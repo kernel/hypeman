@@ -937,7 +937,9 @@ func (m *manager) deleteLeftoverDiskRootVolume(ctx context.Context, buildID, vol
 		return nil
 	}
 
-	if err := m.deleteStaleBuilder(ctx, buildID); err != nil {
+	// Tolerate ErrNotFound: the builder may already be gone while its
+	// attachment record survives, which the recheck below detaches.
+	if err := m.deleteStaleBuilder(ctx, buildID); err != nil && !errors.Is(err, instances.ErrNotFound) {
 		return fmt.Errorf("clear stale builder holding leftover buildkit root volume: %w", err)
 	}
 

@@ -219,9 +219,47 @@ func TestSetupDiskRootVolume_LeftoverSurvivingAttachmentDetached(t *testing.T) {
 	assert.Equal(t, 2, volumeMgr.createCallCount)
 }
 
+// TestSetupDiskRootVolume_LeftoverOrphanAttachmentWithoutBuilder verifies
+// recovery when the builder is already gone but its attachment record
+// survived deletion: the orphan record is detached and the volume cleared.
+func TestSetupDiskRootVolume_LeftoverOrphanAttachmentWithoutBuilder(t *testing.T) {
+	mgr, _, volumeMgr, tempDir := setupTestManager(t)
+	defer os.RemoveAll(tempDir)
+	mgr.config.DiskRootEnabled = true
+
+	created := false
+	volumeMgr.createFunc = func(ctx context.Context, req volumes.CreateVolumeRequest) (*volumes.Volume, error) {
+		if !created {
+			created = true
+			return nil, volumes.ErrAlreadyExists
+		}
+		return &volumes.Volume{Id: *req.Id, Name: req.Name, SizeGb: req.SizeGb}, nil
+	}
+	volumeMgr.volumes["build-disk-build-1"] = &volumes.Volume{
+		Id:   "build-disk-build-1",
+		Name: "build-disk-build-1",
+		Attachments: []volumes.Attachment{
+			{InstanceID: "inst-builder-build-1", MountPath: "/var/lib/buildkit"},
+		},
+	}
+	volumeMgr.deleteFunc = func(ctx context.Context, id string) error {
+		if len(volumeMgr.volumes[id].Attachments) > 0 {
+			return volumes.ErrInUse
+		}
+		delete(volumeMgr.volumes, id)
+		return nil
+	}
+
+	volID, err := mgr.setupDiskRootVolume(context.Background(), "build-1")
+
+	require.NoError(t, err)
+	assert.Equal(t, "build-disk-build-1", volID)
+	assert.Equal(t, 2, volumeMgr.createCallCount)
+}
+
 // TestSetupDiskRootVolume_LeftoverInUseWithoutBuilder verifies recovery fails
-// loudly when the leftover volume is attached but no stale builder exists to
-// clean up.
+// loudly when the leftover volume stays in use with no stale builder and no
+// detachable attachment records.
 func TestSetupDiskRootVolume_LeftoverInUseWithoutBuilder(t *testing.T) {
 	mgr, _, volumeMgr, tempDir := setupTestManager(t)
 	defer os.RemoveAll(tempDir)
@@ -237,8 +275,7 @@ func TestSetupDiskRootVolume_LeftoverInUseWithoutBuilder(t *testing.T) {
 	volID, err := mgr.setupDiskRootVolume(context.Background(), "build-1")
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "stale builder")
-	assert.ErrorIs(t, err, instances.ErrNotFound, "error must wrap the builder lookup failure, not the volume delete error")
+	assert.ErrorIs(t, err, volumes.ErrInUse, "error must surface the volume still being in use")
 	assert.Empty(t, volID)
 }
 
