@@ -139,10 +139,18 @@ func TestSetupDiskRootVolume_LeftoverAttachedToStaleBuilder(t *testing.T) {
 		return &volumes.Volume{Id: *req.Id, Name: req.Name, SizeGb: req.SizeGb}, nil
 	}
 	builderDeleted := false
+	volumeMgr.volumes["build-disk-build-1"] = &volumes.Volume{
+		Id:   "build-disk-build-1",
+		Name: "build-disk-build-1",
+		Attachments: []volumes.Attachment{
+			{InstanceID: "inst-builder-build-1", MountPath: "/var/lib/buildkit"},
+		},
+	}
 	volumeMgr.deleteFunc = func(ctx context.Context, id string) error {
-		if !builderDeleted {
+		if len(volumeMgr.volumes[id].Attachments) > 0 {
 			return volumes.ErrInUse
 		}
+		delete(volumeMgr.volumes, id)
 		return nil
 	}
 	instanceMgr.getFunc = func(ctx context.Context, id string) (*instances.Instance, error) {
@@ -156,6 +164,8 @@ func TestSetupDiskRootVolume_LeftoverAttachedToStaleBuilder(t *testing.T) {
 	instanceMgr.deleteFunc = func(ctx context.Context, id string) error {
 		assert.Equal(t, "inst-builder-build-1", id)
 		builderDeleted = true
+		// Deleting the builder detaches its volumes.
+		volumeMgr.volumes["build-disk-build-1"].Attachments = nil
 		return nil
 	}
 
@@ -257,19 +267,71 @@ func TestSetupDiskRootVolume_LeftoverOrphanAttachmentWithoutBuilder(t *testing.T
 	assert.Equal(t, 2, volumeMgr.createCallCount)
 }
 
+// TestSetupDiskRootVolume_LeftoverVolumeGoneAfterStaleBuilderRemoval
+// verifies a leftover volume removed by a concurrent cleanup between the
+// failed delete and the recheck is treated as recovered, not as an error.
+func TestSetupDiskRootVolume_LeftoverVolumeGoneAfterStaleBuilderRemoval(t *testing.T) {
+	mgr, instanceMgr, volumeMgr, tempDir := setupTestManager(t)
+	defer os.RemoveAll(tempDir)
+	mgr.config.DiskRootEnabled = true
+
+	created := false
+	volumeMgr.createFunc = func(ctx context.Context, req volumes.CreateVolumeRequest) (*volumes.Volume, error) {
+		if !created {
+			created = true
+			return nil, volumes.ErrAlreadyExists
+		}
+		return &volumes.Volume{Id: *req.Id, Name: req.Name, SizeGb: req.SizeGb}, nil
+	}
+	volumeMgr.deleteFunc = func(ctx context.Context, id string) error {
+		return volumes.ErrInUse
+	}
+	instanceMgr.getFunc = func(ctx context.Context, id string) (*instances.Instance, error) {
+		if id == "builder-build-1" {
+			return &instances.Instance{
+				StoredMetadata: instances.StoredMetadata{Id: "inst-builder-build-1", Name: "builder-build-1"},
+			}, nil
+		}
+		return nil, instances.ErrNotFound
+	}
+
+	// The volume is never registered in the mock: the recheck after the
+	// stale builder delete sees ErrNotFound from a concurrent cleanup.
+	volID, err := mgr.setupDiskRootVolume(context.Background(), "build-1")
+
+	require.NoError(t, err)
+	assert.Equal(t, "build-disk-build-1", volID)
+	assert.Equal(t, 2, volumeMgr.createCallCount)
+}
+
 // TestSetupDiskRootVolume_LeftoverInUseWithoutBuilder verifies recovery fails
 // loudly when the leftover volume stays in use with no stale builder and no
 // detachable attachment records.
 func TestSetupDiskRootVolume_LeftoverInUseWithoutBuilder(t *testing.T) {
-	mgr, _, volumeMgr, tempDir := setupTestManager(t)
+	mgr, instanceMgr, volumeMgr, tempDir := setupTestManager(t)
 	defer os.RemoveAll(tempDir)
 	mgr.config.DiskRootEnabled = true
 
 	volumeMgr.createFunc = func(ctx context.Context, req volumes.CreateVolumeRequest) (*volumes.Volume, error) {
 		return nil, volumes.ErrAlreadyExists
 	}
+	instanceMgr.instances["other-inst"] = &instances.Instance{
+		StoredMetadata: instances.StoredMetadata{Id: "other-inst", Name: "other-inst"},
+		State:          instances.StateRunning,
+	}
+	volumeMgr.volumes["build-disk-build-1"] = &volumes.Volume{
+		Id:   "build-disk-build-1",
+		Name: "build-disk-build-1",
+		Attachments: []volumes.Attachment{
+			{InstanceID: "other-inst", MountPath: "/var/lib/buildkit"},
+		},
+	}
 	volumeMgr.deleteFunc = func(ctx context.Context, id string) error {
-		return volumes.ErrInUse
+		if len(volumeMgr.volumes[id].Attachments) > 0 {
+			return volumes.ErrInUse
+		}
+		delete(volumeMgr.volumes, id)
+		return nil
 	}
 
 	volID, err := mgr.setupDiskRootVolume(context.Background(), "build-1")
@@ -277,6 +339,7 @@ func TestSetupDiskRootVolume_LeftoverInUseWithoutBuilder(t *testing.T) {
 	require.Error(t, err)
 	assert.ErrorIs(t, err, volumes.ErrInUse, "error must surface the volume still being in use")
 	assert.Empty(t, volID)
+	assert.Len(t, volumeMgr.volumes["build-disk-build-1"].Attachments, 1, "live holder attachment must not be detached")
 }
 
 // TestCreateBuildConfigVolume_UniqueTempPath verifies the config disk is

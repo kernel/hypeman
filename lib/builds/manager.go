@@ -957,11 +957,14 @@ func (m *manager) deleteLeftoverDiskRootVolume(ctx context.Context, buildID, vol
 			}
 			m.logger.Warn("detached orphan attachment from leftover buildkit root volume", "instance", att.InstanceID, "volume", volID)
 		}
-	} else if !errors.Is(err, volumes.ErrNotFound) {
+	} else if errors.Is(err, volumes.ErrNotFound) {
+		// Concurrent cleanup already removed the volume.
+		return nil
+	} else {
 		return fmt.Errorf("recheck leftover buildkit root volume after stale builder removal: %w", err)
 	}
 
-	if err := m.volumeManager.DeleteVolume(ctx, volID); err != nil {
+	if err := m.volumeManager.DeleteVolume(ctx, volID); err != nil && !errors.Is(err, volumes.ErrNotFound) {
 		return fmt.Errorf("delete leftover buildkit root volume after stale builder removal: %w", err)
 	}
 	return nil
