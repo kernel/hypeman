@@ -84,21 +84,43 @@ func (m *manager) sweepOrphanedDiskRootVolumes(ctx context.Context) {
 // reapAttachedDiskRootVolume handles an orphaned buildkit root volume whose
 // delete failed with ErrInUse. The build is already known to be terminal or
 // gone, so a surviving builder-<buildID> instance is stale crash debris:
-// delete it (which detaches its volumes) and retry the volume delete once.
-// If the volume is attached to anything else it is left alone. Returns true
-// when the volume was reaped.
+// delete it and retry the volume delete once. DeleteInstance only warns when
+// a volume detach fails, so an attachment record can survive the deletion;
+// records whose instance is gone are detached directly. A record backed by a
+// live instance means the volume is held by something we don't own, so it is
+// left alone. Returns true when the volume was reaped.
 func (m *manager) reapAttachedDiskRootVolume(ctx context.Context, buildID, volID string) bool {
 	err := m.deleteStaleBuilder(ctx, buildID)
 	switch {
 	case err == nil:
 		m.logger.Info("deleted stale builder holding orphaned buildkit root volume", "build_id", buildID, "volume_id", volID)
 	case errors.Is(err, instances.ErrNotFound):
-		// Attached to something we don't own; never force-delete.
-		m.logger.Warn("orphaned buildkit root volume still in use by an unknown instance, skipping", "build_id", buildID, "volume_id", volID)
-		return false
+		// The builder is already gone, but an attachment record may have
+		// survived its deletion; handled by the recheck below.
 	default:
 		m.logger.Warn("failed to delete stale builder holding orphaned buildkit root volume", "build_id", buildID, "volume_id", volID, "error", err)
 		return false
+	}
+
+	vol, err := m.volumeManager.GetVolume(ctx, volID)
+	if err != nil {
+		m.logger.Warn("recheck buildkit root volume after stale builder removal", "build_id", buildID, "volume_id", volID, "error", err)
+		return false
+	}
+	for _, att := range vol.Attachments {
+		if _, err := m.instanceManager.GetInstance(ctx, att.InstanceID); err == nil {
+			// Attached to a live instance we don't own; never force-delete.
+			m.logger.Warn("orphaned buildkit root volume still in use by an unknown instance, skipping", "build_id", buildID, "volume_id", volID, "instance", att.InstanceID)
+			return false
+		} else if !errors.Is(err, instances.ErrNotFound) {
+			m.logger.Warn("failed to inspect instance holding buildkit root volume", "build_id", buildID, "volume_id", volID, "instance", att.InstanceID, "error", err)
+			return false
+		}
+		if detachErr := m.volumeManager.DetachVolume(ctx, volID, att.InstanceID); detachErr != nil {
+			m.logger.Warn("failed to detach orphan attachment from buildkit root volume", "build_id", buildID, "volume_id", volID, "instance", att.InstanceID, "error", detachErr)
+			return false
+		}
+		m.logger.Warn("detached orphan attachment from buildkit root volume", "build_id", buildID, "volume_id", volID, "instance", att.InstanceID)
 	}
 
 	err = m.volumeManager.DeleteVolume(ctx, volID)

@@ -130,8 +130,8 @@ func TestSweepOrphanedDiskRootVolumes_SkipsErrInUseWithoutBuilder(t *testing.T) 
 	mgr.sweepOrphanedDiskRootVolumes(context.Background())
 
 	_, err := volumeMgr.GetVolume(context.Background(), "build-disk-build-1")
-	require.NoError(t, err, "volume attached to something we don't own must be left alone")
-	assert.Equal(t, 1, volumeMgr.deleteCallCount, "no retry when the stale builder is not found")
+	require.NoError(t, err, "volume with no detachable attachment records must be left alone")
+	assert.Equal(t, 2, volumeMgr.deleteCallCount, "one retry after confirming no orphan attachments")
 	assert.Equal(t, 0, instanceMgr.deleteCallCount)
 }
 
@@ -178,6 +178,97 @@ func TestSweepOrphanedDiskRootVolumes_NoRetryLoopWhenVolumeStaysInUse(t *testing
 	assert.Equal(t, 2, volumeMgr.deleteCallCount, "exactly one retry after stale builder removal")
 	_, err := volumeMgr.GetVolume(context.Background(), "build-disk-build-1")
 	require.NoError(t, err, "volume still in use must be left alone")
+}
+
+// TestSweepOrphanedDiskRootVolumes_DetachesSurvivingAttachment covers a
+// builder delete whose volume detach only warned: the attachment record
+// survives, and the reaper must detach it directly instead of skipping the
+// volume forever once the builder is gone.
+func TestSweepOrphanedDiskRootVolumes_DetachesSurvivingAttachment(t *testing.T) {
+	mgr, instanceMgr, volumeMgr, tempDir := setupTestManager(t)
+	defer os.RemoveAll(tempDir)
+
+	writeBuildMetadataForReaper(t, mgr, "build-1", StatusFailed)
+	addDiskRootVolume(volumeMgr, "build-disk-build-1")
+	addStaleBuilderInstance(instanceMgr, "build-1")
+	volumeMgr.volumes["build-disk-build-1"].Attachments = []volumes.Attachment{
+		{InstanceID: "builder-build-1", MountPath: "/var/lib/buildkit"},
+	}
+	// Deleting the builder leaves its attachment record behind, mimicking a
+	// detach failure that DeleteInstance only warns about.
+	instanceMgr.deleteFunc = func(ctx context.Context, id string) error {
+		delete(instanceMgr.instances, id)
+		return nil
+	}
+	volumeMgr.deleteFunc = func(ctx context.Context, id string) error {
+		if len(volumeMgr.volumes[id].Attachments) > 0 {
+			return volumes.ErrInUse
+		}
+		delete(volumeMgr.volumes, id)
+		return nil
+	}
+
+	mgr.sweepOrphanedDiskRootVolumes(context.Background())
+
+	_, err := volumeMgr.GetVolume(context.Background(), "build-disk-build-1")
+	assert.ErrorIs(t, err, volumes.ErrNotFound, "volume reaped after surviving attachment is detached")
+}
+
+// TestSweepOrphanedDiskRootVolumes_DetachesOrphanAttachmentWithoutBuilder
+// covers the wedged case: the builder is already gone but its attachment
+// record survived, so the volume stays ErrInUse on every sweep.
+func TestSweepOrphanedDiskRootVolumes_DetachesOrphanAttachmentWithoutBuilder(t *testing.T) {
+	mgr, _, volumeMgr, tempDir := setupTestManager(t)
+	defer os.RemoveAll(tempDir)
+
+	writeBuildMetadataForReaper(t, mgr, "build-1", StatusFailed)
+	addDiskRootVolume(volumeMgr, "build-disk-build-1")
+	volumeMgr.volumes["build-disk-build-1"].Attachments = []volumes.Attachment{
+		{InstanceID: "builder-build-1", MountPath: "/var/lib/buildkit"},
+	}
+	volumeMgr.deleteFunc = func(ctx context.Context, id string) error {
+		if len(volumeMgr.volumes[id].Attachments) > 0 {
+			return volumes.ErrInUse
+		}
+		delete(volumeMgr.volumes, id)
+		return nil
+	}
+
+	mgr.sweepOrphanedDiskRootVolumes(context.Background())
+
+	_, err := volumeMgr.GetVolume(context.Background(), "build-disk-build-1")
+	assert.ErrorIs(t, err, volumes.ErrNotFound, "orphan attachment detached and volume reaped")
+}
+
+// TestSweepOrphanedDiskRootVolumes_SkipsLiveUnknownHolder leaves the volume
+// alone when an attachment record is backed by a live instance that is not
+// the build's builder.
+func TestSweepOrphanedDiskRootVolumes_SkipsLiveUnknownHolder(t *testing.T) {
+	mgr, instanceMgr, volumeMgr, tempDir := setupTestManager(t)
+	defer os.RemoveAll(tempDir)
+
+	writeBuildMetadataForReaper(t, mgr, "build-1", StatusFailed)
+	addDiskRootVolume(volumeMgr, "build-disk-build-1")
+	instanceMgr.instances["other-inst"] = &instances.Instance{
+		StoredMetadata: instances.StoredMetadata{Id: "other-inst", Name: "other-inst"},
+		State:          instances.StateRunning,
+	}
+	volumeMgr.volumes["build-disk-build-1"].Attachments = []volumes.Attachment{
+		{InstanceID: "other-inst", MountPath: "/var/lib/buildkit"},
+	}
+	volumeMgr.deleteFunc = func(ctx context.Context, id string) error {
+		if len(volumeMgr.volumes[id].Attachments) > 0 {
+			return volumes.ErrInUse
+		}
+		delete(volumeMgr.volumes, id)
+		return nil
+	}
+
+	mgr.sweepOrphanedDiskRootVolumes(context.Background())
+
+	vol, err := volumeMgr.GetVolume(context.Background(), "build-disk-build-1")
+	require.NoError(t, err, "volume held by a live unknown instance must be left alone")
+	assert.Len(t, vol.Attachments, 1, "live holder attachment must not be detached")
 }
 
 func TestSweepOrphanedDiskRootVolumes_SkipsErrNotFound(t *testing.T) {
