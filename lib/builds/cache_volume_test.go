@@ -570,10 +570,11 @@ func TestNewManager_CacheVolumesWiring(t *testing.T) {
 		RegistrySecret:      "test-secret",
 	}
 
-	// Disabled by default: no cache volume manager, no reaper.
+	// The cache volume manager is constructed even when the feature is off
+	// so its reaper can evict volumes left over from when it was enabled.
 	disabled, err := NewManager(p, config, newMockInstanceManager(), newMockVolumeManager(), newMockImageManager(), &mockSecretProvider{}, logger, nil)
 	require.NoError(t, err)
-	assert.Nil(t, disabled.(*manager).cacheVolumes)
+	assert.NotNil(t, disabled.(*manager).cacheVolumes)
 
 	// Enabled: cache volume manager is constructed.
 	config.Cache.Enabled = true
@@ -616,4 +617,28 @@ func TestLockScope_ConcurrentEnsure(t *testing.T) {
 	wg.Wait()
 
 	assert.Equal(t, 1, volumeMgr.createCallCount, fmt.Sprintf("expected 1 create, got %d", volumeMgr.createCallCount))
+}
+
+// TestReap_RunsWhenFeatureDisabled verifies leftover cache volumes are still
+// evicted after the feature is turned off: the manager is always constructed
+// so its reaper can clean up volumes from when the feature was enabled.
+func TestReap_RunsWhenFeatureDisabled(t *testing.T) {
+	mgr, volumeMgr, now, tempDir := setupCacheVolumeManager(t, CacheVolumeConfig{
+		Enabled: false,
+		SizeGB:  10,
+		IdleTTL: time.Hour,
+	})
+	defer os.RemoveAll(tempDir)
+
+	ctx := context.Background()
+	oldVol, err := mgr.ensureCacheVolume(ctx, "tenant-old")
+	require.NoError(t, err)
+	*now = now.Add(-2 * time.Hour)
+	mgr.touchLastUsed(oldVol)
+	*now = time.Now()
+
+	mgr.reap(ctx)
+
+	_, err = volumeMgr.GetVolume(ctx, oldVol)
+	assert.ErrorIs(t, err, volumes.ErrNotFound, "leftover cache volume evicted while the feature is disabled")
 }

@@ -38,6 +38,7 @@ func enableCacheVolumes(mgr *manager, volumeMgr *mockVolumeManager, config Cache
 		return vol, nil
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	mgr.config.Cache = config
 	mgr.cacheVolumes = newCacheVolumeManager(config, mgr.paths, volumeMgr, logger)
 }
 

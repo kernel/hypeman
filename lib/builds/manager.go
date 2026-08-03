@@ -189,9 +189,10 @@ func NewManager(
 		m.metrics = metrics
 	}
 
-	if config.Cache.Enabled {
-		m.cacheVolumes = newCacheVolumeManager(config.Cache, p, volumeMgr, logger)
-	}
+	// The cache volume manager always exists so its reaper can evict
+	// volumes left over from when the feature was enabled; builds only
+	// attach cache volumes when Cache.Enabled is set.
+	m.cacheVolumes = newCacheVolumeManager(config.Cache, p, volumeMgr, logger)
 
 	return m, nil
 }
@@ -205,9 +206,7 @@ func (m *manager) Start(ctx context.Context) error {
 		m.RecoverPendingBuilds()
 	}()
 	go m.runDiskRootReaper(ctx)
-	if m.cacheVolumes != nil {
-		m.cacheVolumes.startReaper(ctx)
-	}
+	m.cacheVolumes.startReaper(ctx)
 	m.logger.Info("build manager started")
 	return nil
 }
@@ -542,7 +541,7 @@ func (m *manager) CreateBuild(ctx context.Context, req CreateBuildRequest, sourc
 	}
 	// When a persistent cache volume will back this build, bound BuildKit's
 	// garbage collector to the volume size.
-	if m.cacheVolumes != nil && req.CacheScope != "" && !req.IsAdminBuild {
+	if m.config.Cache.Enabled && req.CacheScope != "" && !req.IsAdminBuild {
 		buildConfig.CacheGCKeepBytes = m.cacheVolumes.gcKeepBytes()
 	}
 	if err := writeBuildConfig(m.paths, id, buildConfig); err != nil {
@@ -570,7 +569,7 @@ func (m *manager) CreateBuild(ctx context.Context, req CreateBuildRequest, sourc
 // that attach the same persistent cache volume share a key and never run
 // concurrently. Builds without a cache volume are unconstrained.
 func (m *manager) buildSerialKey(req CreateBuildRequest) string {
-	if m.cacheVolumes != nil && req.CacheScope != "" && !req.IsAdminBuild {
+	if m.config.Cache.Enabled && req.CacheScope != "" && !req.IsAdminBuild {
 		return req.CacheScope
 	}
 	return ""
@@ -776,7 +775,7 @@ func (m *manager) executeBuild(ctx context.Context, id string, req CreateBuildRe
 	// scope reuse it. Builds for a scope are serialized because the
 	// BuildKit root is exclusive to one builder at a time.
 	cacheVolID := ""
-	if m.cacheVolumes != nil && req.CacheScope != "" && !req.IsAdminBuild {
+	if m.config.Cache.Enabled && req.CacheScope != "" && !req.IsAdminBuild {
 		// The queue serializes same-scope builds before they occupy a
 		// concurrency slot; this lock guards any caller that reaches
 		// executeBuild directly.
