@@ -337,19 +337,25 @@ func (m *manager) ReleaseBuild(ctx context.Context, id string, buildID string) e
 	if holder != buildID {
 		return fmt.Errorf("builder %s is acquired by build %s, not %s", id, holder, buildID)
 	}
-	delete(m.acquired, id)
 
 	// Record usage even for failed builds: last_used_at drives idle TTL.
+	// Persist before releasing the hold so a failed call leaves the
+	// builder acquired and the caller can retry.
 	meta, err := loadMetadata(m.paths, id)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
+			delete(m.acquired, id)
 			return nil // builder was deleted while held
 		}
 		return err
 	}
 	now := time.Now()
 	meta.LastUsedAt = &now
-	return saveMetadata(m.paths, meta)
+	if err := saveMetadata(m.paths, meta); err != nil {
+		return err
+	}
+	delete(m.acquired, id)
+	return nil
 }
 
 // ResetDisk resets a builder's cache by recreating its disk asynchronously
@@ -617,6 +623,12 @@ func (m *manager) reapIdle(ctx context.Context) {
 		}
 		if err := m.volumeManager.DeleteVolume(ctx, meta.DiskVolumeID); err != nil && !errors.Is(err, volumes.ErrNotFound) {
 			m.logger.Error("idle reaper failed to delete builder disk", "id", id, "error", err)
+			// Revert to ready so the next tick retries; a builder left in
+			// deleting is skipped by the reaper until restart reconciliation.
+			meta.Status = StatusReady
+			if saveErr := saveMetadata(m.paths, meta); saveErr != nil {
+				m.logger.Error("idle reaper failed to revert builder status", "id", id, "error", saveErr)
+			}
 			continue
 		}
 		if err := deleteBuilderData(m.paths, id); err != nil {

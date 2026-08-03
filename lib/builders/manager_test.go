@@ -501,6 +501,79 @@ func TestIdleReaper(t *testing.T) {
 	assert.NoError(t, err, "acquired builder must not be reaped")
 }
 
+// failDeleteVolumeManager fails DeleteVolume for the given volume IDs.
+type failDeleteVolumeManager struct {
+	volumes.Manager
+	fail map[string]error
+}
+
+func (f *failDeleteVolumeManager) DeleteVolume(ctx context.Context, id string) error {
+	if err, ok := f.fail[id]; ok {
+		return err
+	}
+	return f.Manager.DeleteVolume(ctx, id)
+}
+
+func TestIdleReaper_RetriesAfterDiskDeleteFailure(t *testing.T) {
+	m, volumeMgr, _, p := setupTestManager(t, Config{IdleTTL: time.Hour})
+
+	b, err := m.CreateBuilder(context.Background(), CreateBuilderRequest{})
+	require.NoError(t, err)
+
+	meta, err := loadMetadata(p, b.ID)
+	require.NoError(t, err)
+	old := time.Now().Add(-2 * time.Hour)
+	meta.LastUsedAt = &old
+	require.NoError(t, saveMetadata(p, meta))
+
+	failing := &failDeleteVolumeManager{
+		Manager: volumeMgr,
+		fail:    map[string]error{b.DiskVolumeID: errors.New("disk busy")},
+	}
+	m.volumeManager = failing
+
+	m.reapIdle(context.Background())
+
+	got, err := m.GetBuilder(context.Background(), b.ID)
+	require.NoError(t, err, "a failed reap must not strand the builder in deleting")
+	assert.Equal(t, StatusReady, got.Status, "status must revert to ready so the next tick retries")
+
+	// Once the disk is deletable again, the next tick finishes the reap.
+	delete(failing.fail, b.DiskVolumeID)
+	m.reapIdle(context.Background())
+	_, err = m.GetBuilder(context.Background(), b.ID)
+	assert.ErrorIs(t, err, ErrNotFound)
+	_, err = volumeMgr.GetVolume(context.Background(), b.DiskVolumeID)
+	assert.ErrorIs(t, err, volumes.ErrNotFound)
+}
+
+func TestReleaseBuild_FailureKeepsHold(t *testing.T) {
+	m, _, _, p := setupTestManager(t, Config{})
+
+	b, err := m.CreateBuilder(context.Background(), CreateBuilderRequest{})
+	require.NoError(t, err)
+	_, err = m.AcquireForBuild(context.Background(), b.ID, "build-1")
+	require.NoError(t, err)
+
+	// Make the metadata unpersistable: a directory occupying the temp path
+	// fails the atomic write even for a root test runner.
+	tmpPath := p.BuilderMetadata(b.ID) + ".tmp"
+	require.NoError(t, os.Mkdir(tmpPath, 0755))
+
+	require.Error(t, m.ReleaseBuild(context.Background(), b.ID, "build-1"))
+
+	// The hold must survive the failed release: the builder stays acquired
+	// and a retry after the failure clears.
+	_, err = m.AcquireForBuild(context.Background(), b.ID, "build-2")
+	assert.ErrorIs(t, err, ErrInUse, "failed release must leave the builder held")
+	require.NoError(t, os.Remove(tmpPath))
+	require.NoError(t, m.ReleaseBuild(context.Background(), b.ID, "build-1"), "retry after failure must succeed")
+
+	got, err := m.GetBuilder(context.Background(), b.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got.LastUsedAt)
+}
+
 func TestValidateBuilderID(t *testing.T) {
 	assert.NoError(t, ValidateBuilderID("abc"))
 	assert.NoError(t, ValidateBuilderID("team-cache_1"))
