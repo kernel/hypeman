@@ -129,7 +129,7 @@ func (s *ApiService) DeleteBuilder(ctx context.Context, request oapi.DeleteBuild
 		if errors.Is(err, builders.ErrInUse) {
 			return oapi.DeleteBuilder409JSONResponse{
 				Code:    "conflict",
-				Message: "builder is in use by a build",
+				Message: "builder is in use",
 			}, nil
 		}
 		log.ErrorContext(ctx, "failed to delete builder", "error", err)
@@ -164,7 +164,7 @@ func (s *ApiService) PruneBuilder(ctx context.Context, request oapi.PruneBuilder
 		if errors.Is(err, builders.ErrInUse) {
 			return oapi.PruneBuilder409JSONResponse{
 				Code:    "conflict",
-				Message: "builder is in use by a build",
+				Message: "builder is in use",
 			}, nil
 		}
 		log.ErrorContext(ctx, "failed to prune builder", "error", err)
