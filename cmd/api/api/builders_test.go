@@ -6,6 +6,7 @@ import (
 
 	"github.com/kernel/hypeman/lib/builders"
 	"github.com/kernel/hypeman/lib/oapi"
+	"github.com/kernel/hypeman/lib/paths"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -95,6 +96,25 @@ func TestCreateBuilder_InvalidID(t *testing.T) {
 	require.NoError(t, err)
 	_, ok := resp.(oapi.CreateBuilder400JSONResponse)
 	assert.True(t, ok, "expected 400 response")
+}
+
+func TestCreateBuilder_DiskSizeExceeded(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	// Enforce a disk size cap so the manager rejects the request.
+	mgr, err := builders.NewManager(paths.New(t.TempDir()), builders.Config{MaxDiskSizeGb: 1}, svc.VolumeManager, svc.InstanceManager, nil, nil)
+	require.NoError(t, err)
+	svc.BuilderManager = mgr
+
+	size := 2
+	resp, err := svc.CreateBuilder(ctx(), oapi.CreateBuilderRequestObject{
+		Body: &oapi.CreateBuilderRequest{DiskSizeGb: &size},
+	})
+	require.NoError(t, err)
+	r, ok := resp.(oapi.CreateBuilder400JSONResponse)
+	require.True(t, ok, "expected 400 for an oversized disk, got %T", resp)
+	assert.Contains(t, r.Message, "exceeds maximum")
 }
 
 func TestGetBuilder(t *testing.T) {

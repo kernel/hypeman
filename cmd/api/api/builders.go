@@ -71,6 +71,11 @@ func (s *ApiService) CreateBuilder(ctx context.Context, request oapi.CreateBuild
 				Code:    "invalid_request",
 				Message: err.Error(),
 			}, nil
+		case errors.Is(err, builders.ErrDiskSizeExceeded):
+			return oapi.CreateBuilder400JSONResponse{
+				Code:    "invalid_request",
+				Message: err.Error(),
+			}, nil
 		case errors.Is(err, tags.ErrInvalidTags):
 			return oapi.CreateBuilder400JSONResponse{
 				Code:    "invalid_request",
