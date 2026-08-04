@@ -425,6 +425,9 @@ func (m *manager) CreateBuild(ctx context.Context, req CreateBuildRequest, sourc
 		if err != nil {
 			return nil, err
 		}
+		if b.Status != builders.StatusReady {
+			return nil, builders.ErrInUse
+		}
 		builder = b
 	}
 
@@ -562,7 +565,7 @@ func (m *manager) CreateBuild(ctx context.Context, req CreateBuildRequest, sourc
 	// Enqueue the build. Builds sharing a builder are serialized by builder
 	// ID so a waiting same-builder build stays pending instead of holding a
 	// global concurrency slot while blocked on the builder's disk.
-	queuePos := m.queue.EnqueueSerial(id, req, m.buildSerialKey(req), func() {
+	queuePos := m.queue.EnqueueSerial(id, req, req.BuilderID, func() {
 		m.runBuild(context.Background(), id, req, policy)
 	})
 
@@ -573,13 +576,6 @@ func (m *manager) CreateBuild(ctx context.Context, req CreateBuildRequest, sourc
 
 	m.logger.Info("build created", "id", id, "queue_position", queuePos)
 	return build, nil
-}
-
-// buildSerialKey returns the queue serialization key for a build: builds
-// that attach the same builder disk share a key and never run concurrently.
-// Builds without a builder are unconstrained.
-func (m *manager) buildSerialKey(req CreateBuildRequest) string {
-	return req.BuilderID
 }
 
 // gcBoundsForDisk computes the BuildKit GC bounds for a builder disk:
@@ -606,7 +602,7 @@ func (m *manager) QueuedBuildsForBuilder(builderID string) []string {
 // queued or running. Until startup recovery completes, persisted pending
 // builds are not in the queue yet, so they are matched on disk.
 func (m *manager) BuilderHasBuilds(builderID string) bool {
-	if m.ActiveBuildForBuilder(builderID) != nil || len(m.QueuedBuildsForBuilder(builderID)) > 0 {
+	if m.queue.HasSerialKey(builderID) {
 		return true
 	}
 	if m.pendingRecovered.Load() {

@@ -671,7 +671,7 @@ func (m *manager) markIdleBuilderDeleting(id string, cutoff time.Time) (*storedM
 	if meta.Status != StatusReady {
 		return meta, false, nil
 	}
-	if _, held := m.acquired[id]; held {
+	if _, held := m.acquired[id]; held || m.buildsInFlightLocked(id) {
 		return meta, false, nil
 	}
 

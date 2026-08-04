@@ -151,6 +151,33 @@ func TestCreateBuild_BuilderNotFound(t *testing.T) {
 	require.ErrorIs(t, err, builders.ErrNotFound)
 }
 
+// TestCreateBuild_BuilderNotReady verifies a build is rejected before queueing
+// when its Builder cannot accept work.
+func TestCreateBuild_BuilderNotReady(t *testing.T) {
+	mgr, _, volumeMgr, tempDir := setupTestManager(t)
+	defer os.RemoveAll(tempDir)
+
+	ctx := context.Background()
+	builder, err := mgr.builderManager.CreateBuilder(ctx, builders.CreateBuilderRequest{})
+	require.NoError(t, err)
+
+	volumeMgr.deleteFunc = func(context.Context, string) error {
+		return errors.New("delete failed")
+	}
+	_, err = mgr.builderManager.ResetDisk(ctx, builder.ID)
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		got, err := mgr.builderManager.GetBuilder(ctx, builder.ID)
+		return err == nil && got.Status == builders.StatusError
+	}, 2*time.Second, 10*time.Millisecond)
+
+	_, err = mgr.CreateBuild(ctx, CreateBuildRequest{
+		Dockerfile: "FROM alpine",
+		BuilderID:  builder.ID,
+	}, []byte("src"))
+	assert.ErrorIs(t, err, builders.ErrInUse)
+}
+
 // TestCreateBuild_GCBoundsWrittenForBuilder verifies the host computes
 // BuildKit GC bounds from the builder disk size into the guest config, and
 // leaves them zero for tmpfs-backed builds.
@@ -295,11 +322,11 @@ func TestBuilderQueueSerialization(t *testing.T) {
 	started := make(chan string, 3)
 	req := CreateBuildRequest{BuilderID: "builder-a"}
 
-	pos1 := mgr.queue.EnqueueSerial("build-1", req, mgr.buildSerialKey(req), func() {
+	pos1 := mgr.queue.EnqueueSerial("build-1", req, req.BuilderID, func() {
 		started <- "build-1"
 		<-release
 	})
-	pos2 := mgr.queue.EnqueueSerial("build-2", req, mgr.buildSerialKey(req), func() {
+	pos2 := mgr.queue.EnqueueSerial("build-2", req, req.BuilderID, func() {
 		started <- "build-2"
 		<-release
 	})

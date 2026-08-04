@@ -48,7 +48,16 @@ func buildkitdVersion() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("buildkitd --version: %v: %s", err, output)
 	}
-	return strings.TrimSpace(string(output)), nil
+	return buildkitCompatibilityVersion(string(output))
+}
+
+func buildkitCompatibilityVersion(output string) (string, error) {
+	for _, field := range strings.Fields(output) {
+		if strings.HasPrefix(field, "v") && len(field) > 1 {
+			return field, nil
+		}
+	}
+	return "", fmt.Errorf("parse buildkitd version from %q", strings.TrimSpace(output))
 }
 
 // reconcileBuildkitVersionStamp resets a persistent BuildKit root written by
@@ -114,6 +123,9 @@ func freshDisk(entries []os.DirEntry) bool {
 // match the current BuildKit version.
 func resetRoot(root string, entries []os.DirEntry) error {
 	for _, entry := range entries {
+		if entry.Name() == "lost+found" {
+			continue
+		}
 		if err := os.RemoveAll(filepath.Join(root, entry.Name())); err != nil {
 			return fmt.Errorf("reset buildkit root: remove %s: %w", entry.Name(), err)
 		}

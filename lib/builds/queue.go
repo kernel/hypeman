@@ -102,15 +102,7 @@ func (q *BuildQueue) canStartLocked(serialKey string) bool {
 	if len(q.active) >= q.maxConcurrent {
 		return false
 	}
-	if serialKey == "" {
-		return true
-	}
-	for _, key := range q.activeSerialKeys {
-		if key == serialKey {
-			return false
-		}
-	}
-	return true
+	return q.serialKeyFreeLocked(serialKey)
 }
 
 // startLocked marks a build active and launches it.
@@ -205,22 +197,15 @@ func (q *BuildQueue) GetPosition(buildID string) *int {
 	return q.pendingPositionLocked(buildID)
 }
 
-// pendingPositionLocked returns the pending queue position for buildID.
-// Position counts only pending builds whose serial keys are currently free.
-// Builds blocked by active serial keys are skipped so later startable builds
-// are not reported behind work that cannot start yet.
+// pendingPositionLocked returns the physical pending queue position for
+// buildID. Scheduling may skip a blocked serial key, but positions retain the
+// existing submission-order semantics for every build.
 func (q *BuildQueue) pendingPositionLocked(buildID string) *int {
-	pos := 0
-	for _, build := range q.pending {
-		blocked := !q.serialKeyFreeLocked(build.SerialKey)
+	for i, build := range q.pending {
 		if build.BuildID == buildID {
-			pos++
+			pos := i + 1
 			return &pos
 		}
-		if blocked {
-			continue
-		}
-		pos++
 	}
 	return nil
 }
@@ -274,6 +259,29 @@ func (q *BuildQueue) QueueLength() int {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	return len(q.active) + len(q.pending)
+}
+
+// HasSerialKey reports whether an active or pending build uses serialKey.
+// Both states are inspected under one lock so pending-to-active transitions
+// cannot briefly appear idle to lifecycle guards.
+func (q *BuildQueue) HasSerialKey(serialKey string) bool {
+	if serialKey == "" {
+		return false
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	for _, key := range q.activeSerialKeys {
+		if key == serialKey {
+			return true
+		}
+	}
+	for _, build := range q.pending {
+		if build.SerialKey == serialKey {
+			return true
+		}
+	}
+	return false
 }
 
 // ActiveBuildForSerialKey returns the ID of the active build holding

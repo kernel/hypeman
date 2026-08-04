@@ -300,11 +300,11 @@ func TestBuildQueue_SerialKeySkipsBlockedPending(t *testing.T) {
 	pos3 := queue.EnqueueSerial("build-3", CreateBuildRequest{}, "builder-a", startFn("build-3"))
 	pos4 := queue.EnqueueSerial("build-4", CreateBuildRequest{}, "builder-c", startFn("build-4"))
 	assert.Equal(t, 1, pos3)
-	assert.Equal(t, 1, pos4, "queue position skips blocked pending builds")
+	assert.Equal(t, 2, pos4, "queue positions retain submission order")
 
 	pendingPos4 := queue.GetPosition("build-4")
 	require.NotNil(t, pendingPos4)
-	assert.Equal(t, 1, *pendingPos4)
+	assert.Equal(t, 2, *pendingPos4)
 
 	<-started // build-1
 	<-started // build-2
@@ -395,8 +395,39 @@ func TestBuildQueue_SerialKeyIntrospection(t *testing.T) {
 	assert.Equal(t, []string{"build-2"}, pending)
 	assert.NotNil(t, queue.PendingBuildsForSerialKey("builder-c"))
 	assert.Empty(t, queue.PendingBuildsForSerialKey("builder-c"))
+	assert.True(t, queue.HasSerialKey("builder-a"))
+	assert.True(t, queue.HasSerialKey("builder-b"))
+	assert.False(t, queue.HasSerialKey("builder-c"))
 
 	close(release)
+}
+
+// TestBuildQueue_HasSerialKeyAcrossPendingToActiveTransition checks the
+// lifecycle guard never sees the serial key disappear as its next build starts.
+func TestBuildQueue_HasSerialKeyAcrossPendingToActiveTransition(t *testing.T) {
+	for i := 0; i < 100; i++ {
+		queue := NewBuildQueue(1)
+		release := make(chan struct{})
+		started := make(chan string, 2)
+
+		queue.EnqueueSerial("build-1", CreateBuildRequest{}, "builder-a", func() {
+			started <- "build-1"
+			<-release
+		})
+		require.Equal(t, "build-1", <-started)
+		queue.EnqueueSerial("build-2", CreateBuildRequest{}, "builder-a", func() {
+			started <- "build-2"
+			<-release
+		})
+		require.True(t, queue.HasSerialKey("builder-a"))
+
+		queue.ReleaseSerialKey("build-1")
+		require.Equal(t, "build-2", <-started)
+		assert.True(t, queue.HasSerialKey("builder-a"), "serial key must remain visible while the successor starts")
+
+		close(release)
+		require.Eventually(t, func() bool { return queue.ActiveCount() == 0 }, time.Second, time.Millisecond)
+	}
 }
 
 // TestBuildQueue_ReleaseSerialKeyStartsSuccessorAtFullCapacity releases the

@@ -1832,11 +1832,11 @@ components:
           nullable: true
         builder_instance_id:
           type: string
-          description: Instance ID of the builder VM (for debugging)
+          description: Disposable VM instance that executed this build; distinct from builder_id
           nullable: true
         builder_id:
           type: string
-          description: Builder whose persistent cache disk backed this build
+          description: Persistent Builder resource whose cache backed this build
           nullable: true
 
     BuilderStatus:
@@ -1877,15 +1877,15 @@ components:
           nullable: true
         max_concurrency:
           type: integer
-          description: Maximum concurrent builds on this builder (fixed at 1)
+          description: Maximum concurrent builds on this builder. Currently fixed at 1.
           example: 1
         active_build_id:
           type: string
-          description: ID of the build currently running on this builder
+          description: Point-in-time ID of the build currently running on this builder
           nullable: true
         queued_builds:
           type: array
-          description: IDs of queued builds waiting for this builder, oldest first
+          description: Point-in-time IDs of queued builds waiting for this builder, oldest first
           items:
             type: string
 
@@ -4297,6 +4297,12 @@ paths:
                 $ref: "#/components/schemas/Error"
         404:
           description: Builder not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        409:
+          description: Builder cannot currently accept a build
           content:
             application/json:
               schema:

@@ -160,6 +160,19 @@ func TestBuildkitWorkerGCConfigSizeDecode(t *testing.T) {
 	}
 }
 
+func TestBuildkitCompatibilityVersion(t *testing.T) {
+	version, err := buildkitCompatibilityVersion("buildkitd github.com/moby/buildkit v0.23.2 abc123")
+	require.NoError(t, err)
+	assert.Equal(t, "v0.23.2", version)
+
+	version, err = buildkitCompatibilityVersion("buildkitd github.com/moby/buildkit v0.23.2 rebuilt-sha")
+	require.NoError(t, err)
+	assert.Equal(t, "v0.23.2", version, "same release with a different build SHA must keep the cache")
+
+	_, err = buildkitCompatibilityVersion("unexpected output")
+	require.Error(t, err)
+}
+
 func TestReconcileBuildkitVersionStamp_MatchingVersion(t *testing.T) {
 	root := t.TempDir()
 	version := "buildkitd github.com/moby/buildkit v0.23.2 abc123"
@@ -188,6 +201,19 @@ func TestReconcileBuildkitVersionStamp_IncompatibleVersionResets(t *testing.T) {
 	stamped, err := os.ReadFile(filepath.Join(root, buildkitVersionStampFile))
 	require.NoError(t, err)
 	assert.Equal(t, newVersion, strings.TrimSpace(string(stamped)))
+}
+
+func TestReconcileBuildkitVersionStamp_ResetPreservesLostFound(t *testing.T) {
+	root := t.TempDir()
+	lostFound := filepath.Join(root, "lost+found")
+	require.NoError(t, os.MkdirAll(lostFound, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "cache.db"), []byte("cache"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(root, buildkitVersionStampFile), []byte("v0.22.0\n"), 0644))
+
+	err := reconcileBuildkitVersionStamp(root, func() (string, error) { return "v0.23.2", nil })
+	require.NoError(t, err)
+	assert.DirExists(t, lostFound)
+	assert.NoFileExists(t, filepath.Join(root, "cache.db"))
 }
 
 func TestReconcileBuildkitVersionStamp_MissingStampResets(t *testing.T) {

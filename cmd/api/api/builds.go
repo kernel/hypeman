@@ -276,6 +276,11 @@ func (s *ApiService) CreateBuild(ctx context.Context, request oapi.CreateBuildRe
 				Code:    "not_found",
 				Message: "builder not found",
 			}, nil
+		case errors.Is(err, builders.ErrInUse):
+			return oapi.CreateBuild409JSONResponse{
+				Code:    "conflict",
+				Message: "builder is in use",
+			}, nil
 		default:
 			log.ErrorContext(ctx, "failed to create build", "error", err)
 			return oapi.CreateBuild500JSONResponse{
