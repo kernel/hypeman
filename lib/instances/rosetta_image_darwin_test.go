@@ -45,7 +45,7 @@ func TestVZRosettaImageX86(t *testing.T) {
 	ctx := context.Background()
 	p := paths.New(tmpDir)
 
-	imageManager, err := images.NewManager(p, 1, nil)
+	imageManager, err := images.NewManager(p, 1, nil, nil)
 	require.NoError(t, err)
 
 	// Pull the amd64 variant of alpine:3.19. The prewarm step mirrors this ref at

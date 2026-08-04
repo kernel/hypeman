@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
+
+	"github.com/google/go-containerregistry/pkg/authn"
 )
 
 // OCIClient is a public wrapper for system manager to use OCI operations
@@ -11,9 +13,10 @@ type OCIClient struct {
 	client *ociClient
 }
 
-// NewOCIClient creates a new OCI client (public for system manager)
-func NewOCIClient(cacheDir string) (*OCIClient, error) {
-	client, err := newOCIClient(cacheDir)
+// NewOCIClient creates a new OCI client (public for system manager).
+// If keychain is nil, the Docker config keychain is used for registry auth.
+func NewOCIClient(cacheDir string, keychain authn.Keychain) (*OCIClient, error) {
+	client, err := newOCIClient(cacheDir, keychain)
 	if err != nil {
 		return nil, err
 	}

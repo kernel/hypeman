@@ -39,7 +39,7 @@ func runStandbySnapshotScenario(t *testing.T, mgr *manager, tmpDir string, cfg s
 		}
 		require.NoError(t, err)
 	}
-	imageManager, err := images.NewManager(p, 1, nil)
+	imageManager, err := images.NewManager(p, 1, nil, nil)
 	requireNoErr(err)
 	snapshottest.EnsureImageReady(t, ctx, p, imageManager, integrationTestImageRef(t, "docker.io/library/alpine:latest"))
 

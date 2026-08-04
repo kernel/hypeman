@@ -45,7 +45,7 @@ func setupVZTestManager(t *testing.T) (*manager, string) {
 	}
 
 	p := paths.New(tmpDir)
-	imageManager, err := images.NewManager(p, 1, nil)
+	imageManager, err := images.NewManager(p, 1, nil, nil)
 	require.NoError(t, err)
 
 	systemManager := system.NewManager(p)
@@ -112,7 +112,7 @@ func TestVZBasicLifecycle(t *testing.T) {
 	p := paths.New(tmpDir)
 
 	// Prepare image
-	imageManager, err := images.NewManager(p, 1, nil)
+	imageManager, err := images.NewManager(p, 1, nil, nil)
 	require.NoError(t, err)
 
 	t.Log("Pulling alpine:latest image...")
@@ -282,7 +282,7 @@ func TestVZExecAndShutdown(t *testing.T) {
 	p := paths.New(tmpDir)
 
 	// Prepare image
-	imageManager, err := images.NewManager(p, 1, nil)
+	imageManager, err := images.NewManager(p, 1, nil, nil)
 	require.NoError(t, err)
 
 	t.Log("Pulling alpine:latest image...")
@@ -391,7 +391,7 @@ func TestVZStandbyAndRestore(t *testing.T) {
 	p := paths.New(tmpDir)
 
 	// Prepare image
-	imageManager, err := images.NewManager(p, 1, nil)
+	imageManager, err := images.NewManager(p, 1, nil, nil)
 	require.NoError(t, err)
 
 	t.Log("Pulling alpine:latest image...")
@@ -554,7 +554,7 @@ func TestVZForkFromRunningNetwork(t *testing.T) {
 	ctx := context.Background()
 	p := paths.New(tmpDir)
 
-	imageManager, err := images.NewManager(p, 1, nil)
+	imageManager, err := images.NewManager(p, 1, nil, nil)
 	require.NoError(t, err)
 
 	t.Log("Pulling alpine:latest image...")

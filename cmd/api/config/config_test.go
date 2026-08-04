@@ -8,6 +8,7 @@ import (
 
 	"github.com/c2h5oh/datasize"
 	"github.com/kernel/hypeman/lib/guestmemory"
+	"github.com/kernel/hypeman/lib/registryauth"
 )
 
 func TestDefaultConfigIncludesMetricsSettings(t *testing.T) {
@@ -537,5 +538,63 @@ func TestValidateAllowsDisabledSnapshotCompressionDefaultWithoutValidAlgorithm(t
 
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("expected disabled snapshot compression default to ignore algorithm/level, got %v", err)
+	}
+}
+
+func TestLoadRegistriesFromConfigFile(t *testing.T) {
+	clearPathEnvOverrides(t)
+
+	tmp := t.TempDir()
+	cfgPath := filepath.Join(tmp, "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte(`
+registries:
+  - host: docker.io
+    kind: static
+    username: myuser
+    password: mytoken
+  - host: "*.dkr.ecr.us-east-1.amazonaws.com"
+    kind: ecr
+    access_key_id: AKIAEXAMPLE
+    secret_access_key: examplesecret
+`), 0600); err != nil {
+		t.Fatalf("write temp config: %v", err)
+	}
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	if len(cfg.Registries) != 2 {
+		t.Fatalf("expected 2 registry entries, got %d", len(cfg.Registries))
+	}
+	if cfg.Registries[0].Host != "docker.io" || cfg.Registries[0].Kind != "static" ||
+		cfg.Registries[0].Username != "myuser" || cfg.Registries[0].Password != "mytoken" {
+		t.Fatalf("unexpected first registry entry: %+v", cfg.Registries[0])
+	}
+	if cfg.Registries[1].Kind != "ecr" || cfg.Registries[1].AccessKeyID != "AKIAEXAMPLE" {
+		t.Fatalf("unexpected second registry entry: %+v", cfg.Registries[1])
+	}
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("expected valid registries config, got %v", err)
+	}
+}
+
+func TestValidateRejectsInvalidRegistryKind(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.Registries = []registryauth.RegistryConfig{{Host: "docker.io", Kind: "bogus"}}
+
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("expected validation error for unknown registry kind")
+	}
+}
+
+func TestValidateRejectsStaticRegistryWithoutCredentials(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.Registries = []registryauth.RegistryConfig{{Host: "docker.io", Kind: "static"}}
+
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("expected validation error for static registry without credentials")
 	}
 }

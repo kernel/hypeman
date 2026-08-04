@@ -23,7 +23,7 @@ const (
 func TestUnpackLayersCapturedFixtureReturnsErrorInsteadOfPanicking(t *testing.T) {
 	dataDir := copyRecoveryFixture(t)
 
-	client, err := newOCIClient(filepath.Join(dataDir, "system", "oci-cache"))
+	client, err := newOCIClient(filepath.Join(dataDir, "system", "oci-cache"), nil)
 	require.NoError(t, err)
 
 	var unpackErr error
@@ -39,7 +39,7 @@ func TestRecoverInterruptedBuildsCapturedFixtureMarksBuildFailed(t *testing.T) {
 	dataDir := copyRecoveryFixture(t)
 	p := paths.New(dataDir)
 
-	client, err := newOCIClient(p.SystemOCICache())
+	client, err := newOCIClient(p.SystemOCICache(), nil)
 	require.NoError(t, err)
 
 	m := &manager{

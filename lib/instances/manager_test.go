@@ -50,7 +50,7 @@ func setupTestManager(t *testing.T) (*manager, string) {
 	}
 
 	p := paths.New(tmpDir)
-	imageManager, err := images.NewManager(p, 1, nil)
+	imageManager, err := images.NewManager(p, 1, nil, nil)
 	require.NoError(t, err)
 
 	systemManager := system.NewManager(p)
@@ -373,7 +373,7 @@ func TestBasicEndToEnd(t *testing.T) {
 	ctx := context.Background()
 
 	// Get the image manager from the manager (we need it for image operations)
-	imageManager, err := images.NewManager(paths.New(tmpDir), 1, nil)
+	imageManager, err := images.NewManager(paths.New(tmpDir), 1, nil, nil)
 	require.NoError(t, err)
 
 	// Pull nginx image (runs a daemon, won't exit)
@@ -980,7 +980,7 @@ func TestAppExitPropagation(t *testing.T) {
 	ctx := context.Background()
 	p := paths.New(tmpDir)
 
-	imageManager, err := images.NewManager(p, 1, nil)
+	imageManager, err := images.NewManager(p, 1, nil, nil)
 	require.NoError(t, err)
 
 	t.Log("Pulling alpine:latest image...")
@@ -1070,7 +1070,7 @@ func TestOOMExitPropagation(t *testing.T) {
 	ctx := context.Background()
 	p := paths.New(tmpDir)
 
-	imageManager, err := images.NewManager(p, 1, nil)
+	imageManager, err := images.NewManager(p, 1, nil, nil)
 	require.NoError(t, err)
 
 	t.Log("Pulling alpine:latest image...")
@@ -1198,7 +1198,7 @@ func TestEntrypointEnvVars(t *testing.T) {
 
 	// Get image manager
 	p := paths.New(tmpDir)
-	imageManager, err := images.NewManager(p, 1, nil)
+	imageManager, err := images.NewManager(p, 1, nil, nil)
 	require.NoError(t, err)
 
 	// Pull bitnami/redis image
@@ -1385,7 +1385,7 @@ func TestStorageOperations(t *testing.T) {
 	}
 
 	p := paths.New(tmpDir)
-	imageManager, _ := images.NewManager(p, 1, nil)
+	imageManager, _ := images.NewManager(p, 1, nil, nil)
 	systemManager := system.NewManager(p)
 	networkManager := network.NewManager(p, cfg, nil)
 	deviceManager := devices.NewManager(p)
@@ -1513,7 +1513,7 @@ func TestStandbyAndRestore(t *testing.T) {
 	ctx := context.Background()
 
 	// Create image manager for pulling nginx
-	imageManager, err := images.NewManager(paths.New(tmpDir), 1, nil)
+	imageManager, err := images.NewManager(paths.New(tmpDir), 1, nil, nil)
 	require.NoError(t, err)
 
 	// Pull nginx image (reuse if already pulled in previous test)
@@ -1738,7 +1738,7 @@ func TestWaitForState_Integration(t *testing.T) {
 	mgr, tmpDir := setupTestManager(t)
 	ctx := context.Background()
 
-	imageManager, err := images.NewManager(paths.New(tmpDir), 1, nil)
+	imageManager, err := images.NewManager(paths.New(tmpDir), 1, nil, nil)
 	require.NoError(t, err)
 
 	t.Log("Pulling nginx:alpine image...")

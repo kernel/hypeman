@@ -75,7 +75,7 @@ func (m *manager) mirrorBaseImagesForBuild(ctx context.Context, id string, req C
 	for _, ref := range refs {
 		result, err := images.MirrorBaseImage(ctx, m.config.RegistryURL, images.MirrorRequest{
 			SourceImage: ref,
-		}, authConfig)
+		}, authConfig, m.config.PullKeychain)
 		if err != nil {
 			m.logger.Warn("failed to mirror base image",
 				"id", id, "image", ref, "error", err)

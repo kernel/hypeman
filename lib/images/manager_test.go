@@ -18,7 +18,7 @@ import (
 
 func TestCreateImage(t *testing.T) {
 	dataDir := t.TempDir()
-	mgr, err := NewManager(paths.New(dataDir), 1, nil)
+	mgr, err := NewManager(paths.New(dataDir), 1, nil, nil)
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -88,7 +88,7 @@ func TestCreateImage(t *testing.T) {
 
 func TestCreateImageDifferentTag(t *testing.T) {
 	dataDir := t.TempDir()
-	mgr, err := NewManager(paths.New(dataDir), 1, nil)
+	mgr, err := NewManager(paths.New(dataDir), 1, nil, nil)
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -110,7 +110,7 @@ func TestCreateImageDifferentTag(t *testing.T) {
 
 func TestCreateImageDuplicate(t *testing.T) {
 	dataDir := t.TempDir()
-	mgr, err := NewManager(paths.New(dataDir), 1, nil)
+	mgr, err := NewManager(paths.New(dataDir), 1, nil, nil)
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -171,7 +171,7 @@ func TestTagFollowsLastPull(t *testing.T) {
 
 func TestListImages(t *testing.T) {
 	dataDir := t.TempDir()
-	mgr, err := NewManager(paths.New(dataDir), 1, nil)
+	mgr, err := NewManager(paths.New(dataDir), 1, nil, nil)
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -201,7 +201,7 @@ func TestListImages(t *testing.T) {
 func TestListImages_IncludesDigestOnlyImages(t *testing.T) {
 	dataDir := t.TempDir()
 	p := paths.New(dataDir)
-	mgr, err := NewManager(p, 1, nil)
+	mgr, err := NewManager(p, 1, nil, nil)
 	require.NoError(t, err)
 
 	const digestRef = "docker.io/library/alpine@sha256:029a752048e32e843bd6defe3841186fb8d19a28dae8ec287f433bb9d6d1ad85"
@@ -222,7 +222,7 @@ func TestListImages_IncludesDigestOnlyImages(t *testing.T) {
 
 func TestGetImage(t *testing.T) {
 	dataDir := t.TempDir()
-	mgr, err := NewManager(paths.New(dataDir), 1, nil)
+	mgr, err := NewManager(paths.New(dataDir), 1, nil, nil)
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -246,7 +246,7 @@ func TestGetImage(t *testing.T) {
 
 func TestGetImageNotFound(t *testing.T) {
 	dataDir := t.TempDir()
-	mgr, err := NewManager(paths.New(dataDir), 1, nil)
+	mgr, err := NewManager(paths.New(dataDir), 1, nil, nil)
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -257,7 +257,7 @@ func TestGetImageNotFound(t *testing.T) {
 
 func TestDeleteImage(t *testing.T) {
 	dataDir := t.TempDir()
-	mgr, err := NewManager(paths.New(dataDir), 1, nil)
+	mgr, err := NewManager(paths.New(dataDir), 1, nil, nil)
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -293,7 +293,7 @@ func TestDeleteImage(t *testing.T) {
 func TestDeleteImageByDigest(t *testing.T) {
 	dataDir := t.TempDir()
 	p := paths.New(dataDir)
-	mgr, err := NewManager(p, 1, nil)
+	mgr, err := NewManager(p, 1, nil, nil)
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -313,7 +313,7 @@ func TestDeleteImageByDigest(t *testing.T) {
 
 func TestDeleteImageNotFound(t *testing.T) {
 	dataDir := t.TempDir()
-	mgr, err := NewManager(paths.New(dataDir), 1, nil)
+	mgr, err := NewManager(paths.New(dataDir), 1, nil, nil)
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -325,7 +325,7 @@ func TestDeleteImageNotFound(t *testing.T) {
 func TestDeleteImagePreservesSharedDigest(t *testing.T) {
 	dataDir := t.TempDir()
 	p := paths.New(dataDir)
-	mgr, err := NewManager(p, 1, nil)
+	mgr, err := NewManager(p, 1, nil, nil)
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -404,7 +404,7 @@ func TestNormalizedRefParsing(t *testing.T) {
 
 func TestLayerCaching(t *testing.T) {
 	dataDir := t.TempDir()
-	mgr, err := NewManager(paths.New(dataDir), 1, nil)
+	mgr, err := NewManager(paths.New(dataDir), 1, nil, nil)
 	require.NoError(t, err)
 	ctx := context.Background()
 
@@ -525,7 +525,7 @@ func seedReadyDigestOnlyImageMetadata(t *testing.T, p *paths.Paths, imageRef str
 func TestImportLocalImageFromOCICache(t *testing.T) {
 	dataDir := t.TempDir()
 	p := paths.New(dataDir)
-	mgr, err := NewManager(p, 1, nil)
+	mgr, err := NewManager(p, 1, nil, nil)
 	require.NoError(t, err)
 
 	ctx := context.Background()

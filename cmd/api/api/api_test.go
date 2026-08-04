@@ -30,7 +30,7 @@ func newTestService(t *testing.T) *ApiService {
 	}
 
 	p := paths.New(cfg.DataDir)
-	imageMgr, err := images.NewManager(p, 1, nil)
+	imageMgr, err := images.NewManager(p, 1, nil, nil)
 	if err != nil {
 		t.Fatalf("failed to create image manager: %v", err)
 	}

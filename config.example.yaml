@@ -89,6 +89,33 @@ data_dir: /var/lib/hypeman
 #                                 # to avoid racing with concurrent pulls
 
 # =============================================================================
+# Registry authentication for image pulls
+# =============================================================================
+# Credentials for pulling images from remote registries. Entries are matched
+# in order against the image reference's registry host; the first match wins.
+# Registries matching no entry fall back to the Docker config keychain
+# (~/.docker/config.json).
+#
+# registries:
+#   # Static username/password (e.g. Docker Hub, GHCR)
+#   - host: docker.io
+#     kind: static
+#     username: myuser
+#     password: ${DOCKERHUB_TOKEN}        # ${VAR} expands from the environment
+#
+#   # AWS ECR: short-lived tokens from GetAuthorizationToken, cached until
+#   # shortly before expiry. AWS credentials come from the standard chain
+#   # (env, shared config) unless access keys are given.
+#   - host: "*.dkr.ecr.us-east-1.amazonaws.com"
+#     kind: ecr
+#     # access_key_id: AKIA...
+#     # secret_access_key: ...
+#
+#   # Explicitly defer to ~/.docker/config.json for a host
+#   - host: ghcr.io
+#     kind: docker-config
+
+# =============================================================================
 # Caddy / Ingress Configuration
 # =============================================================================
 # caddy:

@@ -855,7 +855,7 @@ func TestForkCloudHypervisorFromRunningNetwork(t *testing.T) {
 	manager, tmpDir := setupTestManager(t)
 	ctx := context.Background()
 
-	imageManager, err := images.NewManager(paths.New(tmpDir), 1, nil)
+	imageManager, err := images.NewManager(paths.New(tmpDir), 1, nil, nil)
 	require.NoError(t, err)
 
 	t.Log("Ensuring nginx image...")
@@ -976,7 +976,7 @@ func runWarmForkChain(t *testing.T, mgr *manager, tmpDir string, cfg warmForkCha
 	readyTimeout := 90 * time.Second
 	p := paths.New(tmpDir)
 
-	imageManager, err := images.NewManager(p, 1, nil)
+	imageManager, err := images.NewManager(p, 1, nil, nil)
 	require.NoError(t, err)
 	imageName := integrationTestImageRef(t, "docker.io/library/alpine:latest")
 	snapshottest.EnsureImageReady(t, ctx, p, imageManager, imageName)

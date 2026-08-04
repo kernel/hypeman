@@ -55,7 +55,7 @@ func TestVolumeMultiAttachReadOnly(t *testing.T) {
 	p := paths.New(tmpDir)
 
 	// Setup: prepare image and system files
-	imageManager, err := images.NewManager(p, 1, nil)
+	imageManager, err := images.NewManager(p, 1, nil, nil)
 	require.NoError(t, err)
 
 	t.Log("Pulling alpine image...")
@@ -244,7 +244,7 @@ func TestOverlayDiskCleanupOnDelete(t *testing.T) {
 	p := paths.New(tmpDir)
 
 	// Setup: prepare image and system files
-	imageManager, err := images.NewManager(p, 1, nil)
+	imageManager, err := images.NewManager(p, 1, nil, nil)
 	require.NoError(t, err)
 
 	t.Log("Pulling alpine image...")
@@ -355,7 +355,7 @@ func TestVolumeFromArchive(t *testing.T) {
 	p := paths.New(tmpDir)
 
 	// Setup: prepare image and system files
-	imageManager, err := images.NewManager(p, 1, nil)
+	imageManager, err := images.NewManager(p, 1, nil, nil)
 	require.NoError(t, err)
 
 	t.Log("Pulling alpine image...")

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/c2h5oh/datasize"
+	"github.com/kernel/hypeman/lib/registryauth"
 	"github.com/kernel/hypeman/lib/snapshot"
 	"github.com/knadh/koanf/parsers/yaml"
 	"github.com/knadh/koanf/providers/env"
@@ -269,24 +270,25 @@ type Config struct {
 	Env       string `koanf:"env"`
 	Version   string `koanf:"version"`
 
-	Network          NetworkConfig          `koanf:"network"`
-	Caddy            CaddyConfig            `koanf:"caddy"`
-	ACME             ACMEConfig             `koanf:"acme"`
-	API              APIConfig              `koanf:"api"`
-	Metrics          MetricsConfig          `koanf:"metrics"`
-	Otel             OtelConfig             `koanf:"otel"`
-	Logging          LoggingConfig          `koanf:"logging"`
-	Images           ImagesConfig           `koanf:"images"`
-	Build            BuildConfig            `koanf:"build"`
-	Instances        InstancesConfig        `koanf:"instances"`
-	AutoStandby      AutoStandbyConfig      `koanf:"auto_standby"`
-	Registry         RegistryConfig         `koanf:"registry"`
-	Limits           LimitsConfig           `koanf:"limits"`
-	Oversubscription OversubscriptionConfig `koanf:"oversubscription"`
-	Capacity         CapacityConfig         `koanf:"capacity"`
-	Hypervisor       HypervisorConfig       `koanf:"hypervisor"`
-	Snapshot         SnapshotConfig         `koanf:"snapshot"`
-	GPU              GPUConfig              `koanf:"gpu"`
+	Network          NetworkConfig                 `koanf:"network"`
+	Caddy            CaddyConfig                   `koanf:"caddy"`
+	ACME             ACMEConfig                    `koanf:"acme"`
+	API              APIConfig                     `koanf:"api"`
+	Metrics          MetricsConfig                 `koanf:"metrics"`
+	Otel             OtelConfig                    `koanf:"otel"`
+	Logging          LoggingConfig                 `koanf:"logging"`
+	Images           ImagesConfig                  `koanf:"images"`
+	Build            BuildConfig                   `koanf:"build"`
+	Instances        InstancesConfig               `koanf:"instances"`
+	AutoStandby      AutoStandbyConfig             `koanf:"auto_standby"`
+	Registry         RegistryConfig                `koanf:"registry"`
+	Registries       []registryauth.RegistryConfig `koanf:"registries"`
+	Limits           LimitsConfig                  `koanf:"limits"`
+	Oversubscription OversubscriptionConfig        `koanf:"oversubscription"`
+	Capacity         CapacityConfig                `koanf:"capacity"`
+	Hypervisor       HypervisorConfig              `koanf:"hypervisor"`
+	Snapshot         SnapshotConfig                `koanf:"snapshot"`
+	GPU              GPUConfig                     `koanf:"gpu"`
 }
 
 // GetDefaultConfigPaths returns the default config file paths to search.
@@ -628,6 +630,11 @@ func (c *Config) Validate() error {
 	}
 	if c.Build.Timeout <= 0 {
 		return fmt.Errorf("build.timeout must be positive, got %d", c.Build.Timeout)
+	}
+	for _, reg := range c.Registries {
+		if err := reg.Validate(); err != nil {
+			return err
+		}
 	}
 	if c.Hypervisor.FirecrackerMaxConcurrentRestores < 0 {
 		return fmt.Errorf("hypervisor.firecracker_max_concurrent_restores must be >= 0, got %d", c.Hypervisor.FirecrackerMaxConcurrentRestores)

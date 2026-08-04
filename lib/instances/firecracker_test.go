@@ -49,7 +49,7 @@ func setupTestManagerForFirecrackerWithConfig(t *testing.T, networkCfg config.Ne
 	}
 
 	p := paths.New(tmpDir)
-	imageManager, err := images.NewManager(p, 1, nil)
+	imageManager, err := images.NewManager(p, 1, nil, nil)
 	require.NoError(t, err)
 
 	systemManager := system.NewManager(p)
@@ -143,7 +143,7 @@ func TestFirecrackerStandbyAndRestore(t *testing.T) {
 	ctx := context.Background()
 	p := paths.New(tmpDir)
 
-	imageManager, err := images.NewManager(p, 1, nil)
+	imageManager, err := images.NewManager(p, 1, nil, nil)
 	require.NoError(t, err)
 	createNginxImageAndWait(t, ctx, p, imageManager)
 
@@ -277,7 +277,7 @@ func TestFirecrackerStopClearsStaleSnapshot(t *testing.T) {
 	ctx := context.Background()
 	p := paths.New(tmpDir)
 
-	imageManager, err := images.NewManager(p, 1, nil)
+	imageManager, err := images.NewManager(p, 1, nil, nil)
 	require.NoError(t, err)
 	createNginxImageAndWait(t, ctx, p, imageManager)
 
@@ -354,7 +354,7 @@ func TestFirecrackerNetworkLifecycle(t *testing.T) {
 	ctx := context.Background()
 	p := paths.New(tmpDir)
 
-	imageManager, err := images.NewManager(p, 1, nil)
+	imageManager, err := images.NewManager(p, 1, nil, nil)
 	require.NoError(t, err)
 	createNginxImageAndWait(t, ctx, p, imageManager)
 
@@ -482,7 +482,7 @@ func TestFirecrackerForkFromRunningNetwork(t *testing.T) {
 	ctx := context.Background()
 	p := paths.New(tmpDir)
 
-	imageManager, err := images.NewManager(p, 1, nil)
+	imageManager, err := images.NewManager(p, 1, nil, nil)
 	require.NoError(t, err)
 	createNginxImageAndWait(t, ctx, p, imageManager)
 
@@ -570,7 +570,7 @@ func TestFirecrackerWarmForkChain(t *testing.T) {
 	ctx := context.Background()
 	p := paths.New(tmpDir)
 
-	imageManager, err := images.NewManager(p, 1, nil)
+	imageManager, err := images.NewManager(p, 1, nil, nil)
 	require.NoError(t, err)
 	imageName := integrationTestImageRef(t, "docker.io/library/alpine:latest")
 	snapshottest.EnsureImageReady(t, ctx, p, imageManager, imageName)
@@ -676,7 +676,7 @@ func TestFCUFFDOneShotLifecycle(t *testing.T) {
 	ctx := context.Background()
 	p := paths.New(tmpDir)
 
-	imageManager, err := images.NewManager(p, 1, nil)
+	imageManager, err := images.NewManager(p, 1, nil, nil)
 	require.NoError(t, err)
 	imageName := integrationTestImageRef(t, "docker.io/library/alpine:latest")
 	snapshottest.EnsureImageReady(t, ctx, p, imageManager, imageName)
@@ -882,7 +882,7 @@ func TestFCUFFDGraduationLifecycle(t *testing.T) {
 	ctx := context.Background()
 	p := paths.New(tmpDir)
 
-	imageManager, err := images.NewManager(p, 1, nil)
+	imageManager, err := images.NewManager(p, 1, nil, nil)
 	require.NoError(t, err)
 	imageName := integrationTestImageRef(t, "docker.io/library/alpine:latest")
 	snapshottest.EnsureImageReady(t, ctx, p, imageManager, imageName)
@@ -1113,7 +1113,7 @@ func TestFirecrackerForkIsolation(t *testing.T) {
 	ctx := context.Background()
 	p := paths.New(tmpDir)
 
-	imageManager, err := images.NewManager(p, 1, nil)
+	imageManager, err := images.NewManager(p, 1, nil, nil)
 	require.NoError(t, err)
 	createNginxImageAndWait(t, ctx, p, imageManager)
 

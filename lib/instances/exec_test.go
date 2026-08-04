@@ -100,7 +100,7 @@ func TestExecConcurrent(t *testing.T) {
 	p := paths.New(tmpDir)
 
 	// Setup image
-	imageManager, err := images.NewManager(p, 1, nil)
+	imageManager, err := images.NewManager(p, 1, nil, nil)
 	require.NoError(t, err)
 
 	t.Log("Pulling nginx:alpine image...")

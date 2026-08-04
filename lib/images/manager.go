@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/kernel/hypeman/lib/paths"
 	"github.com/kernel/hypeman/lib/tags"
 	"go.opentelemetry.io/otel/metric"
@@ -65,10 +66,11 @@ type manager struct {
 
 // NewManager creates a new image manager.
 // If meter is nil, metrics are disabled.
-func NewManager(p *paths.Paths, maxConcurrentBuilds int, meter metric.Meter) (Manager, error) {
+// If keychain is nil, the Docker config keychain is used for registry auth.
+func NewManager(p *paths.Paths, maxConcurrentBuilds int, meter metric.Meter, keychain authn.Keychain) (Manager, error) {
 	// Create cache directory under dataDir for OCI layouts
 	cacheDir := p.SystemOCICache()
-	ociClient, err := newOCIClient(cacheDir)
+	ociClient, err := newOCIClient(cacheDir, keychain)
 	if err != nil {
 		return nil, fmt.Errorf("create oci client: %w", err)
 	}

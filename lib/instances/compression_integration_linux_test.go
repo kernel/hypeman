@@ -98,7 +98,7 @@ func setupCompressionTestManagerForHypervisor(t *testing.T, hvType hypervisor.Ty
 	}
 
 	p := paths.New(tmpDir)
-	imageManager, err := images.NewManager(p, 1, nil)
+	imageManager, err := images.NewManager(p, 1, nil, nil)
 	require.NoError(t, err)
 
 	systemManager := system.NewManager(p)
@@ -135,7 +135,7 @@ func runStandbyRestoreCompressionScenarios(t *testing.T, harness compressionInte
 	ctx := context.Background()
 	p := paths.New(tmpDir)
 
-	imageManager, err := images.NewManager(p, 1, nil)
+	imageManager, err := images.NewManager(p, 1, nil, nil)
 	require.NoError(t, err)
 	createNginxImageAndWait(t, ctx, p, imageManager)
 

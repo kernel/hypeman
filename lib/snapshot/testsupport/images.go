@@ -43,7 +43,7 @@ func EnsureImageReady(t *testing.T, ctx context.Context, p *paths.Paths, imageMa
 		cacheDir = filepath.Join(os.TempDir(), "hypeman-snapshot-image-cache")
 	}
 	cachePaths := paths.New(cacheDir)
-	cacheMgr, err := images.NewManager(cachePaths, 1, nil)
+	cacheMgr, err := images.NewManager(cachePaths, 1, nil, nil)
 	require.NoError(t, err)
 
 	prewarmCtx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)

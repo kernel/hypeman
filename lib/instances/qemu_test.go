@@ -43,7 +43,7 @@ func setupTestManagerForQEMU(t *testing.T) (*manager, string) {
 	}
 
 	p := paths.New(tmpDir)
-	imageManager, err := images.NewManager(p, 1, nil)
+	imageManager, err := images.NewManager(p, 1, nil, nil)
 	require.NoError(t, err)
 
 	systemManager := system.NewManager(p)
@@ -208,7 +208,7 @@ func TestQEMUBasicEndToEnd(t *testing.T) {
 	ctx := context.Background()
 
 	// Get the image manager for image operations
-	imageManager, err := images.NewManager(paths.New(tmpDir), 1, nil)
+	imageManager, err := images.NewManager(paths.New(tmpDir), 1, nil, nil)
 	require.NoError(t, err)
 
 	// Pull nginx image
@@ -600,7 +600,7 @@ func TestQEMUEntrypointEnvVars(t *testing.T) {
 
 	// Get image manager
 	p := paths.New(tmpDir)
-	imageManager, err := images.NewManager(p, 1, nil)
+	imageManager, err := images.NewManager(p, 1, nil, nil)
 	require.NoError(t, err)
 
 	// Pull bitnami/redis image
@@ -772,7 +772,7 @@ func TestQEMUStandbyAndRestore(t *testing.T) {
 	p := paths.New(tmpDir)
 
 	// Get the image manager for image operations
-	imageManager, err := images.NewManager(p, 1, nil)
+	imageManager, err := images.NewManager(p, 1, nil, nil)
 	require.NoError(t, err)
 
 	// Pull nginx image
@@ -893,7 +893,7 @@ func TestQEMUForkFromRunningNetwork(t *testing.T) {
 	ctx := context.Background()
 	p := paths.New(tmpDir)
 
-	imageManager, err := images.NewManager(p, 1, nil)
+	imageManager, err := images.NewManager(p, 1, nil, nil)
 	require.NoError(t, err)
 
 	t.Log("Ensuring nginx image...")

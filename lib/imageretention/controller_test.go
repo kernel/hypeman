@@ -228,7 +228,7 @@ func TestRunPerformsImmediateSweep(t *testing.T) {
 func TestSweepSuccessLogIsDebugOnly(t *testing.T) {
 	dataDir := t.TempDir()
 	p := paths.New(dataDir)
-	manager, err := images.NewManager(p, 1, nil)
+	manager, err := images.NewManager(p, 1, nil, nil)
 	require.NoError(t, err)
 
 	var out bytes.Buffer
@@ -302,7 +302,7 @@ func newTestController(t *testing.T, unusedFor time.Duration, allowed []string) 
 
 	dataDir := t.TempDir()
 	p := paths.New(dataDir)
-	manager, err := images.NewManager(p, 1, nil)
+	manager, err := images.NewManager(p, 1, nil, nil)
 	require.NoError(t, err)
 
 	controller, err := NewController(p, manager, unusedFor, allowed, nil, nil)
@@ -315,7 +315,7 @@ func newMetricTestController(t *testing.T, unusedFor time.Duration, allowed []st
 
 	dataDir := t.TempDir()
 	p := paths.New(dataDir)
-	manager, err := images.NewManager(p, 1, nil)
+	manager, err := images.NewManager(p, 1, nil, nil)
 	require.NoError(t, err)
 
 	reader := otelmetric.NewManualReader()

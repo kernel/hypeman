@@ -126,6 +126,7 @@ Common settings:
 | `acme.dns_provider` | DNS provider for ACME challenges | _(empty)_ |
 | `acme.cloudflare_api_token` | Cloudflare API token | _(empty)_ |
 | `build.docker_socket` | Path to Docker socket | `/var/run/docker.sock` |
+| `registries` | Per-registry pull credentials (host glob + kind: `static`, `ecr`, `docker-config`); unmatched hosts use `~/.docker/config.json` | _(empty)_ |
 | `hypervisor.default` | Default hypervisor type (`cloud-hypervisor`, `firecracker`, `qemu`, `vz`) | `cloud-hypervisor` |
 | `hypervisor.firecracker_binary_path` | Optional runtime path to external Firecracker binary | _(empty = embedded)_ |
 

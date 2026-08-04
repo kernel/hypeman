@@ -97,7 +97,7 @@ func main() {
 		fatalf("ensure local registry: %v", err)
 	}
 
-	inspectClient, err := images.NewOCIClient(filepath.Join(prewarmDir, ".inspect-cache"))
+	inspectClient, err := images.NewOCIClient(filepath.Join(prewarmDir, ".inspect-cache"), nil)
 	if err != nil {
 		fatalf("create inspect client: %v", err)
 	}
@@ -109,7 +109,7 @@ func main() {
 		Images:     make([]manifestImage, 0, len(imagesToWarm)),
 	}
 	p := paths.New(prewarmDir)
-	readyImageManager, err := images.NewManager(p, 1, nil)
+	readyImageManager, err := images.NewManager(p, 1, nil, nil)
 	if err != nil {
 		fatalf("create ready image manager: %v", err)
 	}
@@ -233,7 +233,7 @@ func ensureMirroredImage(ctx context.Context, inspector *images.OCIClient, regis
 	res, err := images.MirrorBaseImage(ctx, "http://"+registry, images.MirrorRequest{
 		SourceImage: img.Source,
 		Platform:    img.Platform,
-	}, nil)
+	}, nil, nil)
 	if err != nil {
 		return manifestImage{}, err
 	}

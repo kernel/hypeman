@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/v1/empty"
 	"github.com/google/go-containerregistry/pkg/v1/layout"
 	"github.com/google/go-containerregistry/pkg/v1/tarball"
@@ -89,6 +90,10 @@ type Config struct {
 
 	// DockerSocket is the path to the Docker socket for building the builder image
 	DockerSocket string
+
+	// PullKeychain authenticates base-image pulls from remote registries
+	// during mirroring. nil uses the Docker config keychain.
+	PullKeychain authn.Keychain
 }
 
 // DefaultConfig returns the default build manager configuration

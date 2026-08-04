@@ -48,7 +48,7 @@ func TestUnpackLayersFailsOnBuildKitCacheMediatype(t *testing.T) {
 	require.NoError(t, err, "failed to create mock BuildKit cache layout")
 
 	// Create OCI client and try to unpack
-	client, err := newOCIClient(cacheDir)
+	client, err := newOCIClient(cacheDir, nil)
 	require.NoError(t, err)
 
 	targetDir := t.TempDir()
@@ -71,7 +71,7 @@ func TestExtractMetadataSucceedsOnBuildKitCache(t *testing.T) {
 	err := createBuildKitCacheLayout(cacheDir, "test-cache")
 	require.NoError(t, err)
 
-	client, err := newOCIClient(cacheDir)
+	client, err := newOCIClient(cacheDir, nil)
 	require.NoError(t, err)
 
 	// This succeeds because go-containerregistry doesn't validate config mediatype
@@ -320,7 +320,7 @@ func TestDockerSaveTarballToOCILayoutRoundtrip(t *testing.T) {
 	require.NoError(t, err)
 
 	// Step 5: Create OCI client and verify existsInLayout (cache hit detection)
-	client, err := newOCIClient(cacheDir)
+	client, err := newOCIClient(cacheDir, nil)
 	require.NoError(t, err)
 	assert.True(t, client.existsInLayout(layoutTag), "image should exist in layout after AppendImage")
 
@@ -382,7 +382,7 @@ func TestDockerSaveToOCILayoutCacheHit(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create OCI client pointing at same cache dir
-	client, err := newOCIClient(cacheDir)
+	client, err := newOCIClient(cacheDir, nil)
 	require.NoError(t, err)
 
 	// Call pullAndExport with a bogus imageRef — since the digest is already cached,

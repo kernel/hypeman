@@ -106,7 +106,7 @@ func TestGPUInference(t *testing.T) {
 	}
 
 	// Initialize managers
-	imageMgr, err := images.NewManager(p, 1, nil)
+	imageMgr, err := images.NewManager(p, 1, nil, nil)
 	require.NoError(t, err)
 
 	systemMgr := system.NewManager(p)

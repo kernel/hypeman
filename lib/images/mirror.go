@@ -35,7 +35,10 @@ type MirrorResult struct {
 //
 // For example, mirroring "docker.io/onkernel/nodejs22-base:0.1.1" will create
 // "onkernel/nodejs22-base:0.1.1" in the local registry.
-func MirrorBaseImage(ctx context.Context, registryURL string, req MirrorRequest, authConfig *authn.AuthConfig) (*MirrorResult, error) {
+//
+// srcKeychain authenticates the source pull; nil uses the Docker config
+// keychain. authConfig authenticates the push to the local registry.
+func MirrorBaseImage(ctx context.Context, registryURL string, req MirrorRequest, authConfig *authn.AuthConfig, srcKeychain authn.Keychain) (*MirrorResult, error) {
 	// Parse source reference
 	srcRef, err := name.ParseReference(req.SourceImage)
 	if err != nil {
@@ -47,10 +50,14 @@ func MirrorBaseImage(ctx context.Context, registryURL string, req MirrorRequest,
 		return nil, err
 	}
 
+	if srcKeychain == nil {
+		srcKeychain = authn.DefaultKeychain
+	}
+
 	// Pull the image from source
 	img, err := remote.Image(srcRef,
 		remote.WithContext(ctx),
-		remote.WithAuthFromKeychain(authn.DefaultKeychain),
+		remote.WithAuthFromKeychain(srcKeychain),
 		remote.WithPlatform(platform.ToGCR()))
 	if err != nil {
 		return nil, fmt.Errorf("pull source image: %w", wrapRegistryError(err))

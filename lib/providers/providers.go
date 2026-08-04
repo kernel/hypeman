@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/c2h5oh/datasize"
+	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/kernel/hypeman/cmd/api/config"
 	"github.com/kernel/hypeman/lib/builds"
 	"github.com/kernel/hypeman/lib/devices"
@@ -25,6 +26,7 @@ import (
 	hypemanotel "github.com/kernel/hypeman/lib/otel"
 	"github.com/kernel/hypeman/lib/paths"
 	"github.com/kernel/hypeman/lib/registry"
+	"github.com/kernel/hypeman/lib/registryauth"
 	"github.com/kernel/hypeman/lib/resources"
 	"github.com/kernel/hypeman/lib/snapshot"
 	"github.com/kernel/hypeman/lib/system"
@@ -78,7 +80,21 @@ func ProvidePaths(cfg *config.Config) *paths.Paths {
 // ProvideImageManager provides the image manager
 func ProvideImageManager(p *paths.Paths, cfg *config.Config) (images.Manager, error) {
 	meter := otel.GetMeterProvider().Meter("hypeman")
-	return images.NewManager(p, cfg.Limits.MaxConcurrentBuilds, meter)
+	keychain, err := registryKeychain(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return images.NewManager(p, cfg.Limits.MaxConcurrentBuilds, meter, keychain)
+}
+
+// registryKeychain builds the registry credential keychain used for image
+// pulls. Invalid registries config fails startup.
+func registryKeychain(cfg *config.Config) (authn.Keychain, error) {
+	keychain, err := registryauth.NewKeychain(cfg.Registries)
+	if err != nil {
+		return nil, fmt.Errorf("registries config: %w", err)
+	}
+	return keychain, nil
 }
 
 // ProvideSystemManager provides the system manager
@@ -422,6 +438,12 @@ func ProvideBuildManager(p *paths.Paths, cfg *config.Config, instanceManager ins
 		RegistrySecret:      cfg.JwtSecret, // Use same secret for registry tokens
 		DockerSocket:        cfg.Build.DockerSocket,
 	}
+
+	pullKeychain, err := registryKeychain(cfg)
+	if err != nil {
+		return nil, err
+	}
+	buildConfig.PullKeychain = pullKeychain
 
 	// Configure secret provider (use NoOpSecretProvider as fallback to avoid nil panics)
 	var secretProvider builds.SecretProvider

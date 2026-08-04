@@ -63,7 +63,7 @@ func TestVGPU(t *testing.T) {
 	}
 
 	// Create managers
-	imageManager, err := images.NewManager(p, 1, nil)
+	imageManager, err := images.NewManager(p, 1, nil, nil)
 	require.NoError(t, err)
 
 	systemManager := system.NewManager(p)

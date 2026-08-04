@@ -24,6 +24,7 @@ import (
 // ociClient handles OCI image operations without requiring Docker daemon
 type ociClient struct {
 	cacheDir string
+	keychain authn.Keychain
 }
 
 // digestToLayoutTag converts a digest to a valid OCI layout tag.
@@ -55,12 +56,16 @@ func (c *ociClient) existsInLayout(layoutTag string) bool {
 	return len(descriptorPaths) > 0
 }
 
-// newOCIClient creates a new OCI client
-func newOCIClient(cacheDir string) (*ociClient, error) {
+// newOCIClient creates a new OCI client. If keychain is nil, the Docker
+// config keychain is used for registry authentication.
+func newOCIClient(cacheDir string, keychain authn.Keychain) (*ociClient, error) {
 	if err := os.MkdirAll(cacheDir, 0755); err != nil {
 		return nil, fmt.Errorf("create cache dir: %w", err)
 	}
-	return &ociClient{cacheDir: cacheDir}, nil
+	if keychain == nil {
+		keychain = authn.DefaultKeychain
+	}
+	return &ociClient{cacheDir: cacheDir, keychain: keychain}, nil
 }
 
 // vmPlatform returns the target platform for VM images: a Linux guest on the
@@ -94,7 +99,7 @@ func (c *ociClient) inspectManifestWithPlatform(ctx context.Context, imageRef st
 	// is centralized here so callers can `%w` the result without re-wrapping.
 	img, err := remote.Image(ref,
 		remote.WithContext(ctx),
-		remote.WithAuthFromKeychain(authn.DefaultKeychain),
+		remote.WithAuthFromKeychain(c.keychain),
 		remote.WithPlatform(platform))
 	if err != nil {
 		return "", fmt.Errorf("fetch manifest: %w", wrapRegistryError(err))
@@ -135,7 +140,7 @@ func (c *ociClient) inspectDigestPlatform(ctx context.Context, imageRef string, 
 
 	desc, err := remote.Get(ref,
 		remote.WithContext(ctx),
-		remote.WithAuthFromKeychain(authn.DefaultKeychain))
+		remote.WithAuthFromKeychain(c.keychain))
 	if err != nil {
 		return Platform{}, "", fmt.Errorf("fetch manifest: %w", wrapRegistryError(err))
 	}
@@ -146,7 +151,7 @@ func (c *ociClient) inspectDigestPlatform(ctx context.Context, imageRef string, 
 		// re-parsed digest ref is correct here because the digest names the index.
 		img, err = remote.Image(ref,
 			remote.WithContext(ctx),
-			remote.WithAuthFromKeychain(authn.DefaultKeychain),
+			remote.WithAuthFromKeychain(c.keychain),
 			remote.WithPlatform(requested))
 	} else {
 		// Single-arch manifest: the digest already pins the exact image.
@@ -230,7 +235,7 @@ func (c *ociClient) pullToOCILayoutWithPlatform(ctx context.Context, imageRef, l
 	// WithPlatform ensures we pull the correct architecture for multi-arch images
 	img, err := remote.Image(ref,
 		remote.WithContext(ctx),
-		remote.WithAuthFromKeychain(authn.DefaultKeychain),
+		remote.WithAuthFromKeychain(c.keychain),
 		remote.WithPlatform(platform))
 	if err != nil {
 		// Rate limits fail here immediately (429 is not retried by default)

@@ -30,7 +30,7 @@ func (m *manager) buildInitrd(ctx context.Context, arch string) (string, error) 
 
 	// Create OCI client (reuses image manager's cache)
 	cacheDir := m.paths.SystemOCICache()
-	ociClient, err := images.NewOCIClient(cacheDir)
+	ociClient, err := images.NewOCIClient(cacheDir, nil)
 	if err != nil {
 		return "", fmt.Errorf("create oci client: %w", err)
 	}

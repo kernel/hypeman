@@ -35,7 +35,7 @@ func TestCloudHypervisorVersionUpgradeRestore(t *testing.T) {
 	p := paths.New(tmpDir)
 
 	// Prepare image and system files
-	imageManager, err := images.NewManager(p, 1, nil)
+	imageManager, err := images.NewManager(p, 1, nil, nil)
 	require.NoError(t, err)
 
 	t.Log("Ensuring alpine image...")

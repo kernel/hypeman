@@ -54,7 +54,7 @@ func TestVZForkSpeed(t *testing.T) {
 	ctx := context.Background()
 	p := paths.New(tmpDir)
 
-	imageManager, err := images.NewManager(p, 1, nil)
+	imageManager, err := images.NewManager(p, 1, nil, nil)
 	require.NoError(t, err)
 
 	ref := integrationTestImageRef(t, "docker.io/library/alpine:latest")
