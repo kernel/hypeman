@@ -79,13 +79,6 @@ type VirtualFunction struct {
 	PCIAddress string `json:"pci_address"` // e.g., "0000:82:00.4"
 	ParentGPU  string `json:"parent_gpu"`  // e.g., "0000:82:00.0"
 	Allocated  bool   `json:"allocated"`   // true if a vGPU is assigned to this VF
-	// HasMdev is retained for source and JSON compatibility.
-	// Deprecated: use Allocated.
-	HasMdev bool `json:"has_mdev"`
-}
-
-func (vf VirtualFunction) IsAllocated() bool {
-	return vf.Allocated || vf.HasMdev
 }
 
 type VGPUDevice struct {
