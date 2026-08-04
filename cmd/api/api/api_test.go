@@ -134,7 +134,7 @@ func ctxWithInstance(svc *ApiService, idOrName string) context.Context {
 	return mw.WithResolvedInstance(ctx(), inst.Id, inst)
 }
 
-// ctxWithVolume creates a context with a resolved volume (simulates ResolveResource middleware)
+// ctxWithBuilder creates a context with a resolved builder (simulates ResolveResource middleware)
 func ctxWithBuilder(svc *ApiService, id string) context.Context {
 	b, err := svc.BuilderManager.GetBuilder(ctx(), id)
 	if err != nil {
@@ -143,6 +143,7 @@ func ctxWithBuilder(svc *ApiService, id string) context.Context {
 	return mw.WithResolvedBuilder(ctx(), b.ID, b)
 }
 
+// ctxWithVolume creates a context with a resolved volume (simulates ResolveResource middleware)
 func ctxWithVolume(svc *ApiService, idOrName string) context.Context {
 	vol, err := svc.VolumeManager.GetVolume(ctx(), idOrName)
 	if err != nil {

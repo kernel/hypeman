@@ -1284,6 +1284,7 @@ components:
         status:
           type: string
           enum: [pending, pulling, converting, ready, failed]
+          x-enum-varnames: [ImageStatusPending, ImageStatusPulling, ImageStatusConverting, ImageStatusReady, ImageStatusFailed]
           description: Build status
           example: ready
         queue_position:
@@ -1715,6 +1716,7 @@ components:
     BuildStatus:
       type: string
       enum: [queued, building, pushing, ready, failed, cancelled]
+      x-enum-varnames: [BuildStatusQueued, BuildStatusBuilding, BuildStatusPushing, BuildStatusReady, BuildStatusFailed, BuildStatusCancelled]
       description: Build job status
     
     BuildPolicy:
@@ -1836,6 +1838,7 @@ components:
     BuilderStatus:
       type: string
       enum: [ready, pruning, deleting, error]
+      x-enum-varnames: [BuilderStatusReady, BuilderStatusPruning, BuilderStatusDeleting, BuilderStatusError]
       description: Builder lifecycle status
 
     Builder:
@@ -1844,15 +1847,16 @@ components:
       properties:
         id:
           type: string
-          description: Unique builder identifier (opaque; the only selector)
-          example: "bldr-abc123"
+          description: Builder identifier
+          example: "tz4a98xxat96iws9zmbrgj3a"
         name:
           type: string
           description: Optional non-unique display name
           example: team-cache
         disk_size_gb:
           type: integer
-          description: Persistent BuildKit cache disk size in gigabytes (immutable)
+          minimum: 1
+          description: Persistent builder cache disk size in gigabytes. Cannot be changed after creation.
           example: 50
         status:
           $ref: "#/components/schemas/BuilderStatus"
@@ -1873,7 +1877,7 @@ components:
       properties:
         id:
           type: string
-          description: Optional caller-supplied identifier for control-plane idempotency (auto-generated if not provided)
+          description: Optional caller-supplied identifier, auto-generated if not provided
           example: "team-cache-1"
         name:
           type: string
@@ -1881,7 +1885,8 @@ components:
           example: team-cache
         disk_size_gb:
           type: integer
-          description: Cache disk size in gigabytes (default from server config; immutable after creation)
+          minimum: 1
+          description: Cache disk size in gigabytes. Omit to use the server default.
           example: 50
         tags:
           $ref: "#/components/schemas/Tags"
@@ -4424,7 +4429,7 @@ paths:
                 $ref: "#/components/schemas/Error"
     post:
       summary: Create builder
-      description: Creates a builder and eagerly provisions its persistent BuildKit cache disk. One build at a time runs on a builder.
+      description: Creates a builder and its cache disk. One build at a time runs per builder.
       operationId: createBuilder
       security:
         - bearerAuth: []
@@ -4506,7 +4511,7 @@ paths:
                 $ref: "#/components/schemas/Error"
     delete:
       summary: Delete builder
-      description: Deletes a builder and its cache disk. Deletion is total and irreversible.
+      description: Permanently deletes a builder and its cache disk.
       operationId: deleteBuilder
       security:
         - bearerAuth: []
@@ -4548,7 +4553,7 @@ paths:
   /builders/{id}/prune:
     post:
       summary: Prune builder cache
-      description: Resets the builder's cache by asynchronously recreating its disk. The builder transitions to pruning, then ready. Builder identity is preserved.
+      description: Resets the builder's cache disk. The builder transitions to pruning, then ready. Builder identity is preserved.
       operationId: pruneBuilder
       security:
         - bearerAuth: []

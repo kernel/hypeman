@@ -155,10 +155,11 @@ type BuildConfig struct {
 
 // BuildersConfig holds builder resource settings.
 type BuildersConfig struct {
-	MaxCount          int    `koanf:"max_count"`
-	DefaultDiskSizeGb int    `koanf:"default_disk_size_gb"`
-	MaxDiskSizeGb     int    `koanf:"max_disk_size_gb"`
-	IdleTTL           string `koanf:"idle_ttl"` // duration; empty or "0" disables the destructive idle reaper
+	MaxCount          int           `koanf:"max_count"`
+	DefaultDiskSizeGb int           `koanf:"default_disk_size_gb"`
+	MaxDiskSizeGb     int           `koanf:"max_disk_size_gb"`
+	IdleTTL           string        `koanf:"idle_ttl"` // duration; empty or "0" disables the destructive idle reaper
+	IdleTTLDuration   time.Duration `koanf:"-"`        // parsed by Validate
 }
 
 // InstancesConfig holds instance-manager internal settings.
@@ -657,6 +658,7 @@ func (c *Config) Validate() error {
 	if c.Builders.MaxDiskSizeGb > 0 && c.Builders.DefaultDiskSizeGb > c.Builders.MaxDiskSizeGb {
 		return fmt.Errorf("builders.default_disk_size_gb %d exceeds builders.max_disk_size_gb %d", c.Builders.DefaultDiskSizeGb, c.Builders.MaxDiskSizeGb)
 	}
+	c.Builders.IdleTTLDuration = 0
 	if c.Builders.IdleTTL != "" {
 		ttl, err := time.ParseDuration(c.Builders.IdleTTL)
 		if err != nil {
@@ -665,6 +667,7 @@ func (c *Config) Validate() error {
 		if ttl < 0 {
 			return fmt.Errorf("builders.idle_ttl must be >= 0, got %s", c.Builders.IdleTTL)
 		}
+		c.Builders.IdleTTLDuration = ttl
 	}
 	if c.Hypervisor.FirecrackerMaxConcurrentRestores < 0 {
 		return fmt.Errorf("hypervisor.firecracker_max_concurrent_restores must be >= 0, got %d", c.Hypervisor.FirecrackerMaxConcurrentRestores)

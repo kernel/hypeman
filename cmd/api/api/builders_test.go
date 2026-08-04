@@ -1,6 +1,7 @@
 package api
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -76,7 +77,7 @@ func TestCreateBuilder_CallerSuppliedID(t *testing.T) {
 	_, ok := resp.(oapi.CreateBuilder201JSONResponse)
 	require.True(t, ok, "expected 201 response")
 
-	// Replay with the same ID conflicts (control-plane idempotency).
+	// Replay with the same ID is an explicit conflict.
 	resp, err = svc.CreateBuilder(ctx(), oapi.CreateBuilderRequestObject{
 		Body: &oapi.CreateBuilderRequest{Id: &id},
 	})
@@ -96,6 +97,25 @@ func TestCreateBuilder_InvalidID(t *testing.T) {
 	require.NoError(t, err)
 	_, ok := resp.(oapi.CreateBuilder400JSONResponse)
 	assert.True(t, ok, "expected 400 response")
+}
+
+func TestCreateBuilder_NonPositiveDiskSize(t *testing.T) {
+	t.Parallel()
+
+	for _, size := range []int{0, -1} {
+		size := size
+		t.Run(fmt.Sprintf("size_%d", size), func(t *testing.T) {
+			t.Parallel()
+			svc := newTestService(t)
+			resp, err := svc.CreateBuilder(ctx(), oapi.CreateBuilderRequestObject{
+				Body: &oapi.CreateBuilderRequest{DiskSizeGb: &size},
+			})
+			require.NoError(t, err)
+			r, ok := resp.(oapi.CreateBuilder400JSONResponse)
+			require.True(t, ok, "expected 400 for disk size %d, got %T", size, resp)
+			assert.Contains(t, r.Message, "must be positive")
+		})
+	}
 }
 
 func TestCreateBuilder_DiskSizeExceeded(t *testing.T) {

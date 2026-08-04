@@ -46,10 +46,21 @@ func (s *ApiService) CreateBuilder(ctx context.Context, request oapi.CreateBuild
 		}, nil
 	}
 
+	if request.Body.DiskSizeGb != nil && *request.Body.DiskSizeGb <= 0 {
+		return oapi.CreateBuilder400JSONResponse{
+			Code:    "invalid_request",
+			Message: "disk_size_gb must be positive",
+		}, nil
+	}
+
+	diskSizeGb := 0
+	if request.Body.DiskSizeGb != nil {
+		diskSizeGb = *request.Body.DiskSizeGb
+	}
 	domainReq := builders.CreateBuilderRequest{
 		ID:         request.Body.Id,
-		Name:       valueOrEmpty(request.Body.Name),
-		DiskSizeGb: valueOrZero(request.Body.DiskSizeGb),
+		Name:       derefString(request.Body.Name),
+		DiskSizeGb: diskSizeGb,
 		Tags:       toMapTags(request.Body.Tags),
 	}
 
@@ -66,7 +77,7 @@ func (s *ApiService) CreateBuilder(ctx context.Context, request oapi.CreateBuild
 				Code:    "quota_exceeded",
 				Message: err.Error(),
 			}, nil
-		case errors.Is(err, builders.ErrInvalidID):
+		case errors.Is(err, builders.ErrInvalidID), errors.Is(err, builders.ErrInvalidDiskSize):
 			return oapi.CreateBuilder400JSONResponse{
 				Code:    "invalid_request",
 				Message: err.Error(),
@@ -153,7 +164,8 @@ func (s *ApiService) PruneBuilder(ctx context.Context, request oapi.PruneBuilder
 	}
 	log := logger.FromContext(ctx)
 
-	if err := s.BuilderManager.ResetDisk(ctx, b.ID); err != nil {
+	accepted, err := s.BuilderManager.ResetDisk(ctx, b.ID)
+	if err != nil {
 		if errors.Is(err, builders.ErrNotFound) {
 			// Deleted between resolution and this call (e.g. idle reaper)
 			return oapi.PruneBuilder404JSONResponse{
@@ -174,16 +186,7 @@ func (s *ApiService) PruneBuilder(ctx context.Context, request oapi.PruneBuilder
 		}, nil
 	}
 
-	// Re-read for the post-transition status.
-	updated, err := s.BuilderManager.GetBuilder(ctx, b.ID)
-	if err != nil {
-		log.ErrorContext(ctx, "failed to re-read builder after prune", "error", err)
-		return oapi.PruneBuilder500JSONResponse{
-			Code:    "internal_error",
-			Message: "failed to prune builder",
-		}, nil
-	}
-	return oapi.PruneBuilder202JSONResponse(builderToOAPI(updated)), nil
+	return oapi.PruneBuilder202JSONResponse(builderToOAPI(accepted)), nil
 }
 
 func builderToOAPI(b *builders.Builder) oapi.Builder {
@@ -196,20 +199,6 @@ func builderToOAPI(b *builders.Builder) oapi.Builder {
 		CreatedAt:  b.CreatedAt,
 		LastUsedAt: b.LastUsedAt,
 	}
-}
-
-func valueOrEmpty(s *string) string {
-	if s == nil {
-		return ""
-	}
-	return *s
-}
-
-func valueOrZero(i *int) int {
-	if i == nil {
-		return 0
-	}
-	return *i
 }
 
 func stringPtrOrNil(s string) *string {

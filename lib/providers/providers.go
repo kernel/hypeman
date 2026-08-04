@@ -381,21 +381,12 @@ func ProvideIngressManager(p *paths.Paths, cfg *config.Config, instanceManager i
 
 // ProvideBuilderManager provides the builders manager
 func ProvideBuilderManager(p *paths.Paths, cfg *config.Config, instanceManager instances.Manager, volumeManager volumes.Manager, log *slog.Logger) (builders.Manager, error) {
-	var idleTTL time.Duration
-	if cfg.Builders.IdleTTL != "" {
-		ttl, err := time.ParseDuration(cfg.Builders.IdleTTL)
-		if err != nil {
-			return nil, fmt.Errorf("parse builders.idle_ttl: %w", err)
-		}
-		idleTTL = ttl
-	}
-
 	meter := otel.GetMeterProvider().Meter("hypeman")
 	return builders.NewManager(p, builders.Config{
 		MaxCount:          cfg.Builders.MaxCount,
 		DefaultDiskSizeGb: cfg.Builders.DefaultDiskSizeGb,
 		MaxDiskSizeGb:     cfg.Builders.MaxDiskSizeGb,
-		IdleTTL:           idleTTL,
+		IdleTTL:           cfg.Builders.IdleTTLDuration,
 	}, volumeManager, instanceManager, log, meter)
 }
 
