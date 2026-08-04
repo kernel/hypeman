@@ -42,7 +42,7 @@ func getVGPUStatus() *GPUResourceStatus {
 	// Count used VFs (those with mdevs)
 	usedSlots := 0
 	for _, vf := range vfs {
-		if vf.HasMdev {
+		if vf.Allocated {
 			usedSlots++
 		}
 	}
