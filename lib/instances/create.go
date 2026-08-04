@@ -32,6 +32,14 @@ const (
 	MaxVolumesPerInstance = 23
 )
 
+// allowedSystemMountPaths are exact paths exempt from the system directory
+// check for instances created with AllowSystemVolumeMounts: internal
+// services that own the path and require a volume mounted at a fixed
+// location under it.
+var allowedSystemMountPaths = []string{
+	"/var/lib/buildkit", // BuildKit root volume in builder VMs
+}
+
 // systemDirectories are paths that cannot be used as volume mount points
 var systemDirectories = []string{
 	"/",
@@ -641,8 +649,9 @@ func validateCreateRequest(req *CreateInstanceRequest) error {
 }
 
 // validateVolumeAttachments validates volume attachment requests.
-// allowSystemVolumes permits attaching volumes whose IDs carry a reserved
-// internal prefix and is only set for internally created instances.
+// allowSystemVolumes is only set for internally created instances: it
+// permits attaching volumes whose IDs carry a reserved internal prefix and
+// mounting them at the reserved paths in allowedSystemMountPaths.
 func validateVolumeAttachments(attachments []VolumeAttachment, allowSystemVolumes bool) error {
 	// Count total devices needed (each overlay volume needs 2 devices: base + overlay)
 	totalDevices := 0
@@ -667,7 +676,7 @@ func validateVolumeAttachments(attachments []VolumeAttachment, allowSystemVolume
 		cleanPath := filepath.Clean(vol.MountPath)
 
 		// Check for system directories
-		if isSystemDirectory(cleanPath) {
+		if isSystemDirectory(cleanPath) && !(allowSystemVolumes && isAllowedSystemMountPath(cleanPath)) {
 			return fmt.Errorf("volume %s: cannot mount to system directory %q", vol.VolumeID, cleanPath)
 		}
 
@@ -696,6 +705,17 @@ func validateVolumeAttachments(attachments []VolumeAttachment, allowSystemVolume
 	}
 
 	return nil
+}
+
+// isAllowedSystemMountPath reports whether path is an exact match for a
+// system path that an internal instance may mount a volume at.
+func isAllowedSystemMountPath(path string) bool {
+	for _, allowed := range allowedSystemMountPaths {
+		if path == allowed {
+			return true
+		}
+	}
+	return false
 }
 
 // isSystemDirectory checks if a path is or is under a system directory

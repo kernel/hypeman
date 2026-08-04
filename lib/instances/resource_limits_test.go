@@ -252,3 +252,29 @@ func TestValidateVolumeAttachments_ReservedVolumeID(t *testing.T) {
 	}}, false)
 	assert.NoError(t, err)
 }
+
+func TestValidateVolumeAttachments_BuildkitRootSystemPath(t *testing.T) {
+	t.Parallel()
+	// The BuildKit root volume in builder VMs mounts at a fixed path under
+	// /var and is allowed only for internal instances that opt in.
+	buildkitRoot := []VolumeAttachment{{
+		VolumeID:  "builder-disk-abc123",
+		MountPath: "/var/lib/buildkit",
+	}}
+
+	err := validateVolumeAttachments(buildkitRoot, true)
+	assert.NoError(t, err)
+
+	err = validateVolumeAttachments(buildkitRoot, false)
+	assert.Error(t, err, "system mount path rejected without AllowSystemVolumeMounts")
+
+	// Parent paths and other /var subdirectories remain rejected even for
+	// internal instances.
+	for _, path := range []string{"/var", "/var/lib", "/var/lib/buildkit/nested", "/var/log"} {
+		err := validateVolumeAttachments([]VolumeAttachment{{
+			VolumeID:  "builder-disk-abc123",
+			MountPath: path,
+		}}, true)
+		assert.Error(t, err, "expected %q to be rejected", path)
+	}
+}
