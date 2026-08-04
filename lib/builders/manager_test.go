@@ -489,7 +489,15 @@ func TestReconcile_InterruptedDelete(t *testing.T) {
 	b, err := mgr.CreateBuilder(context.Background(), CreateBuilderRequest{})
 	require.NoError(t, err)
 
-	// Crash mid-delete: status persisted as deleting, disk and metadata remain.
+	// Crash mid-delete: status persisted as deleting, disk and metadata remain,
+	// and a stale VM still holds the disk.
+	instMgr.instances["inst-stale-delete"] = &instances.Instance{
+		StoredMetadata: instances.StoredMetadata{Id: "inst-stale-delete"},
+	}
+	require.NoError(t, volumeMgr.AttachVolume(context.Background(), b.DiskVolumeID, volumes.AttachVolumeRequest{
+		InstanceID: "inst-stale-delete",
+		MountPath:  "/var/lib/buildkit",
+	}))
 	meta, err := loadMetadata(p, b.ID)
 	require.NoError(t, err)
 	meta.Status = StatusDeleting
@@ -501,6 +509,7 @@ func TestReconcile_InterruptedDelete(t *testing.T) {
 
 	_, err = restarted.GetBuilder(context.Background(), b.ID)
 	assert.ErrorIs(t, err, ErrNotFound)
+	assert.Contains(t, instMgr.deleted, "inst-stale-delete")
 	_, err = volumeMgr.GetVolume(context.Background(), b.DiskVolumeID)
 	assert.ErrorIs(t, err, volumes.ErrNotFound)
 }
@@ -530,7 +539,7 @@ func TestReconcile_InterruptedPrune(t *testing.T) {
 }
 
 func TestIdleReaper(t *testing.T) {
-	m, volumeMgr, _, p := setupTestManager(t, Config{IdleTTL: time.Hour})
+	m, volumeMgr, instMgr, p := setupTestManager(t, Config{IdleTTL: time.Hour})
 
 	b, err := m.CreateBuilder(context.Background(), CreateBuilderRequest{})
 	require.NoError(t, err)
@@ -566,6 +575,26 @@ func TestIdleReaper(t *testing.T) {
 	m.reapIdle(context.Background())
 	_, err = m.GetBuilder(context.Background(), b2.ID)
 	assert.NoError(t, err, "acquired builder must not be reaped")
+
+	// A stale VM attachment on an idle builder is cleared before deletion.
+	b3, err := m.CreateBuilder(context.Background(), CreateBuilderRequest{})
+	require.NoError(t, err)
+	instMgr.instances["inst-stale-reap"] = &instances.Instance{
+		StoredMetadata: instances.StoredMetadata{Id: "inst-stale-reap"},
+	}
+	require.NoError(t, volumeMgr.AttachVolume(context.Background(), b3.DiskVolumeID, volumes.AttachVolumeRequest{
+		InstanceID: "inst-stale-reap",
+		MountPath:  "/var/lib/buildkit",
+	}))
+	meta, err = loadMetadata(p, b3.ID)
+	require.NoError(t, err)
+	meta.LastUsedAt = &old
+	require.NoError(t, saveMetadata(p, meta))
+
+	m.reapIdle(context.Background())
+	_, err = m.GetBuilder(context.Background(), b3.ID)
+	assert.ErrorIs(t, err, ErrNotFound)
+	assert.Contains(t, instMgr.deleted, "inst-stale-reap")
 }
 
 // failDeleteVolumeManager fails DeleteVolume for the given volume IDs.

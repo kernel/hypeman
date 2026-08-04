@@ -502,6 +502,10 @@ func (m *manager) reconcile(ctx context.Context) error {
 		switch meta.Status {
 		case StatusDeleting:
 			m.logger.Info("resuming interrupted builder delete", "id", id)
+			if err := m.clearStaleAttachments(ctx, meta.diskVolumeID()); err != nil {
+				reconcileErrs = append(reconcileErrs, fmt.Errorf("clear builder %s attachments before delete: %w", id, err))
+				continue
+			}
 			if err := m.DeleteBuilder(ctx, id); err != nil {
 				reconcileErrs = append(reconcileErrs, fmt.Errorf("resume builder %s delete: %w", id, err))
 			}
@@ -595,9 +599,8 @@ func (m *manager) runIdleReaper(ctx context.Context) {
 }
 
 // reapIdle deletes ready builders whose last use (or creation) is older
-// than the idle TTL. Candidate discovery does not hold the manager lock;
-// DeleteBuilder re-checks ownership, attachment, and lifecycle state before
-// changing anything.
+// than the idle TTL. It marks a candidate deleting before clearing stale
+// attachments, preventing a build from acquiring it during cleanup.
 func (m *manager) reapIdle(ctx context.Context) {
 	ids, err := listBuilderIDs(m.paths)
 	if err != nil {
@@ -607,37 +610,55 @@ func (m *manager) reapIdle(ctx context.Context) {
 	cutoff := time.Now().Add(-m.config.IdleTTL)
 
 	for _, id := range ids {
-		m.mu.Lock()
-		meta, err := loadMetadata(m.paths, id)
-		_, held := m.acquired[id]
-		m.mu.Unlock()
+		meta, shouldDelete, err := m.markIdleBuilderDeleting(id, cutoff)
 		if err != nil {
-			m.logger.Error("idle reaper failed to load builder", "id", id, "error", err)
+			m.logger.Error("idle reaper failed to inspect builder", "id", id, "error", err)
 			continue
 		}
-		if held {
-			continue
-		}
-		if meta.Status == StatusDeleting {
-			if err := m.DeleteBuilder(ctx, id); err != nil && !errors.Is(err, ErrInUse) && !errors.Is(err, ErrNotFound) {
-				m.logger.Error("idle reaper failed to resume builder delete", "id", id, "error", err)
-			}
-			continue
-		}
-		if meta.Status != StatusReady {
-			continue
-		}
-		lastActivity := meta.CreatedAt
-		if meta.LastUsedAt != nil {
-			lastActivity = *meta.LastUsedAt
-		}
-		if lastActivity.After(cutoff) {
+		if !shouldDelete {
 			continue
 		}
 
-		m.logger.Info("deleting idle builder", "id", id, "last_activity", lastActivity)
-		if err := m.DeleteBuilder(ctx, id); err != nil && !errors.Is(err, ErrInUse) && !errors.Is(err, ErrNotFound) {
+		if err := m.clearStaleAttachments(ctx, meta.diskVolumeID()); err != nil {
+			m.logger.Error("idle reaper failed to clear stale attachments", "id", id, "error", err)
+			continue
+		}
+		if err := m.DeleteBuilder(ctx, id); err != nil && !errors.Is(err, ErrNotFound) {
 			m.logger.Error("idle reaper failed to delete builder", "id", id, "error", err)
 		}
 	}
+}
+
+func (m *manager) markIdleBuilderDeleting(id string, cutoff time.Time) (*storedMetadata, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	meta, err := loadMetadata(m.paths, id)
+	if err != nil {
+		return nil, false, err
+	}
+	if meta.Status == StatusDeleting {
+		return meta, true, nil
+	}
+	if meta.Status != StatusReady {
+		return meta, false, nil
+	}
+	if _, held := m.acquired[id]; held {
+		return meta, false, nil
+	}
+
+	lastActivity := meta.CreatedAt
+	if meta.LastUsedAt != nil {
+		lastActivity = *meta.LastUsedAt
+	}
+	if lastActivity.After(cutoff) {
+		return meta, false, nil
+	}
+
+	m.logger.Info("deleting idle builder", "id", id, "last_activity", lastActivity)
+	meta.Status = StatusDeleting
+	if err := saveMetadata(m.paths, meta); err != nil {
+		return nil, false, err
+	}
+	return meta, true, nil
 }
