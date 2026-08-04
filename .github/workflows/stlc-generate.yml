@@ -61,7 +61,7 @@ env:
   # An integration-test dispatch pushes this branch instead of the preview
   # branch or main.
   INTEGRATION_BRANCH: stlc/integration-test/run-${{ github.run_id }}
-  SDK_REPOS: hypeman-go hypeman-ts
+  SDK_REPOS: hypeman-go-staging hypeman-ts-staging
   SDK_TARGETS: go,typescript
 
 jobs:
@@ -168,7 +168,7 @@ jobs:
           app-id: ${{ secrets.ADMIN_APP_ID }}
           private-key: ${{ secrets.ADMIN_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
-          repositories: hypeman-go,hypeman-ts
+          repositories: hypeman-go,hypeman-ts,hypeman-go-staging,hypeman-ts-staging
           permission-contents: write
           permission-workflows: write
           permission-pull-requests: write
@@ -188,6 +188,27 @@ jobs:
           git config --global user.name "${APP_SLUG}[bot]"
           git config --global user.email "${bot_id}+${APP_SLUG}[bot]@users.noreply.github.com"
           gh auth setup-git
+
+      - name: Initialize empty staging repos
+        env:
+          GH_TOKEN: ${{ steps.sdk-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          pairs=(
+            "hypeman-go hypeman-go-staging"
+            "hypeman-ts hypeman-ts-staging"
+          )
+          for pair in "${pairs[@]}"; do
+            read -r production staging <<<"$pair"
+            if gh api "repos/kernel/$staging/git/ref/heads/main" >/dev/null 2>&1; then
+              echo "$staging already initialized"
+              continue
+            fi
+            mirror=$(mktemp -d)
+            git clone --mirror "https://github.com/kernel/$production.git" "$mirror/repo.git"
+            git -C "$mirror/repo.git" push --mirror "https://github.com/kernel/$staging.git"
+            rm -rf "$mirror"
+          done
 
       - name: Resolve the SDK commit message
         # The merged PR's title, which survives squash, merge, and rebase alike;
@@ -373,7 +394,7 @@ jobs:
           app-id: ${{ secrets.ADMIN_APP_ID }}
           private-key: ${{ secrets.ADMIN_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
-          repositories: hypeman-go,hypeman-ts
+          repositories: hypeman-go-staging,hypeman-ts-staging
           permission-contents: write
 
       - name: Delete the preview branches
