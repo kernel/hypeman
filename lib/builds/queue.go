@@ -137,12 +137,25 @@ func (q *BuildQueue) MarkComplete(buildID string) {
 // ReleaseSerialKey frees the serial key held by an active build without
 // marking it complete, so a same-key pending build can start once the
 // active build no longer needs exclusivity (after it releases the builder
-// disk but before it finishes post-build work).
+// disk but before it finishes post-build work). The successor starts even
+// when every global slot is taken: the releasing build is past its
+// exclusive phase, so serialized builds would otherwise never overlap at
+// MaxConcurrentBuilds=1.
 func (q *BuildQueue) ReleaseSerialKey(buildID string) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
+	key, held := q.activeSerialKeys[buildID]
 	delete(q.activeSerialKeys, buildID)
+	if held {
+		for i, build := range q.pending {
+			if build.SerialKey == key {
+				q.pending = append(q.pending[:i], q.pending[i+1:]...)
+				q.startLocked(build)
+				break
+			}
+		}
+	}
 	q.startPendingLocked()
 }
 

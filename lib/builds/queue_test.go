@@ -398,3 +398,42 @@ func TestBuildQueue_SerialKeyIntrospection(t *testing.T) {
 
 	close(release)
 }
+
+// TestBuildQueue_ReleaseSerialKeyStartsSuccessorAtFullCapacity releases the
+// serial key while the build keeps its global slot (post-build work) and
+// verifies the serialized successor starts anyway: at MaxConcurrentBuilds=1
+// requiring a free global slot would never let serialized builds overlap.
+func TestBuildQueue_ReleaseSerialKeyStartsSuccessorAtFullCapacity(t *testing.T) {
+	queue := NewBuildQueue(1)
+
+	release := make(chan struct{})
+	started := make(chan string, 2)
+
+	queue.EnqueueSerial("build-1", CreateBuildRequest{}, "builder-a", func() {
+		started <- "build-1"
+		// VM phase done; the build keeps its global slot for post-build
+		// work and only completes after release closes.
+		queue.ReleaseSerialKey("build-1")
+		<-release
+	})
+	queue.EnqueueSerial("build-2", CreateBuildRequest{}, "builder-a", func() {
+		started <- "build-2"
+		<-release
+	})
+
+	select {
+	case id := <-started:
+		assert.Equal(t, "build-1", id)
+	case <-time.After(2 * time.Second):
+		t.Fatal("first build did not start")
+	}
+
+	select {
+	case id := <-started:
+		assert.Equal(t, "build-2", id)
+	case <-time.After(2 * time.Second):
+		t.Fatal("serialized successor did not start on serial key release with all global slots taken")
+	}
+
+	close(release)
+}
