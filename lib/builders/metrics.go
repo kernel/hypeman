@@ -40,7 +40,19 @@ func newBuilderMetrics(meter metric.Meter, m *manager) (*Metrics, error) {
 			if err != nil {
 				return nil
 			}
-			o.ObserveInt64(buildersTotal, int64(len(builders)))
+			counts := map[string]int64{
+				StatusReady:    0,
+				StatusPruning:  0,
+				StatusDeleting: 0,
+				StatusError:    0,
+			}
+			for _, builder := range builders {
+				counts[builder.Status]++
+			}
+			for status, count := range counts {
+				o.ObserveInt64(buildersTotal, count,
+					metric.WithAttributes(attribute.String("status", status)))
+			}
 			return nil
 		},
 		buildersTotal,

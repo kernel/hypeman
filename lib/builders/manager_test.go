@@ -24,6 +24,26 @@ type mockInstanceChecker struct {
 	deleted    []string
 }
 
+type createThenFailVolumeManager struct {
+	volumes.Manager
+	createErr error
+	deleteErr error
+}
+
+func (m *createThenFailVolumeManager) CreateVolume(ctx context.Context, req volumes.CreateVolumeRequest) (*volumes.Volume, error) {
+	if _, err := m.Manager.CreateVolume(ctx, req); err != nil {
+		return nil, err
+	}
+	return nil, m.createErr
+}
+
+func (m *createThenFailVolumeManager) DeleteVolume(ctx context.Context, id string) error {
+	if m.deleteErr != nil {
+		return m.deleteErr
+	}
+	return m.Manager.DeleteVolume(ctx, id)
+}
+
 func (m *mockInstanceChecker) GetInstance(ctx context.Context, idOrName string) (*instances.Instance, error) {
 	if m.getErr != nil {
 		return nil, m.getErr
@@ -97,7 +117,8 @@ func TestCreateBuilder_CallerSuppliedID(t *testing.T) {
 	assert.Equal(t, "builder-disk-team-cache-1", b.DiskVolumeID)
 	assert.Equal(t, 20, b.DiskSizeGb)
 
-	// Same ID is a conflict, supporting control-plane idempotency.
+	// Same ID is an explicit conflict; caller-supplied IDs are not an
+	// idempotency mechanism.
 	_, err = mgr.CreateBuilder(context.Background(), CreateBuilderRequest{ID: &id})
 	assert.ErrorIs(t, err, ErrAlreadyExists)
 }
@@ -114,7 +135,10 @@ func TestCreateBuilder_InvalidID(t *testing.T) {
 func TestCreateBuilder_Quotas(t *testing.T) {
 	mgr, _, _, _ := setupTestManager(t, Config{MaxCount: 1, MaxDiskSizeGb: 60})
 
-	_, err := mgr.CreateBuilder(context.Background(), CreateBuilderRequest{DiskSizeGb: 61})
+	_, err := mgr.CreateBuilder(context.Background(), CreateBuilderRequest{DiskSizeGb: -1})
+	assert.ErrorIs(t, err, ErrInvalidDiskSize)
+
+	_, err = mgr.CreateBuilder(context.Background(), CreateBuilderRequest{DiskSizeGb: 61})
 	assert.ErrorIs(t, err, ErrDiskSizeExceeded)
 
 	_, err = mgr.CreateBuilder(context.Background(), CreateBuilderRequest{DiskSizeGb: 60})
@@ -124,10 +148,49 @@ func TestCreateBuilder_Quotas(t *testing.T) {
 	assert.ErrorIs(t, err, ErrQuotaExceeded)
 }
 
+func TestCreateBuilder_FailedDiskCleanupKeepsOwnershipMetadata(t *testing.T) {
+	p := paths.New(t.TempDir())
+	volumeMgr := volumes.NewManager(p, 0, nil)
+	wrapped := &createThenFailVolumeManager{
+		Manager:   volumeMgr,
+		createErr: errors.New("create result lost"),
+		deleteErr: errors.New("disk busy"),
+	}
+	instMgr := &mockInstanceChecker{instances: map[string]*instances.Instance{}}
+	managerInterface, err := NewManager(p, Config{}, wrapped, instMgr, slog.Default(), nil)
+	require.NoError(t, err)
+	mgr := managerInterface.(*manager)
+
+	id := "partial-create"
+	_, err = mgr.CreateBuilder(context.Background(), CreateBuilderRequest{ID: &id})
+	require.ErrorContains(t, err, "create result lost")
+	require.ErrorContains(t, err, "disk busy")
+
+	builder, err := mgr.GetBuilder(context.Background(), id)
+	require.NoError(t, err)
+	assert.Equal(t, StatusError, builder.Status)
+	_, err = volumeMgr.GetVolume(context.Background(), builder.DiskVolumeID)
+	require.NoError(t, err, "partially-created disk remains owned by visible metadata")
+
+	_, err = mgr.CreateBuilder(context.Background(), CreateBuilderRequest{ID: &id})
+	assert.ErrorIs(t, err, ErrAlreadyExists)
+}
+
 func TestGetBuilder_NotFound(t *testing.T) {
 	mgr, _, _, _ := setupTestManager(t, Config{})
 	_, err := mgr.GetBuilder(context.Background(), "nope")
 	assert.ErrorIs(t, err, ErrNotFound)
+}
+
+func TestCorruptMetadataIsReported(t *testing.T) {
+	mgr, _, _, p := setupTestManager(t, Config{})
+	require.NoError(t, os.MkdirAll(p.BuilderDir("corrupt"), 0755))
+	require.NoError(t, os.WriteFile(p.BuilderMetadata("corrupt"), []byte("{"), 0644))
+
+	_, err := mgr.ListBuilders(context.Background())
+	require.ErrorContains(t, err, "load builder corrupt")
+	err = mgr.Start(context.Background())
+	require.ErrorContains(t, err, "load builder corrupt")
 }
 
 func TestListBuilders(t *testing.T) {
@@ -320,7 +383,9 @@ func TestResetDisk(t *testing.T) {
 	marker := p.VolumeDir(b.DiskVolumeID) + "/marker"
 	require.NoError(t, os.WriteFile(marker, []byte("x"), 0644))
 
-	require.NoError(t, mgr.ResetDisk(context.Background(), b.ID))
+	accepted, err := mgr.ResetDisk(context.Background(), b.ID)
+	require.NoError(t, err)
+	assert.Equal(t, StatusPruning, accepted.Status)
 	waitForStatus(t, mgr, b.ID, StatusReady)
 
 	_, err = os.Stat(marker)
@@ -344,14 +409,16 @@ func TestResetDisk_InUse(t *testing.T) {
 
 	_, err = mgr.AcquireForBuild(context.Background(), b.ID, "build-1")
 	require.NoError(t, err)
-	assert.ErrorIs(t, mgr.ResetDisk(context.Background(), b.ID), ErrInUse)
+	_, err = mgr.ResetDisk(context.Background(), b.ID)
+	assert.ErrorIs(t, err, ErrInUse)
 	require.NoError(t, mgr.ReleaseBuild(context.Background(), b.ID, "build-1"))
 
 	err = volumeMgr.AttachVolume(context.Background(), b.DiskVolumeID, volumes.AttachVolumeRequest{
 		InstanceID: "inst-1", MountPath: "/var/lib/buildkit",
 	})
 	require.NoError(t, err)
-	assert.ErrorIs(t, mgr.ResetDisk(context.Background(), b.ID), ErrInUse)
+	_, err = mgr.ResetDisk(context.Background(), b.ID)
+	assert.ErrorIs(t, err, ErrInUse)
 }
 
 func TestReconcile_MissingDisk(t *testing.T) {
@@ -535,10 +602,11 @@ func TestIdleReaper_RetriesAfterDiskDeleteFailure(t *testing.T) {
 	m.reapIdle(context.Background())
 
 	got, err := m.GetBuilder(context.Background(), b.ID)
-	require.NoError(t, err, "a failed reap must not strand the builder in deleting")
-	assert.Equal(t, StatusReady, got.Status, "status must revert to ready so the next tick retries")
+	require.NoError(t, err)
+	assert.Equal(t, StatusDeleting, got.Status, "failed delete remains crash-recoverable")
 
-	// Once the disk is deletable again, the next tick finishes the reap.
+	// Once the disk is deletable again, the next tick resumes the shared
+	// delete path and finishes the reap.
 	delete(failing.fail, b.DiskVolumeID)
 	m.reapIdle(context.Background())
 	_, err = m.GetBuilder(context.Background(), b.ID)
@@ -584,7 +652,8 @@ func TestValidateBuilderID(t *testing.T) {
 
 func TestResetDisk_NotFound(t *testing.T) {
 	mgr, _, _, _ := setupTestManager(t, Config{})
-	assert.ErrorIs(t, mgr.ResetDisk(context.Background(), "nope"), ErrNotFound)
+	_, err := mgr.ResetDisk(context.Background(), "nope")
+	assert.ErrorIs(t, err, ErrNotFound)
 }
 
 func TestDeleteBuilder_ToleratesMissingDisk(t *testing.T) {

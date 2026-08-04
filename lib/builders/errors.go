@@ -20,6 +20,9 @@ var (
 	// builder count limit
 	ErrQuotaExceeded = errors.New("builder quota exceeded")
 
+	// ErrInvalidDiskSize is returned when a requested disk size is negative
+	ErrInvalidDiskSize = errors.New("invalid builder disk size")
+
 	// ErrDiskSizeExceeded is returned when a requested disk size exceeds the
 	// configured maximum
 	ErrDiskSizeExceeded = errors.New("builder disk size exceeds maximum")

@@ -1,7 +1,6 @@
-// Package builders implements the Builder resource: a named, persistent
-// BuildKit cache disk that disposable per-build VMs attach at
-// /var/lib/buildkit. A Builder is the unit of build-cache isolation; one
-// build at a time may run on a Builder.
+// Package builders implements persistent cache resources used by disposable
+// build VMs. A Builder is the unit of build-cache isolation; one build at a
+// time may run on a Builder.
 package builders
 
 import (
@@ -31,8 +30,7 @@ const (
 	managedByTagValue = "builder"
 )
 
-// Builder is a first-class build-cache resource. Its disk is a persistent
-// ext4 sparse-file volume attached to builder VMs at /var/lib/buildkit.
+// Builder is a first-class build-cache resource backed by a persistent disk.
 type Builder struct {
 	ID           string
 	Name         string // optional, non-unique metadata
@@ -46,9 +44,9 @@ type Builder struct {
 
 // CreateBuilderRequest is the domain request for creating a builder
 type CreateBuilderRequest struct {
-	ID         *string // optional caller-supplied ID for control-plane idempotency
+	ID         *string // optional caller-supplied ID
 	Name       string
-	DiskSizeGb int // <= 0 uses the configured default; immutable after creation
+	DiskSizeGb int // 0 uses the configured default; immutable after creation
 	Tags       tags.Tags
 }
 

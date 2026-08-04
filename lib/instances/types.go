@@ -275,6 +275,7 @@ type CreateInstanceRequest struct {
 	HealthCheck              *healthcheck.Policy         // Optional workload health check policy
 	RestartPolicy            *restartpolicy.Policy       // Optional whole-instance restart policy
 	AllowSystemVolumeMounts  bool                        // Internal only: permits attaching reserved system volumes. Never populated from API requests.
+	SystemVolumeMountPaths   []string                    // Internal only: exact system paths reserved volumes may mount at.
 }
 
 // StartInstanceRequest is the domain request for starting a stopped instance

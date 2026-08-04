@@ -50,10 +50,10 @@ type Manager interface {
 	ReleaseBuild(ctx context.Context, id string, buildID string) error
 
 	// ResetDisk resets a builder's cache by recreating its disk
-	// asynchronously: the builder transitions to pruning, then ready (or
-	// error). Returns ErrInUse while the builder is acquired by a build,
-	// has its disk attached, or is mid-delete.
-	ResetDisk(ctx context.Context, id string) error
+	// asynchronously: the returned snapshot has status pruning, followed by
+	// ready (or error). Returns ErrInUse while the builder is acquired by a
+	// build, has its disk attached, or is mid-delete.
+	ResetDisk(ctx context.Context, id string) (*Builder, error)
 }
 
 // instanceChecker is the subset of the instance manager reconciliation
@@ -127,7 +127,7 @@ func NewManager(
 // Start reconciles on-disk state after a restart and starts the idle reaper
 func (m *manager) Start(ctx context.Context) error {
 	if err := m.reconcile(ctx); err != nil {
-		m.logger.Error("builder reconciliation failed", "error", err)
+		return fmt.Errorf("reconcile builders: %w", err)
 	}
 	if m.config.IdleTTL > 0 {
 		go m.runIdleReaper(ctx)
@@ -139,6 +139,9 @@ func (m *manager) Start(ctx context.Context) error {
 // CreateBuilder creates a builder and eagerly provisions its disk
 func (m *manager) CreateBuilder(ctx context.Context, req CreateBuilderRequest) (*Builder, error) {
 	start := time.Now()
+	result := "error"
+	defer func() { m.recordCreateDuration(ctx, start, result) }()
+
 	if err := tags.Validate(req.Tags); err != nil {
 		return nil, err
 	}
@@ -152,7 +155,10 @@ func (m *manager) CreateBuilder(ctx context.Context, req CreateBuilderRequest) (
 	}
 
 	sizeGb := req.DiskSizeGb
-	if sizeGb <= 0 {
+	if sizeGb < 0 {
+		return nil, fmt.Errorf("%w: disk_size_gb must not be negative", ErrInvalidDiskSize)
+	}
+	if sizeGb == 0 {
 		sizeGb = m.config.DefaultDiskSizeGb
 	}
 	if m.config.MaxDiskSizeGb > 0 && sizeGb > m.config.MaxDiskSizeGb {
@@ -182,30 +188,42 @@ func (m *manager) CreateBuilder(ctx context.Context, req CreateBuilderRequest) (
 	// which startup reconciliation recreates. The reverse order would
 	// orphan a reserved volume with no owning metadata.
 	meta := &storedMetadata{
-		ID:           id,
-		Name:         req.Name,
-		DiskSizeGb:   sizeGb,
-		Tags:         tags.Clone(req.Tags),
-		Status:       StatusReady,
-		CreatedAt:    time.Now(),
-		DiskVolumeID: DiskVolumeID(id),
+		ID:         id,
+		Name:       req.Name,
+		DiskSizeGb: sizeGb,
+		Tags:       tags.Clone(req.Tags),
+		Status:     StatusReady,
+		CreatedAt:  time.Now(),
 	}
 	if err := saveMetadata(m.paths, meta); err != nil {
 		return nil, err
 	}
 
 	if err := m.createDisk(ctx, meta); err != nil {
-		deleteBuilderData(m.paths, id)
+		// Keep ownership metadata until any partially-created reserved volume
+		// is gone. Otherwise the volume becomes invisible to reconciliation
+		// and a same-ID retry cannot recover it.
+		meta.Status = StatusError
+		if saveErr := saveMetadata(m.paths, meta); saveErr != nil {
+			return nil, errors.Join(err, fmt.Errorf("persist builder create failure: %w", saveErr))
+		}
+		cleanupErr := m.volumeManager.DeleteVolume(ctx, meta.diskVolumeID())
+		if cleanupErr != nil && !errors.Is(cleanupErr, volumes.ErrNotFound) {
+			return nil, errors.Join(err, fmt.Errorf("clean up builder disk: %w", cleanupErr))
+		}
+		if cleanupErr := deleteBuilderData(m.paths, id); cleanupErr != nil {
+			return nil, errors.Join(err, cleanupErr)
+		}
 		return nil, err
 	}
 
-	m.recordCreateDuration(ctx, start, "success")
+	result = "success"
 	return meta.toBuilder(), nil
 }
 
 // createDisk provisions the builder's ext4 disk volume
 func (m *manager) createDisk(ctx context.Context, meta *storedMetadata) error {
-	volID := meta.DiskVolumeID
+	volID := meta.diskVolumeID()
 	_, err := m.volumeManager.CreateVolume(ctx, volumes.CreateVolumeRequest{
 		Id:     &volID,
 		Name:   volID,
@@ -238,7 +256,7 @@ func (m *manager) ListBuilders(ctx context.Context) ([]Builder, error) {
 	for _, id := range ids {
 		meta, err := loadMetadata(m.paths, id)
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("load builder %s: %w", id, err)
 		}
 		builders = append(builders, *meta.toBuilder())
 	}
@@ -262,7 +280,7 @@ func (m *manager) DeleteBuilder(ctx context.Context, id string) error {
 		if meta.Status == StatusPruning {
 			return ErrInUse
 		}
-		attached, err := m.diskAttached(ctx, meta.DiskVolumeID)
+		attached, err := m.diskAttached(ctx, meta.diskVolumeID())
 		if err != nil {
 			return err
 		}
@@ -278,7 +296,7 @@ func (m *manager) DeleteBuilder(ctx context.Context, id string) error {
 		}
 	}
 
-	if err := m.volumeManager.DeleteVolume(ctx, meta.DiskVolumeID); err != nil && !errors.Is(err, volumes.ErrNotFound) {
+	if err := m.volumeManager.DeleteVolume(ctx, meta.diskVolumeID()); err != nil && !errors.Is(err, volumes.ErrNotFound) {
 		return fmt.Errorf("delete builder disk: %w", err)
 	}
 
@@ -307,7 +325,7 @@ func (m *manager) AcquireForBuild(ctx context.Context, id string, buildID string
 		return nil, err
 	}
 
-	attached, err := m.diskAttached(ctx, meta.DiskVolumeID)
+	attached, err := m.diskAttached(ctx, meta.diskVolumeID())
 	if err != nil {
 		return nil, err
 	}
@@ -316,7 +334,7 @@ func (m *manager) AcquireForBuild(ctx context.Context, id string, buildID string
 		// attachment: it is a leaked record or a stale VM from a crashed
 		// build. Clear it rather than failing every build until the next
 		// restart reconciliation.
-		if err := m.clearStaleAttachments(ctx, meta.DiskVolumeID); err != nil {
+		if err := m.clearStaleAttachments(ctx, meta.diskVolumeID()); err != nil {
 			return nil, fmt.Errorf("clear stale builder disk attachments: %w", err)
 		}
 	}
@@ -359,30 +377,30 @@ func (m *manager) ReleaseBuild(ctx context.Context, id string, buildID string) e
 }
 
 // ResetDisk resets a builder's cache by recreating its disk asynchronously
-func (m *manager) ResetDisk(ctx context.Context, id string) error {
+func (m *manager) ResetDisk(ctx context.Context, id string) (*Builder, error) {
 	m.mu.Lock()
 
 	meta, err := loadMetadata(m.paths, id)
 	if err != nil {
 		m.mu.Unlock()
-		return err
+		return nil, err
 	}
 	if _, held := m.acquired[id]; held {
 		m.mu.Unlock()
-		return ErrInUse
+		return nil, ErrInUse
 	}
 	if meta.Status != StatusReady && meta.Status != StatusError {
 		m.mu.Unlock()
-		return ErrInUse
+		return nil, ErrInUse
 	}
-	attached, err := m.diskAttached(ctx, meta.DiskVolumeID)
+	attached, err := m.diskAttached(ctx, meta.diskVolumeID())
 	if err != nil {
 		m.mu.Unlock()
-		return err
+		return nil, err
 	}
 	if attached {
 		m.mu.Unlock()
-		return ErrInUse
+		return nil, ErrInUse
 	}
 
 	// Persist the transition before any side effect so a crash mid-prune
@@ -390,8 +408,9 @@ func (m *manager) ResetDisk(ctx context.Context, id string) error {
 	meta.Status = StatusPruning
 	if err := saveMetadata(m.paths, meta); err != nil {
 		m.mu.Unlock()
-		return err
+		return nil, err
 	}
+	accepted := meta.toBuilder()
 	m.mu.Unlock()
 
 	go func() {
@@ -399,7 +418,7 @@ func (m *manager) ResetDisk(ctx context.Context, id string) error {
 			m.logger.Error("builder disk reset failed", "id", id, "error", err)
 		}
 	}()
-	return nil
+	return accepted, nil
 }
 
 // resetDisk recreates a builder's disk and transitions it back to ready,
@@ -423,7 +442,7 @@ func (m *manager) resetDisk(ctx context.Context, id string) error {
 		return err
 	}
 
-	if err := m.volumeManager.DeleteVolume(ctx, meta.DiskVolumeID); err != nil && !errors.Is(err, volumes.ErrNotFound) {
+	if err := m.volumeManager.DeleteVolume(ctx, meta.diskVolumeID()); err != nil && !errors.Is(err, volumes.ErrNotFound) {
 		return fail(fmt.Errorf("delete builder disk: %w", err))
 	}
 	if err := m.createDisk(ctx, meta); err != nil {
@@ -437,14 +456,14 @@ func (m *manager) resetDisk(ctx context.Context, id string) error {
 // ensureDisk recreates the builder's disk when it is missing. Returns nil
 // when the disk already exists.
 func (m *manager) ensureDisk(ctx context.Context, meta *storedMetadata) error {
-	_, err := m.volumeManager.GetVolume(ctx, meta.DiskVolumeID)
+	_, err := m.volumeManager.GetVolume(ctx, meta.diskVolumeID())
 	if err == nil {
 		return nil
 	}
 	if !errors.Is(err, volumes.ErrNotFound) {
 		return fmt.Errorf("get builder disk: %w", err)
 	}
-	m.logger.Warn("builder disk missing, recreating empty", "id", meta.ID, "volume", meta.DiskVolumeID)
+	m.logger.Warn("builder disk missing, recreating empty", "id", meta.ID, "volume", meta.diskVolumeID())
 	if err := m.createDisk(ctx, meta); err != nil && !errors.Is(err, volumes.ErrAlreadyExists) {
 		return err
 	}
@@ -472,9 +491,11 @@ func (m *manager) reconcile(ctx context.Context) error {
 		return err
 	}
 
+	var reconcileErrs []error
 	for _, id := range ids {
 		meta, err := loadMetadata(m.paths, id)
 		if err != nil {
+			reconcileErrs = append(reconcileErrs, fmt.Errorf("load builder %s: %w", id, err))
 			continue
 		}
 
@@ -482,26 +503,26 @@ func (m *manager) reconcile(ctx context.Context) error {
 		case StatusDeleting:
 			m.logger.Info("resuming interrupted builder delete", "id", id)
 			if err := m.DeleteBuilder(ctx, id); err != nil {
-				m.logger.Error("failed to resume builder delete", "id", id, "error", err)
+				reconcileErrs = append(reconcileErrs, fmt.Errorf("resume builder %s delete: %w", id, err))
 			}
 			continue
 		case StatusPruning:
 			m.logger.Info("resuming interrupted builder prune", "id", id)
 			if err := m.resetDisk(ctx, id); err != nil {
-				m.logger.Error("failed to resume builder prune", "id", id, "error", err)
+				reconcileErrs = append(reconcileErrs, fmt.Errorf("resume builder %s prune: %w", id, err))
 			}
 			continue
 		}
 
 		if err := m.ensureDisk(ctx, meta); err != nil {
-			m.logger.Error("failed to recreate missing builder disk", "id", id, "error", err)
+			reconcileErrs = append(reconcileErrs, fmt.Errorf("recreate builder %s disk: %w", id, err))
 			continue
 		}
-		if err := m.clearStaleAttachments(ctx, meta.DiskVolumeID); err != nil {
-			m.logger.Error("failed to clear stale builder disk attachments", "id", id, "error", err)
+		if err := m.clearStaleAttachments(ctx, meta.diskVolumeID()); err != nil {
+			reconcileErrs = append(reconcileErrs, fmt.Errorf("clear builder %s stale attachments: %w", id, err))
 		}
 	}
-	return nil
+	return errors.Join(reconcileErrs...)
 }
 
 // clearStaleAttachments removes attachment records from a builder disk that
@@ -574,12 +595,10 @@ func (m *manager) runIdleReaper(ctx context.Context) {
 }
 
 // reapIdle deletes ready builders whose last use (or creation) is older
-// than the idle TTL. Builders that are acquired, attached, or mid-transition
-// are skipped; DeleteBuilder re-checks those conditions.
+// than the idle TTL. Candidate discovery does not hold the manager lock;
+// DeleteBuilder re-checks ownership, attachment, and lifecycle state before
+// changing anything.
 func (m *manager) reapIdle(ctx context.Context) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	ids, err := listBuilderIDs(m.paths)
 	if err != nil {
 		m.logger.Error("idle reaper failed to list builders", "error", err)
@@ -588,14 +607,24 @@ func (m *manager) reapIdle(ctx context.Context) {
 	cutoff := time.Now().Add(-m.config.IdleTTL)
 
 	for _, id := range ids {
+		m.mu.Lock()
 		meta, err := loadMetadata(m.paths, id)
+		_, held := m.acquired[id]
+		m.mu.Unlock()
 		if err != nil {
+			m.logger.Error("idle reaper failed to load builder", "id", id, "error", err)
+			continue
+		}
+		if held {
+			continue
+		}
+		if meta.Status == StatusDeleting {
+			if err := m.DeleteBuilder(ctx, id); err != nil && !errors.Is(err, ErrInUse) && !errors.Is(err, ErrNotFound) {
+				m.logger.Error("idle reaper failed to resume builder delete", "id", id, "error", err)
+			}
 			continue
 		}
 		if meta.Status != StatusReady {
-			continue
-		}
-		if _, held := m.acquired[id]; held {
 			continue
 		}
 		lastActivity := meta.CreatedAt
@@ -606,33 +635,9 @@ func (m *manager) reapIdle(ctx context.Context) {
 			continue
 		}
 
-		attached, err := m.diskAttached(ctx, meta.DiskVolumeID)
-		if err != nil {
-			m.logger.Error("idle reaper failed to check builder disk", "id", id, "error", err)
-			continue
-		}
-		if attached {
-			continue
-		}
-
 		m.logger.Info("deleting idle builder", "id", id, "last_activity", lastActivity)
-		meta.Status = StatusDeleting
-		if err := saveMetadata(m.paths, meta); err != nil {
-			m.logger.Error("idle reaper failed to mark builder deleting", "id", id, "error", err)
-			continue
-		}
-		if err := m.volumeManager.DeleteVolume(ctx, meta.DiskVolumeID); err != nil && !errors.Is(err, volumes.ErrNotFound) {
-			m.logger.Error("idle reaper failed to delete builder disk", "id", id, "error", err)
-			// Revert to ready so the next tick retries; a builder left in
-			// deleting is skipped by the reaper until restart reconciliation.
-			meta.Status = StatusReady
-			if saveErr := saveMetadata(m.paths, meta); saveErr != nil {
-				m.logger.Error("idle reaper failed to revert builder status", "id", id, "error", saveErr)
-			}
-			continue
-		}
-		if err := deleteBuilderData(m.paths, id); err != nil {
-			m.logger.Error("idle reaper failed to delete builder metadata", "id", id, "error", err)
+		if err := m.DeleteBuilder(ctx, id); err != nil && !errors.Is(err, ErrInUse) && !errors.Is(err, ErrNotFound) {
+			m.logger.Error("idle reaper failed to delete builder", "id", id, "error", err)
 		}
 	}
 }

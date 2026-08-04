@@ -16,14 +16,13 @@ import (
 
 // storedMetadata represents builder metadata persisted to disk
 type storedMetadata struct {
-	ID           string     `json:"id"`
-	Name         string     `json:"name,omitempty"`
-	DiskSizeGb   int        `json:"disk_size_gb"`
-	Tags         tags.Tags  `json:"tags,omitempty"`
-	Status       string     `json:"status"`
-	CreatedAt    time.Time  `json:"created_at"`
-	LastUsedAt   *time.Time `json:"last_used_at,omitempty"`
-	DiskVolumeID string     `json:"disk_volume_id"`
+	ID         string     `json:"id"`
+	Name       string     `json:"name,omitempty"`
+	DiskSizeGb int        `json:"disk_size_gb"`
+	Tags       tags.Tags  `json:"tags,omitempty"`
+	Status     string     `json:"status"`
+	CreatedAt  time.Time  `json:"created_at"`
+	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
 }
 
 // loadMetadata loads builder metadata from disk
@@ -91,11 +90,19 @@ func listBuilderIDs(p *paths.Paths) ([]string, error) {
 		if !entry.IsDir() {
 			continue
 		}
-		if _, err := os.Stat(p.BuilderMetadata(entry.Name())); err == nil {
-			ids = append(ids, entry.Name())
+		if _, err := os.Stat(p.BuilderMetadata(entry.Name())); err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, fmt.Errorf("stat builder metadata %s: %w", entry.Name(), err)
 		}
+		ids = append(ids, entry.Name())
 	}
 	return ids, nil
+}
+
+func (m *storedMetadata) diskVolumeID() string {
+	return DiskVolumeID(m.ID)
 }
 
 // toBuilder converts stored metadata to the public Builder type
@@ -108,6 +115,6 @@ func (m *storedMetadata) toBuilder() *Builder {
 		Status:       m.Status,
 		CreatedAt:    m.CreatedAt,
 		LastUsedAt:   m.LastUsedAt,
-		DiskVolumeID: m.DiskVolumeID,
+		DiskVolumeID: DiskVolumeID(m.ID),
 	}
 }
