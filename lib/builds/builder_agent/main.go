@@ -52,6 +52,13 @@ type BuildConfig struct {
 	NetworkMode      string            `json:"network_mode"`
 	IsAdminBuild     bool              `json:"is_admin_build,omitempty"`
 	GlobalCacheKey   string            `json:"global_cache_key,omitempty"`
+
+	// CacheGCReservedBytes and CacheGCMaxUsedBytes bound BuildKit's garbage
+	// collector when the build root is a fixed-size persistent disk. Both
+	// must be positive to take effect; zero values leave GC at BuildKit
+	// defaults (used for the tmpfs root, which needs no explicit bound).
+	CacheGCReservedBytes int64 `json:"cache_gc_reserved_bytes,omitempty"`
+	CacheGCMaxUsedBytes  int64 `json:"cache_gc_max_used_bytes,omitempty"`
 }
 
 // SecretRef references a secret to inject during build
@@ -663,6 +670,10 @@ func setupBuildkitdConfig(config *BuildConfig) error {
 	// - RegistryInsecure=false (default) means use HTTPS
 	isHTTPS := !config.RegistryInsecure
 	hasCA := config.RegistryCACert != ""
+	gcConfig, err := buildkitWorkerGCConfig(config.CacheGCReservedBytes, config.CacheGCMaxUsedBytes)
+	if err != nil {
+		return fmt.Errorf("configure BuildKit GC: %w", err)
+	}
 
 	log.Printf("BuildKit config for registry %s (https=%v, insecure=%v, hasCA=%v)",
 		registryHost, isHTTPS, config.RegistryInsecure, hasCA)
@@ -730,6 +741,8 @@ func setupBuildkitdConfig(config *BuildConfig) error {
 	tomlContent.WriteString("[registry.\"docker.io\"]\n")
 	tomlContent.WriteString(fmt.Sprintf("  mirrors = [\"%s\"]\n", registryHost))
 
+	tomlContent.WriteString(gcConfig)
+
 	// Ensure config directory exists
 	buildkitDir := "/home/builder/.config/buildkit"
 	if err := os.MkdirAll(buildkitDir, 0755); err != nil {
@@ -746,6 +759,31 @@ func setupBuildkitdConfig(config *BuildConfig) error {
 		tomlPath, registryHost, isHTTPS, config.RegistryInsecure, hasCA)
 
 	return nil
+}
+
+// buildkitWorkerGCConfig returns the buildkitd.toml OCI worker section that
+// enables BuildKit garbage collection bounded by reservedBytes (the retention
+// floor GC never reclaims below) and maxUsedBytes (the ceiling that triggers
+// reclaim), or an empty string when both bounds are absent. Sizes are quoted
+// human-readable strings: BuildKit decodes them with units.RAMInBytes, so a
+// bare integer would be interpreted as bytes. The deprecated gckeepstorage is
+// deliberately not emitted: it maps to reservedSpace only, so nothing would
+// reclaim above the floor and a fixed-size disk could fill to ENOSPC.
+// gcpolicy string sizes require BuildKit >= v0.13.
+func buildkitWorkerGCConfig(reservedBytes, maxUsedBytes int64) (string, error) {
+	if reservedBytes == 0 && maxUsedBytes == 0 {
+		return "", nil
+	}
+	const minGCBytes = int64(1024 * 1024)
+	if reservedBytes < minGCBytes || maxUsedBytes < minGCBytes {
+		return "", fmt.Errorf("reserved and maximum GC bounds must both be at least 1 MiB")
+	}
+	if reservedBytes >= maxUsedBytes {
+		return "", fmt.Errorf("reserved GC bytes must be less than maximum used bytes")
+	}
+	reservedMB := reservedBytes / minGCBytes
+	maxUsedMB := maxUsedBytes / minGCBytes
+	return fmt.Sprintf("\n[worker.oci]\n  gc = true\n  [[worker.oci.gcpolicy]]\n    reservedSpace = \"%dMB\"\n    maxUsedSpace = \"%dMB\"\n    all = true\n", reservedMB, maxUsedMB), nil
 }
 
 func runBuild(ctx context.Context, config *BuildConfig, logWriter io.Writer) (string, string, error) {
@@ -856,21 +894,11 @@ func runBuild(ctx context.Context, config *BuildConfig, logWriter io.Writer) (st
 	buildkitdConfig := "/home/builder/.config/buildkit/buildkitd.toml"
 	log.Printf("Using buildkitd config: %s", buildkitdConfig)
 
-	// Mount a tmpfs for BuildKit's data directory.
-	// The VM rootfs is an overlayfs (read-only ext4 + writable ext4 upper layer).
-	// BuildKit's native overlayfs snapshotter creates char device 0:0 for whiteout
-	// markers, but mknod(char 0:0) fails on an overlayfs mount because the kernel
-	// treats it as an overlayfs whiteout rather than a regular device node.
-	// Using tmpfs avoids this nested-overlayfs conflict.
 	buildkitRoot := "/var/lib/buildkit"
-	if err := os.MkdirAll(buildkitRoot, 0755); err != nil {
-		return "", "", fmt.Errorf("create buildkit root dir: %w", err)
+	requirePersistentRoot := config.CacheGCReservedBytes != 0 || config.CacheGCMaxUsedBytes != 0
+	if err := ensureBuildkitRoot(buildkitRoot, requirePersistentRoot, isMountPoint, mountBuildkitTmpfs); err != nil {
+		return "", "", err
 	}
-	mountCmd := exec.Command("mount", "-t", "tmpfs", "-o", "size=3G", "tmpfs", buildkitRoot)
-	if output, err := mountCmd.CombinedOutput(); err != nil {
-		return "", "", fmt.Errorf("mount tmpfs at %s (required for native overlayfs snapshotter): %v: %s", buildkitRoot, err, output)
-	}
-	log.Printf("Mounted tmpfs at %s for BuildKit snapshotter", buildkitRoot)
 
 	log.Printf("Running: buildctl-daemonless.sh %s", strings.Join(args, " "))
 

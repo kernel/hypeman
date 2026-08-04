@@ -175,6 +175,12 @@ type BuildConfig struct {
 
 	// ImageName optionally sets a custom image name for the build output.
 	ImageName string `json:"image_name,omitempty"`
+
+	// CacheGCReservedBytes and CacheGCMaxUsedBytes bound BuildKit's garbage
+	// collector when the build root is a fixed-size persistent disk. The host
+	// leaves both zero for tmpfs-backed builds.
+	CacheGCReservedBytes int64 `json:"cache_gc_reserved_bytes,omitempty"`
+	CacheGCMaxUsedBytes  int64 `json:"cache_gc_max_used_bytes,omitempty"`
 }
 
 // BuildEvent represents a typed SSE event for build streaming
