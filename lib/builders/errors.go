@@ -19,4 +19,8 @@ var (
 	// ErrQuotaExceeded is returned when a create would exceed the configured
 	// builder count limit
 	ErrQuotaExceeded = errors.New("builder quota exceeded")
+
+	// ErrDiskSizeExceeded is returned when a requested disk size exceeds the
+	// configured maximum
+	ErrDiskSizeExceeded = errors.New("builder disk size exceeds maximum")
 )

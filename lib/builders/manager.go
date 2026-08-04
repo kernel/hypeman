@@ -156,7 +156,7 @@ func (m *manager) CreateBuilder(ctx context.Context, req CreateBuilderRequest) (
 		sizeGb = m.config.DefaultDiskSizeGb
 	}
 	if m.config.MaxDiskSizeGb > 0 && sizeGb > m.config.MaxDiskSizeGb {
-		return nil, fmt.Errorf("disk_size_gb %d exceeds maximum of %d", sizeGb, m.config.MaxDiskSizeGb)
+		return nil, fmt.Errorf("%w: disk_size_gb %d exceeds maximum of %d", ErrDiskSizeExceeded, sizeGb, m.config.MaxDiskSizeGb)
 	}
 
 	m.mu.Lock()

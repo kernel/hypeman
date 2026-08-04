@@ -115,7 +115,7 @@ func TestCreateBuilder_Quotas(t *testing.T) {
 	mgr, _, _, _ := setupTestManager(t, Config{MaxCount: 1, MaxDiskSizeGb: 60})
 
 	_, err := mgr.CreateBuilder(context.Background(), CreateBuilderRequest{DiskSizeGb: 61})
-	assert.ErrorContains(t, err, "exceeds maximum")
+	assert.ErrorIs(t, err, ErrDiskSizeExceeded)
 
 	_, err = mgr.CreateBuilder(context.Background(), CreateBuilderRequest{DiskSizeGb: 60})
 	require.NoError(t, err)
