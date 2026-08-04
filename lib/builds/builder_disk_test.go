@@ -364,3 +364,71 @@ func TestBuilderDeleteAndPruneBlockedByQueuedBuilds(t *testing.T) {
 	err = mgr.builderManager.DeleteBuilder(ctx, builder.ID)
 	assert.ErrorIs(t, err, builders.ErrInUse, "delete must be blocked by a queued-then-running build")
 }
+
+// TestExecuteBuild_ReleaseRetriedOnPersistFailure fails the builder
+// metadata write for the first release attempts and verifies the deferred
+// retry still releases the builder: without it the hold would leak and
+// every later build for the builder would fail AcquireForBuild until
+// restart.
+func TestExecuteBuild_ReleaseRetriedOnPersistFailure(t *testing.T) {
+	mgr, instanceMgr, _, tempDir := setupTestManager(t)
+	defer os.RemoveAll(tempDir)
+
+	ctx := context.Background()
+	builder, err := mgr.builderManager.CreateBuilder(ctx, builders.CreateBuilderRequest{DiskSizeGb: 20})
+	require.NoError(t, err)
+
+	req := CreateBuildRequest{
+		Dockerfile: "FROM alpine\nRUN echo hello",
+		BuilderID:  builder.ID,
+	}
+	prepareBuildOnDisk(t, mgr, "build-1", req)
+	stoppedBuilderInstance(instanceMgr, nil)
+
+	// A directory occupying the temp path fails the atomic write even for
+	// a root test runner; clear it after the first attempt fails.
+	tmpPath := mgr.paths.BuilderMetadata(builder.ID) + ".tmp"
+	require.NoError(t, os.Mkdir(tmpPath, 0755))
+	defer os.Remove(tmpPath)
+	go func() {
+		time.Sleep(1100 * time.Millisecond)
+		os.Remove(tmpPath)
+	}()
+
+	policy := DefaultBuildPolicy()
+	_, err = mgr.executeBuild(ctx, "build-1", req, &policy)
+	require.NoError(t, err)
+
+	// The retried release succeeded: the builder is immediately
+	// re-acquirable and last_used_at was stamped.
+	_, err = mgr.builderManager.AcquireForBuild(ctx, builder.ID, "build-2")
+	require.NoError(t, err, "release retry must clear the hold")
+	got, err := mgr.builderManager.GetBuilder(ctx, builder.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got.LastUsedAt)
+}
+
+// TestBuilderHasBuilds_CountsDiskPendingBeforeRecovery persists a queued
+// build without enqueueing it (the state between restart and startup
+// recovery, which runs only after the builder image is ready) and
+// verifies it still counts as builder activity.
+func TestBuilderHasBuilds_CountsDiskPendingBeforeRecovery(t *testing.T) {
+	mgr, _, _, tempDir := setupTestManager(t)
+	defer os.RemoveAll(tempDir)
+
+	require.NoError(t, writeMetadata(mgr.paths, &buildMetadata{
+		ID:        "build-disk",
+		Status:    StatusQueued,
+		Request:   &CreateBuildRequest{BuilderID: "builder-a"},
+		CreatedAt: time.Now(),
+	}))
+
+	assert.True(t, mgr.BuilderHasBuilds("builder-a"), "disk-pending build must count before recovery")
+	assert.False(t, mgr.BuilderHasBuilds("builder-b"))
+
+	// After recovery completes with nothing left pending, an empty queue
+	// reports idle.
+	require.NoError(t, deleteBuild(mgr.paths, "build-disk"))
+	mgr.RecoverPendingBuilds()
+	assert.False(t, mgr.BuilderHasBuilds("builder-a"))
+}

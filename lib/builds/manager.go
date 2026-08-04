@@ -29,6 +29,13 @@ import (
 	"go.opentelemetry.io/otel/metric"
 )
 
+const (
+	// releaseBuildMaxAttempts bounds the builder-release retry at the end
+	// of a build; releaseBuildRetryDelay spaces the attempts.
+	releaseBuildMaxAttempts = 5
+	releaseBuildRetryDelay  = time.Second
+)
+
 //go:embed images/generic/Dockerfile
 var builderDockerfile []byte
 
@@ -70,7 +77,8 @@ type Manager interface {
 	QueuedBuildsForBuilder(builderID string) []string
 
 	// BuilderHasBuilds reports whether any build targeting the builder is
-	// queued or running.
+	// queued or running, including builds still only persisted on disk
+	// while startup recovery has not re-enqueued them yet.
 	BuilderHasBuilds(builderID string) bool
 }
 
@@ -139,6 +147,10 @@ type manager struct {
 	metrics         *Metrics
 	createMu        sync.Mutex
 	builderReady    atomic.Bool
+	// pendingRecovered is set once RecoverPendingBuilds has re-enqueued
+	// persisted pending builds; until then BuilderHasBuilds also scans
+	// disk so delete, prune, and the idle reaper see them.
+	pendingRecovered atomic.Bool
 
 	// Status subscription system for SSE streaming
 	statusSubscribers map[string][]chan BuildEvent
@@ -591,9 +603,28 @@ func (m *manager) QueuedBuildsForBuilder(builderID string) []string {
 }
 
 // BuilderHasBuilds reports whether any build targeting the builder is
-// queued or running.
+// queued or running. Until startup recovery completes, persisted pending
+// builds are not in the queue yet, so they are matched on disk.
 func (m *manager) BuilderHasBuilds(builderID string) bool {
-	return m.ActiveBuildForBuilder(builderID) != nil || len(m.QueuedBuildsForBuilder(builderID)) > 0
+	if m.ActiveBuildForBuilder(builderID) != nil || len(m.QueuedBuildsForBuilder(builderID)) > 0 {
+		return true
+	}
+	if m.pendingRecovered.Load() {
+		return false
+	}
+	pending, err := listPendingBuilds(m.paths)
+	if err != nil {
+		// Fail closed: blocking a delete is recoverable, deleting a
+		// builder out from under a pending build is not.
+		m.logger.Error("list pending builds for builder activity check", "builder", builderID, "error", err)
+		return true
+	}
+	for _, meta := range pending {
+		if meta.Request != nil && meta.Request.BuilderID == builderID {
+			return true
+		}
+	}
+	return false
 }
 
 // storeSource stores the source tarball for a build
@@ -804,9 +835,20 @@ func (m *manager) executeBuild(ctx context.Context, id string, req CreateBuildRe
 			return nil, fmt.Errorf("acquire builder %s: %w", req.BuilderID, err)
 		}
 		defer func() {
-			if err := m.builderManager.ReleaseBuild(context.Background(), req.BuilderID, id); err != nil {
-				m.logger.Error("failed to release builder", "builder", req.BuilderID, "build", id, "error", err)
+			// ReleaseBuild keeps the builder acquired when stamping
+			// last_used_at fails so the caller can retry. Without the
+			// retry, a transient write error leaks the hold and every
+			// later build for this builder fails AcquireForBuild until
+			// restart.
+			var err error
+			for attempt := 1; attempt <= releaseBuildMaxAttempts; attempt++ {
+				if err = m.builderManager.ReleaseBuild(context.Background(), req.BuilderID, id); err == nil {
+					return
+				}
+				m.logger.Warn("failed to release builder, retrying", "builder", req.BuilderID, "build", id, "attempt", attempt, "error", err)
+				time.Sleep(releaseBuildRetryDelay)
 			}
+			m.logger.Error("failed to release builder; builder stays acquired until restart", "builder", req.BuilderID, "build", id, "error", err)
 		}()
 		builderDiskVolID = builders.DiskVolumeID(req.BuilderID)
 	}
@@ -1409,6 +1451,7 @@ func (m *manager) RecoverPendingBuilds() {
 	if len(pending) > 0 {
 		m.logger.Info("recovered pending builds", "count", len(pending))
 	}
+	m.pendingRecovered.Store(true)
 }
 
 // refreshBuildToken regenerates the registry token for a build and updates the config file
