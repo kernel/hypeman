@@ -206,6 +206,8 @@ jobs:
             fi
             mirror=$(mktemp -d)
             git clone --mirror "https://github.com/kernel/$production.git" "$mirror/repo.git"
+            git -C "$mirror/repo.git" for-each-ref --format='delete %(refname)' refs/pull | \
+              git -C "$mirror/repo.git" update-ref --stdin
             git -C "$mirror/repo.git" push --mirror "https://github.com/kernel/$staging.git"
             rm -rf "$mirror"
           done
