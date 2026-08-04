@@ -16,7 +16,7 @@ func TestEnsureBuildkitRootAlreadyMounted(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "buildkit")
 
 	mountCalled := false
-	err := ensureBuildkitRoot(root,
+	err := ensureBuildkitRoot(root, false,
 		func(path string) (bool, error) {
 			assert.Equal(t, root, path)
 			return true, nil
@@ -35,7 +35,7 @@ func TestEnsureBuildkitRootMountsTmpfsWhenUnmounted(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "buildkit")
 
 	var mountedPath string
-	err := ensureBuildkitRoot(root,
+	err := ensureBuildkitRoot(root, false,
 		func(path string) (bool, error) { return false, nil },
 		func(path string) error {
 			mountedPath = path
@@ -48,10 +48,26 @@ func TestEnsureBuildkitRootMountsTmpfsWhenUnmounted(t *testing.T) {
 	assert.DirExists(t, root)
 }
 
+func TestEnsureBuildkitRootRequiresPersistentMountForGC(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "buildkit")
+	mountCalled := false
+
+	err := ensureBuildkitRoot(root, true,
+		func(path string) (bool, error) { return false, nil },
+		func(path string) error {
+			mountCalled = true
+			return nil
+		},
+	)
+
+	require.ErrorContains(t, err, "persistent BuildKit cache configured")
+	assert.False(t, mountCalled, "configured persistent cache must not fall back to tmpfs")
+}
+
 func TestEnsureBuildkitRootPropagatesMountFailure(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "buildkit")
 
-	err := ensureBuildkitRoot(root,
+	err := ensureBuildkitRoot(root, false,
 		func(path string) (bool, error) { return false, nil },
 		func(path string) error { return errors.New("mount failed") },
 	)
@@ -62,7 +78,7 @@ func TestEnsureBuildkitRootPropagatesMountFailure(t *testing.T) {
 func TestEnsureBuildkitRootPropagatesMountpointCheckFailure(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "buildkit")
 
-	err := ensureBuildkitRoot(root,
+	err := ensureBuildkitRoot(root, false,
 		func(path string) (bool, error) { return false, errors.New("proc unavailable") },
 		func(path string) error { return nil },
 	)
@@ -85,11 +101,30 @@ func TestMountsContain(t *testing.T) {
 
 func TestBuildkitWorkerGCConfig(t *testing.T) {
 	// No bounds: no worker section, GC stays at BuildKit defaults (tmpfs path).
-	assert.Empty(t, buildkitWorkerGCConfig(0, 0))
-	assert.Empty(t, buildkitWorkerGCConfig(45*1024*1024*1024, 0))
-	assert.Empty(t, buildkitWorkerGCConfig(0, 45*1024*1024*1024))
+	cfg, err := buildkitWorkerGCConfig(0, 0)
+	require.NoError(t, err)
+	assert.Empty(t, cfg)
 
-	cfg := buildkitWorkerGCConfig(5*1024*1024*1024, 45*1024*1024*1024)
+	for name, tc := range map[string]struct {
+		reserved int64
+		maximum  int64
+		wantErr  string
+	}{
+		"missing maximum":    {5 * 1024 * 1024, 0, "both be at least 1 MiB"},
+		"missing reserved":   {0, 5 * 1024 * 1024, "both be at least 1 MiB"},
+		"reserved too small": {512 * 1024, 5 * 1024 * 1024, "both be at least 1 MiB"},
+		"maximum too small":  {1024 * 1024, 512 * 1024, "both be at least 1 MiB"},
+		"equal bounds":       {5 * 1024 * 1024, 5 * 1024 * 1024, "must be less than"},
+		"reserved above max": {6 * 1024 * 1024, 5 * 1024 * 1024, "must be less than"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := buildkitWorkerGCConfig(tc.reserved, tc.maximum)
+			require.ErrorContains(t, err, tc.wantErr)
+		})
+	}
+
+	cfg, err = buildkitWorkerGCConfig(5*1024*1024*1024, 45*1024*1024*1024)
+	require.NoError(t, err)
 	golden := "\n[worker.oci]\n" +
 		"  gc = true\n" +
 		"  [[worker.oci.gcpolicy]]\n" +
@@ -105,14 +140,15 @@ func TestBuildkitWorkerGCConfig(t *testing.T) {
 // units.RAMInBytes, so the emitted strings must decode back to the intended
 // byte counts.
 func TestBuildkitWorkerGCConfigSizeDecode(t *testing.T) {
-	cfg := buildkitWorkerGCConfig(5*1024*1024*1024, 45*1024*1024*1024)
+	cfg, err := buildkitWorkerGCConfig(5*1024*1024*1024, 45*1024*1024*1024)
+	require.NoError(t, err)
 
 	for key, wantBytes := range map[string]int64{
 		"reservedSpace": 5 * 1024 * 1024 * 1024,
 		"maxUsedSpace":  45 * 1024 * 1024 * 1024,
 	} {
 		var size string
-		_, err := fmt.Sscanf(strings.TrimSpace(strings.Split(strings.Split(cfg, key+" = ")[1], "\n")[0]), "%q", &size)
+		_, err = fmt.Sscanf(strings.TrimSpace(strings.Split(strings.Split(cfg, key+" = ")[1], "\n")[0]), "%q", &size)
 		require.NoError(t, err)
 		decoded, err := units.RAMInBytes(size)
 		require.NoError(t, err)

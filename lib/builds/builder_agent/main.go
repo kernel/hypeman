@@ -670,6 +670,10 @@ func setupBuildkitdConfig(config *BuildConfig) error {
 	// - RegistryInsecure=false (default) means use HTTPS
 	isHTTPS := !config.RegistryInsecure
 	hasCA := config.RegistryCACert != ""
+	gcConfig, err := buildkitWorkerGCConfig(config.CacheGCReservedBytes, config.CacheGCMaxUsedBytes)
+	if err != nil {
+		return fmt.Errorf("configure BuildKit GC: %w", err)
+	}
 
 	log.Printf("BuildKit config for registry %s (https=%v, insecure=%v, hasCA=%v)",
 		registryHost, isHTTPS, config.RegistryInsecure, hasCA)
@@ -737,7 +741,7 @@ func setupBuildkitdConfig(config *BuildConfig) error {
 	tomlContent.WriteString("[registry.\"docker.io\"]\n")
 	tomlContent.WriteString(fmt.Sprintf("  mirrors = [\"%s\"]\n", registryHost))
 
-	tomlContent.WriteString(buildkitWorkerGCConfig(config.CacheGCReservedBytes, config.CacheGCMaxUsedBytes))
+	tomlContent.WriteString(gcConfig)
 
 	// Ensure config directory exists
 	buildkitDir := "/home/builder/.config/buildkit"
@@ -760,19 +764,26 @@ func setupBuildkitdConfig(config *BuildConfig) error {
 // buildkitWorkerGCConfig returns the buildkitd.toml OCI worker section that
 // enables BuildKit garbage collection bounded by reservedBytes (the retention
 // floor GC never reclaims below) and maxUsedBytes (the ceiling that triggers
-// reclaim), or an empty string when either bound is missing. Sizes are quoted
+// reclaim), or an empty string when both bounds are absent. Sizes are quoted
 // human-readable strings: BuildKit decodes them with units.RAMInBytes, so a
 // bare integer would be interpreted as bytes. The deprecated gckeepstorage is
 // deliberately not emitted: it maps to reservedSpace only, so nothing would
 // reclaim above the floor and a fixed-size disk could fill to ENOSPC.
 // gcpolicy string sizes require BuildKit >= v0.13.
-func buildkitWorkerGCConfig(reservedBytes, maxUsedBytes int64) string {
-	if reservedBytes <= 0 || maxUsedBytes <= 0 {
-		return ""
+func buildkitWorkerGCConfig(reservedBytes, maxUsedBytes int64) (string, error) {
+	if reservedBytes == 0 && maxUsedBytes == 0 {
+		return "", nil
 	}
-	reservedMB := reservedBytes / (1024 * 1024)
-	maxUsedMB := maxUsedBytes / (1024 * 1024)
-	return fmt.Sprintf("\n[worker.oci]\n  gc = true\n  [[worker.oci.gcpolicy]]\n    reservedSpace = \"%dMB\"\n    maxUsedSpace = \"%dMB\"\n    all = true\n", reservedMB, maxUsedMB)
+	const minGCBytes = int64(1024 * 1024)
+	if reservedBytes < minGCBytes || maxUsedBytes < minGCBytes {
+		return "", fmt.Errorf("reserved and maximum GC bounds must both be at least 1 MiB")
+	}
+	if reservedBytes >= maxUsedBytes {
+		return "", fmt.Errorf("reserved GC bytes must be less than maximum used bytes")
+	}
+	reservedMB := reservedBytes / minGCBytes
+	maxUsedMB := maxUsedBytes / minGCBytes
+	return fmt.Sprintf("\n[worker.oci]\n  gc = true\n  [[worker.oci.gcpolicy]]\n    reservedSpace = \"%dMB\"\n    maxUsedSpace = \"%dMB\"\n    all = true\n", reservedMB, maxUsedMB), nil
 }
 
 func runBuild(ctx context.Context, config *BuildConfig, logWriter io.Writer) (string, string, error) {
@@ -884,7 +895,8 @@ func runBuild(ctx context.Context, config *BuildConfig, logWriter io.Writer) (st
 	log.Printf("Using buildkitd config: %s", buildkitdConfig)
 
 	buildkitRoot := "/var/lib/buildkit"
-	if err := ensureBuildkitRoot(buildkitRoot, isMountPoint, mountBuildkitTmpfs); err != nil {
+	requirePersistentRoot := config.CacheGCReservedBytes != 0 || config.CacheGCMaxUsedBytes != 0
+	if err := ensureBuildkitRoot(buildkitRoot, requirePersistentRoot, isMountPoint, mountBuildkitTmpfs); err != nil {
 		return "", "", err
 	}
 
@@ -938,7 +950,7 @@ func runBuild(ctx context.Context, config *BuildConfig, logWriter io.Writer) (st
 //
 // A pre-mounted root is shared state: only attach a volume there when builds
 // are serialized per volume, never to two builder VMs at once.
-func ensureBuildkitRoot(root string, isMounted func(string) (bool, error), mountTmpfs func(string) error) error {
+func ensureBuildkitRoot(root string, requirePersistent bool, isMounted func(string) (bool, error), mountTmpfs func(string) error) error {
 	mounted, err := isMounted(root)
 	if err != nil {
 		return fmt.Errorf("check mountpoint %s: %w", root, err)
@@ -946,6 +958,9 @@ func ensureBuildkitRoot(root string, isMounted func(string) (bool, error), mount
 	if mounted {
 		log.Printf("Using existing mount at %s for BuildKit", root)
 		return nil
+	}
+	if requirePersistent {
+		return fmt.Errorf("persistent BuildKit cache configured but %s is not mounted", root)
 	}
 	if err := os.MkdirAll(root, 0755); err != nil {
 		return fmt.Errorf("create buildkit root dir: %w", err)
