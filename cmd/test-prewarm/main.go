@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -23,8 +24,9 @@ import (
 )
 
 const (
-	defaultRegistry = "127.0.0.1:5001"
-	registryName    = "hypeman-ci-registry"
+	defaultRegistry      = "127.0.0.1:5001"
+	registryName         = "hypeman-ci-registry"
+	initrdBuildRetention = 2 * time.Hour
 )
 
 // prewarmImage is a source image to mirror into the local registry. Platform
@@ -154,6 +156,13 @@ func main() {
 	if err != nil {
 		fatalf("hash initrd: %v", err)
 	}
+	pruned, err := pruneOldInitrdBuilds(initrdPath, time.Now().Add(-initrdBuildRetention))
+	if err != nil {
+		fatalf("prune old initrd builds: %v", err)
+	}
+	if pruned > 0 {
+		fmt.Printf("pruned old initrd builds count=%d retention=%s\n", pruned, initrdBuildRetention)
+	}
 
 	manifest.System.KernelVersion = string(system.DefaultKernelVersion)
 	manifest.System.Arch = system.GetArch()
@@ -167,6 +176,44 @@ func main() {
 		fatalf("write manifest: %v", err)
 	}
 	fmt.Printf("prewarm complete manifest=%s\n", manifestPath)
+}
+
+func pruneOldInitrdBuilds(initrdPath string, cutoff time.Time) (int, error) {
+	currentBuild := filepath.Base(filepath.Dir(initrdPath))
+	initrdDir := filepath.Dir(filepath.Dir(initrdPath))
+	latestTarget, err := os.Readlink(filepath.Join(initrdDir, "latest"))
+	if err != nil {
+		return 0, fmt.Errorf("read latest initrd: %w", err)
+	}
+	latestBuild := filepath.Base(filepath.Clean(latestTarget))
+
+	entries, err := os.ReadDir(initrdDir)
+	if err != nil {
+		return 0, fmt.Errorf("read initrd builds: %w", err)
+	}
+
+	pruned := 0
+	for _, entry := range entries {
+		name := entry.Name()
+		if !entry.IsDir() || name == currentBuild || name == latestBuild {
+			continue
+		}
+		if _, err := strconv.ParseInt(name, 10, 64); err != nil {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return pruned, fmt.Errorf("stat initrd build %s: %w", name, err)
+		}
+		if !info.ModTime().Before(cutoff) {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(initrdDir, name)); err != nil {
+			return pruned, fmt.Errorf("remove initrd build %s: %w", name, err)
+		}
+		pruned++
+	}
+	return pruned, nil
 }
 
 func ensureMirroredImage(ctx context.Context, inspector *images.OCIClient, registry string, img prewarmImage) (manifestImage, error) {
