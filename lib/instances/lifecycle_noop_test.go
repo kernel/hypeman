@@ -208,7 +208,7 @@ func TestStopStoppedInstanceReleasesRetainedVGPU(t *testing.T) {
 	assert.Empty(t, stored.GPUDevicePath)
 }
 
-func TestStopStoppedInstanceVGPUReleaseFailureReturnsError(t *testing.T) {
+func TestStopStoppedInstanceVGPUReleaseFailureRemainsNoop(t *testing.T) {
 	m, id := newLifecycleNoopManagerWithInstance(t, StateStopped, time.Now().UTC())
 	meta, err := m.loadMetadata(id)
 	require.NoError(t, err)
@@ -217,9 +217,10 @@ func TestStopStoppedInstanceVGPUReleaseFailureReturnsError(t *testing.T) {
 	meta.GPUDevicePath = "/sys/bus/pci/devices/0000:82:00.4"
 	require.NoError(t, m.saveMetadata(meta))
 
-	_, err = m.StopInstance(context.Background(), id)
-	require.Error(t, err)
-	assert.ErrorContains(t, err, "destroy vGPU")
+	inst, err := m.StopInstance(context.Background(), id)
+	require.NoError(t, err)
+	require.NotNil(t, inst)
+	assert.Equal(t, StateStopped, inst.State)
 
 	stored, err := m.loadMetadata(id)
 	require.NoError(t, err)
