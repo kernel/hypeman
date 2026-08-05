@@ -27,6 +27,7 @@
 - **Built-in ingress** — reverse proxy with TLS termination and subdomain routing
 - **GPU passthrough** — vGPU and VFIO device support
 - **OCI image support** — pull and run standard container images
+- **Remote registry push** — export cached images to any OCI registry (AWS ECR, Docker Hub, ghcr, ...) with docker-style borrowed credentials
 - **Remote API** — JWT-authenticated server with a separate CLI client
 
 ## Requirements
@@ -132,6 +133,35 @@ hypeman exec my-app whoami
 # Shell into the VM
 hypeman exec -it my-app /bin/sh
 ```
+
+### Pushing Images to Remote Registries
+
+Images in the local store can be exported to any OCI registry (AWS ECR,
+Docker Hub, ghcr, ...) via the API. Credentials follow the docker model:
+they stay on the client and are borrowed for a single push, never stored
+on the server. Without credentials, the server's own registry logins
+(`~/.docker/config.json`) are used.
+
+```bash
+# Push a ready image to a remote registry, lending the client's credentials
+curl -X POST https://hypeman.example.com/pushes \
+  -H "Authorization: Bearer $HYPEMAN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "image": "myapp:latest",
+    "target": "123456789.dkr.ecr.us-east-1.amazonaws.com/myapp:v1",
+    "credentials": {
+      "username": "AWS",
+      "password": "'$(aws ecr get-login-password --region us-east-1)'"
+    }
+  }'
+
+# Poll the job (queued -> pushing -> pushed | failed)
+curl https://hypeman.example.com/pushes/<id> -H "Authorization: Bearer $HYPEMAN_TOKEN"
+```
+
+Pushed blobs are identical to the cached image, so manifest digests are
+preserved end to end. Only images in the `ready` state can be pushed.
 
 ### VM Lifecycle
 
