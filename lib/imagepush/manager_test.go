@@ -533,6 +533,60 @@ func TestCreatePushAdoptsOrphanedPendingJob(t *testing.T) {
 	}
 }
 
+func TestCreatePushOrphanWithCredentialsIsFailedNotAdopted(t *testing.T) {
+	p, digest := cacheFixture(t)
+	host := openRegistry(t)
+	target := host + "/export/cred-orphan:v1"
+
+	resolver := &fakeResolver{images: map[string]*images.Image{
+		"myapp:v1": readyImage("myapp:v1", digest),
+	}}
+	mgr, err := NewManager(p, resolver, nil, 1)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	// An orphaned record that used borrowed credentials cannot be
+	// re-executed with them: it must be closed, and a fresh job created.
+	orphan := &pushMetadata{
+		ID:             "cred-orphan",
+		Status:         StatusQueued,
+		Image:          "myapp:v1",
+		Digest:         digest,
+		Target:         target,
+		Insecure:       true,
+		HadCredentials: true,
+		CreatedAt:      time.Now(),
+	}
+	if err := writeMetadata(p, orphan); err != nil {
+		t.Fatalf("writeMetadata: %v", err)
+	}
+
+	push, err := mgr.CreatePush(context.Background(), PushRequest{
+		Image: "myapp:v1", Target: target, Insecure: true,
+	})
+	if err != nil {
+		t.Fatalf("CreatePush: %v", err)
+	}
+	if push.ID == "cred-orphan" {
+		t.Fatal("credentialed orphan must not be adopted")
+	}
+	if err := mgr.WaitForPush(context.Background(), push.ID); err != nil {
+		t.Fatalf("WaitForPush: %v", err)
+	}
+
+	got, err := mgr.GetPush(context.Background(), "cred-orphan")
+	if err != nil {
+		t.Fatalf("GetPush orphan: %v", err)
+	}
+	if got.Status != StatusFailed {
+		t.Errorf("orphan status = %s, want failed", got.Status)
+	}
+	if got.Error == nil || !strings.Contains(*got.Error, "credentials") {
+		t.Errorf("orphan error = %v, want credentials explanation", got.Error)
+	}
+}
+
 func TestRecoveryDedupesSameKey(t *testing.T) {
 	p, digest := cacheFixture(t)
 	host := openRegistry(t)

@@ -48,8 +48,10 @@ func (q *pushQueue) Enqueue(key string, startFn func(), done func()) int {
 	}
 
 	wrappedFn := func() {
+		// Deferred so a panicking startFn still releases the slot and runs
+		// the completion hook; otherwise the key would stay active forever.
+		defer q.complete(key, done)
 		startFn()
-		q.complete(key, done)
 	}
 
 	if len(q.active) < q.maxConcurrent {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -105,12 +106,18 @@ func (m *manager) CreatePush(ctx context.Context, req PushRequest) (*Push, error
 
 	// Adopt a pending record that exists on disk but is not tracked in memory
 	// (e.g. left behind by an interrupted recovery) instead of creating a
-	// duplicate job for the same digest+target. Adopted records cannot carry
-	// borrowed credentials: recovery fails those instead of re-enqueueing.
+	// duplicate job for the same digest+target. Records that carried borrowed
+	// credentials cannot be re-executed with them: close them with the same
+	// policy as recovery and fall through to create a fresh job (the current
+	// request may lend new credentials).
 	orphan, err := findPendingPush(m.paths, key)
 	if err != nil {
 		m.mu.Unlock()
 		return nil, fmt.Errorf("scan pending pushes: %w", err)
+	}
+	if orphan != nil && orphan.HadCredentials {
+		m.failRecovered(orphan, "push interrupted by restart: borrowed registry credentials are no longer available, retry the push")
+		orphan = nil
 	}
 	if orphan != nil {
 		m.inflight[key] = inflightPush{id: orphan.ID, digest: orphan.Digest}
@@ -163,42 +170,50 @@ func (m *manager) executePush(ctx context.Context, meta *pushMetadata, provider 
 		fmt.Fprintf(os.Stderr, "Warning: failed to persist push status for %s: %v\n", meta.ID, err)
 	}
 
-	result, err := registrypush.PushFromCache(ctx, m.paths, meta.Digest, meta.Target, provider, registrypush.Options{
+	result, pushErr := registrypush.PushFromCache(ctx, m.paths, meta.Digest, meta.Target, provider, registrypush.Options{
 		Insecure: meta.Insecure,
 	})
 	now := time.Now()
-	if err != nil {
-		errorMsg := err.Error()
+	if pushErr != nil {
+		errorMsg := pushErr.Error()
 		meta.Status = StatusFailed
 		meta.Error = &errorMsg
-		meta.CompletedAt = &now
-		m.writeTerminal(meta)
-		m.notify(meta.ID, StatusFailed, err)
+	} else {
+		meta.Status = StatusPushed
+		meta.Layers = result.Layers
+		meta.Bytes = result.Bytes
+	}
+	meta.CompletedAt = &now
+
+	if err := m.writeTerminal(meta); err != nil {
+		// The outcome cannot be recorded: drop the record and report the job
+		// as failed with the persistence problem, so WaitForPush and GetPush
+		// agree instead of diverging into success-then-not-found. The actual
+		// push outcome goes to the log.
+		fmt.Fprintf(os.Stderr, "Warning: push %s to %s finished as %s but the job record could not be persisted: %v\n", meta.ID, meta.Target, strings.ToLower(meta.Status), err)
+		os.RemoveAll(m.paths.PushDir(meta.ID))
+		persistErr := fmt.Errorf("job record could not be persisted: %w", err)
+		errorMsg := persistErr.Error()
+		meta.Status = StatusFailed
+		meta.Error = &errorMsg
+		m.notify(meta.ID, StatusFailed, persistErr)
 		return
 	}
 
-	meta.Status = StatusPushed
-	meta.Layers = result.Layers
-	meta.Bytes = result.Bytes
-	meta.CompletedAt = &now
-	m.writeTerminal(meta)
-	m.notify(meta.ID, StatusPushed, nil)
+	if pushErr != nil {
+		m.notify(meta.ID, StatusFailed, pushErr)
+	} else {
+		m.notify(meta.ID, StatusPushed, nil)
+	}
 }
 
-// writeTerminal persists a terminal status. If the write fails even after a
-// retry, the job directory is removed so the on-disk record cannot diverge
-// from the notification that WaitForPush returns; a record that cannot be
-// persisted cannot be tracked.
-func (m *manager) writeTerminal(meta *pushMetadata) {
+// writeTerminal persists a terminal status, retrying once.
+func (m *manager) writeTerminal(meta *pushMetadata) error {
 	err := writeMetadata(m.paths, meta)
 	if err != nil {
 		err = writeMetadata(m.paths, meta)
 	}
-	if err == nil {
-		return
-	}
-	fmt.Fprintf(os.Stderr, "Warning: dropping push record %s, could not persist terminal status: %v\n", meta.ID, err)
-	os.RemoveAll(m.paths.PushDir(meta.ID))
+	return err
 }
 
 // releaseInflight returns the queue completion hook that drops the job's
@@ -357,7 +372,7 @@ func (m *manager) failRecovered(meta *pushMetadata, reason string) {
 	meta.Error = &reason
 	now := time.Now()
 	meta.CompletedAt = &now
-	if err := writeMetadata(m.paths, meta); err != nil {
+	if err := m.writeTerminal(meta); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: dropping unrecoverable push record %s: %v\n", meta.ID, err)
 		os.RemoveAll(m.paths.PushDir(meta.ID))
 	}
