@@ -2,6 +2,7 @@ package imagepush
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -367,6 +368,7 @@ func (m *manager) recoverInterruptedPushes() {
 
 // failRecovered marks a recovered job failed. If the status cannot be
 // persisted, the record is removed instead of being left permanently queued.
+// Subscribers are notified so a WaitForPush racing the close does not hang.
 func (m *manager) failRecovered(meta *pushMetadata, reason string) {
 	meta.Status = StatusFailed
 	meta.Error = &reason
@@ -376,6 +378,7 @@ func (m *manager) failRecovered(meta *pushMetadata, reason string) {
 		fmt.Fprintf(os.Stderr, "Warning: dropping unrecoverable push record %s: %v\n", meta.ID, err)
 		os.RemoveAll(m.paths.PushDir(meta.ID))
 	}
+	m.notify(meta.ID, StatusFailed, errors.New(reason))
 }
 
 func (m *manager) subscribe(id string, ch chan StatusEvent) {
