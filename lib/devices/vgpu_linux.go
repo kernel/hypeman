@@ -23,15 +23,16 @@ func CreateVGPU(ctx context.Context, profileName, instanceID string) (*VGPUDevic
 	}, nil
 }
 
-func DestroyVGPU(ctx context.Context, framework VGPUFramework, devicePath, mdevUUID string) error {
-	if framework != VGPUFrameworkNone && framework != VGPUFrameworkMdev {
-		return fmt.Errorf("unknown vGPU framework %q", framework)
+func DestroyVGPU(ctx context.Context, assignment VGPUAssignment) error {
+	if assignment.Framework != VGPUFrameworkNone && assignment.Framework != VGPUFrameworkMdev {
+		return fmt.Errorf("unknown vGPU framework %q", assignment.Framework)
 	}
+	mdevUUID := assignment.MdevUUID
 	if mdevUUID == "" {
-		if devicePath == "" {
+		if assignment.DevicePath == "" {
 			return nil
 		}
-		mdevUUID = filepath.Base(devicePath)
+		mdevUUID = filepath.Base(assignment.DevicePath)
 	}
 	return DestroyMdev(ctx, mdevUUID)
 }
