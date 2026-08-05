@@ -166,6 +166,85 @@ func TestDeleteRetainsMetadataWhenVGPUReleaseFails(t *testing.T) {
 	assert.Equal(t, "/sys/bus/pci/devices/0000:82:00.4", stored.GPUDevicePath)
 }
 
+func TestDeleteReleasesVGPUBeforeTeardown(t *testing.T) {
+	m, id := newLifecycleNoopManagerWithInstance(t, StateStopped, time.Now().UTC())
+	deviceManager := &recordingDeviceManager{}
+	m.deviceManager = deviceManager
+	meta, err := m.loadMetadata(id)
+	require.NoError(t, err)
+	meta.GPUProfile = "NVIDIA L40S-2Q"
+	meta.GPUFramework = devices.VGPUFramework("future-framework")
+	meta.GPUDevicePath = "/sys/bus/pci/devices/0000:82:00.4"
+	meta.Devices = []string{"dev-1"}
+	require.NoError(t, m.saveMetadata(meta))
+
+	err = m.DeleteInstance(context.Background(), id)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "destroy vGPU")
+	assert.Empty(t, deviceManager.detached)
+	assert.Empty(t, deviceManager.unbound)
+
+	stored, err := m.loadMetadata(id)
+	require.NoError(t, err)
+	assert.Equal(t, devices.VGPUFramework("future-framework"), stored.GPUFramework)
+}
+
+func TestStopStoppedInstanceReleasesRetainedVGPU(t *testing.T) {
+	m, id := newLifecycleNoopManagerWithInstance(t, StateStopped, time.Now().UTC())
+	meta, err := m.loadMetadata(id)
+	require.NoError(t, err)
+	meta.GPUProfile = "NVIDIA L40S-2Q"
+	meta.GPUFramework = devices.VGPUFrameworkNone
+	meta.GPUDevicePath = "/sys/bus/pci/devices/0000:82:00.4"
+	require.NoError(t, m.saveMetadata(meta))
+
+	inst, err := m.StopInstance(context.Background(), id)
+	require.NoError(t, err)
+	require.NotNil(t, inst)
+	assert.Equal(t, StateStopped, inst.State)
+
+	stored, err := m.loadMetadata(id)
+	require.NoError(t, err)
+	assert.Empty(t, stored.GPUDevicePath)
+}
+
+func TestStopStoppedInstanceVGPUReleaseFailureReturnsError(t *testing.T) {
+	m, id := newLifecycleNoopManagerWithInstance(t, StateStopped, time.Now().UTC())
+	meta, err := m.loadMetadata(id)
+	require.NoError(t, err)
+	meta.GPUProfile = "NVIDIA L40S-2Q"
+	meta.GPUFramework = devices.VGPUFramework("future-framework")
+	meta.GPUDevicePath = "/sys/bus/pci/devices/0000:82:00.4"
+	require.NoError(t, m.saveMetadata(meta))
+
+	_, err = m.StopInstance(context.Background(), id)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "destroy vGPU")
+
+	stored, err := m.loadMetadata(id)
+	require.NoError(t, err)
+	assert.Equal(t, devices.VGPUFramework("future-framework"), stored.GPUFramework)
+	assert.Equal(t, "/sys/bus/pci/devices/0000:82:00.4", stored.GPUDevicePath)
+}
+
+// recordingDeviceManager is a devices.Manager stub that records passthrough
+// teardown calls. Only the methods delete exercises are implemented.
+type recordingDeviceManager struct {
+	devices.Manager
+	detached []string
+	unbound  []string
+}
+
+func (m *recordingDeviceManager) MarkDetached(ctx context.Context, deviceID string) error {
+	m.detached = append(m.detached, deviceID)
+	return nil
+}
+
+func (m *recordingDeviceManager) UnbindFromVFIO(ctx context.Context, id string) error {
+	m.unbound = append(m.unbound, id)
+	return nil
+}
+
 func newLifecycleNoopManagerWithInstance(t *testing.T, state State, now time.Time) (*manager, string) {
 	t.Helper()
 
