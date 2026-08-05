@@ -99,8 +99,9 @@ func (s *ApiService) ListPushes(ctx context.Context, request oapi.ListPushesRequ
 }
 
 // pushCredentialsToAuthn maps API credentials to the go-containerregistry
-// auth config. Returns nil when absent so the push falls back to the
-// server's default credential resolution.
+// auth config. Returns nil when absent or empty so the push falls back to
+// the server's default credential resolution — an empty credentials object
+// must not mask the keychain.
 func pushCredentialsToAuthn(creds *oapi.PushCredentials) *authn.AuthConfig {
 	if creds == nil {
 		return nil
@@ -114,6 +115,9 @@ func pushCredentialsToAuthn(creds *oapi.PushCredentials) *authn.AuthConfig {
 	}
 	if creds.RegistryToken != nil {
 		cfg.RegistryToken = *creds.RegistryToken
+	}
+	if cfg.Username == "" && cfg.Password == "" && cfg.RegistryToken == "" {
+		return nil
 	}
 	return cfg
 }

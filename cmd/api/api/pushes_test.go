@@ -111,6 +111,26 @@ func TestCreatePush_NoCredentialsStaysNil(t *testing.T) {
 	require.Nil(t, fake.createdReq.Credentials)
 }
 
+func TestCreatePush_EmptyCredentialsFallsBackToDefault(t *testing.T) {
+	t.Parallel()
+
+	fake := &fakePushManager{push: &imagepush.Push{ID: "push-1", Status: imagepush.StatusQueued}}
+	svc := &ApiService{PushManager: fake}
+
+	// An empty credentials object must behave like no credentials at all:
+	// the server's default resolution stays in charge.
+	resp, err := svc.CreatePush(context.Background(), oapi.CreatePushRequestObject{
+		Body: &oapi.CreatePushRequest{
+			Image:       "alpine:latest",
+			Target:      "registry.example.com/app:v1",
+			Credentials: &oapi.PushCredentials{},
+		},
+	})
+	require.NoError(t, err)
+	require.IsType(t, oapi.CreatePush202JSONResponse{}, resp)
+	require.Nil(t, fake.createdReq.Credentials)
+}
+
 func TestCreatePush_ErrorStatusMapping(t *testing.T) {
 	t.Parallel()
 

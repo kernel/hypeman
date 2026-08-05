@@ -1784,6 +1784,7 @@ components:
     PushStatus:
       type: string
       enum: [queued, pushing, pushed, failed]
+      x-enum-varnames: [PushStatusQueued, PushStatusPushing, PushStatusPushed, PushStatusFailed]
 
     PushCredentials:
       type: object
