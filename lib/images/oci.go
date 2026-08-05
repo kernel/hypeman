@@ -97,14 +97,14 @@ func (c *ociClient) inspectManifestWithPlatform(ctx context.Context, imageRef st
 		remote.WithAuthFromKeychain(authn.DefaultKeychain),
 		remote.WithPlatform(platform))
 	if err != nil {
-		return "", fmt.Errorf("fetch manifest: %w", wrapRegistryError(err))
+		return "", fmt.Errorf("fetch manifest: %w", ClassifyRegistryError(err))
 	}
 
 	// remote.Image is lazy, so the "no child with platform" error for a multi-arch
 	// index surfaces here rather than from remote.Image above; classify it too.
 	digest, err := img.Digest()
 	if err != nil {
-		return "", fmt.Errorf("get image digest: %w", wrapRegistryError(err))
+		return "", fmt.Errorf("get image digest: %w", ClassifyRegistryError(err))
 	}
 
 	return digest.String(), nil
@@ -123,10 +123,10 @@ func (c *ociClient) inspectManifestWithPlatform(ctx context.Context, imageRef st
 //     to a host-matching child and the requested platform would never be checked.
 //   - For an index, WithPlatform IS correct: it selects the child for the
 //     requested platform (a missing child surfaces as "no child with platform"
-//     -> ErrPlatformNotAvailable -> 404 via wrapRegistryError).
+//     -> ErrPlatformNotAvailable -> 404 via ClassifyRegistryError).
 //
 // A digest absent from the registry surfaces as a not-found error, classified by
-// wrapRegistryError.
+// ClassifyRegistryError.
 func (c *ociClient) inspectDigestPlatform(ctx context.Context, imageRef string, requested gcr.Platform) (Platform, string, error) {
 	ref, err := name.ParseReference(imageRef)
 	if err != nil {
@@ -137,7 +137,7 @@ func (c *ociClient) inspectDigestPlatform(ctx context.Context, imageRef string, 
 		remote.WithContext(ctx),
 		remote.WithAuthFromKeychain(authn.DefaultKeychain))
 	if err != nil {
-		return Platform{}, "", fmt.Errorf("fetch manifest: %w", wrapRegistryError(err))
+		return Platform{}, "", fmt.Errorf("fetch manifest: %w", ClassifyRegistryError(err))
 	}
 
 	var img gcr.Image
@@ -153,17 +153,17 @@ func (c *ociClient) inspectDigestPlatform(ctx context.Context, imageRef string, 
 		img, err = desc.Image()
 	}
 	if err != nil {
-		return Platform{}, "", fmt.Errorf("resolve image for platform: %w", wrapRegistryError(err))
+		return Platform{}, "", fmt.Errorf("resolve image for platform: %w", ClassifyRegistryError(err))
 	}
 
 	configFile, err := img.ConfigFile()
 	if err != nil {
-		return Platform{}, "", fmt.Errorf("get image config: %w", wrapRegistryError(err))
+		return Platform{}, "", fmt.Errorf("get image config: %w", ClassifyRegistryError(err))
 	}
 
 	resolvedDigest, err := img.Digest()
 	if err != nil {
-		return Platform{}, "", fmt.Errorf("get image digest: %w", wrapRegistryError(err))
+		return Platform{}, "", fmt.Errorf("get image digest: %w", ClassifyRegistryError(err))
 	}
 
 	return Platform{
@@ -234,7 +234,7 @@ func (c *ociClient) pullToOCILayoutWithPlatform(ctx context.Context, imageRef, l
 		remote.WithPlatform(platform))
 	if err != nil {
 		// Rate limits fail here immediately (429 is not retried by default)
-		return fmt.Errorf("fetch image manifest: %w", wrapRegistryError(err))
+		return fmt.Errorf("fetch image manifest: %w", ClassifyRegistryError(err))
 	}
 
 	// Open or create OCI layout directory

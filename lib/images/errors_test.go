@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestWrapRegistryError(t *testing.T) {
+func TestClassifyRegistryError(t *testing.T) {
 	tests := []struct {
 		name string
 		in   error
@@ -63,41 +63,41 @@ func TestWrapRegistryError(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := wrapRegistryError(tt.in)
+			got := ClassifyRegistryError(tt.in)
 			if tt.in == nil {
 				if got != nil {
-					t.Fatalf("wrapRegistryError(nil) = %v, want nil", got)
+					t.Fatalf("ClassifyRegistryError(nil) = %v, want nil", got)
 				}
 				return
 			}
 			if tt.want == nil {
 				// Should be returned unchanged and not match any typed error.
 				if got != tt.in {
-					t.Fatalf("wrapRegistryError(%v) = %v, want unchanged", tt.in, got)
+					t.Fatalf("ClassifyRegistryError(%v) = %v, want unchanged", tt.in, got)
 				}
 				for _, sentinel := range []error{ErrPlatformNotAvailable, ErrRateLimited, ErrNotFound} {
 					if errors.Is(got, sentinel) {
-						t.Fatalf("wrapRegistryError(%v) unexpectedly classified as %v", tt.in, sentinel)
+						t.Fatalf("ClassifyRegistryError(%v) unexpectedly classified as %v", tt.in, sentinel)
 					}
 				}
 				return
 			}
 			if !errors.Is(got, tt.want) {
-				t.Fatalf("wrapRegistryError(%v) = %v, want errors.Is %v", tt.in, got, tt.want)
+				t.Fatalf("ClassifyRegistryError(%v) = %v, want errors.Is %v", tt.in, got, tt.want)
 			}
 			// The underlying registry message must be preserved for operators.
 			if !strings.Contains(got.Error(), tt.in.Error()) {
-				t.Fatalf("wrapRegistryError(%v) dropped the cause text: %v", tt.in, got)
+				t.Fatalf("ClassifyRegistryError(%v) dropped the cause text: %v", tt.in, got)
 			}
 		})
 	}
 }
 
-// TestWrapRegistryErrorPrecedence asserts rate-limit classification wins over a
+// TestClassifyRegistryErrorPrecedence asserts rate-limit classification wins over a
 // coincidental "404"/"not found" substring so a throttled pull is retryable
 // rather than reported as a permanent not-found.
-func TestWrapRegistryErrorPrecedence(t *testing.T) {
-	err := wrapRegistryError(fmt.Errorf("429 too many requests (not found in cache)"))
+func TestClassifyRegistryErrorPrecedence(t *testing.T) {
+	err := ClassifyRegistryError(fmt.Errorf("429 too many requests (not found in cache)"))
 	if !errors.Is(err, ErrRateLimited) {
 		t.Fatalf("got %v, want ErrRateLimited", err)
 	}

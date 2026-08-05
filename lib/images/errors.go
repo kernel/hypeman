@@ -21,11 +21,11 @@ var (
 	ErrRateLimited = errors.New("registry rate limit exceeded")
 )
 
-// wrapRegistryError classifies a raw registry/go-containerregistry error into a
+// ClassifyRegistryError classifies a raw registry/go-containerregistry error into a
 // typed hypeman error so the API layer can map it to an appropriate 4xx/429
 // status instead of a blanket 500. Errors that don't match a known client- or
 // registry-condition are returned unchanged (and surface as 500).
-func wrapRegistryError(err error) error {
+func ClassifyRegistryError(err error) error {
 	if err == nil {
 		return nil
 	}
