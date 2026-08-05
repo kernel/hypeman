@@ -472,6 +472,137 @@ func TestRecoverInterruptedPushes(t *testing.T) {
 	}
 }
 
+func TestCreatePushAdoptsOrphanedPendingJob(t *testing.T) {
+	p, digest := cacheFixture(t)
+	host := openRegistry(t)
+	target := host + "/export/orphan:v1"
+
+	resolver := &fakeResolver{images: map[string]*images.Image{
+		"myapp:v1": readyImage("myapp:v1", digest),
+	}}
+	mgr, err := NewManager(p, resolver, nil, 1)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	// Simulate an orphan: a queued record on disk that the manager does not
+	// track (it appeared after startup, e.g. left behind by a crashed
+	// process). A new push for the same image+target must adopt it instead of
+	// creating a duplicate job.
+	orphan := &pushMetadata{
+		ID:        "orphan-1",
+		Status:    StatusQueued,
+		Image:     "myapp:v1",
+		Digest:    digest,
+		Target:    target,
+		Insecure:  true,
+		CreatedAt: time.Now(),
+	}
+	if err := writeMetadata(p, orphan); err != nil {
+		t.Fatalf("writeMetadata: %v", err)
+	}
+
+	push, err := mgr.CreatePush(context.Background(), PushRequest{
+		Image: "myapp:v1", Target: target, Insecure: true,
+	})
+	if err != nil {
+		t.Fatalf("CreatePush: %v", err)
+	}
+	if push.ID != "orphan-1" {
+		t.Fatalf("push ID = %s, want orphan-1 (adopted, not duplicated)", push.ID)
+	}
+	if err := mgr.WaitForPush(context.Background(), push.ID); err != nil {
+		t.Fatalf("WaitForPush: %v", err)
+	}
+
+	got, err := mgr.GetPush(context.Background(), "orphan-1")
+	if err != nil {
+		t.Fatalf("GetPush: %v", err)
+	}
+	if got.Status != StatusPushed {
+		t.Errorf("status = %s, want pushed", got.Status)
+	}
+
+	// Exactly one job exists for the key.
+	pushes, err := mgr.ListPushes(context.Background())
+	if err != nil {
+		t.Fatalf("ListPushes: %v", err)
+	}
+	if len(pushes) != 1 {
+		t.Errorf("len(pushes) = %d, want 1", len(pushes))
+	}
+}
+
+func TestRecoveryDedupesSameKey(t *testing.T) {
+	p, digest := cacheFixture(t)
+	host := openRegistry(t)
+	target := host + "/export/dup:v1"
+	now := time.Now()
+
+	older := &pushMetadata{ID: "older", Status: StatusQueued, Image: "myapp:v1", Digest: digest, Target: target, Insecure: true, CreatedAt: now.Add(-time.Minute)}
+	newer := &pushMetadata{ID: "newer", Status: StatusQueued, Image: "myapp:v1", Digest: digest, Target: target, Insecure: true, CreatedAt: now}
+	for _, meta := range []*pushMetadata{older, newer} {
+		if err := writeMetadata(p, meta); err != nil {
+			t.Fatalf("writeMetadata(%s): %v", meta.ID, err)
+		}
+	}
+
+	resolver := &fakeResolver{images: map[string]*images.Image{
+		"myapp:v1": readyImage("myapp:v1", digest),
+	}}
+	mgr, err := NewManager(p, resolver, nil, 1)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	if err := mgr.WaitForPush(context.Background(), "older"); err != nil {
+		t.Fatalf("WaitForPush older: %v", err)
+	}
+
+	got, err := mgr.GetPush(context.Background(), "newer")
+	if err != nil {
+		t.Fatalf("GetPush newer: %v", err)
+	}
+	if got.Status != StatusFailed {
+		t.Errorf("newer status = %s, want failed (superseded)", got.Status)
+	}
+	if got.Error == nil || !strings.Contains(*got.Error, "superseded") {
+		t.Errorf("newer error = %v, want superseded explanation", got.Error)
+	}
+}
+
+func TestSequentialSameKeyPushesAllComplete(t *testing.T) {
+	p, digest := cacheFixture(t)
+	host := openRegistry(t)
+	resolver := &fakeResolver{images: map[string]*images.Image{
+		"myapp:v1": readyImage("myapp:v1", digest),
+	}}
+	mgr, err := NewManager(p, resolver, nil, 1)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	target := host + "/export/again:v1"
+	for i := 0; i < 5; i++ {
+		push, err := mgr.CreatePush(context.Background(), PushRequest{
+			Image: "myapp:v1", Target: target, Insecure: true,
+		})
+		if err != nil {
+			t.Fatalf("CreatePush #%d: %v", i, err)
+		}
+		if err := mgr.WaitForPush(context.Background(), push.ID); err != nil {
+			t.Fatalf("WaitForPush #%d: %v", i, err)
+		}
+		got, err := mgr.GetPush(context.Background(), push.ID)
+		if err != nil {
+			t.Fatalf("GetPush #%d: %v", i, err)
+		}
+		if got.Status != StatusPushed {
+			t.Fatalf("push #%d status = %s, want pushed (stuck job?)", i, got.Status)
+		}
+	}
+}
+
 func TestWaitForPushNotFound(t *testing.T) {
 	p, _ := cacheFixture(t)
 	resolver := &fakeResolver{images: map[string]*images.Image{}}

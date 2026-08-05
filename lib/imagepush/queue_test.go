@@ -35,8 +35,8 @@ func TestPushQueueConcurrencyLimit(t *testing.T) {
 		}
 	}
 
-	posA := q.Enqueue("a", startFn(true))
-	posB := q.Enqueue("b", startFn(false))
+	posA := q.Enqueue("a", startFn(true), nil)
+	posB := q.Enqueue("b", startFn(false), nil)
 	if posA != 0 {
 		t.Errorf("posA = %d, want 0 (started immediately)", posA)
 	}
@@ -79,14 +79,14 @@ func TestPushQueueDedupesByKey(t *testing.T) {
 		<-release
 	}
 
-	q.Enqueue("same", first)
+	q.Enqueue("same", first, nil)
 	<-started
 
-	pos := q.Enqueue("same", blocked)
+	pos := q.Enqueue("same", blocked, nil)
 	if pos != 0 {
 		t.Errorf("duplicate enqueue of active key = %d, want 0", pos)
 	}
-	pos = q.Enqueue("same", blocked)
+	pos = q.Enqueue("same", blocked, nil)
 	if pos != 0 {
 		t.Errorf("second duplicate enqueue = %d, want 0 (still active)", pos)
 	}
@@ -100,12 +100,47 @@ func TestPushQueueDedupesByKey(t *testing.T) {
 	}
 }
 
+// TestPushQueueCompletionOrdering guards the invariant that the done
+// callback runs only after the key leaves the active set: a concurrent
+// Enqueue in between must never fall into a gap where the job has finished
+// but the slot is still held.
+func TestPushQueueCompletionOrdering(t *testing.T) {
+	q := newPushQueue(1)
+
+	started := make(chan struct{})
+	doneRan := make(chan struct{})
+	q.Enqueue("k", func() {
+		close(started)
+	}, func() {
+		for _, key := range q.ActiveKeys() {
+			if key == "k" {
+				t.Error("key still active when done ran")
+			}
+		}
+		close(doneRan)
+	})
+
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("job never started")
+	}
+	select {
+	case <-doneRan:
+	case <-time.After(5 * time.Second):
+		t.Fatal("done never ran")
+	}
+	if keys := q.ActiveKeys(); len(keys) != 0 {
+		t.Errorf("ActiveKeys = %v, want empty", keys)
+	}
+}
+
 func TestPushQueueActiveKeys(t *testing.T) {
 	q := newPushQueue(1)
 	release := make(chan struct{})
 
-	q.Enqueue("a", func() { <-release })
-	q.Enqueue("b", func() {})
+	q.Enqueue("a", func() { <-release }, nil)
+	q.Enqueue("b", func() {}, nil)
 
 	keys := q.ActiveKeys()
 	if len(keys) != 2 {

@@ -3,6 +3,7 @@ package imagepush
 import (
 	"context"
 	"fmt"
+	"os"
 	"sync"
 	"time"
 
@@ -85,14 +86,46 @@ func (m *manager) CreatePush(ctx context.Context, req PushRequest) (*Push, error
 
 	key := pushKey(img.Digest, dstRef.String())
 
-	// Hold the lock across dedup check, metadata write, and registration so a
-	// concurrent request for the same digest+target cannot slip in between and
-	// leave an orphaned queued job behind.
+	// Borrowed credentials live only in this closure: the job provider is
+	// built per push and never touches disk.
+	provider := m.provider
+	if req.Credentials != nil {
+		provider = &registrypush.StaticProvider{Config: *req.Credentials}
+	}
+
+	// Hold the lock across dedup check, orphan adoption, metadata write, and
+	// registration so a concurrent request for the same digest+target cannot
+	// slip in between and leave an orphaned queued job behind.
 	m.mu.Lock()
 	if existing, ok := m.inflight[key]; ok {
 		id := existing.id
 		m.mu.Unlock()
 		return m.GetPush(ctx, id)
+	}
+
+	// Adopt a pending record that exists on disk but is not tracked in memory
+	// (e.g. left behind by an interrupted recovery) instead of creating a
+	// duplicate job for the same digest+target. Adopted records cannot carry
+	// borrowed credentials: recovery fails those instead of re-enqueueing.
+	orphan, err := findPendingPush(m.paths, key)
+	if err != nil {
+		m.mu.Unlock()
+		return nil, fmt.Errorf("scan pending pushes: %w", err)
+	}
+	if orphan != nil {
+		m.inflight[key] = inflightPush{id: orphan.ID, digest: orphan.Digest}
+		m.mu.Unlock()
+
+		orphanCopy := *orphan
+		queuePos := m.queue.Enqueue(key, func() {
+			m.executePush(context.Background(), &orphanCopy, m.provider)
+		}, m.releaseInflight(key))
+
+		push := orphan.toPush()
+		if queuePos > 0 {
+			push.QueuePosition = &queuePos
+		}
+		return push, nil
 	}
 
 	meta := &pushMetadata{
@@ -112,17 +145,10 @@ func (m *manager) CreatePush(ctx context.Context, req PushRequest) (*Push, error
 	m.inflight[key] = inflightPush{id: meta.ID, digest: meta.Digest}
 	m.mu.Unlock()
 
-	// Borrowed credentials live only in this closure: the job provider is
-	// built per push and never touches disk.
-	provider := m.provider
-	if req.Credentials != nil {
-		provider = &registrypush.StaticProvider{Config: *req.Credentials}
-	}
-
 	metaCopy := *meta
 	queuePos := m.queue.Enqueue(key, func() {
 		m.executePush(context.Background(), &metaCopy, provider)
-	})
+	}, m.releaseInflight(key))
 
 	push := meta.toPush()
 	if queuePos > 0 {
@@ -132,15 +158,10 @@ func (m *manager) CreatePush(ctx context.Context, req PushRequest) (*Push, error
 }
 
 func (m *manager) executePush(ctx context.Context, meta *pushMetadata, provider registrypush.Provider) {
-	key := pushKey(meta.Digest, meta.Target)
-	defer func() {
-		m.mu.Lock()
-		delete(m.inflight, key)
-		m.mu.Unlock()
-	}()
-
 	meta.Status = StatusPushing
-	writeMetadata(m.paths, meta)
+	if err := writeMetadata(m.paths, meta); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to persist push status for %s: %v\n", meta.ID, err)
+	}
 
 	result, err := registrypush.PushFromCache(ctx, m.paths, meta.Digest, meta.Target, provider, registrypush.Options{
 		Insecure: meta.Insecure,
@@ -151,7 +172,7 @@ func (m *manager) executePush(ctx context.Context, meta *pushMetadata, provider 
 		meta.Status = StatusFailed
 		meta.Error = &errorMsg
 		meta.CompletedAt = &now
-		writeMetadata(m.paths, meta)
+		m.writeTerminal(meta)
 		m.notify(meta.ID, StatusFailed, err)
 		return
 	}
@@ -160,8 +181,37 @@ func (m *manager) executePush(ctx context.Context, meta *pushMetadata, provider 
 	meta.Layers = result.Layers
 	meta.Bytes = result.Bytes
 	meta.CompletedAt = &now
-	writeMetadata(m.paths, meta)
+	m.writeTerminal(meta)
 	m.notify(meta.ID, StatusPushed, nil)
+}
+
+// writeTerminal persists a terminal status. If the write fails even after a
+// retry, the job directory is removed so the on-disk record cannot diverge
+// from the notification that WaitForPush returns; a record that cannot be
+// persisted cannot be tracked.
+func (m *manager) writeTerminal(meta *pushMetadata) {
+	err := writeMetadata(m.paths, meta)
+	if err != nil {
+		err = writeMetadata(m.paths, meta)
+	}
+	if err == nil {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "Warning: dropping push record %s, could not persist terminal status: %v\n", meta.ID, err)
+	os.RemoveAll(m.paths.PushDir(meta.ID))
+}
+
+// releaseInflight returns the queue completion hook that drops the job's
+// inflight registration. The queue runs it only after the key leaves the
+// active set, so a concurrent CreatePush never falls into a gap between job
+// completion and slot release: it either sees the inflight entry and gets the
+// finished job, or enqueues a fresh one that actually starts.
+func (m *manager) releaseInflight(key string) func() {
+	return func() {
+		m.mu.Lock()
+		delete(m.inflight, key)
+		m.mu.Unlock()
+	}
 }
 
 func (m *manager) GetPush(ctx context.Context, id string) (*Push, error) {
@@ -268,21 +318,26 @@ func (m *manager) recoverInterruptedPushes() {
 		return // Best effort
 	}
 
+	seen := make(map[string]string, len(pending)) // key -> recovered push ID
 	for _, meta := range pending {
+		key := pushKey(meta.Digest, meta.Target)
+
 		// Borrowed credentials do not survive a restart, so a credentialed
 		// push cannot be retried faithfully; fail it instead of re-enqueueing
 		// with the default provider.
 		if meta.HadCredentials {
-			meta.Status = StatusFailed
-			errorMsg := "push interrupted by restart: borrowed registry credentials are no longer available, retry the push"
-			meta.Error = &errorMsg
-			now := time.Now()
-			meta.CompletedAt = &now
-			writeMetadata(m.paths, meta)
+			m.failRecovered(meta, "push interrupted by restart: borrowed registry credentials are no longer available, retry the push")
 			continue
 		}
 
-		key := pushKey(meta.Digest, meta.Target)
+		// Duplicate records for one logical push can accumulate on disk;
+		// recover the oldest and close the rest so nothing is left forever
+		// queued.
+		if chosen, ok := seen[key]; ok {
+			m.failRecovered(meta, fmt.Sprintf("superseded by duplicate push job %s for the same image and target", chosen))
+			continue
+		}
+		seen[key] = meta.ID
 
 		m.mu.Lock()
 		m.inflight[key] = inflightPush{id: meta.ID, digest: meta.Digest}
@@ -291,7 +346,20 @@ func (m *manager) recoverInterruptedPushes() {
 		metaCopy := *meta
 		m.queue.Enqueue(key, func() {
 			m.executePush(context.Background(), &metaCopy, m.provider)
-		})
+		}, m.releaseInflight(key))
+	}
+}
+
+// failRecovered marks a recovered job failed. If the status cannot be
+// persisted, the record is removed instead of being left permanently queued.
+func (m *manager) failRecovered(meta *pushMetadata, reason string) {
+	meta.Status = StatusFailed
+	meta.Error = &reason
+	now := time.Now()
+	meta.CompletedAt = &now
+	if err := writeMetadata(m.paths, meta); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: dropping unrecoverable push record %s: %v\n", meta.ID, err)
+		os.RemoveAll(m.paths.PushDir(meta.ID))
 	}
 }
 
