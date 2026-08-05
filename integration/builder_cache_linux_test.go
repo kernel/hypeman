@@ -93,7 +93,7 @@ func TestBuilderPersistentCacheReuse(t *testing.T) {
 		}
 	})
 
-	registryURL, registryCA := startBuildRegistry(t, gateway, cfg.Network.BridgeName, p, imageManager)
+	registryURL, registryCA := startBuildRegistry(t, gateway, cfg.Network.SubnetCIDR, p, imageManager)
 
 	builderManager, err := builders.NewManager(
 		p,
@@ -162,7 +162,7 @@ RUN --mount=type=cache,target=/cache sh -c 'if [ -f /cache/sentinel ]; then echo
 	require.NotEqual(t, *first.BuilderInstanceID, *second.BuilderInstanceID)
 }
 
-func startBuildRegistry(t *testing.T, gateway, bridge string, p *paths.Paths, imageManager images.Manager) (string, string) {
+func startBuildRegistry(t *testing.T, gateway, subnet string, p *paths.Paths, imageManager images.Manager) (string, string) {
 	t.Helper()
 	reg, err := registry.New(p, imageManager)
 	require.NoError(t, err)
@@ -180,7 +180,7 @@ func startBuildRegistry(t *testing.T, gateway, bridge string, p *paths.Paths, im
 	}()
 	t.Cleanup(func() { _ = server.Close() })
 	port := strconv.Itoa(listener.Addr().(*net.TCPAddr).Port)
-	firewallArgs := []string{"INPUT", "-i", bridge, "-p", "tcp", "--dport", port, "-j", "ACCEPT"}
+	firewallArgs := []string{"INPUT", "-s", subnet, "-p", "tcp", "--dport", port, "-j", "ACCEPT"}
 	output, err := exec.Command("iptables", append([]string{"-I"}, firewallArgs...)...).CombinedOutput()
 	require.NoErrorf(t, err, "allow registry traffic: %s", output)
 	t.Cleanup(func() { _ = exec.Command("iptables", append([]string{"-D"}, firewallArgs...)...).Run() })
