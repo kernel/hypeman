@@ -37,10 +37,10 @@ lib/devices/
 
 ```bash
 # Check available profiles
-curl localhost:8080/resources | jq .gpu
+curl localhost:4973/resources | jq .gpu
 
 # Create instance with vGPU
-curl -X POST localhost:8080/instances \
+curl -X POST localhost:4973/instances \
   -H "Content-Type: application/json" \
   -d '{
     "name": "ml-training",
@@ -56,21 +56,21 @@ nvidia-smi
 
 ```bash
 # Discover available devices
-curl localhost:8080/devices/available
+curl localhost:4973/devices/available
 
 # Register the GPU
-curl -X POST localhost:8080/devices \
+curl -X POST localhost:4973/devices \
   -d '{"name": "l4-gpu", "pci_address": "0000:a2:00.0"}'
 
 # Create instance with GPU
-curl -X POST localhost:8080/instances \
+curl -X POST localhost:4973/instances \
   -d '{"name": "ml-training", "image": "nvidia/cuda:12.0-base", "devices": ["l4-gpu"]}'
 
 # Inside VM: verify GPU
 nvidia-smi
 
 # Delete instance (auto-unbinds from VFIO)
-curl -X DELETE localhost:8080/instances/{id}
+curl -X DELETE localhost:4973/instances/{id}
 ```
 
 ## Device Lifecycle
@@ -194,7 +194,7 @@ sudo systemctl start nvidia-persistenced
 
 Check available slots:
 ```bash
-curl localhost:8080/resources | jq '.gpu.profiles'
+curl localhost:4973/resources | jq '.gpu.profiles'
 ```
 
 ### Running the E2E Test

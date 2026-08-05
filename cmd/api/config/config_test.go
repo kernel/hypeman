@@ -11,6 +11,17 @@ import (
 	"github.com/kernel/hypeman/lib/guestmemory"
 )
 
+func TestDefaultConfigUsesHypemanPort(t *testing.T) {
+	cfg := defaultConfig()
+
+	if cfg.Port != "4973" {
+		t.Fatalf("expected default port to be 4973, got %q", cfg.Port)
+	}
+	if cfg.Registry.URL != "localhost:4973" {
+		t.Fatalf("expected default registry URL to use port 4973, got %q", cfg.Registry.URL)
+	}
+}
+
 func TestDefaultConfigIncludesMetricsSettings(t *testing.T) {
 	cfg := defaultConfig()
 

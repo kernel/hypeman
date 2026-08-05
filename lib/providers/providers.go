@@ -337,7 +337,7 @@ func ProvideIngressManager(p *paths.Paths, cfg *config.Config, instanceManager i
 	}
 
 	// Parse API port from config
-	apiPort := 8080 // default
+	apiPort := 4973 // default
 	if cfg.Port != "" {
 		if p, err := strconv.Atoi(cfg.Port); err == nil {
 			apiPort = p
@@ -408,7 +408,7 @@ func ProvideBuildManager(p *paths.Paths, cfg *config.Config, instanceManager ins
 	// Inside a VM, "localhost" refers to the VM itself, not the host.
 	registryURL := cfg.Registry.URL
 	if registryURL == "" {
-		registryURL = "localhost:8080"
+		registryURL = "localhost:4973"
 	}
 	if strings.HasPrefix(registryURL, "localhost:") || strings.HasPrefix(registryURL, "127.0.0.1:") {
 		gateway := cfg.Network.SubnetGateway

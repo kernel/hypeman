@@ -79,7 +79,7 @@ go install 'github.com/kernel/hypeman-cli/cmd/hypeman@latest'
 Then create a CLI config file at `~/.config/hypeman/cli.yaml`:
 
 ```yaml
-base_url: http://<server-host>:8080
+base_url: http://<server-host>:4973
 api_key: "<token>"
 ```
 

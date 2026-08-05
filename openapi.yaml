@@ -2,9 +2,9 @@ openapi: 3.1.0
 info:
   title: Hypeman API
   description: Generic API for managing VM lifecycle using Cloud Hypervisor with OCI-based workloads
-  version: 0.2.0
+  version: 0.3.0
 servers:
-  - url: http://localhost:8080
+  - url: http://localhost:4973
     description: Local development server
 components:
   securitySchemes:
