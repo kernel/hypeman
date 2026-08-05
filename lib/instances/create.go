@@ -633,18 +633,25 @@ func validateCreateRequest(req *CreateInstanceRequest) error {
 	req.RestartPolicy = normalizedRestartPolicy
 
 	// Validate volume attachments
-	if err := validateVolumeAttachments(req.Volumes); err != nil {
+	if err := validateVolumeAttachmentsWithSystemPaths(req.Volumes, req.AllowSystemVolumeMounts, req.SystemVolumeMountPaths); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-// validateVolumeAttachments validates volume attachment requests
-func validateVolumeAttachments(volumes []VolumeAttachment) error {
+// validateVolumeAttachments validates public volume attachment requests.
+func validateVolumeAttachments(attachments []VolumeAttachment, allowSystemVolumes bool) error {
+	return validateVolumeAttachmentsWithSystemPaths(attachments, allowSystemVolumes, nil)
+}
+
+// validateVolumeAttachmentsWithSystemPaths validates volume attachments for
+// internal callers that may attach reserved volumes at explicitly allowed
+// system paths.
+func validateVolumeAttachmentsWithSystemPaths(attachments []VolumeAttachment, allowSystemVolumes bool, allowedSystemMountPaths []string) error {
 	// Count total devices needed (each overlay volume needs 2 devices: base + overlay)
 	totalDevices := 0
-	for _, vol := range volumes {
+	for _, vol := range attachments {
 		totalDevices++
 		if vol.Overlay {
 			totalDevices++ // Overlay needs an additional device
@@ -655,7 +662,7 @@ func validateVolumeAttachments(volumes []VolumeAttachment) error {
 	}
 
 	seenPaths := make(map[string]bool)
-	for _, vol := range volumes {
+	for _, vol := range attachments {
 		// Validate mount path is absolute
 		if !filepath.IsAbs(vol.MountPath) {
 			return fmt.Errorf("volume %s: mount path %q must be absolute", vol.VolumeID, vol.MountPath)
@@ -665,8 +672,15 @@ func validateVolumeAttachments(volumes []VolumeAttachment) error {
 		cleanPath := filepath.Clean(vol.MountPath)
 
 		// Check for system directories
-		if isSystemDirectory(cleanPath) {
+		if isSystemDirectory(cleanPath) && !(allowSystemVolumes && isAllowedSystemMountPath(cleanPath, allowedSystemMountPaths)) {
 			return fmt.Errorf("volume %s: cannot mount to system directory %q", vol.VolumeID, cleanPath)
+		}
+
+		// Reserved internal volume IDs are attachable only by internal instances
+		if !allowSystemVolumes {
+			if prefix := volumes.ReservedVolumeIDPrefix(vol.VolumeID); prefix != "" {
+				return fmt.Errorf("volume %s: volume IDs with the prefix %q are reserved for internal use", vol.VolumeID, prefix)
+			}
 		}
 
 		// Check for duplicate mount paths
@@ -687,6 +701,17 @@ func validateVolumeAttachments(volumes []VolumeAttachment) error {
 	}
 
 	return nil
+}
+
+// isAllowedSystemMountPath reports whether path is an exact match for a
+// system path that an internal instance may mount a volume at.
+func isAllowedSystemMountPath(path string, allowedSystemMountPaths []string) bool {
+	for _, allowed := range allowedSystemMountPaths {
+		if path == allowed {
+			return true
+		}
+	}
+	return false
 }
 
 // isSystemDirectory checks if a path is or is under a system directory
