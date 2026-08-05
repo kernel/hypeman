@@ -36,9 +36,20 @@ branches after review.
 
 ## Custom code and recovery
 
-Edit custom code in `stainless/sdks/<target>/`, run `stlc build --commit
-"<message>" --push`, and commit the resulting
-`stainless/custom-code/<target>/` tracking file in this repo.
+Edit custom code in `stainless/sdks/<target>/`, then seal and commit it from the
+config repo:
+
+```bash
+cd stainless
+stlc build --commit "feat: describe the change" --push
+cd ..
+git add stainless/custom-code
+git commit -m "chore(stlc): seal custom code"
+git push
+```
+
+Run the `stlc` recovery commands from the workspace (`cd stainless` from the
+repo root).
 
 - `stlc status` reports the required next command.
 - Use `stlc build --continue` after resolving an integration conflict.

@@ -232,8 +232,8 @@ jobs:
           stlc exec --targets "$SDK_TARGETS" -- ./scripts/bootstrap
           stlc lint --targets "$SDK_TARGETS"
           stlc test --targets "$SDK_TARGETS"
-          stlc exec --targets "$SDK_TARGETS" -- git diff --exit-code
-          stlc exec --targets "$SDK_TARGETS" -- git diff --cached --exit-code
+          stlc exec --targets "$SDK_TARGETS" -- sh -c \
+            'status=$(git status --porcelain --untracked-files=all) && [ -z "$status" ] || { printf "%s\n" "$status" >&2; exit 1; }'
 
           # Re-running is deterministic and pushes the already-validated commits.
           stlc build \
