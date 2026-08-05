@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -85,17 +86,6 @@ func TestBuilderPersistentCacheReuse(t *testing.T) {
 
 	registryURL := startBuildRegistry(t, gateway, p, imageManager)
 
-	const builderImage = "docker.io/onkernel/builder-generic:latest"
-	createdBuilderImage, err := imageManager.CreateImage(ctx, images.CreateImageRequest{Name: builderImage})
-	require.NoError(t, err)
-	builderImageRef := createdBuilderImage.Name
-	if createdBuilderImage.Digest != "" {
-		builderRef, parseErr := images.ParseNormalizedRef(builderImage)
-		require.NoError(t, parseErr)
-		builderImageRef = builderRef.Repository() + "@" + createdBuilderImage.Digest
-	}
-	require.NoError(t, imageManager.WaitForReady(ctx, builderImageRef))
-
 	builderManager, err := builders.NewManager(
 		p,
 		builders.Config{DefaultDiskSizeGb: 4},
@@ -111,7 +101,6 @@ func TestBuilderPersistentCacheReuse(t *testing.T) {
 		p,
 		builds.Config{
 			MaxConcurrentBuilds: 1,
-			BuilderImage:        builderImageRef,
 			RegistryURL:         registryURL,
 			RegistryInsecure:    true,
 			RegistrySecret:      "builder-cache-integration-test",
@@ -128,14 +117,24 @@ func TestBuilderPersistentCacheReuse(t *testing.T) {
 	require.NoError(t, err)
 	builderManager.SetBuildActivityChecker(buildManager.BuilderHasBuilds)
 	require.NoError(t, buildManager.Start(ctx))
-	// Start prepares an already-imported Builder image asynchronously.
-	time.Sleep(time.Second)
+	require.EventuallyWithT(t, func(collect *assert.CollectT) {
+		all, listErr := imageManager.ListImages(ctx)
+		require.NoError(collect, listErr)
+		ready := false
+		for _, image := range all {
+			if strings.Contains(image.Name, "/internal/builder") {
+				ready = image.Status == images.StatusReady
+			}
+		}
+		require.True(collect, ready)
+	}, 5*time.Minute, time.Second)
+	// ensureBuilderImage records the ready image in the build manager after conversion.
+	time.Sleep(100 * time.Millisecond)
 
 	builder, err := builderManager.CreateBuilder(ctx, builders.CreateBuilderRequest{DiskSizeGb: 4})
 	require.NoError(t, err)
 
-	dockerfile := `# syntax=docker/dockerfile:1
-FROM alpine:3.18
+	dockerfile := `FROM alpine:3.18
 ARG CACHE_BUSTER
 RUN --mount=type=cache,target=/cache sh -c 'if [ -f /cache/sentinel ]; then echo BUILDER_CACHE_HIT; else echo BUILDER_CACHE_MISS; touch /cache/sentinel; fi; echo "$CACHE_BUSTER" > /cache-buster'
 `
