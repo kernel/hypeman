@@ -486,6 +486,140 @@ func TestWaitForPushNotFound(t *testing.T) {
 	}
 }
 
+// erroringProvider always fails, proving a push that succeeds used the
+// request's borrowed credentials instead of the manager default.
+type erroringProvider struct{}
+
+func (erroringProvider) Authenticator(_ context.Context, _ name.Reference) (authn.Authenticator, error) {
+	return nil, fmt.Errorf("default provider must not be used")
+}
+
+func TestCreatePushWithBorrowedCredentials(t *testing.T) {
+	p, digest := cacheFixture(t)
+
+	inner := registry.New()
+	gated := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer borrowed-token" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		inner.ServeHTTP(w, r)
+	})
+	srv := httptest.NewServer(gated)
+	t.Cleanup(srv.Close)
+	host := strings.TrimPrefix(srv.URL, "http://")
+
+	resolver := &fakeResolver{images: map[string]*images.Image{
+		"myapp:v1": readyImage("myapp:v1", digest),
+	}}
+	mgr, err := NewManager(p, resolver, erroringProvider{}, 1)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	push, err := mgr.CreatePush(context.Background(), PushRequest{
+		Image:       "myapp:v1",
+		Target:      host + "/export/app:v1",
+		Insecure:    true,
+		Credentials: &authn.AuthConfig{RegistryToken: "borrowed-token"},
+	})
+	if err != nil {
+		t.Fatalf("CreatePush: %v", err)
+	}
+	if err := mgr.WaitForPush(context.Background(), push.ID); err != nil {
+		t.Fatalf("WaitForPush: %v", err)
+	}
+
+	got, err := mgr.GetPush(context.Background(), push.ID)
+	if err != nil {
+		t.Fatalf("GetPush: %v", err)
+	}
+	if got.Status != StatusPushed {
+		t.Errorf("status = %s, want pushed (error: %v)", got.Status, got.Error)
+	}
+}
+
+func TestCredentialsNeverPersisted(t *testing.T) {
+	p, digest := cacheFixture(t)
+	host := openRegistry(t)
+	resolver := &fakeResolver{images: map[string]*images.Image{
+		"myapp:v1": readyImage("myapp:v1", digest),
+	}}
+	mgr, err := NewManager(p, resolver, nil, 1)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	const secret = "super-secret-borrowed-password"
+	push, err := mgr.CreatePush(context.Background(), PushRequest{
+		Image:       "myapp:v1",
+		Target:      host + "/export/app:v1",
+		Insecure:    true,
+		Credentials: &authn.AuthConfig{Username: "pusher", Password: secret},
+	})
+	if err != nil {
+		t.Fatalf("CreatePush: %v", err)
+	}
+	if err := mgr.WaitForPush(context.Background(), push.ID); err != nil {
+		t.Fatalf("WaitForPush: %v", err)
+	}
+
+	data, err := os.ReadFile(p.PushMetadata(push.ID))
+	if err != nil {
+		t.Fatalf("read metadata: %v", err)
+	}
+	if strings.Contains(string(data), secret) || strings.Contains(string(data), "pusher") {
+		t.Error("borrowed credentials were persisted to disk")
+	}
+}
+
+func TestRecoveryFailsCredentialJobs(t *testing.T) {
+	p, digest := cacheFixture(t)
+	host := openRegistry(t)
+
+	meta := &pushMetadata{
+		ID:             "cred-push",
+		Status:         StatusQueued,
+		Image:          "myapp:v1",
+		Digest:         digest,
+		Target:         host + "/export/recovered:v1",
+		Insecure:       true,
+		HadCredentials: true,
+		CreatedAt:      time.Now(),
+	}
+	if err := writeMetadata(p, meta); err != nil {
+		t.Fatalf("writeMetadata: %v", err)
+	}
+
+	resolver := &fakeResolver{images: map[string]*images.Image{
+		"myapp:v1": readyImage("myapp:v1", digest),
+	}}
+	mgr, err := NewManager(p, resolver, nil, 1)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	got, err := mgr.GetPush(context.Background(), "cred-push")
+	if err != nil {
+		t.Fatalf("GetPush: %v", err)
+	}
+	if got.Status != StatusFailed {
+		t.Errorf("status = %s, want failed (credentialed pushes cannot be recovered)", got.Status)
+	}
+	if got.Error == nil || !strings.Contains(*got.Error, "credentials") {
+		t.Errorf("error = %v, want an explanation about borrowed credentials", got.Error)
+	}
+
+	// Nothing was pushed to the destination.
+	dstRef, err := name.ParseReference(host+"/export/recovered:v1", name.Insecure)
+	if err != nil {
+		t.Fatalf("parse target: %v", err)
+	}
+	if _, err := remote.Get(dstRef, remote.WithAuth(authn.Anonymous)); err == nil {
+		t.Error("recovered credentialed push should not have pushed")
+	}
+}
+
 // Ensure ocicache errors surface through the manager when blobs disappear.
 func TestCreatePushMissingBlobs(t *testing.T) {
 	p, digest := cacheFixture(t)

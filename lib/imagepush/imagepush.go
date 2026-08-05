@@ -12,6 +12,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/kernel/hypeman/lib/images"
 )
 
@@ -36,6 +37,13 @@ type PushRequest struct {
 	Target string
 	// Insecure allows pushing to plain-HTTP registries.
 	Insecure bool
+	// Credentials are borrowed for this push only, docker-style: the caller's
+	// registry login (e.g. resolved from the client's ~/.docker/config.json)
+	// rides along with the request instead of living on the server. They are
+	// never persisted or logged; a push interrupted across a restart cannot be
+	// recovered and fails instead. When nil, the manager's default provider
+	// resolves credentials.
+	Credentials *authn.AuthConfig
 }
 
 // Push is the state of one push job.
@@ -68,7 +76,8 @@ type StatusEvent struct {
 type Manager interface {
 	// CreatePush validates the request, persists a queued job, and enqueues it.
 	// A request that matches an in-flight job (same digest and target) returns
-	// the existing job instead of creating a duplicate.
+	// the existing job instead of creating a duplicate; the in-flight job's
+	// credentials remain in effect.
 	CreatePush(ctx context.Context, req PushRequest) (*Push, error)
 	GetPush(ctx context.Context, id string) (*Push, error)
 	// ListPushes returns all pushes, newest first.
