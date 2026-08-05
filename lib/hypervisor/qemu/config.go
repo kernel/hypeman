@@ -86,13 +86,10 @@ func BuildArgs(cfg hypervisor.VMConfig) []string {
 		args = append(args, "-device", fmt.Sprintf("vfio-pci,sysfsdev=%s", cfg.VGPUDevicePath))
 	}
 
-	// PCI device passthrough (GPU, mdev vGPU, etc.)
+	// Whole-device PCI passthrough (vGPU attaches via VGPUDevicePath above)
 	for _, devicePath := range cfg.PCIDevices {
 		var deviceArg string
-		if strings.HasPrefix(devicePath, "/sys/bus/mdev/devices/") {
-			// mdev device (vGPU) - use sysfsdev parameter
-			deviceArg = fmt.Sprintf("vfio-pci,sysfsdev=%s", devicePath)
-		} else if strings.HasPrefix(devicePath, "/sys/bus/pci/devices/") {
+		if strings.HasPrefix(devicePath, "/sys/bus/pci/devices/") {
 			// Full sysfs path for regular PCI device - extract the PCI address
 			// Using filepath.Base is more robust than manual string splitting
 			pciAddr := filepath.Base(strings.TrimSuffix(devicePath, "/"))
