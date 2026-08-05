@@ -5,6 +5,13 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"math/big"
 	"net"
 	"net/http"
 	"os"
@@ -85,7 +92,7 @@ func TestBuilderPersistentCacheReuse(t *testing.T) {
 		}
 	})
 
-	registryURL := startBuildRegistry(t, gateway, p, imageManager)
+	registryURL, registryCA := startBuildRegistry(t, gateway, p, imageManager)
 
 	builderManager, err := builders.NewManager(
 		p,
@@ -103,7 +110,7 @@ func TestBuilderPersistentCacheReuse(t *testing.T) {
 		builds.Config{
 			MaxConcurrentBuilds: 1,
 			RegistryURL:         registryURL,
-			RegistryInsecure:    true,
+			RegistryCACert:      registryCA,
 			RegistrySecret:      "builder-cache-integration-test",
 			DefaultTimeout:      600,
 		},
@@ -154,21 +161,46 @@ RUN --mount=type=cache,target=/cache sh -c 'if [ -f /cache/sentinel ]; then echo
 	require.NotEqual(t, *first.BuilderInstanceID, *second.BuilderInstanceID)
 }
 
-func startBuildRegistry(t *testing.T, gateway string, p *paths.Paths, imageManager images.Manager) string {
+func startBuildRegistry(t *testing.T, gateway string, p *paths.Paths, imageManager images.Manager) (string, string) {
 	t.Helper()
 	reg, err := registry.New(p, imageManager)
 	require.NoError(t, err)
+	certPEM, keyPEM := registryCertificate(t, net.ParseIP(gateway))
+	certificate, err := tls.X509KeyPair(certPEM, keyPEM)
+	require.NoError(t, err)
 	listener, err := net.Listen("tcp", "0.0.0.0:0")
 	require.NoError(t, err)
+	tlsListener := tls.NewListener(listener, &tls.Config{Certificates: []tls.Certificate{certificate}, MinVersion: tls.VersionTLS12})
 	server := &http.Server{Handler: reg.Handler()}
 	go func() {
-		if serveErr := server.Serve(listener); serveErr != nil && serveErr != http.ErrServerClosed {
+		if serveErr := server.Serve(tlsListener); serveErr != nil && serveErr != http.ErrServerClosed {
 			t.Logf("registry server: %v", serveErr)
 		}
 	}()
 	t.Cleanup(func() { _ = server.Close() })
 	port := listener.Addr().(*net.TCPAddr).Port
-	return net.JoinHostPort(gateway, strconv.Itoa(port))
+	return net.JoinHostPort(gateway, strconv.Itoa(port)), string(certPEM)
+}
+
+func registryCertificate(t *testing.T, ip net.IP) ([]byte, []byte) {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+	now := time.Now()
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: ip.String()},
+		NotBefore:    now.Add(-time.Minute),
+		NotAfter:     now.Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		IPAddresses:  []net.IP{ip},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	require.NoError(t, err)
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
+	return certPEM, keyPEM
 }
 
 func runBuilderBuild(t *testing.T, ctx context.Context, manager builds.Manager, builderID, dockerfile string, source []byte, cacheBuster string) *builds.Build {
