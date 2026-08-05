@@ -42,7 +42,7 @@ curl -fsSL https://get.hypeman.sh/cli | bash
 
 mkdir -p ~/.config/hypeman
 cat > ~/.config/hypeman/cli.yaml <<EOF
-base_url: http://<public-ip>:8080
+base_url: http://<public-ip>:4973
 api_key: "<jwt-from-hypeman-create-token>"
 EOF
 
@@ -92,11 +92,11 @@ https://kernel-hypeman-cloudformation-prod.s3.us-east-1.amazonaws.com/v1/hypeman
 | --- | --- |
 | Region | `us-east-1` |
 | Instance type | `c8i.2xlarge` |
-| Hypeman API port | `8080` |
+| Hypeman API and internal registry port | `4973` |
 | Admin access | AWS Systems Manager Session Manager |
 | SSH | Disabled unless explicitly enabled |
 | Root volume | 30 GiB encrypted EBS |
 | Hypeman data volume | 100 GiB encrypted EBS, formatted XFS at `/var/lib/hypeman` |
-| Hypeman version | Latest release with a matching artifact |
+| Hypeman version | `v0.3.0` |
 
 The deployment expects an Intel C8i, M8i, or R8i instance type with EC2 nested virtualization support.

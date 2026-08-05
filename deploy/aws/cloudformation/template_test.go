@@ -15,7 +15,7 @@ func TestQuickstartParameters(t *testing.T) {
 	parameters := requireMapping(t, requireField(t, root, "Parameters"))
 	assertDefault(t, parameters, "InstanceType", "c8i.2xlarge")
 	assertDefault(t, parameters, "AllowedApiCidr", "127.0.0.1/32")
-	assertDefault(t, parameters, "ApiPort", "8080")
+	assertDefault(t, parameters, "ApiPort", "4973")
 	assertDefault(t, parameters, "EnableHttpIngress", "false")
 	assertDefault(t, parameters, "EnableHttpsIngress", "false")
 	assertDefault(t, parameters, "AllowedIngressCidr", "127.0.0.1/32")
@@ -25,7 +25,7 @@ func TestQuickstartParameters(t *testing.T) {
 	assertDefault(t, parameters, "DataVolumeSize", "100")
 	assertDefault(t, parameters, "DataVolumeIops", "")
 	assertDefault(t, parameters, "DataVolumeThroughput", "")
-	assertDefault(t, parameters, "HypemanVersion", "latest")
+	assertDefault(t, parameters, "HypemanVersion", "v0.3.0")
 	assertDefault(t, parameters, "HypemanCliVersion", "latest")
 
 	instanceType := requireMapping(t, parameters["InstanceType"])
@@ -53,6 +53,31 @@ func TestQuickstartParameters(t *testing.T) {
 			t.Fatalf("missing CloudFormation parameter group %q", name)
 		}
 	}
+}
+
+func TestApiPortContract(t *testing.T) {
+	template := loadTemplate(t)
+	root := requireMapping(t, template)
+	resources := requireMapping(t, requireField(t, root, "Resources"))
+
+	securityGroup := requireMapping(t, requireField(t, resources, "HypemanSecurityGroup"))
+	sgProperties := requireMapping(t, requireField(t, securityGroup, "Properties"))
+	apiIngress := requireMapping(t, requireSequence(t, requireField(t, sgProperties, "SecurityGroupIngress")).Content[0])
+	assertRef(t, requireField(t, apiIngress, "FromPort"), "ApiPort")
+	assertRef(t, requireField(t, apiIngress, "ToPort"), "ApiPort")
+
+	host := requireMapping(t, requireField(t, resources, "HypemanHost"))
+	userData := nodeText(requireField(t, requireMapping(t, requireField(t, host, "Properties")), "UserData"))
+	assertContains(t, userData, `Environment="PORT=${ApiPort}"`)
+	assertContains(t, userData, `Environment="REGISTRY__URL=localhost:${ApiPort}"`)
+	assertContains(t, userData, "base_url: http://localhost:${ApiPort}")
+	assertContains(t, userData, "http://127.0.0.1:${ApiPort}/health")
+
+	outputs := requireMapping(t, requireField(t, root, "Outputs"))
+	endpoint := requireMapping(t, requireField(t, outputs, "HypemanEndpoint"))
+	endpointSub := requireSequence(t, requireField(t, endpoint, "Value"))
+	endpointVariables := requireMapping(t, endpointSub.Content[1])
+	assertRef(t, requireField(t, endpointVariables, "Port"), "ApiPort")
 }
 
 func TestCloudFormationLaunchContract(t *testing.T) {
