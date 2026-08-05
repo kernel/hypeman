@@ -2,9 +2,11 @@ package instances
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 
 	"github.com/kernel/hypeman/lib/devices"
+	"github.com/kernel/hypeman/lib/logger"
 )
 
 func setStoredVGPUDevice(stored *StoredMetadata, device *devices.VGPUDevice) {
@@ -33,6 +35,25 @@ func releaseStoredVGPU(ctx context.Context, stored *StoredMetadata) error {
 	}
 	clearStoredVGPUDevice(stored)
 	return nil
+}
+
+// releaseRetainedVGPULocked releases a vGPU assignment retained on a stopped
+// instance after a failed release during the original stop. It is a no-op
+// when no assignment is retained. The caller must hold the instance lock.
+func (m *manager) releaseRetainedVGPULocked(ctx context.Context, id string) error {
+	meta, err := m.loadMetadata(id)
+	if err != nil {
+		return err
+	}
+	stored := &meta.StoredMetadata
+	if storedVGPUDevicePath(stored) == "" {
+		return nil
+	}
+	if err := releaseStoredVGPU(ctx, stored); err != nil {
+		logger.FromContext(ctx).ErrorContext(ctx, "failed to destroy retained vGPU; retaining assignment metadata", "instance_id", id, "error", err)
+		return fmt.Errorf("destroy vGPU: %w", err)
+	}
+	return m.saveMetadata(meta)
 }
 
 func storedVGPUDevicePath(stored *StoredMetadata) string {
