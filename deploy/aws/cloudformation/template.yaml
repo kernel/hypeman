@@ -94,10 +94,10 @@ Parameters:
     AllowedPattern: "^([0-9]{1,3}\\.){3}[0-9]{1,3}/([0-9]|[1-2][0-9]|3[0-2])$"
   ApiPort:
     Type: Number
-    Default: 8080
+    Default: 4973
     MinValue: 1
     MaxValue: 65535
-    Description: Hypeman API port exposed to AllowedApiCidr.
+    Description: Hypeman API and internal registry port exposed to AllowedApiCidr.
   EnableHttpIngress:
     Type: String
     Default: "false"
@@ -151,7 +151,7 @@ Parameters:
     Description: Optional provisioned throughput in MiB/s for the Hypeman data gp3 EBS volume. When set, Hypeman disk I/O capacity is configured to the same value.
   HypemanVersion:
     Type: String
-    Default: latest
+    Default: v0.3.0
     Description: Hypeman API release tag, or latest. Ignored when HypemanBranch is set.
   HypemanBranch:
     Type: String
@@ -511,15 +511,17 @@ Resources:
           fi
           curl -fsSL https://raw.githubusercontent.com/kernel/hypeman/main/scripts/install.sh | bash
 
-          if [ -n "${DataVolumeThroughput}" ]; then
-            install -d -m 755 /etc/systemd/system/hypeman.service.d
-            cat >/etc/systemd/system/hypeman.service.d/disk-io-capacity.conf <<EOF
+          install -d -m 755 /etc/systemd/system/hypeman.service.d
+          cat >/etc/systemd/system/hypeman.service.d/cloudformation.conf <<EOF
           [Service]
-          Environment="CAPACITY__DISK_IO=${DataVolumeThroughput}MB/s"
+          Environment="PORT=${ApiPort}"
+          Environment="REGISTRY__URL=localhost:${ApiPort}"
           EOF
-            systemctl daemon-reload
-            systemctl restart hypeman
+          if [ -n "${DataVolumeThroughput}" ]; then
+            echo 'Environment="CAPACITY__DISK_IO=${DataVolumeThroughput}MB/s"' >>/etc/systemd/system/hypeman.service.d/cloudformation.conf
           fi
+          systemctl daemon-reload
+          systemctl restart hypeman
 
           install -d -m 755 /opt/hypeman/deploy
           cat >/usr/local/bin/hypeman-create-token <<'SCRIPT'
