@@ -8,13 +8,10 @@
 # the same real generate job on a stlc/integration-test/run-<run id> branch in
 # each SDK repo and opens a do-not-merge draft PR per repo — never main, no
 # seal-back, no docs publish. See the runbook.
-# On push to main: rebuilds and pushes to each SDK repo's main. release-please
-# (running in each SDK repo) opens the version + changelog PR from there, and
-# merging that PR is what publishes — so the human gate before a release stays
-# where it is today.
-#
-# We run single-repo: staging_repo == production_repo in
-# stainless.yaml, so there is no promote step and no back-sync.
+# On push to main: rebuilds and pushes to each staging repo's main. The staging
+# promotion workflow fast-forwards production main, where release-please opens
+# the version + changelog PR. Merging that PR publishes the package, and
+# production releases fast-forward back into staging.
 #
 # Setup this workflow depends on is in docs/runbooks/sdk-generation-stlc.md.
 name: Generate SDKs with stlc
@@ -188,29 +185,6 @@ jobs:
           git config --global user.name "${APP_SLUG}[bot]"
           git config --global user.email "${bot_id}+${APP_SLUG}[bot]@users.noreply.github.com"
           gh auth setup-git
-
-      - name: Initialize empty staging repos
-        env:
-          GH_TOKEN: ${{ steps.sdk-token.outputs.token }}
-        run: |
-          set -euo pipefail
-          pairs=(
-            "hypeman-go hypeman-go-staging"
-            "hypeman-ts hypeman-ts-staging"
-          )
-          for pair in "${pairs[@]}"; do
-            read -r production staging <<<"$pair"
-            if gh api "repos/kernel/$staging/git/ref/heads/main" >/dev/null 2>&1; then
-              echo "$staging already initialized"
-              continue
-            fi
-            mirror=$(mktemp -d)
-            git clone --mirror "https://github.com/kernel/$production.git" "$mirror/repo.git"
-            git -C "$mirror/repo.git" for-each-ref --format='delete %(refname)' refs/pull | \
-              git -C "$mirror/repo.git" update-ref --stdin
-            git -C "$mirror/repo.git" push --mirror "https://github.com/kernel/$staging.git"
-            rm -rf "$mirror"
-          done
 
       - name: Resolve the SDK commit message
         # The merged PR's title, which survives squash, merge, and rebase alike;
