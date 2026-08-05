@@ -41,6 +41,7 @@ func TestBuilderPersistentCacheReuse(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
+	t.Chdir("..")
 
 	p := paths.New(t.TempDir())
 	cfg := &config.Config{
