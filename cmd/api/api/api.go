@@ -8,6 +8,7 @@ import (
 	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/guestmemory"
 	"github.com/kernel/hypeman/lib/images"
+	"github.com/kernel/hypeman/lib/imagepush"
 	"github.com/kernel/hypeman/lib/ingress"
 	"github.com/kernel/hypeman/lib/instances"
 	"github.com/kernel/hypeman/lib/network"
@@ -28,6 +29,7 @@ type ApiService struct {
 	DeviceManager         devices.Manager
 	IngressManager        ingress.Manager
 	BuildManager          builds.Manager
+	PushManager           imagepush.Manager
 	ResourceManager       *resources.Manager
 	GuestMemoryController guestmemory.Controller
 	AutoStandbyController *autostandby.Controller
@@ -47,6 +49,7 @@ func New(
 	deviceManager devices.Manager,
 	ingressManager ingress.Manager,
 	buildManager builds.Manager,
+	pushManager imagepush.Manager,
 	resourceManager *resources.Manager,
 	guestMemoryController guestmemory.Controller,
 	autoStandbyController *autostandby.Controller,
@@ -62,6 +65,7 @@ func New(
 		DeviceManager:         deviceManager,
 		IngressManager:        ingressManager,
 		BuildManager:          buildManager,
+		PushManager:           pushManager,
 		ResourceManager:       resourceManager,
 		GuestMemoryController: guestMemoryController,
 		AutoStandbyController: autoStandbyController,

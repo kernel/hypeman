@@ -401,6 +401,12 @@ func (m *manager) InProgressDigests() []string {
 	return digests
 }
 
+// LiveCacheManifestDigests implements ocicachegc.RootsProvider so in-flight
+// push digests are treated as live alongside the OCI layout index.
+func (m *manager) LiveCacheManifestDigests() []string {
+	return m.InProgressDigests()
+}
+
 func (m *manager) recoverInterruptedPushes() {
 	// A crash between the push-dir MkdirAll and the metadata rename leaves an
 	// empty dir no listing can read and no recovery can act on; sweep it now,

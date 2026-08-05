@@ -119,4 +119,7 @@ type Manager interface {
 	// InProgressDigests returns the manifest digests of queued and pushing
 	// jobs so the OCI cache GC can keep their blobs alive mid-push.
 	InProgressDigests() []string
+	// LiveCacheManifestDigests implements ocicachegc.RootsProvider by
+	// delegating to InProgressDigests.
+	LiveCacheManifestDigests() []string
 }

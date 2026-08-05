@@ -187,6 +187,7 @@ type LimitsConfig struct {
 	MaxMemoryPerInstance  string  `koanf:"max_memory_per_instance"`
 	MaxTotalVolumeStorage string  `koanf:"max_total_volume_storage"`
 	MaxConcurrentBuilds   int     `koanf:"max_concurrent_builds"`
+	MaxConcurrentPushes   int     `koanf:"max_concurrent_pushes"`
 	MaxOverlaySize        string  `koanf:"max_overlay_size"`
 	MaxImageStorage       float64 `koanf:"max_image_storage"`
 }
@@ -430,6 +431,7 @@ func defaultConfig() *Config {
 			MaxMemoryPerInstance:  "32GB",
 			MaxTotalVolumeStorage: "",
 			MaxConcurrentBuilds:   1,
+			MaxConcurrentPushes:   2,
 			MaxOverlaySize:        "100GB",
 			MaxImageStorage:       0.2,
 		},

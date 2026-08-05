@@ -15,6 +15,7 @@ import (
 	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/guestmemory"
 	"github.com/kernel/hypeman/lib/images"
+	"github.com/kernel/hypeman/lib/imagepush"
 	"github.com/kernel/hypeman/lib/ingress"
 	"github.com/kernel/hypeman/lib/instances"
 	"github.com/kernel/hypeman/lib/network"
@@ -40,6 +41,7 @@ type application struct {
 	BuilderManager        builders.Manager
 	IngressManager        ingress.Manager
 	BuildManager          builds.Manager
+	PushManager           imagepush.Manager
 	ResourceManager       *resources.Manager
 	GuestMemoryController guestmemory.Controller
 	AutoStandbyController *autostandby.Controller
@@ -65,6 +67,7 @@ func initializeApp() (*application, func(), error) {
 		providers.ProvideBuilderManager,
 		providers.ProvideIngressManager,
 		providers.ProvideBuildManager,
+		providers.ProvidePushManager,
 		providers.ProvideResourceManager,
 		providers.ProvideGuestMemoryController,
 		providers.ProvideAutoStandbyController,

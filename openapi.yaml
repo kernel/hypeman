@@ -1780,7 +1780,101 @@ components:
         status:
           $ref: "#/components/schemas/BuildStatus"
           description: New build status (only for type=status)
-    
+
+    PushStatus:
+      type: string
+      enum: [queued, pushing, pushed, failed]
+
+    PushCredentials:
+      type: object
+      description: |
+        Registry credentials borrowed for this push only, docker-style: the
+        caller's registry login (e.g. from the client's ~/.docker/config.json)
+        rides along with the request instead of living on the server. Never
+        persisted or logged; a push interrupted by a restart fails instead of
+        retrying without them. When omitted, the server's own registry
+        credentials are used.
+      properties:
+        username:
+          type: string
+          description: Registry username
+        password:
+          type: string
+          description: Registry password or access token
+          format: password
+        registry_token:
+          type: string
+          description: Bearer token sent as-is in the Authorization header
+          format: password
+
+    CreatePushRequest:
+      type: object
+      required:
+        - image
+        - target
+      properties:
+        image:
+          type: string
+          description: Hypeman image name to push (tag or digest form)
+          example: "docker.io/library/alpine:latest"
+        target:
+          type: string
+          description: Full remote reference to push to
+          example: "123456789.dkr.ecr.us-east-1.amazonaws.com/myapp:v1"
+        insecure:
+          type: boolean
+          description: Allow pushing to plain-HTTP registries
+          default: false
+        credentials:
+          $ref: "#/components/schemas/PushCredentials"
+
+    Push:
+      type: object
+      required:
+        - id
+        - image
+        - digest
+        - target
+        - status
+        - created_at
+      properties:
+        id:
+          type: string
+          description: Push job identifier
+        image:
+          type: string
+          description: Hypeman image name (normalized ref)
+        digest:
+          type: string
+          description: Cached manifest digest being pushed
+        target:
+          type: string
+          description: Remote reference the image is pushed to
+        status:
+          $ref: "#/components/schemas/PushStatus"
+        queue_position:
+          type: integer
+          description: Position in the push queue (only when status is queued)
+          nullable: true
+        error:
+          type: string
+          description: Error message (only when status is failed)
+          nullable: true
+        layers:
+          type: integer
+          description: Number of layers pushed (only when status is pushed)
+        bytes:
+          type: integer
+          format: int64
+          description: Total compressed layer bytes pushed (only when status is pushed)
+        created_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+          nullable: true
+
     Build:
       type: object
       required: [id, status, created_at]
@@ -4620,6 +4714,127 @@ paths:
                 $ref: "#/components/schemas/Error"
         409:
           description: Conflict - builder is in use
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /pushes:
+    get:
+      summary: List pushes
+      description: Lists outbound image push jobs, newest first.
+      operationId: listPushes
+      security:
+        - bearerAuth: []
+      responses:
+        200:
+          description: List of pushes
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Push"
+        401:
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    post:
+      summary: Push an image to a remote registry
+      description: |
+        Creates a push job that exports a hypeman image from the local OCI
+        cache to a remote registry (e.g. AWS ECR, Docker Hub). Credentials are
+        borrowed from the request when provided and never persisted; otherwise
+        the server's own registry credentials are used. Only images in the
+        ready state can be pushed.
+      operationId: createPush
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePushRequest"
+      responses:
+        202:
+          description: Push job created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Push"
+        400:
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        401:
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        404:
+          description: Image not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        409:
+          description: Image exists but is not ready
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /pushes/{id}:
+    get:
+      summary: Get push details
+      operationId: getPush
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Push ID
+      responses:
+        200:
+          description: Push details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Push"
+        401:
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        404:
+          description: Push not found
           content:
             application/json:
               schema:

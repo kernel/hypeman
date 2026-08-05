@@ -119,6 +119,22 @@ type ociCacheGCRunner interface {
 	Run(ctx context.Context) error
 }
 
+// compositeOCICacheRoots fans the GC's extra-root query out to every source
+// that tracks cache blobs outside index.json: the embedded registry's
+// BuildKit cache tags and the push manager's in-flight push digests.
+type compositeOCICacheRoots []ocicachegc.RootsProvider
+
+func (c compositeOCICacheRoots) LiveCacheManifestDigests() []string {
+	out := make([]string, 0)
+	for _, roots := range c {
+		if roots == nil {
+			continue
+		}
+		out = append(out, roots.LiveCacheManifestDigests()...)
+	}
+	return out
+}
+
 func configureOCICacheGC(cfg *config.Config, roots ocicachegc.RootsProvider, logger *slog.Logger, meter metric.Meter, tracer trace.Tracer) (ociCacheGCRunner, error) {
 	if cfg == nil || !cfg.Images.OCICacheGC.Enabled {
 		return nil, nil
@@ -576,7 +592,7 @@ func run() error {
 
 	ociGC, err := configureOCICacheGC(
 		app.Config,
-		app.Registry,
+		compositeOCICacheRoots{app.Registry, app.PushManager},
 		logger,
 		otelProvider.MeterFor(loglib.SubsystemImages),
 		otelProvider.TracerFor(loglib.SubsystemImages),
