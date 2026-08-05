@@ -37,7 +37,7 @@ runs:
         git config --global --add "$git_config_key" "https://github.com/stainless/"
 
         npm install -g \
-          "git+https://x-access-token:${STLC_READ_TOKEN}@github.com/stainless/stlc.git" \
-          "git+https://x-access-token:${STLC_READ_TOKEN}@github.com/stainless/stlc-typescript.git" \
-          "git+https://x-access-token:${STLC_READ_TOKEN}@github.com/stainless/stlc-go.git"
+          "git+https://x-access-token:${STLC_READ_TOKEN}@github.com/stainless/stlc.git#cfc85d2651330f7ba6a94dbe8e3c92ab64124f38" \
+          "git+https://x-access-token:${STLC_READ_TOKEN}@github.com/stainless/stlc-typescript.git#cd63c03a3381e7fbf05e1de78fb3e38a1fd1aaee" \
+          "git+https://x-access-token:${STLC_READ_TOKEN}@github.com/stainless/stlc-go.git#9473a876905d28ab87c5a7bce69199a9389a2094"
         stlc version

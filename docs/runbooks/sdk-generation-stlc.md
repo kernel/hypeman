@@ -11,8 +11,9 @@ preview and merge builds.
 - `stainless/custom-code/` preserves the hand-written SDK code exported in the
   transition bundle.
 - Generated SDK checkouts and build manifests stay ignored under `stainless/`.
-- `staging_repo` equals `production_repo`, so generation writes to the public SDK
-  repositories without a separate promote or back-sync step.
+- `staging_repo` points to the internal `hypeman-go-staging` and
+  `hypeman-ts-staging` repositories. Generation writes there; a manual promotion
+  fast-forwards the public production repos, and releases sync back to staging.
 
 ## One-time setup
 
@@ -23,15 +24,16 @@ preview and merge builds.
    `STLC_READ_TOKEN` Actions secret.
 3. Make the existing admin GitHub App credentials available as
    `ADMIN_APP_ID` and `ADMIN_APP_PRIVATE_KEY`. The app must be able to write
-   branches, workflow files, and pull requests in both SDK repositories. Its
+   branches and workflow files in both staging and production SDK repositories.
+   Its
    installation must explicitly grant **Workflows: read and write**; a workflow
    cannot elevate the app's configured permissions.
 4. Configure release-please and package publishing in each SDK repository before
    generated commits reach `main`.
-5. Initialize the workspace from the transition bundle. Accept each public SDK
-   repository as its own staging repository, retain `stainless/custom-code/`,
-   delete the bundled spec/config copies, and point `workspace.json` at the root
-   files:
+5. Initialize the workspace from the transition bundle. Use
+   `hypeman-go-staging` and `hypeman-ts-staging` as the staging repositories,
+   retain `stainless/custom-code/`, delete the bundled spec/config copies, and
+   point `workspace.json` at the root files:
 
    ```json
    {
@@ -44,7 +46,9 @@ preview and merge builds.
 ## Local validation
 
 Install Node.js 24, pnpm 10.30.1, Go, and the CLI plus target packages from
-Stainless's private repositories. The custom code adds dependencies after
+Stainless's private repositories. CI pins those Git dependencies to exact
+commits in `.github/actions/setup-stlc/action.yml`; update the revisions together
+and rerun full SDK validation when upgrading. The custom code adds dependencies after
 generation, so bootstrap and validate the integrated SDKs rather than linting the
 unpatched generated baseline:
 
@@ -62,13 +66,16 @@ compatible.
 
 ## Pull requests and merges
 
-On a pull request, the workflow pushes `stlc/preview/pr-<number>` to each SDK repo
-and updates one manifest comment. Closing the PR deletes the preview branches.
+On a pull request, the workflow pushes `stlc/preview/pr-<number>` to each staging
+repo and updates one manifest comment. Closing the PR deletes the preview branches.
 
 On a push to `main`, the workflow generates without pushing, bootstraps the
 integrated SDKs, runs lint and tests, checks for tracked worktree changes, and only
-then re-runs the deterministic build with `--push`. It opens a seal-back PR if the
-custom-code tracking files changed.
+then re-runs the deterministic build with `--push` to staging `main`. A maintainer
+manually dispatches `Promote SDKs` in each staging repo to fast-forward production.
+Release-please then opens the version PR in production; after publication, the
+scheduled sync fast-forwards those commits back to staging. The config workflow
+opens a seal-back PR if the custom-code tracking files changed.
 
 ## Safe integration test
 
@@ -80,6 +87,6 @@ gh workflow run stlc-generate.yml --ref <branch> -f integration_test=true
 
 This runs the real generator and validation sequence, pushes only a unique
 `stlc/integration-test/run-<run-id>` branch, and opens do-not-merge draft PRs in
-both SDK repos. It never pushes SDK `main` and never runs seal-back.
+both staging repos. It never pushes SDK `main` and never runs seal-back.
 
 After review, close the draft PRs and delete their integration-test branches.
