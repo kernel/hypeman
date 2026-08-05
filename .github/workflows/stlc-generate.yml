@@ -13,7 +13,7 @@
 # the version + changelog PR. Merging that PR publishes the package, and
 # production releases fast-forward back into staging.
 #
-# Setup this workflow depends on is in docs/runbooks/sdk-generation-stlc.md.
+# Operator commands and recovery notes are in docs/runbooks/sdk-generation-stlc.md.
 name: Generate SDKs with stlc
 
 on:
