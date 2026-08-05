@@ -2,7 +2,6 @@ package instances
 
 import (
 	"context"
-	"fmt"
 	"path/filepath"
 
 	"github.com/kernel/hypeman/lib/devices"
@@ -39,21 +38,26 @@ func releaseStoredVGPU(ctx context.Context, stored *StoredMetadata) error {
 
 // releaseRetainedVGPULocked releases a vGPU assignment retained on a stopped
 // instance after a failed release during the original stop. It is a no-op
-// when no assignment is retained. The caller must hold the instance lock.
-func (m *manager) releaseRetainedVGPULocked(ctx context.Context, id string) error {
+// when no assignment is retained, and a failed retry only logs so the
+// metadata stays for the next retry. The caller must hold the instance lock.
+func (m *manager) releaseRetainedVGPULocked(ctx context.Context, id string) {
+	log := logger.FromContext(ctx)
 	meta, err := m.loadMetadata(id)
 	if err != nil {
-		return err
+		log.WarnContext(ctx, "failed to load metadata for retained vGPU release", "instance_id", id, "error", err)
+		return
 	}
 	stored := &meta.StoredMetadata
 	if storedVGPUDevicePath(stored) == "" {
-		return nil
+		return
 	}
 	if err := releaseStoredVGPU(ctx, stored); err != nil {
-		logger.FromContext(ctx).ErrorContext(ctx, "failed to destroy retained vGPU; retaining assignment metadata", "instance_id", id, "error", err)
-		return fmt.Errorf("destroy vGPU: %w", err)
+		log.WarnContext(ctx, "failed to destroy retained vGPU; retaining assignment metadata", "instance_id", id, "error", err)
+		return
 	}
-	return m.saveMetadata(meta)
+	if err := m.saveMetadata(meta); err != nil {
+		log.WarnContext(ctx, "failed to save metadata after retained vGPU release", "instance_id", id, "error", err)
+	}
 }
 
 func storedVGPUDevicePath(stored *StoredMetadata) string {
