@@ -280,7 +280,7 @@ func (m *manager) createInstance(
 		})
 	}
 
-	// Handle vGPU profile request - create mdev device
+	// Handle vGPU profile request
 	if req.GPU != nil && req.GPU.Profile != "" {
 		log.InfoContext(ctx, "creating vGPU", "instance_id", id, "profile", req.GPU.Profile)
 		gpuDevice, err = devices.CreateVGPU(ctx, req.GPU.Profile, id)
@@ -293,7 +293,7 @@ func (m *manager) createInstance(
 		gpuDevicePath = gpuDevice.SysfsPath
 		gpuMdevUUID = gpuDevice.MdevUUID
 
-		// Add mdev cleanup to stack
+		// Add vGPU cleanup to stack
 		cu.Add(func() {
 			if err := devices.DestroyVGPU(ctx, gpuDevice.Framework, gpuDevice.SysfsPath, gpuDevice.MdevUUID); err != nil {
 				log.WarnContext(ctx, "failed to destroy vGPU on cleanup", "instance_id", id, "error", err)
