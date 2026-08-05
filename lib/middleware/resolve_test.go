@@ -92,3 +92,38 @@ func TestResolveResource_URLDecodesImageName(t *testing.T) {
 		})
 	}
 }
+
+func TestResolveResource_ResolvesBuilderByID(t *testing.T) {
+	// Regression test: the path-dispatch switch must include a /builders/
+	// case, otherwise the Builder resolver is never invoked and resolved
+	// builders are missing from request context (handlers then 500).
+
+	resolver := &mockResolver{}
+
+	errResponder := func(w http.ResponseWriter, err error, lookup string) {
+		w.WriteHeader(http.StatusNotFound)
+	}
+
+	middleware := ResolveResource(Resolvers{
+		Builder: resolver,
+	}, errResponder)
+
+	r := chi.NewRouter()
+	r.With(middleware).Get("/builders/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if GetResolvedBuilder[struct{}](r.Context()) == nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/builders/bld_123", nil)
+	w := httptest.NewRecorder()
+
+	r.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code,
+		"Expected resolved builder in context, got %d", w.Code)
+	assert.Equal(t, "bld_123", resolver.receivedName,
+		"Builder resolver was not invoked with the path ID")
+}

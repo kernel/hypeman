@@ -3,6 +3,7 @@ package api
 import (
 	"github.com/kernel/hypeman/cmd/api/config"
 	"github.com/kernel/hypeman/lib/autostandby"
+	"github.com/kernel/hypeman/lib/builders"
 	"github.com/kernel/hypeman/lib/builds"
 	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/guestmemory"
@@ -22,6 +23,7 @@ type ApiService struct {
 	ImageManager          images.Manager
 	InstanceManager       instances.Manager
 	VolumeManager         volumes.Manager
+	BuilderManager        builders.Manager
 	NetworkManager        network.Manager
 	DeviceManager         devices.Manager
 	IngressManager        ingress.Manager
@@ -40,6 +42,7 @@ func New(
 	imageManager images.Manager,
 	instanceManager instances.Manager,
 	volumeManager volumes.Manager,
+	builderManager builders.Manager,
 	networkManager network.Manager,
 	deviceManager devices.Manager,
 	ingressManager ingress.Manager,
@@ -54,6 +57,7 @@ func New(
 		ImageManager:          imageManager,
 		InstanceManager:       instanceManager,
 		VolumeManager:         volumeManager,
+		BuilderManager:        builderManager,
 		NetworkManager:        networkManager,
 		DeviceManager:         deviceManager,
 		IngressManager:        ingressManager,

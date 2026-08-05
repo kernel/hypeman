@@ -10,6 +10,7 @@ import (
 	"github.com/kernel/hypeman/cmd/api/api"
 	"github.com/kernel/hypeman/cmd/api/config"
 	"github.com/kernel/hypeman/lib/autostandby"
+	"github.com/kernel/hypeman/lib/builders"
 	"github.com/kernel/hypeman/lib/builds"
 	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/guestmemory"
@@ -36,6 +37,7 @@ type application struct {
 	DeviceManager         devices.Manager
 	InstanceManager       instances.Manager
 	VolumeManager         volumes.Manager
+	BuilderManager        builders.Manager
 	IngressManager        ingress.Manager
 	BuildManager          builds.Manager
 	ResourceManager       *resources.Manager
@@ -60,6 +62,7 @@ func initializeApp() (*application, func(), error) {
 		providers.ProvideDeviceManager,
 		providers.ProvideInstanceManager,
 		providers.ProvideVolumeManager,
+		providers.ProvideBuilderManager,
 		providers.ProvideIngressManager,
 		providers.ProvideBuildManager,
 		providers.ProvideResourceManager,

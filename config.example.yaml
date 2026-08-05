@@ -153,6 +153,13 @@ data_dir: /var/lib/hypeman
 #   max_concurrent_source_builds: 2
 #   timeout: 600
 
+# builders:
+#   max_count: 0                    # max number of builders (0 = unlimited)
+#   default_disk_size_gb: 50        # cache disk size when a create omits it
+#   max_disk_size_gb: 0             # max cache disk size (0 = unlimited)
+#   idle_ttl: ""                    # delete builders idle this long (e.g. "24h");
+#                                   # destructive, empty = disabled
+
 # =============================================================================
 # Resource Limits
 # =============================================================================
