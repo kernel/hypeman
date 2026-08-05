@@ -189,6 +189,28 @@ func TestDeleteReleasesVGPUBeforeTeardown(t *testing.T) {
 	assert.Equal(t, devices.VGPUFramework("future-framework"), stored.GPUFramework)
 }
 
+// A stale release during start must be persisted immediately: if start fails
+// later (here at vGPU recreation on a host without VFs), the on-disk metadata
+// must no longer point at the already-released device.
+func TestStartPersistsStaleVGPUReleaseImmediately(t *testing.T) {
+	m, id := newLifecycleNoopManagerWithInstance(t, StateStopped, time.Now().UTC())
+	m.imageManager = readyFixtureImageManager{name: "test-image"}
+	meta, err := m.loadMetadata(id)
+	require.NoError(t, err)
+	meta.GPUProfile = "NVIDIA L40S-2Q"
+	meta.GPUFramework = devices.VGPUFrameworkNone
+	meta.GPUDevicePath = "/sys/bus/pci/devices/0000:82:00.4"
+	require.NoError(t, m.saveMetadata(meta))
+
+	_, err = m.StartInstance(context.Background(), id, StartInstanceRequest{})
+	require.Error(t, err)
+
+	stored, err := m.loadMetadata(id)
+	require.NoError(t, err)
+	assert.Empty(t, stored.GPUDevicePath, "released assignment should be persisted despite the failed start")
+	assert.Equal(t, "NVIDIA L40S-2Q", stored.GPUProfile, "profile is kept for the next start")
+}
+
 func TestStopStoppedInstanceReleasesRetainedVGPU(t *testing.T) {
 	m, id := newLifecycleNoopManagerWithInstance(t, StateStopped, time.Now().UTC())
 	meta, err := m.loadMetadata(id)
