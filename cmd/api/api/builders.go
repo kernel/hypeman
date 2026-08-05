@@ -29,7 +29,7 @@ func (s *ApiService) ListBuilders(ctx context.Context, request oapi.ListBuilders
 		if !matchesTagsFilter(b.Tags, request.Params.Tags) {
 			continue
 		}
-		oapiBuilders = append(oapiBuilders, builderToOAPI(&b))
+		oapiBuilders = append(oapiBuilders, s.builderToOAPI(&b))
 	}
 
 	return oapi.ListBuilders200JSONResponse(oapiBuilders), nil
@@ -100,7 +100,7 @@ func (s *ApiService) CreateBuilder(ctx context.Context, request oapi.CreateBuild
 		}, nil
 	}
 
-	return oapi.CreateBuilder201JSONResponse(builderToOAPI(b)), nil
+	return oapi.CreateBuilder201JSONResponse(s.builderToOAPI(b)), nil
 }
 
 // GetBuilder gets builder details
@@ -113,7 +113,7 @@ func (s *ApiService) GetBuilder(ctx context.Context, request oapi.GetBuilderRequ
 			Message: "resource not resolved",
 		}, nil
 	}
-	return oapi.GetBuilder200JSONResponse(builderToOAPI(b)), nil
+	return oapi.GetBuilder200JSONResponse(s.builderToOAPI(b)), nil
 }
 
 // DeleteBuilder deletes a builder and its cache disk
@@ -186,18 +186,24 @@ func (s *ApiService) PruneBuilder(ctx context.Context, request oapi.PruneBuilder
 		}, nil
 	}
 
-	return oapi.PruneBuilder202JSONResponse(builderToOAPI(accepted)), nil
+	return oapi.PruneBuilder202JSONResponse(s.builderToOAPI(accepted)), nil
 }
 
-func builderToOAPI(b *builders.Builder) oapi.Builder {
+// builderToOAPI converts a domain builder to its API representation. One
+// build at a time runs on a builder, so max_concurrency is fixed at 1;
+// active_build_id and queued_builds come from the build queue.
+func (s *ApiService) builderToOAPI(b *builders.Builder) oapi.Builder {
 	return oapi.Builder{
-		Id:         b.ID,
-		Name:       stringPtrOrNil(b.Name),
-		DiskSizeGb: b.DiskSizeGb,
-		Status:     oapi.BuilderStatus(b.Status),
-		Tags:       toOAPITags(b.Tags),
-		CreatedAt:  b.CreatedAt,
-		LastUsedAt: b.LastUsedAt,
+		Id:             b.ID,
+		Name:           stringPtrOrNil(b.Name),
+		DiskSizeGb:     b.DiskSizeGb,
+		Status:         oapi.BuilderStatus(b.Status),
+		Tags:           toOAPITags(b.Tags),
+		CreatedAt:      b.CreatedAt,
+		LastUsedAt:     b.LastUsedAt,
+		MaxConcurrency: 1,
+		ActiveBuildId:  s.BuildManager.ActiveBuildForBuilder(b.ID),
+		QueuedBuilds:   s.BuildManager.QueuedBuildsForBuilder(b.ID),
 	}
 }
 

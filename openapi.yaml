@@ -1832,7 +1832,11 @@ components:
           nullable: true
         builder_instance_id:
           type: string
-          description: Instance ID of the builder VM (for debugging)
+          description: Disposable VM instance that executed this build; distinct from builder_id
+          nullable: true
+        builder_id:
+          type: string
+          description: Persistent Builder resource whose cache backed this build
           nullable: true
 
     BuilderStatus:
@@ -1843,7 +1847,7 @@ components:
 
     Builder:
       type: object
-      required: [id, disk_size_gb, status, created_at]
+      required: [id, disk_size_gb, status, created_at, max_concurrency, queued_builds]
       properties:
         id:
           type: string
@@ -1871,6 +1875,19 @@ components:
           format: date-time
           description: When a build last ran on this builder
           nullable: true
+        max_concurrency:
+          type: integer
+          description: Maximum concurrent builds on this builder. Currently fixed at 1.
+          example: 1
+        active_build_id:
+          type: string
+          description: Point-in-time ID of the build currently running on this builder
+          nullable: true
+        queued_builds:
+          type: array
+          description: Point-in-time IDs of queued builds waiting for this builder, oldest first
+          items:
+            type: string
 
     CreateBuilderRequest:
       type: object
@@ -4214,6 +4231,12 @@ paths:
                 base_image_digest:
                   type: string
                   description: Optional pinned base image digest
+                builder_id:
+                  type: string
+                  description: |
+                    Optional Builder ID whose persistent cache disk backs this build.
+                    This is the only builder selector. One build at a time runs on a
+                    builder; builds for the same builder are serialized.
                 cache_scope:
                   type: string
                   description: Tenant-specific cache key prefix
@@ -4268,6 +4291,18 @@ paths:
                 $ref: "#/components/schemas/Error"
         401:
           description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        404:
+          description: Builder not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        409:
+          description: Builder cannot currently accept a build
           content:
             application/json:
               schema:

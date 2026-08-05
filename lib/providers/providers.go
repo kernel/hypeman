@@ -391,7 +391,7 @@ func ProvideBuilderManager(p *paths.Paths, cfg *config.Config, instanceManager i
 }
 
 // ProvideBuildManager provides the build manager
-func ProvideBuildManager(p *paths.Paths, cfg *config.Config, instanceManager instances.Manager, volumeManager volumes.Manager, imageManager images.Manager, log *slog.Logger) (builds.Manager, error) {
+func ProvideBuildManager(p *paths.Paths, cfg *config.Config, instanceManager instances.Manager, volumeManager volumes.Manager, builderManager builders.Manager, imageManager images.Manager, log *slog.Logger) (builds.Manager, error) {
 	// Read CA cert file if specified
 	var registryCACert string
 	if cfg.Registry.CACertFile != "" {
@@ -445,5 +445,13 @@ func ProvideBuildManager(p *paths.Paths, cfg *config.Config, instanceManager ins
 	}
 
 	meter := otel.GetMeterProvider().Meter("hypeman")
-	return builds.NewManager(p, buildConfig, instanceManager, volumeManager, imageManager, secretProvider, log, meter)
+	buildManager, err := builds.NewManager(p, buildConfig, instanceManager, volumeManager, builderManager, imageManager, secretProvider, log, meter)
+	if err != nil {
+		return nil, err
+	}
+
+	// Builder delete and prune reject while builds are queued or running.
+	builderManager.SetBuildActivityChecker(buildManager.BuilderHasBuilds)
+
+	return buildManager, nil
 }

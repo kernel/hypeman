@@ -896,8 +896,16 @@ func runBuild(ctx context.Context, config *BuildConfig, logWriter io.Writer) (st
 
 	buildkitRoot := "/var/lib/buildkit"
 	requirePersistentRoot := config.CacheGCReservedBytes != 0 || config.CacheGCMaxUsedBytes != 0
-	if err := ensureBuildkitRoot(buildkitRoot, requirePersistentRoot, isMountPoint, mountBuildkitTmpfs); err != nil {
+	premounted, err := ensureBuildkitRoot(buildkitRoot, requirePersistentRoot, isMountPoint, mountBuildkitTmpfs)
+	if err != nil {
 		return "", "", err
+	}
+	if premounted {
+		// The root is a persistent disk shared across builds. Reset the
+		// cache when it was written by an incompatible BuildKit.
+		if err := reconcileBuildkitVersionStamp(buildkitRoot, buildkitdVersion); err != nil {
+			return "", "", fmt.Errorf("reconcile buildkit version stamp: %w", err)
+		}
 	}
 
 	log.Printf("Running: buildctl-daemonless.sh %s", strings.Join(args, " "))

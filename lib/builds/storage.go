@@ -30,6 +30,11 @@ type buildMetadata struct {
 
 // toBuild converts internal metadata to the public Build type
 func (m *buildMetadata) toBuild() *Build {
+	var builderID *string
+	if m.Request != nil && m.Request.BuilderID != "" {
+		id := m.Request.BuilderID
+		builderID = &id
+	}
 	return &Build{
 		ID:                m.ID,
 		Status:            m.Status,
@@ -43,6 +48,7 @@ func (m *buildMetadata) toBuild() *Build {
 		CompletedAt:       m.CompletedAt,
 		DurationMS:        m.DurationMS,
 		BuilderInstanceID: m.BuilderInstance,
+		BuilderID:         builderID,
 	}
 }
 

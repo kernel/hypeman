@@ -1,11 +1,15 @@
 package api
 
 import (
+	"bytes"
+	"context"
 	"fmt"
+	"mime/multipart"
 	"testing"
 	"time"
 
 	"github.com/kernel/hypeman/lib/builders"
+	builddomain "github.com/kernel/hypeman/lib/builds"
 	"github.com/kernel/hypeman/lib/oapi"
 	"github.com/kernel/hypeman/lib/paths"
 	"github.com/stretchr/testify/assert"
@@ -290,6 +294,37 @@ func TestPruneBuilder_NotFoundAfterResolution(t *testing.T) {
 	assert.True(t, ok, "expected 404 when the builder is gone after resolution")
 }
 
+type createBuildErrorManager struct {
+	builddomain.Manager
+	err error
+}
+
+func (m *createBuildErrorManager) CreateBuild(context.Context, builddomain.CreateBuildRequest, []byte) (*builddomain.Build, error) {
+	return nil, m.err
+}
+
+func TestCreateBuild_BuilderInUse(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+	svc.BuildManager = &createBuildErrorManager{Manager: svc.BuildManager, err: builders.ErrInUse}
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("source", "source.tar.gz")
+	require.NoError(t, err)
+	_, err = part.Write([]byte("source"))
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+
+	resp, err := svc.CreateBuild(ctx(), oapi.CreateBuildRequestObject{
+		Body: multipart.NewReader(&body, writer.Boundary()),
+	})
+	require.NoError(t, err)
+	r, ok := resp.(oapi.CreateBuild409JSONResponse)
+	require.True(t, ok, "expected 409, got %T", resp)
+	assert.Equal(t, "builder is in use", r.Message)
+}
+
 func TestDeleteBuilder_NotFoundAfterResolution(t *testing.T) {
 	t.Parallel()
 	svc := newTestService(t)
@@ -309,4 +344,29 @@ func TestDeleteBuilder_NotFoundAfterResolution(t *testing.T) {
 	require.NoError(t, err)
 	_, ok := resp.(oapi.DeleteBuilder404JSONResponse)
 	assert.True(t, ok, "expected 404 when the builder is gone after resolution")
+}
+
+func TestGetBuilder_QueueState(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	createResp, err := svc.CreateBuilder(ctx(), oapi.CreateBuilderRequestObject{
+		Body: &oapi.CreateBuilderRequest{},
+	})
+	require.NoError(t, err)
+	created := createResp.(oapi.CreateBuilder201JSONResponse)
+
+	// New fields are always present with real queue state.
+	assert.Equal(t, 1, created.MaxConcurrency)
+	assert.NotNil(t, created.QueuedBuilds, "queued_builds must be non-nil")
+	assert.Empty(t, created.QueuedBuilds)
+	assert.Nil(t, created.ActiveBuildId)
+
+	resp, err := svc.GetBuilder(ctxWithBuilder(svc, created.Id), oapi.GetBuilderRequestObject{Id: created.Id})
+	require.NoError(t, err)
+	got := resp.(oapi.GetBuilder200JSONResponse)
+	assert.Equal(t, 1, got.MaxConcurrency)
+	assert.NotNil(t, got.QueuedBuilds)
+	assert.Empty(t, got.QueuedBuilds)
+	assert.Nil(t, got.ActiveBuildId)
 }

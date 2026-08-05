@@ -54,6 +54,12 @@ type Manager interface {
 	// ready (or error). Returns ErrInUse while the builder is acquired by a
 	// build, has its disk attached, or is mid-delete.
 	ResetDisk(ctx context.Context, id string) (*Builder, error)
+
+	// SetBuildActivityChecker registers a function reporting whether a
+	// builder has queued or running builds. DeleteBuilder and ResetDisk
+	// consult it so they also return ErrInUse while builds are queued,
+	// before any build holds the acquisition.
+	SetBuildActivityChecker(fn func(builderID string) bool)
 }
 
 // instanceChecker is the subset of the instance manager reconciliation
@@ -85,6 +91,8 @@ type manager struct {
 
 	mu       sync.Mutex
 	acquired map[string]string // builder ID -> build ID holding it
+
+	hasBuilds func(builderID string) bool
 }
 
 // NewManager creates a new builders manager.
@@ -134,6 +142,19 @@ func (m *manager) Start(ctx context.Context) error {
 	}
 	m.logger.Info("builders manager started")
 	return nil
+}
+
+// SetBuildActivityChecker registers the queued/running build checker.
+func (m *manager) SetBuildActivityChecker(fn func(builderID string) bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.hasBuilds = fn
+}
+
+// buildsInFlightLocked reports whether the builder has queued or running
+// builds. m.mu must be held.
+func (m *manager) buildsInFlightLocked(id string) bool {
+	return m.hasBuilds != nil && m.hasBuilds(id)
 }
 
 // CreateBuilder creates a builder and eagerly provisions its disk
@@ -280,6 +301,9 @@ func (m *manager) DeleteBuilder(ctx context.Context, id string) error {
 		if meta.Status == StatusPruning {
 			return ErrInUse
 		}
+		if m.buildsInFlightLocked(id) {
+			return ErrInUse
+		}
 		attached, err := m.diskAttached(ctx, meta.diskVolumeID())
 		if err != nil {
 			return err
@@ -390,6 +414,10 @@ func (m *manager) ResetDisk(ctx context.Context, id string) (*Builder, error) {
 		return nil, ErrInUse
 	}
 	if meta.Status != StatusReady && meta.Status != StatusError {
+		m.mu.Unlock()
+		return nil, ErrInUse
+	}
+	if m.buildsInFlightLocked(id) {
 		m.mu.Unlock()
 		return nil, ErrInUse
 	}
@@ -643,7 +671,7 @@ func (m *manager) markIdleBuilderDeleting(id string, cutoff time.Time) (*storedM
 	if meta.Status != StatusReady {
 		return meta, false, nil
 	}
-	if _, held := m.acquired[id]; held {
+	if _, held := m.acquired[id]; held || m.buildsInFlightLocked(id) {
 		return meta, false, nil
 	}
 
