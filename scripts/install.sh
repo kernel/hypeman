@@ -766,11 +766,21 @@ if [ "$CLI_INSTALLED" = true ]; then
 
         # Determine the port from config
         CLI_PORT="4973"
+        DEFAULT_CONFIG_FILE="${TMP_DIR}/config.example.yaml"
+        if [ "$OS" = "darwin" ]; then
+            DEFAULT_CONFIG_FILE="${TMP_DIR}/config.example.darwin.yaml"
+        fi
+        if [ -f "$DEFAULT_CONFIG_FILE" ]; then
+            PARSED_PORT=$(grep -E '^[[:space:]]*port[[:space:]]*:' "$DEFAULT_CONFIG_FILE" 2>/dev/null | head -1 | sed 's/^[[:space:]]*port[[:space:]]*:[[:space:]]*//' | tr -d "\"'" | sed 's/[[:space:]]*$//' || true)
+            if [ -z "$PARSED_PORT" ]; then
+                PARSED_PORT=$(grep -E '^[[:space:]]*#[[:space:]]*port[[:space:]]*:' "$DEFAULT_CONFIG_FILE" 2>/dev/null | head -1 | sed 's/^[[:space:]]*#[[:space:]]*port[[:space:]]*:[[:space:]]*//' | tr -d "\"'" | sed 's/[[:space:]]*$//' || true)
+            fi
+            if [ -n "$PARSED_PORT" ]; then
+                CLI_PORT="$PARSED_PORT"
+            fi
+        fi
         if [ -f "$CONFIG_FILE" ]; then
             PARSED_PORT=$(grep -E '^[[:space:]]*port[[:space:]]*:' "$CONFIG_FILE" 2>/dev/null | head -1 | sed 's/^[[:space:]]*port[[:space:]]*:[[:space:]]*//' | tr -d "\"'" | sed 's/[[:space:]]*$//' || true)
-            if [ -z "$PARSED_PORT" ]; then
-                PARSED_PORT=$(grep -E '^[[:space:]]*#[[:space:]]*port[[:space:]]*:' "$CONFIG_FILE" 2>/dev/null | head -1 | sed 's/^[[:space:]]*#[[:space:]]*port[[:space:]]*:[[:space:]]*//' | tr -d "\"'" | sed 's/[[:space:]]*$//' || true)
-            fi
             if [ -n "$PARSED_PORT" ]; then
                 CLI_PORT="$PARSED_PORT"
             fi
