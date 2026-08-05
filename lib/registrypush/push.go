@@ -57,7 +57,10 @@ func Push(ctx context.Context, img v1.Image, target string, provider Provider, o
 	}
 
 	if err := remote.Write(dstRef, img, remote.WithContext(ctx), remote.WithAuth(auth)); err != nil {
-		return nil, images.ClassifyRegistryError(fmt.Errorf("push to %s: %w", dstRef, err))
+		// Classify the raw registry error before adding the target reference:
+		// the classifier substring-matches its input, so the host, port, or tag
+		// of the destination must not participate in the match.
+		return nil, fmt.Errorf("push to %s: %w", dstRef, images.ClassifyRegistryError(err))
 	}
 
 	digest, err := img.Digest()

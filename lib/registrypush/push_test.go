@@ -93,6 +93,38 @@ func TestPushFromCache(t *testing.T) {
 	}
 }
 
+// TestPushTargetTextDoesNotLeakIntoClassification guards against the
+// classifier substring-matching the destination reference itself: a target
+// containing "404" (e.g. a v404 tag) must not turn a transport failure into
+// images.ErrNotFound.
+func TestPushTargetTextDoesNotLeakIntoClassification(t *testing.T) {
+	// Retry on the rare chance the random listener port itself contains "404".
+	var host string
+	for i := 0; i < 10; i++ {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "boom", http.StatusInternalServerError)
+		}))
+		host = strings.TrimPrefix(srv.URL, "http://")
+		if !strings.Contains(host, "404") {
+			t.Cleanup(srv.Close)
+			break
+		}
+		srv.Close()
+	}
+	if strings.Contains(host, "404") {
+		t.Skip("could not get a port without 404 in it")
+	}
+
+	p, digest := cacheFixture(t)
+	_, err := PushFromCache(context.Background(), p, digest, host+"/test/app:v404", nil, Options{Insecure: true})
+	if err == nil {
+		t.Fatal("expected push to fail")
+	}
+	if errors.Is(err, images.ErrNotFound) {
+		t.Errorf("err = %v, must not be classified as not-found because of the target text", err)
+	}
+}
+
 func TestPushFromCacheNotFound(t *testing.T) {
 	p := paths.New(t.TempDir())
 
