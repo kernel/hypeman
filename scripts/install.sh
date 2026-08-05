@@ -768,6 +768,9 @@ if [ "$CLI_INSTALLED" = true ]; then
         CLI_PORT="4973"
         if [ -f "$CONFIG_FILE" ]; then
             PARSED_PORT=$(grep -E '^[[:space:]]*port[[:space:]]*:' "$CONFIG_FILE" 2>/dev/null | head -1 | sed 's/^[[:space:]]*port[[:space:]]*:[[:space:]]*//' | tr -d "\"'" | sed 's/[[:space:]]*$//' || true)
+            if [ -z "$PARSED_PORT" ]; then
+                PARSED_PORT=$(grep -E '^[[:space:]]*#[[:space:]]*port[[:space:]]*:' "$CONFIG_FILE" 2>/dev/null | head -1 | sed 's/^[[:space:]]*#[[:space:]]*port[[:space:]]*:[[:space:]]*//' | tr -d "\"'" | sed 's/[[:space:]]*$//' || true)
+            fi
             if [ -n "$PARSED_PORT" ]; then
                 CLI_PORT="$PARSED_PORT"
             fi
