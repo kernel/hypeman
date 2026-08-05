@@ -15,7 +15,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 	"testing"
@@ -52,9 +51,12 @@ func TestBuilderPersistentCacheReuse(t *testing.T) {
 	t.Chdir("..")
 
 	p := paths.New(t.TempDir())
+	networkConfig := newParallelTestNetworkConfig(t)
+	// Guest-to-host registry traffic follows the production bridge firewall path.
+	networkConfig.BridgeName = "hm" + strings.TrimPrefix(networkConfig.BridgeName, "hi")
 	cfg := &config.Config{
 		DataDir: p.DataDir(),
-		Network: newParallelTestNetworkConfig(t),
+		Network: networkConfig,
 	}
 	gateway, err := network.DeriveGateway(cfg.Network.SubnetCIDR)
 	require.NoError(t, err)
@@ -93,7 +95,7 @@ func TestBuilderPersistentCacheReuse(t *testing.T) {
 		}
 	})
 
-	registryURL, registryCA := startBuildRegistry(t, gateway, cfg.Network.SubnetCIDR, p, imageManager)
+	registryURL, registryCA := startBuildRegistry(t, gateway, p, imageManager)
 
 	builderManager, err := builders.NewManager(
 		p,
@@ -162,7 +164,7 @@ RUN --mount=type=cache,target=/cache sh -c 'if [ -f /cache/sentinel ]; then echo
 	require.NotEqual(t, *first.BuilderInstanceID, *second.BuilderInstanceID)
 }
 
-func startBuildRegistry(t *testing.T, gateway, subnet string, p *paths.Paths, imageManager images.Manager) (string, string) {
+func startBuildRegistry(t *testing.T, gateway string, p *paths.Paths, imageManager images.Manager) (string, string) {
 	t.Helper()
 	reg, err := registry.New(p, imageManager)
 	require.NoError(t, err)
@@ -180,10 +182,6 @@ func startBuildRegistry(t *testing.T, gateway, subnet string, p *paths.Paths, im
 	}()
 	t.Cleanup(func() { _ = server.Close() })
 	port := strconv.Itoa(listener.Addr().(*net.TCPAddr).Port)
-	firewallArgs := []string{"INPUT", "-s", subnet, "-p", "tcp", "--dport", port, "-j", "ACCEPT"}
-	output, err := exec.Command("iptables", append([]string{"-I"}, firewallArgs...)...).CombinedOutput()
-	require.NoErrorf(t, err, "allow registry traffic: %s", output)
-	t.Cleanup(func() { _ = exec.Command("iptables", append([]string{"-D"}, firewallArgs...)...).Run() })
 	return net.JoinHostPort(gateway, port), string(certPEM)
 }
 
