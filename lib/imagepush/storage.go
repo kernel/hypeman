@@ -10,19 +10,23 @@ import (
 	"github.com/kernel/hypeman/lib/paths"
 )
 
-// pushMetadata is the internal representation stored on disk.
+// pushMetadata is the internal representation stored on disk. Credentials are
+// deliberately absent: borrowed credentials live only in memory for the
+// duration of the push. HadCredentials records that the job used them so
+// recovery can fail it instead of retrying without them.
 type pushMetadata struct {
-	ID          string     `json:"id"`
-	Status      string     `json:"status"`
-	Image       string     `json:"image"`
-	Digest      string     `json:"digest"`
-	Target      string     `json:"target"`
-	Insecure    bool       `json:"insecure"`
-	Error       *string    `json:"error,omitempty"`
-	Layers      int        `json:"layers,omitempty"`
-	Bytes       int64      `json:"bytes,omitempty"`
-	CreatedAt   time.Time  `json:"created_at"`
-	CompletedAt *time.Time `json:"completed_at,omitempty"`
+	ID             string     `json:"id"`
+	Status         string     `json:"status"`
+	Image          string     `json:"image"`
+	Digest         string     `json:"digest"`
+	Target         string     `json:"target"`
+	Insecure       bool       `json:"insecure"`
+	HadCredentials bool       `json:"had_credentials,omitempty"`
+	Error          *string    `json:"error,omitempty"`
+	Layers         int        `json:"layers,omitempty"`
+	Bytes          int64      `json:"bytes,omitempty"`
+	CreatedAt      time.Time  `json:"created_at"`
+	CompletedAt    *time.Time `json:"completed_at,omitempty"`
 }
 
 func (m *pushMetadata) toPush() *Push {

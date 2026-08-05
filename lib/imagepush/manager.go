@@ -96,13 +96,14 @@ func (m *manager) CreatePush(ctx context.Context, req PushRequest) (*Push, error
 	}
 
 	meta := &pushMetadata{
-		ID:        cuid2.Generate(),
-		Status:    StatusQueued,
-		Image:     img.Name,
-		Digest:    img.Digest,
-		Target:    dstRef.String(),
-		Insecure:  req.Insecure,
-		CreatedAt: time.Now(),
+		ID:             cuid2.Generate(),
+		Status:         StatusQueued,
+		Image:          img.Name,
+		Digest:         img.Digest,
+		Target:         dstRef.String(),
+		Insecure:       req.Insecure,
+		HadCredentials: req.Credentials != nil,
+		CreatedAt:      time.Now(),
 	}
 	if err := writeMetadata(m.paths, meta); err != nil {
 		m.mu.Unlock()
@@ -111,9 +112,16 @@ func (m *manager) CreatePush(ctx context.Context, req PushRequest) (*Push, error
 	m.inflight[key] = inflightPush{id: meta.ID, digest: meta.Digest}
 	m.mu.Unlock()
 
+	// Borrowed credentials live only in this closure: the job provider is
+	// built per push and never touches disk.
+	provider := m.provider
+	if req.Credentials != nil {
+		provider = &registrypush.StaticProvider{Config: *req.Credentials}
+	}
+
 	metaCopy := *meta
 	queuePos := m.queue.Enqueue(key, func() {
-		m.executePush(context.Background(), &metaCopy)
+		m.executePush(context.Background(), &metaCopy, provider)
 	})
 
 	push := meta.toPush()
@@ -123,7 +131,7 @@ func (m *manager) CreatePush(ctx context.Context, req PushRequest) (*Push, error
 	return push, nil
 }
 
-func (m *manager) executePush(ctx context.Context, meta *pushMetadata) {
+func (m *manager) executePush(ctx context.Context, meta *pushMetadata, provider registrypush.Provider) {
 	key := pushKey(meta.Digest, meta.Target)
 	defer func() {
 		m.mu.Lock()
@@ -134,7 +142,7 @@ func (m *manager) executePush(ctx context.Context, meta *pushMetadata) {
 	meta.Status = StatusPushing
 	writeMetadata(m.paths, meta)
 
-	result, err := registrypush.PushFromCache(ctx, m.paths, meta.Digest, meta.Target, m.provider, registrypush.Options{
+	result, err := registrypush.PushFromCache(ctx, m.paths, meta.Digest, meta.Target, provider, registrypush.Options{
 		Insecure: meta.Insecure,
 	})
 	now := time.Now()
@@ -261,6 +269,19 @@ func (m *manager) recoverInterruptedPushes() {
 	}
 
 	for _, meta := range pending {
+		// Borrowed credentials do not survive a restart, so a credentialed
+		// push cannot be retried faithfully; fail it instead of re-enqueueing
+		// with the default provider.
+		if meta.HadCredentials {
+			meta.Status = StatusFailed
+			errorMsg := "push interrupted by restart: borrowed registry credentials are no longer available, retry the push"
+			meta.Error = &errorMsg
+			now := time.Now()
+			meta.CompletedAt = &now
+			writeMetadata(m.paths, meta)
+			continue
+		}
+
 		key := pushKey(meta.Digest, meta.Target)
 
 		m.mu.Lock()
@@ -269,7 +290,7 @@ func (m *manager) recoverInterruptedPushes() {
 
 		metaCopy := *meta
 		m.queue.Enqueue(key, func() {
-			m.executePush(context.Background(), &metaCopy)
+			m.executePush(context.Background(), &metaCopy, m.provider)
 		})
 	}
 }
