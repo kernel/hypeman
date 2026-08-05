@@ -139,8 +139,8 @@ func TestBuilderPersistentCacheReuse(t *testing.T) {
 		}
 		require.True(collect, ready)
 	}, 5*time.Minute, time.Second)
-	// ensureBuilderImage records the ready image in the build manager after conversion.
-	time.Sleep(100 * time.Millisecond)
+	// ensureBuilderImage records the ready image on its next 500ms poll.
+	time.Sleep(600 * time.Millisecond)
 
 	builder, err := builderManager.CreateBuilder(ctx, builders.CreateBuilderRequest{DiskSizeGb: 4})
 	require.NoError(t, err)
