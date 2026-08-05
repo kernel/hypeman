@@ -100,7 +100,7 @@ Common settings:
 
 | Key | Description | Default |
 |-----|-------------|---------|
-| `port` | HTTP server port | `8080` |
+| `port` | HTTP server port | `4973` |
 | `data_dir` | Data directory for VM images, volumes, etc. | `/var/lib/hypeman` |
 | `jwt_secret` | Secret key for JWT authentication (required) | _(empty)_ |
 | `env` | Deployment environment (filters telemetry) | `unset` |
@@ -200,7 +200,7 @@ acme:
 2. Create an ingress with TLS enabled:
 
 ```bash
-curl -X POST http://localhost:8080/v1/ingresses \
+curl -X POST http://localhost:4973/v1/ingresses \
   -H "Content-Type: application/json" \
   -d '{
     "name": "my-https-app",
@@ -261,7 +261,7 @@ make gen-jwt
 make dev
 ```
 
-The server will start on port 8080 (configurable via `port` in config.yaml).
+The server will start on port 4973 (configurable via `port` in config.yaml).
 
 ### Shared-Machine Local Config
 

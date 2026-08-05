@@ -40,7 +40,7 @@ vGPU mode uses NVIDIA's SR-IOV technology to create Virtual Functions (VFs), eac
 Query available profiles via the resources API:
 
 ```bash
-curl -s http://localhost:8080/resources | jq .gpu
+curl -s http://localhost:4973/resources | jq .gpu
 ```
 
 ```json
@@ -61,7 +61,7 @@ curl -s http://localhost:8080/resources | jq .gpu
 Request a vGPU by specifying the profile name:
 
 ```bash
-curl -X POST http://localhost:8080/instances \
+curl -X POST http://localhost:4973/instances \
   -H "Content-Type: application/json" \
   -d '{
     "name": "ml-training",
@@ -108,7 +108,7 @@ Passthrough mode assigns entire physical GPUs to instances via VFIO.
 ### Checking Available GPUs
 
 ```bash
-curl -s http://localhost:8080/resources | jq .gpu
+curl -s http://localhost:4973/resources | jq .gpu
 ```
 
 ```json
@@ -129,11 +129,11 @@ For whole-GPU passthrough, use the devices API (see [README.md](README.md)):
 
 ```bash
 # Register GPU
-curl -X POST http://localhost:8080/devices \
+curl -X POST http://localhost:4973/devices \
   -d '{"pci_address": "0000:82:00.0", "name": "gpu-0"}'
 
 # Create instance with GPU
-curl -X POST http://localhost:8080/instances \
+curl -X POST http://localhost:4973/instances \
   -d '{"name": "ml-job", "image": "nvidia/cuda:12.4", "devices": ["gpu-0"]}'
 ```
 
@@ -253,7 +253,7 @@ To upgrade the NVIDIA driver version:
 
 The requested profile may require more VRAM than available. Check:
 ```bash
-curl -s http://localhost:8080/resources | jq '.gpu.profiles'
+curl -s http://localhost:4973/resources | jq '.gpu.profiles'
 ```
 
 ### nvidia-smi fails in guest
@@ -262,7 +262,7 @@ curl -s http://localhost:8080/resources | jq '.gpu.profiles'
 2. Check driver version compatibility with vGPU Manager
 3. Inspect guest boot logs:
    ```bash
-   curl http://localhost:8080/instances/<id>/logs?source=app
+   curl http://localhost:4973/instances/<id>/logs?source=app
    ```
 
 ### mdev creation fails

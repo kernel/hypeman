@@ -95,7 +95,7 @@ type Config struct {
 func DefaultConfig() Config {
 	return Config{
 		MaxConcurrentBuilds: 2,
-		RegistryURL:         "localhost:8080",
+		RegistryURL:         "localhost:4973",
 		DefaultTimeout:      600, // 10 minutes
 	}
 }

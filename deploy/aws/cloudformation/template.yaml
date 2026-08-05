@@ -94,7 +94,7 @@ Parameters:
     AllowedPattern: "^([0-9]{1,3}\\.){3}[0-9]{1,3}/([0-9]|[1-2][0-9]|3[0-2])$"
   ApiPort:
     Type: Number
-    Default: 8080
+    Default: 4973
     MinValue: 1
     MaxValue: 65535
     Description: Hypeman API port exposed to AllowedApiCidr.

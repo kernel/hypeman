@@ -15,7 +15,7 @@ func TestQuickstartParameters(t *testing.T) {
 	parameters := requireMapping(t, requireField(t, root, "Parameters"))
 	assertDefault(t, parameters, "InstanceType", "c8i.2xlarge")
 	assertDefault(t, parameters, "AllowedApiCidr", "127.0.0.1/32")
-	assertDefault(t, parameters, "ApiPort", "8080")
+	assertDefault(t, parameters, "ApiPort", "4973")
 	assertDefault(t, parameters, "EnableHttpIngress", "false")
 	assertDefault(t, parameters, "EnableHttpsIngress", "false")
 	assertDefault(t, parameters, "AllowedIngressCidr", "127.0.0.1/32")

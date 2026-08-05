@@ -105,10 +105,10 @@ Registry-based caching with tenant isolation:
 ```
 
 ```go
-gen := NewCacheKeyGenerator("localhost:8080")
+gen := NewCacheKeyGenerator("localhost:4973")
 key, _ := gen.GenerateCacheKey("my-tenant", "myapp", lockfileHashes)
-// key.ImportCacheArg() → "type=registry,ref=localhost:8080/cache/my-tenant/myapp/abc123"
-// key.ExportCacheArg() → "type=registry,ref=localhost:8080/cache/my-tenant/myapp/abc123,mode=max"
+// key.ImportCacheArg() → "type=registry,ref=localhost:4973/cache/my-tenant/myapp/abc123"
+// key.ExportCacheArg() → "type=registry,ref=localhost:4973/cache/my-tenant/myapp/abc123,mode=max"
 ```
 
 ### Registry Token System (`registry_token.go`)
@@ -207,7 +207,7 @@ CMD [\"node\", \"index.js\"]" \
 |---------------------|---------|-------------|
 | `MAX_CONCURRENT_SOURCE_BUILDS` | `2` | Max parallel builds |
 | `BUILDER_IMAGE` | `hypeman/builder:latest` | Builder VM image |
-| `REGISTRY_URL` | `localhost:8080` | Registry for built images |
+| `REGISTRY_URL` | `localhost:4973` | Registry for built images |
 | `BUILD_TIMEOUT` | `600` | Default timeout (seconds) |
 
 ### Registry URL Configuration
@@ -419,7 +419,7 @@ go test ./lib/builds/registry_token_test.go ./lib/builds/registry_token.go -v
 | `image not found` | Builder image not imported | Import image using `POST /images` endpoint |
 | `no cgroup mount found` | Cgroups not mounted in VM | Update init script to mount cgroups |
 | `http: server gave HTTP response to HTTPS client` | BuildKit using HTTPS for HTTP registry | Add `registry.insecure=true` to output flags |
-| `connection refused` to localhost:8080 | Registry URL not accessible from VM | Use gateway IP (10.102.0.1) instead of localhost |
+| `connection refused` to localhost:4973 | Registry URL not accessible from VM | Use gateway IP (10.102.0.1) instead of localhost |
 | `401 Unauthorized` | Registry auth issue | Check registry_token in config.json; verify middleware handles Basic auth |
 | `No space left on device` | Instance memory too small for image | Use at least 1GB RAM for Node.js images |
 | `can't enable NoProcessSandbox without Rootless` | Wrong BUILDKITD_FLAGS | Use empty flags or remove the flag |

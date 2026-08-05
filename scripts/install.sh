@@ -765,7 +765,7 @@ if [ "$CLI_INSTALLED" = true ]; then
         mkdir -p "$CLI_CONFIG_DIR"
 
         # Determine the port from config
-        CLI_PORT="8080"
+        CLI_PORT="4973"
         if [ -f "$CONFIG_FILE" ]; then
             PARSED_PORT=$(grep -E '^[[:space:]]*port[[:space:]]*:' "$CONFIG_FILE" 2>/dev/null | head -1 | sed 's/^[[:space:]]*port[[:space:]]*:[[:space:]]*//' | tr -d "\"'" | sed 's/[[:space:]]*$//' || true)
             if [ -n "$PARSED_PORT" ]; then

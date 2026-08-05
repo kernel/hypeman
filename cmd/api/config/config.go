@@ -308,7 +308,7 @@ func GetDefaultConfigPaths() []string {
 // defaultConfig returns a Config struct with all default values set.
 func defaultConfig() *Config {
 	return &Config{
-		Port:      "8080",
+		Port:      "4973",
 		DataDir:   "/var/lib/hypeman",
 		JwtSecret: "",
 		Env:       "unset",
@@ -403,7 +403,7 @@ func defaultConfig() *Config {
 		},
 
 		Registry: RegistryConfig{
-			URL:        "localhost:8080",
+			URL:        "localhost:4973",
 			Insecure:   false,
 			CACertFile: "",
 		},

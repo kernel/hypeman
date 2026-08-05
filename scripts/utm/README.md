@@ -146,7 +146,7 @@ make gen-jwt
 
 # on the host machine
 export HYPEMAN_API_KEY="<token-from-vm>"
-export HYPEMAN_BASE_URL="http://hypemman.local:8080"
+export HYPEMAN_BASE_URL="http://hypemman.local:4973"
 
 # then try out some commands
 hypeman pull debian:13-slim

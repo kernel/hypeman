@@ -25,7 +25,7 @@ jwt_secret: dev-secret-change-me
 data_dir: ~/Library/Application Support/hypeman
 
 # Server configuration
-port: "8080"
+port: "4973"
 
 # =============================================================================
 # Hypervisor Configuration (IMPORTANT FOR MACOS)
@@ -104,7 +104,7 @@ caddy:
 # IMPORTANT: "host.docker.internal" does NOT work in vz VMs - that's a Docker
 # Desktop-specific hostname. Use the NAT gateway IP instead.
 registry:
-  url: 192.168.64.1:8080
+  url: 192.168.64.1:4973
   insecure: true
 
 build:

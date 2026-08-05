@@ -17,7 +17,7 @@ jwt_secret: ""
 data_dir: /var/lib/hypeman
 
 # Server configuration
-# port: 8080
+# port: 4973
 
 # =============================================================================
 # Hypervisor Configuration

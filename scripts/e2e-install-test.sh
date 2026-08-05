@@ -46,7 +46,7 @@ BRANCH="$BRANCH" CLI_BRANCH="${CLI_BRANCH:-}" bash scripts/install.sh
 # =============================================================================
 info "Phase 3: Waiting for service to be healthy..."
 
-PORT=8080
+PORT=4973
 TIMEOUT=60
 ELAPSED=0
 
