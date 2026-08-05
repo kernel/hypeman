@@ -3,6 +3,8 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sort"
 
 	"github.com/kernel/hypeman/lib/logger"
 	mw "github.com/kernel/hypeman/lib/middleware"
@@ -43,6 +45,21 @@ func (s *ApiService) CreateVolume(ctx context.Context, request oapi.CreateVolume
 		return oapi.CreateVolume400JSONResponse{
 			Code:    "invalid_request",
 			Message: "request body is required",
+		}, nil
+	}
+
+	if request.Body.Id != nil {
+		if prefix := volumes.ReservedVolumeIDPrefix(*request.Body.Id); prefix != "" {
+			return oapi.CreateVolume400JSONResponse{
+				Code:    "invalid_request",
+				Message: fmt.Sprintf("volume IDs with the prefix %q are reserved for internal use", prefix),
+			}, nil
+		}
+	}
+	if key := reservedTagKey(request.Body.Tags); key != "" {
+		return oapi.CreateVolume400JSONResponse{
+			Code:    "invalid_request",
+			Message: fmt.Sprintf("tag key %q is reserved for internal use", key),
 		}, nil
 	}
 
@@ -96,6 +113,21 @@ func (s *ApiService) CreateVolumeFromArchive(ctx context.Context, request oapi.C
 	}
 	// Note: request.Body is never nil in Go's net/http (empty body = http.NoBody)
 	// Empty/invalid archives will fail with a clear gzip error downstream
+
+	if request.Params.Id != nil {
+		if prefix := volumes.ReservedVolumeIDPrefix(*request.Params.Id); prefix != "" {
+			return oapi.CreateVolumeFromArchive400JSONResponse{
+				Code:    "invalid_request",
+				Message: fmt.Sprintf("volume IDs with the prefix %q are reserved for internal use", prefix),
+			}, nil
+		}
+	}
+	if key := reservedTagKey(request.Params.Tags); key != "" {
+		return oapi.CreateVolumeFromArchive400JSONResponse{
+			Code:    "invalid_request",
+			Message: fmt.Sprintf("tag key %q is reserved for internal use", key),
+		}, nil
+	}
 
 	// Create the volume from archive - stream directly without buffering
 	domainReq := volumes.CreateVolumeFromArchiveRequest{
@@ -162,6 +194,13 @@ func (s *ApiService) DeleteVolume(ctx context.Context, request oapi.DeleteVolume
 	}
 	log := logger.FromContext(ctx)
 
+	if prefix := volumes.ReservedVolumeIDPrefix(vol.Id); prefix != "" {
+		return oapi.DeleteVolume409JSONResponse{
+			Code:    "conflict",
+			Message: fmt.Sprintf("volume IDs with the prefix %q are reserved for internal use", prefix),
+		}, nil
+	}
+
 	err := s.VolumeManager.DeleteVolume(ctx, vol.Id)
 	if err != nil {
 		switch {
@@ -179,6 +218,25 @@ func (s *ApiService) DeleteVolume(ctx context.Context, request oapi.DeleteVolume
 		}
 	}
 	return oapi.DeleteVolume204Response{}, nil
+}
+
+// reservedTagKey returns the first caller-supplied tag key in the reserved
+// internal namespace, or "" when all keys are usable by API callers.
+func reservedTagKey(resourceTags *oapi.Tags) string {
+	if resourceTags == nil {
+		return ""
+	}
+	keys := make([]string, 0, len(*resourceTags))
+	for key := range *resourceTags {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if volumes.ReservedTagNamespace(key) != "" {
+			return key
+		}
+	}
+	return ""
 }
 
 func volumeToOAPI(vol volumes.Volume) oapi.Volume {

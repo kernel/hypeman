@@ -52,6 +52,14 @@ Scopes follow the pattern `resource:action`. Each resource type supports `read`,
 | `build:write` | Create builds |
 | `build:delete` | Cancel/delete builds |
 
+### Builders
+
+| Scope | Grants access to |
+|---|---|
+| `builder:read` | List builders, get builder details |
+| `builder:write` | Create builders, prune builder cache disks |
+| `builder:delete` | Delete builders |
+
 ### Devices
 
 | Scope | Grants access to |

@@ -227,3 +227,244 @@ func TestBuildQueue_Counts(t *testing.T) {
 
 	close(done)
 }
+
+func TestBuildQueue_SerialKeySerializesSameKey(t *testing.T) {
+	queue := NewBuildQueue(2)
+
+	release := make(chan struct{})
+	started := make(chan string, 3)
+	startFn := func(id string) func() {
+		return func() {
+			started <- id
+			<-release
+		}
+	}
+
+	// Two builds with the same serial key: only the first starts even though
+	// a concurrency slot is free.
+	pos1 := queue.EnqueueSerial("build-1", CreateBuildRequest{}, "builder-a", startFn("build-1"))
+	pos2 := queue.EnqueueSerial("build-2", CreateBuildRequest{}, "builder-a", startFn("build-2"))
+
+	assert.Equal(t, 0, pos1)
+	assert.Equal(t, 1, pos2)
+
+	select {
+	case id := <-started:
+		assert.Equal(t, "build-1", id)
+	case <-time.After(2 * time.Second):
+		t.Fatal("first build did not start")
+	}
+	assert.Equal(t, 1, queue.ActiveCount(), "same-key build stays pending and does not occupy a slot")
+	assert.Equal(t, 1, queue.PendingCount())
+
+	// A build with a different key starts immediately in the free slot.
+	pos3 := queue.EnqueueSerial("build-3", CreateBuildRequest{}, "builder-b", startFn("build-3"))
+	assert.Equal(t, 0, pos3)
+	select {
+	case id := <-started:
+		assert.Equal(t, "build-3", id)
+	case <-time.After(2 * time.Second):
+		t.Fatal("different-key build did not start in the free slot")
+	}
+
+	close(release)
+
+	// Once the first build completes, the serialized build starts.
+	select {
+	case id := <-started:
+		assert.Equal(t, "build-2", id)
+	case <-time.After(2 * time.Second):
+		t.Fatal("serialized build did not start after same-key build completed")
+	}
+}
+
+func TestBuildQueue_SerialKeySkipsBlockedPending(t *testing.T) {
+	queue := NewBuildQueue(2)
+
+	// Each build gets its own release channel so completing one build can
+	// only unblock its own goroutine.
+	release := make(map[string]chan struct{})
+	for _, id := range []string{"build-1", "build-2", "build-3", "build-4"} {
+		release[id] = make(chan struct{})
+	}
+	started := make(chan string, 4)
+	startFn := func(id string) func() {
+		return func() {
+			started <- id
+			<-release[id]
+		}
+	}
+
+	queue.EnqueueSerial("build-1", CreateBuildRequest{}, "builder-a", startFn("build-1"))
+	queue.EnqueueSerial("build-2", CreateBuildRequest{}, "builder-b", startFn("build-2"))
+	pos3 := queue.EnqueueSerial("build-3", CreateBuildRequest{}, "builder-a", startFn("build-3"))
+	pos4 := queue.EnqueueSerial("build-4", CreateBuildRequest{}, "builder-c", startFn("build-4"))
+	assert.Equal(t, 1, pos3)
+	assert.Equal(t, 2, pos4, "queue positions retain submission order")
+
+	pendingPos4 := queue.GetPosition("build-4")
+	require.NotNil(t, pendingPos4)
+	assert.Equal(t, 2, *pendingPos4)
+
+	<-started // build-1
+	<-started // build-2
+
+	// build-2 completes: build-3 is blocked (builder-a held by build-1), so
+	// build-4 starts instead of letting the slot sit idle.
+	close(release["build-2"])
+	select {
+	case id := <-started:
+		assert.Equal(t, "build-4", id, "blocked pending build is skipped for a later startable one")
+	case <-time.After(2 * time.Second):
+		t.Fatal("no pending build started after a slot freed")
+	}
+	assert.Nil(t, queue.GetPosition("build-4"), "build-4 is running after skip-ahead")
+	pendingPos3 := queue.GetPosition("build-3")
+	require.NotNil(t, pendingPos3)
+	assert.Equal(t, 1, *pendingPos3, "blocked build stays at front once later build starts")
+
+	// build-1 completes: build-3's key is now free and it starts.
+	close(release["build-1"])
+	select {
+	case id := <-started:
+		assert.Equal(t, "build-3", id)
+	case <-time.After(2 * time.Second):
+		t.Fatal("blocked build did not start once its serial key freed")
+	}
+	close(release["build-3"])
+	close(release["build-4"])
+}
+
+// TestBuildQueue_ReleaseSerialKeyStartsSameKeyPending verifies that releasing
+// a serial key lets a same-key pending build start while the active build
+// continues running (e.g. waiting for image conversion after the cache
+// volume is detached).
+func TestBuildQueue_ReleaseSerialKeyStartsSameKeyPending(t *testing.T) {
+	queue := NewBuildQueue(2)
+
+	release := make(chan struct{})
+	started := make(chan string, 2)
+	startFn := func(id string) func() {
+		return func() {
+			started <- id
+			<-release
+		}
+	}
+
+	queue.EnqueueSerial("build-1", CreateBuildRequest{}, "builder-a", startFn("build-1"))
+	queue.EnqueueSerial("build-2", CreateBuildRequest{}, "builder-a", startFn("build-2"))
+
+	select {
+	case id := <-started:
+		assert.Equal(t, "build-1", id)
+	case <-time.After(2 * time.Second):
+		t.Fatal("first build did not start")
+	}
+	assert.Equal(t, 1, queue.PendingCount())
+
+	// Releasing the key starts the pending same-key build while build-1 is
+	// still active.
+	queue.ReleaseSerialKey("build-1")
+	select {
+	case id := <-started:
+		assert.Equal(t, "build-2", id)
+	case <-time.After(2 * time.Second):
+		t.Fatal("pending same-key build did not start after serial key release")
+	}
+	assert.Equal(t, 2, queue.ActiveCount())
+
+	close(release)
+}
+
+func TestBuildQueue_SerialKeyIntrospection(t *testing.T) {
+	queue := NewBuildQueue(1)
+
+	release := make(chan struct{})
+	startFn := func() { <-release }
+
+	queue.EnqueueSerial("build-1", CreateBuildRequest{}, "builder-a", startFn)
+	queue.EnqueueSerial("build-2", CreateBuildRequest{}, "builder-a", startFn)
+	queue.EnqueueSerial("build-3", CreateBuildRequest{}, "builder-b", startFn)
+
+	active := queue.ActiveBuildForSerialKey("builder-a")
+	require.NotNil(t, active)
+	assert.Equal(t, "build-1", *active)
+	assert.Nil(t, queue.ActiveBuildForSerialKey("builder-b"))
+
+	pending := queue.PendingBuildsForSerialKey("builder-a")
+	assert.Equal(t, []string{"build-2"}, pending)
+	assert.NotNil(t, queue.PendingBuildsForSerialKey("builder-c"))
+	assert.Empty(t, queue.PendingBuildsForSerialKey("builder-c"))
+	assert.True(t, queue.HasSerialKey("builder-a"))
+	assert.True(t, queue.HasSerialKey("builder-b"))
+	assert.False(t, queue.HasSerialKey("builder-c"))
+
+	close(release)
+}
+
+// TestBuildQueue_HasSerialKeyAcrossPendingToActiveTransition checks the
+// lifecycle guard never sees the serial key disappear as its next build starts.
+func TestBuildQueue_HasSerialKeyAcrossPendingToActiveTransition(t *testing.T) {
+	for i := 0; i < 100; i++ {
+		queue := NewBuildQueue(1)
+		release := make(chan struct{})
+		started := make(chan string, 2)
+
+		queue.EnqueueSerial("build-1", CreateBuildRequest{}, "builder-a", func() {
+			started <- "build-1"
+			<-release
+		})
+		require.Equal(t, "build-1", <-started)
+		queue.EnqueueSerial("build-2", CreateBuildRequest{}, "builder-a", func() {
+			started <- "build-2"
+			<-release
+		})
+		require.True(t, queue.HasSerialKey("builder-a"))
+
+		queue.ReleaseSerialKey("build-1")
+		require.Equal(t, "build-2", <-started)
+		assert.True(t, queue.HasSerialKey("builder-a"), "serial key must remain visible while the successor starts")
+
+		close(release)
+		require.Eventually(t, func() bool { return queue.ActiveCount() == 0 }, time.Second, time.Millisecond)
+	}
+}
+
+// TestBuildQueue_ReleaseSerialKeyStartsSuccessorAtFullCapacity releases the
+// serial key while the build keeps its global slot (post-build work) and
+// verifies the serialized successor starts anyway: at MaxConcurrentBuilds=1
+// requiring a free global slot would never let serialized builds overlap.
+func TestBuildQueue_ReleaseSerialKeyStartsSuccessorAtFullCapacity(t *testing.T) {
+	queue := NewBuildQueue(1)
+
+	release := make(chan struct{})
+	started := make(chan string, 2)
+
+	queue.EnqueueSerial("build-1", CreateBuildRequest{}, "builder-a", func() {
+		started <- "build-1"
+		// VM phase done; the build keeps its global slot for post-build
+		// work and only completes after release closes.
+		queue.ReleaseSerialKey("build-1")
+		<-release
+	})
+	queue.EnqueueSerial("build-2", CreateBuildRequest{}, "builder-a", func() {
+		started <- "build-2"
+		<-release
+	})
+
+	select {
+	case id := <-started:
+		assert.Equal(t, "build-1", id)
+	case <-time.After(2 * time.Second):
+		t.Fatal("first build did not start")
+	}
+
+	select {
+	case id := <-started:
+		assert.Equal(t, "build-2", id)
+	case <-time.After(2 * time.Second):
+		t.Fatal("serialized successor did not start on serial key release with all global slots taken")
+	}
+
+	close(release)
+}

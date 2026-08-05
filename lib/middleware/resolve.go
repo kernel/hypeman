@@ -42,6 +42,7 @@ type Resolvers struct {
 	Volume   ResourceResolver
 	Ingress  ResourceResolver
 	Image    ResourceResolver
+	Builder  ResourceResolver
 }
 
 // ErrorResponder handles resolver errors by writing HTTP responses.
@@ -56,6 +57,7 @@ type ErrorResponder func(w http.ResponseWriter, err error, lookup string)
 //   - /volumes/{id}/* -> uses Volume resolver
 //   - /ingresses/{id}/* -> uses Ingress resolver
 //   - /images/{name}/* -> uses Image resolver (by name, not ID)
+//   - /builders/{id}/* -> uses Builder resolver (by opaque ID, not name)
 func ResolveResource(resolvers Resolvers, errResponder ErrorResponder) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -84,6 +86,10 @@ func ResolveResource(resolvers Resolvers, errResponder ErrorResponder) func(http
 				resolver = resolvers.Image
 				resourceType = "image"
 				paramName = "name"
+			case strings.HasPrefix(path, "/builders/"):
+				resolver = resolvers.Builder
+				resourceType = "builder"
+				paramName = "id"
 			default:
 				// No resource to resolve (e.g., list endpoints, health)
 				next.ServeHTTP(w, r)
@@ -182,6 +188,12 @@ func GetResolvedImage[T any](ctx context.Context) *T {
 	return getResolved[T](ctx, "image")
 }
 
+// GetResolvedBuilder retrieves the resolved builder from context.
+// Returns nil if not found or wrong type.
+func GetResolvedBuilder[T any](ctx context.Context) *T {
+	return getResolved[T](ctx, "builder")
+}
+
 // GetResolvedID retrieves just the resolved ID for a resource type.
 func GetResolvedID(ctx context.Context, resourceType string) string {
 	if resolved, ok := ctx.Value(resolvedResourceKey{resourceType}).(ResolvedResource); ok {
@@ -225,6 +237,11 @@ func WithResolvedVolume(ctx context.Context, id string, vol any) context.Context
 // WithResolvedIngress returns a context with the given ingress set as resolved.
 func WithResolvedIngress(ctx context.Context, id string, ing any) context.Context {
 	return context.WithValue(ctx, resolvedResourceKey{"ingress"}, ResolvedResource{ID: id, Resource: ing})
+}
+
+// WithResolvedBuilder returns a context with the given builder set as resolved.
+func WithResolvedBuilder(ctx context.Context, id string, b any) context.Context {
+	return context.WithValue(ctx, resolvedResourceKey{"builder"}, ResolvedResource{ID: id, Resource: b})
 }
 
 // WithResolvedImage returns a context with the given image set as resolved.

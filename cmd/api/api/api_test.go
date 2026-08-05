@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/cmd/api/config"
+	"github.com/kernel/hypeman/lib/builders"
+	"github.com/kernel/hypeman/lib/builds"
 	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/instances"
@@ -44,6 +46,19 @@ func newTestService(t *testing.T) *ApiService {
 		MaxOverlaySize: 100 * 1024 * 1024 * 1024, // 100GB
 	}
 	instanceMgr := instances.NewManager(p, imageMgr, systemMgr, networkMgr, deviceMgr, volumeMgr, limits, "", instances.SnapshotPolicy{}, nil, nil)
+	builderMgr, err := builders.NewManager(p, builders.Config{}, volumeMgr, instanceMgr, nil, nil)
+	if err != nil {
+		t.Fatalf("failed to create builders manager: %v", err)
+	}
+	buildMgr, err := builds.NewManager(p, builds.Config{
+		MaxConcurrentBuilds: 2,
+		RegistryURL:         "localhost:5000",
+		DefaultTimeout:      300,
+	}, instanceMgr, volumeMgr, builderMgr, imageMgr, &builds.NoOpSecretProvider{}, nil, nil)
+	if err != nil {
+		t.Fatalf("failed to create build manager: %v", err)
+	}
+	builderMgr.SetBuildActivityChecker(buildMgr.BuilderHasBuilds)
 
 	// Initialize network manager (creates bridge for network-enabled tests)
 	if err := networkMgr.Initialize(ctx(), nil); err != nil {
@@ -60,6 +75,8 @@ func newTestService(t *testing.T) *ApiService {
 		ImageManager:    imageMgr,
 		InstanceManager: instanceMgr,
 		VolumeManager:   volumeMgr,
+		BuilderManager:  builderMgr,
+		BuildManager:    buildMgr,
 		NetworkManager:  networkMgr,
 		DeviceManager:   deviceMgr,
 		ResourceManager: resourceMgr,
@@ -126,6 +143,15 @@ func ctxWithInstance(svc *ApiService, idOrName string) context.Context {
 		return ctx() // Let handler deal with the error
 	}
 	return mw.WithResolvedInstance(ctx(), inst.Id, inst)
+}
+
+// ctxWithBuilder creates a context with a resolved builder (simulates ResolveResource middleware)
+func ctxWithBuilder(svc *ApiService, id string) context.Context {
+	b, err := svc.BuilderManager.GetBuilder(ctx(), id)
+	if err != nil {
+		return ctx()
+	}
+	return mw.WithResolvedBuilder(ctx(), b.ID, b)
 }
 
 // ctxWithVolume creates a context with a resolved volume (simulates ResolveResource middleware)

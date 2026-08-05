@@ -1284,6 +1284,7 @@ components:
         status:
           type: string
           enum: [pending, pulling, converting, ready, failed]
+          x-enum-varnames: [ImageStatusPending, ImageStatusPulling, ImageStatusConverting, ImageStatusReady, ImageStatusFailed]
           description: Build status
           example: ready
         queue_position:
@@ -1715,6 +1716,7 @@ components:
     BuildStatus:
       type: string
       enum: [queued, building, pushing, ready, failed, cancelled]
+      x-enum-varnames: [BuildStatusQueued, BuildStatusBuilding, BuildStatusPushing, BuildStatusReady, BuildStatusFailed, BuildStatusCancelled]
       description: Build job status
     
     BuildPolicy:
@@ -1830,8 +1832,81 @@ components:
           nullable: true
         builder_instance_id:
           type: string
-          description: Instance ID of the builder VM (for debugging)
+          description: Disposable VM instance that executed this build; distinct from builder_id
           nullable: true
+        builder_id:
+          type: string
+          description: Persistent Builder resource whose cache backed this build
+          nullable: true
+
+    BuilderStatus:
+      type: string
+      enum: [ready, pruning, deleting, error]
+      x-enum-varnames: [BuilderStatusReady, BuilderStatusPruning, BuilderStatusDeleting, BuilderStatusError]
+      description: Builder lifecycle status
+
+    Builder:
+      type: object
+      required: [id, disk_size_gb, status, created_at, max_concurrency, queued_builds]
+      properties:
+        id:
+          type: string
+          description: Builder identifier
+          example: "tz4a98xxat96iws9zmbrgj3a"
+        name:
+          type: string
+          description: Optional non-unique display name
+          example: team-cache
+        disk_size_gb:
+          type: integer
+          minimum: 1
+          description: Persistent builder cache disk size in gigabytes. Cannot be changed after creation.
+          example: 50
+        status:
+          $ref: "#/components/schemas/BuilderStatus"
+        tags:
+          $ref: "#/components/schemas/Tags"
+        created_at:
+          type: string
+          format: date-time
+          description: Creation timestamp (RFC3339)
+        last_used_at:
+          type: string
+          format: date-time
+          description: When a build last ran on this builder
+          nullable: true
+        max_concurrency:
+          type: integer
+          description: Maximum concurrent builds on this builder. Currently fixed at 1.
+          example: 1
+        active_build_id:
+          type: string
+          description: Point-in-time ID of the build currently running on this builder
+          nullable: true
+        queued_builds:
+          type: array
+          description: Point-in-time IDs of queued builds waiting for this builder, oldest first
+          items:
+            type: string
+
+    CreateBuilderRequest:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Optional caller-supplied identifier, auto-generated if not provided
+          example: "team-cache-1"
+        name:
+          type: string
+          description: Optional non-unique display name
+          example: team-cache
+        disk_size_gb:
+          type: integer
+          minimum: 1
+          description: Cache disk size in gigabytes. Omit to use the server default.
+          example: 50
+        tags:
+          $ref: "#/components/schemas/Tags"
 
     ResourceStatus:
       type: object
@@ -4156,6 +4231,12 @@ paths:
                 base_image_digest:
                   type: string
                   description: Optional pinned base image digest
+                builder_id:
+                  type: string
+                  description: |
+                    Optional Builder ID whose persistent cache disk backs this build.
+                    This is the only builder selector. One build at a time runs on a
+                    builder; builds for the same builder are serialized.
                 cache_scope:
                   type: string
                   description: Tenant-specific cache key prefix
@@ -4210,6 +4291,18 @@ paths:
                 $ref: "#/components/schemas/Error"
         401:
           description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        404:
+          description: Builder not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        409:
+          description: Builder cannot currently accept a build
           content:
             application/json:
               schema:
@@ -4323,6 +4416,210 @@ paths:
                 $ref: "#/components/schemas/BuildEvent"
         404:
           description: Build not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /builders:
+    get:
+      summary: List builders
+      operationId: listBuilders
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: tags
+          in: query
+          required: false
+          style: deepObject
+          explode: true
+          schema:
+            $ref: "#/components/schemas/Tags"
+          description: Filter builders by tag key-value pairs.
+      responses:
+        200:
+          description: List of builders
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Builder"
+        401:
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    post:
+      summary: Create builder
+      description: Creates a builder and its cache disk. One build at a time runs per builder.
+      operationId: createBuilder
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateBuilderRequest"
+      responses:
+        201:
+          description: Builder created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Builder"
+        400:
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        401:
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        409:
+          description: Conflict - builder with this ID already exists or quota exceeded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /builders/{id}:
+    get:
+      summary: Get builder details
+      operationId: getBuilder
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Builder ID
+      responses:
+        200:
+          description: Builder details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Builder"
+        401:
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        404:
+          description: Builder not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      summary: Delete builder
+      description: Permanently deletes a builder and its cache disk.
+      operationId: deleteBuilder
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Builder ID
+      responses:
+        204:
+          description: Builder deleted
+        401:
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        404:
+          description: Builder not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        409:
+          description: Conflict - builder is in use
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /builders/{id}/prune:
+    post:
+      summary: Prune builder cache
+      description: Resets the builder's cache disk. The builder transitions to pruning, then ready. Builder identity is preserved.
+      operationId: pruneBuilder
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Builder ID
+      responses:
+        202:
+          description: Prune accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Builder"
+        401:
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        404:
+          description: Builder not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        409:
+          description: Conflict - builder is in use
           content:
             application/json:
               schema:

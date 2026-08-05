@@ -153,6 +153,15 @@ type BuildConfig struct {
 	DockerSocket              string `koanf:"docker_socket"`
 }
 
+// BuildersConfig holds builder resource settings.
+type BuildersConfig struct {
+	MaxCount          int           `koanf:"max_count"`
+	DefaultDiskSizeGb int           `koanf:"default_disk_size_gb"`
+	MaxDiskSizeGb     int           `koanf:"max_disk_size_gb"`
+	IdleTTL           string        `koanf:"idle_ttl"` // duration; empty or "0" disables the destructive idle reaper
+	IdleTTLDuration   time.Duration `koanf:"-"`        // parsed by Validate
+}
+
 // InstancesConfig holds instance-manager internal settings.
 type InstancesConfig struct {
 	LifecycleEventBufferSize int `koanf:"lifecycle_event_buffer_size"`
@@ -278,6 +287,7 @@ type Config struct {
 	Logging          LoggingConfig          `koanf:"logging"`
 	Images           ImagesConfig           `koanf:"images"`
 	Build            BuildConfig            `koanf:"build"`
+	Builders         BuildersConfig         `koanf:"builders"`
 	Instances        InstancesConfig        `koanf:"instances"`
 	AutoStandby      AutoStandbyConfig      `koanf:"auto_standby"`
 	Registry         RegistryConfig         `koanf:"registry"`
@@ -392,6 +402,13 @@ func defaultConfig() *Config {
 			Timeout:                   600,
 			SecretsDir:                "",
 			DockerSocket:              "/var/run/docker.sock",
+		},
+
+		Builders: BuildersConfig{
+			MaxCount:          0, // unlimited
+			DefaultDiskSizeGb: 50,
+			MaxDiskSizeGb:     0,  // unlimited
+			IdleTTL:           "", // disabled
 		},
 
 		Instances: InstancesConfig{
@@ -628,6 +645,29 @@ func (c *Config) Validate() error {
 	}
 	if c.Build.Timeout <= 0 {
 		return fmt.Errorf("build.timeout must be positive, got %d", c.Build.Timeout)
+	}
+	if c.Builders.MaxCount < 0 {
+		return fmt.Errorf("builders.max_count must be >= 0, got %d", c.Builders.MaxCount)
+	}
+	if c.Builders.DefaultDiskSizeGb <= 0 {
+		return fmt.Errorf("builders.default_disk_size_gb must be positive, got %d", c.Builders.DefaultDiskSizeGb)
+	}
+	if c.Builders.MaxDiskSizeGb < 0 {
+		return fmt.Errorf("builders.max_disk_size_gb must be >= 0, got %d", c.Builders.MaxDiskSizeGb)
+	}
+	if c.Builders.MaxDiskSizeGb > 0 && c.Builders.DefaultDiskSizeGb > c.Builders.MaxDiskSizeGb {
+		return fmt.Errorf("builders.default_disk_size_gb %d exceeds builders.max_disk_size_gb %d", c.Builders.DefaultDiskSizeGb, c.Builders.MaxDiskSizeGb)
+	}
+	c.Builders.IdleTTLDuration = 0
+	if c.Builders.IdleTTL != "" {
+		ttl, err := time.ParseDuration(c.Builders.IdleTTL)
+		if err != nil {
+			return fmt.Errorf("builders.idle_ttl must be a valid duration: %w", err)
+		}
+		if ttl < 0 {
+			return fmt.Errorf("builders.idle_ttl must be >= 0, got %s", c.Builders.IdleTTL)
+		}
+		c.Builders.IdleTTLDuration = ttl
 	}
 	if c.Hypervisor.FirecrackerMaxConcurrentRestores < 0 {
 		return fmt.Errorf("hypervisor.firecracker_max_concurrent_restores must be >= 0, got %d", c.Hypervisor.FirecrackerMaxConcurrentRestores)

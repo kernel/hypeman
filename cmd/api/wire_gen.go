@@ -11,6 +11,7 @@ import (
 	"github.com/kernel/hypeman/cmd/api/api"
 	"github.com/kernel/hypeman/cmd/api/config"
 	"github.com/kernel/hypeman/lib/autostandby"
+	"github.com/kernel/hypeman/lib/builders"
 	"github.com/kernel/hypeman/lib/builds"
 	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/guestmemory"
@@ -54,11 +55,15 @@ func initializeApp() (*application, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	buildersManager, err := providers.ProvideBuilderManager(paths, config, instancesManager, volumesManager, logger)
+	if err != nil {
+		return nil, nil, err
+	}
 	ingressManager, err := providers.ProvideIngressManager(paths, config, instancesManager)
 	if err != nil {
 		return nil, nil, err
 	}
-	buildsManager, err := providers.ProvideBuildManager(paths, config, instancesManager, volumesManager, manager, logger)
+	buildsManager, err := providers.ProvideBuildManager(paths, config, instancesManager, volumesManager, buildersManager, manager, logger)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -80,7 +85,7 @@ func initializeApp() (*application, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	apiService := api.New(config, manager, instancesManager, volumesManager, networkManager, devicesManager, ingressManager, buildsManager, resourcesManager, controller, autostandbyController, vm_metricsManager)
+	apiService := api.New(config, manager, instancesManager, volumesManager, buildersManager, networkManager, devicesManager, ingressManager, buildsManager, resourcesManager, controller, autostandbyController, vm_metricsManager)
 	mainApplication := &application{
 		Ctx:                   context,
 		Logger:                logger,
@@ -91,6 +96,7 @@ func initializeApp() (*application, func(), error) {
 		DeviceManager:         devicesManager,
 		InstanceManager:       instancesManager,
 		VolumeManager:         volumesManager,
+		BuilderManager:        buildersManager,
 		IngressManager:        ingressManager,
 		BuildManager:          buildsManager,
 		ResourceManager:       resourcesManager,
@@ -118,6 +124,7 @@ type application struct {
 	DeviceManager         devices.Manager
 	InstanceManager       instances.Manager
 	VolumeManager         volumes.Manager
+	BuilderManager        builders.Manager
 	IngressManager        ingress.Manager
 	BuildManager          builds.Manager
 	ResourceManager       *resources.Manager

@@ -11,6 +11,7 @@ import (
 
 	"github.com/c2h5oh/datasize"
 	"github.com/kernel/hypeman/cmd/api/config"
+	"github.com/kernel/hypeman/lib/builders"
 	"github.com/kernel/hypeman/lib/builds"
 	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/guestmemory"
@@ -378,8 +379,19 @@ func ProvideIngressManager(p *paths.Paths, cfg *config.Config, instanceManager i
 	return ingress.NewManager(p, ingressConfig, resolver, otelLogger), nil
 }
 
+// ProvideBuilderManager provides the builders manager
+func ProvideBuilderManager(p *paths.Paths, cfg *config.Config, instanceManager instances.Manager, volumeManager volumes.Manager, log *slog.Logger) (builders.Manager, error) {
+	meter := otel.GetMeterProvider().Meter("hypeman")
+	return builders.NewManager(p, builders.Config{
+		MaxCount:          cfg.Builders.MaxCount,
+		DefaultDiskSizeGb: cfg.Builders.DefaultDiskSizeGb,
+		MaxDiskSizeGb:     cfg.Builders.MaxDiskSizeGb,
+		IdleTTL:           cfg.Builders.IdleTTLDuration,
+	}, volumeManager, instanceManager, log, meter)
+}
+
 // ProvideBuildManager provides the build manager
-func ProvideBuildManager(p *paths.Paths, cfg *config.Config, instanceManager instances.Manager, volumeManager volumes.Manager, imageManager images.Manager, log *slog.Logger) (builds.Manager, error) {
+func ProvideBuildManager(p *paths.Paths, cfg *config.Config, instanceManager instances.Manager, volumeManager volumes.Manager, builderManager builders.Manager, imageManager images.Manager, log *slog.Logger) (builds.Manager, error) {
 	// Read CA cert file if specified
 	var registryCACert string
 	if cfg.Registry.CACertFile != "" {
@@ -433,5 +445,13 @@ func ProvideBuildManager(p *paths.Paths, cfg *config.Config, instanceManager ins
 	}
 
 	meter := otel.GetMeterProvider().Meter("hypeman")
-	return builds.NewManager(p, buildConfig, instanceManager, volumeManager, imageManager, secretProvider, log, meter)
+	buildManager, err := builds.NewManager(p, buildConfig, instanceManager, volumeManager, builderManager, imageManager, secretProvider, log, meter)
+	if err != nil {
+		return nil, err
+	}
+
+	// Builder delete and prune reject while builds are queued or running.
+	builderManager.SetBuildActivityChecker(buildManager.BuilderHasBuilds)
+
+	return buildManager, nil
 }

@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/kernel/hypeman/lib/oapi"
+	"github.com/kernel/hypeman/lib/volumes"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -76,4 +77,97 @@ func TestDeleteVolume_ByName(t *testing.T) {
 	require.NoError(t, err)
 	_, ok := resp.(oapi.DeleteVolume204Response)
 	assert.True(t, ok, "expected 204 response")
+}
+
+func TestCreateVolume_ReservedIDPrefix(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	id := "builder-disk-abc123"
+	resp, err := svc.CreateVolume(ctx(), oapi.CreateVolumeRequestObject{
+		Body: &oapi.CreateVolumeRequest{
+			Name:   "squat",
+			SizeGb: 1,
+			Id:     &id,
+		},
+	})
+	require.NoError(t, err)
+	bad, ok := resp.(oapi.CreateVolume400JSONResponse)
+	require.True(t, ok, "expected 400 for reserved ID prefix")
+	assert.Contains(t, bad.Message, "reserved for internal use")
+
+	// A near-prefix that does not match exactly stays allowed.
+	id = "builder-disks"
+	resp, err = svc.CreateVolume(ctx(), oapi.CreateVolumeRequestObject{
+		Body: &oapi.CreateVolumeRequest{
+			Name:   "not-reserved",
+			SizeGb: 1,
+			Id:     &id,
+		},
+	})
+	require.NoError(t, err)
+	_, ok = resp.(oapi.CreateVolume201JSONResponse)
+	assert.True(t, ok, "expected 201 for non-reserved ID")
+}
+
+func TestCreateVolume_ReservedTagNamespace(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	resourceTags := oapi.Tags{"hypeman.system/managed-by": "builder"}
+	resp, err := svc.CreateVolume(ctx(), oapi.CreateVolumeRequestObject{
+		Body: &oapi.CreateVolumeRequest{
+			Name:   "spoofed",
+			SizeGb: 1,
+			Tags:   &resourceTags,
+		},
+	})
+	require.NoError(t, err)
+	bad, ok := resp.(oapi.CreateVolume400JSONResponse)
+	require.True(t, ok, "expected 400 for reserved tag key")
+	assert.Contains(t, bad.Message, "reserved for internal use")
+
+	vols, err := svc.VolumeManager.ListVolumes(ctx())
+	require.NoError(t, err)
+	assert.Empty(t, vols, "spoofed volume should not be created")
+}
+
+func TestCreateVolumeFromArchive_ReservedTagNamespace(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	resourceTags := oapi.Tags{"hypeman.system/managed-by": "builder"}
+	resp, err := svc.CreateVolumeFromArchive(ctx(), oapi.CreateVolumeFromArchiveRequestObject{
+		Params: oapi.CreateVolumeFromArchiveParams{
+			Name:   "spoofed",
+			SizeGb: 1,
+			Tags:   &resourceTags,
+		},
+	})
+	require.NoError(t, err)
+	bad, ok := resp.(oapi.CreateVolumeFromArchive400JSONResponse)
+	require.True(t, ok, "expected 400 for reserved tag key")
+	assert.Contains(t, bad.Message, "reserved for internal use")
+}
+
+func TestDeleteVolume_ReservedIDPrefix(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	id := "builder-disk-abc123"
+	_, err := svc.VolumeManager.CreateVolume(ctx(), volumes.CreateVolumeRequest{
+		Id:     &id,
+		Name:   id,
+		SizeGb: 1,
+	})
+	require.NoError(t, err)
+
+	resp, err := svc.DeleteVolume(ctxWithVolume(svc, id), oapi.DeleteVolumeRequestObject{Id: id})
+	require.NoError(t, err)
+	conflict, ok := resp.(oapi.DeleteVolume409JSONResponse)
+	require.True(t, ok, "expected 409 for reserved ID prefix")
+	assert.Contains(t, conflict.Message, "reserved for internal use")
+
+	_, err = svc.VolumeManager.GetVolume(ctx(), id)
+	require.NoError(t, err, "reserved volume must not be deleted")
 }

@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/c2h5oh/datasize"
 	"github.com/kernel/hypeman/lib/guestmemory"
@@ -548,5 +549,47 @@ func TestValidateAllowsDisabledSnapshotCompressionDefaultWithoutValidAlgorithm(t
 
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("expected disabled snapshot compression default to ignore algorithm/level, got %v", err)
+	}
+}
+
+func TestValidateBuildersConfig(t *testing.T) {
+	cases := []struct {
+		name    string
+		mutate  func(*Config)
+		wantErr string
+	}{
+		{"defaults", func(c *Config) {}, ""},
+		{"negative max count", func(c *Config) { c.Builders.MaxCount = -1 }, "builders.max_count"},
+		{"zero default disk size", func(c *Config) { c.Builders.DefaultDiskSizeGb = 0 }, "builders.default_disk_size_gb"},
+		{"negative max disk size", func(c *Config) { c.Builders.MaxDiskSizeGb = -1 }, "builders.max_disk_size_gb"},
+		{"default exceeds max", func(c *Config) { c.Builders.MaxDiskSizeGb = 10 }, "exceeds"},
+		{"invalid idle ttl", func(c *Config) { c.Builders.IdleTTL = "not-a-duration" }, "builders.idle_ttl"},
+		{"negative idle ttl", func(c *Config) { c.Builders.IdleTTL = "-1h" }, "builders.idle_ttl"},
+		{"idle ttl set", func(c *Config) { c.Builders.IdleTTL = "24h" }, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := defaultConfig()
+			tc.mutate(cfg)
+			err := cfg.Validate()
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("expected valid config, got %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("expected error containing %q, got %v", tc.wantErr, err)
+			}
+		})
+	}
+
+	cfg := defaultConfig()
+	cfg.Builders.IdleTTL = "24h"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("expected valid idle ttl, got %v", err)
+	}
+	if cfg.Builders.IdleTTLDuration != 24*time.Hour {
+		t.Fatalf("expected parsed idle ttl 24h, got %s", cfg.Builders.IdleTTLDuration)
 	}
 }

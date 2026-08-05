@@ -1,0 +1,372 @@
+package api
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"mime/multipart"
+	"testing"
+	"time"
+
+	"github.com/kernel/hypeman/lib/builders"
+	builddomain "github.com/kernel/hypeman/lib/builds"
+	"github.com/kernel/hypeman/lib/oapi"
+	"github.com/kernel/hypeman/lib/paths"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestListBuilders_Empty(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	resp, err := svc.ListBuilders(ctx(), oapi.ListBuildersRequestObject{})
+	require.NoError(t, err)
+
+	list, ok := resp.(oapi.ListBuilders200JSONResponse)
+	require.True(t, ok, "expected 200 response")
+	assert.NotNil(t, list, "list must be non-nil even when empty")
+	assert.Empty(t, list)
+}
+
+func TestCreateBuilder(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	name := "team-cache"
+	sizeGb := 20
+	resp, err := svc.CreateBuilder(ctx(), oapi.CreateBuilderRequestObject{
+		Body: &oapi.CreateBuilderRequest{
+			Name:       &name,
+			DiskSizeGb: &sizeGb,
+		},
+	})
+	require.NoError(t, err)
+	created, ok := resp.(oapi.CreateBuilder201JSONResponse)
+	require.True(t, ok, "expected 201 response")
+	assert.NotEmpty(t, created.Id)
+	require.NotNil(t, created.Name)
+	assert.Equal(t, name, *created.Name)
+	assert.Equal(t, sizeGb, created.DiskSizeGb)
+	assert.Equal(t, oapi.BuilderStatusReady, created.Status)
+	assert.Nil(t, created.LastUsedAt)
+
+	// Disk provisioned eagerly.
+	_, err = svc.VolumeManager.GetVolume(ctx(), builders.DiskVolumeID(created.Id))
+	require.NoError(t, err)
+}
+
+func TestCreateBuilder_DefaultDiskSize(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	resp, err := svc.CreateBuilder(ctx(), oapi.CreateBuilderRequestObject{
+		Body: &oapi.CreateBuilderRequest{},
+	})
+	require.NoError(t, err)
+	created, ok := resp.(oapi.CreateBuilder201JSONResponse)
+	require.True(t, ok, "expected 201 response")
+	assert.Equal(t, builders.DefaultDiskSizeGb, created.DiskSizeGb)
+}
+
+func TestCreateBuilder_CallerSuppliedID(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	id := "team-cache-1"
+	resp, err := svc.CreateBuilder(ctx(), oapi.CreateBuilderRequestObject{
+		Body: &oapi.CreateBuilderRequest{Id: &id},
+	})
+	require.NoError(t, err)
+	_, ok := resp.(oapi.CreateBuilder201JSONResponse)
+	require.True(t, ok, "expected 201 response")
+
+	// Replay with the same ID is an explicit conflict.
+	resp, err = svc.CreateBuilder(ctx(), oapi.CreateBuilderRequestObject{
+		Body: &oapi.CreateBuilderRequest{Id: &id},
+	})
+	require.NoError(t, err)
+	_, ok = resp.(oapi.CreateBuilder409JSONResponse)
+	assert.True(t, ok, "expected 409 response")
+}
+
+func TestCreateBuilder_InvalidID(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	id := "bad/id"
+	resp, err := svc.CreateBuilder(ctx(), oapi.CreateBuilderRequestObject{
+		Body: &oapi.CreateBuilderRequest{Id: &id},
+	})
+	require.NoError(t, err)
+	_, ok := resp.(oapi.CreateBuilder400JSONResponse)
+	assert.True(t, ok, "expected 400 response")
+}
+
+func TestCreateBuilder_NonPositiveDiskSize(t *testing.T) {
+	t.Parallel()
+
+	for _, size := range []int{0, -1} {
+		size := size
+		t.Run(fmt.Sprintf("size_%d", size), func(t *testing.T) {
+			t.Parallel()
+			svc := newTestService(t)
+			resp, err := svc.CreateBuilder(ctx(), oapi.CreateBuilderRequestObject{
+				Body: &oapi.CreateBuilderRequest{DiskSizeGb: &size},
+			})
+			require.NoError(t, err)
+			r, ok := resp.(oapi.CreateBuilder400JSONResponse)
+			require.True(t, ok, "expected 400 for disk size %d, got %T", size, resp)
+			assert.Contains(t, r.Message, "must be positive")
+		})
+	}
+}
+
+func TestCreateBuilder_DiskSizeExceeded(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	// Enforce a disk size cap so the manager rejects the request.
+	mgr, err := builders.NewManager(paths.New(t.TempDir()), builders.Config{MaxDiskSizeGb: 1}, svc.VolumeManager, svc.InstanceManager, nil, nil)
+	require.NoError(t, err)
+	svc.BuilderManager = mgr
+
+	size := 2
+	resp, err := svc.CreateBuilder(ctx(), oapi.CreateBuilderRequestObject{
+		Body: &oapi.CreateBuilderRequest{DiskSizeGb: &size},
+	})
+	require.NoError(t, err)
+	r, ok := resp.(oapi.CreateBuilder400JSONResponse)
+	require.True(t, ok, "expected 400 for an oversized disk, got %T", resp)
+	assert.Contains(t, r.Message, "exceeds maximum")
+}
+
+func TestGetBuilder(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	name := "cache"
+	createResp, err := svc.CreateBuilder(ctx(), oapi.CreateBuilderRequestObject{
+		Body: &oapi.CreateBuilderRequest{Name: &name},
+	})
+	require.NoError(t, err)
+	created := createResp.(oapi.CreateBuilder201JSONResponse)
+
+	resp, err := svc.GetBuilder(ctxWithBuilder(svc, created.Id), oapi.GetBuilderRequestObject{Id: created.Id})
+	require.NoError(t, err)
+	got, ok := resp.(oapi.GetBuilder200JSONResponse)
+	require.True(t, ok, "expected 200 response")
+	assert.Equal(t, created.Id, got.Id)
+	require.NotNil(t, got.Name)
+	assert.Equal(t, name, *got.Name)
+}
+
+func TestListBuilders_TagFilter(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	resourceTags := oapi.Tags{"team": "a"}
+	_, err := svc.CreateBuilder(ctx(), oapi.CreateBuilderRequestObject{
+		Body: &oapi.CreateBuilderRequest{Tags: &resourceTags},
+	})
+	require.NoError(t, err)
+	_, err = svc.CreateBuilder(ctx(), oapi.CreateBuilderRequestObject{
+		Body: &oapi.CreateBuilderRequest{},
+	})
+	require.NoError(t, err)
+
+	resp, err := svc.ListBuilders(ctx(), oapi.ListBuildersRequestObject{})
+	require.NoError(t, err)
+	list := resp.(oapi.ListBuilders200JSONResponse)
+	assert.Len(t, list, 2)
+
+	resp, err = svc.ListBuilders(ctx(), oapi.ListBuildersRequestObject{
+		Params: oapi.ListBuildersParams{Tags: &resourceTags},
+	})
+	require.NoError(t, err)
+	list = resp.(oapi.ListBuilders200JSONResponse)
+	require.Len(t, list, 1)
+	assert.Equal(t, "a", (*list[0].Tags)["team"])
+}
+
+func TestDeleteBuilder(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	createResp, err := svc.CreateBuilder(ctx(), oapi.CreateBuilderRequestObject{
+		Body: &oapi.CreateBuilderRequest{},
+	})
+	require.NoError(t, err)
+	created := createResp.(oapi.CreateBuilder201JSONResponse)
+
+	resp, err := svc.DeleteBuilder(ctxWithBuilder(svc, created.Id), oapi.DeleteBuilderRequestObject{Id: created.Id})
+	require.NoError(t, err)
+	_, ok := resp.(oapi.DeleteBuilder204Response)
+	assert.True(t, ok, "expected 204 response")
+
+	_, err = svc.BuilderManager.GetBuilder(ctx(), created.Id)
+	assert.ErrorIs(t, err, builders.ErrNotFound)
+}
+
+func TestDeleteBuilder_InUse(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	createResp, err := svc.CreateBuilder(ctx(), oapi.CreateBuilderRequestObject{
+		Body: &oapi.CreateBuilderRequest{},
+	})
+	require.NoError(t, err)
+	created := createResp.(oapi.CreateBuilder201JSONResponse)
+
+	_, err = svc.BuilderManager.AcquireForBuild(ctx(), created.Id, "build-1")
+	require.NoError(t, err)
+
+	resp, err := svc.DeleteBuilder(ctxWithBuilder(svc, created.Id), oapi.DeleteBuilderRequestObject{Id: created.Id})
+	require.NoError(t, err)
+	_, ok := resp.(oapi.DeleteBuilder409JSONResponse)
+	assert.True(t, ok, "expected 409 while a build holds the builder")
+}
+
+func TestPruneBuilder(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	createResp, err := svc.CreateBuilder(ctx(), oapi.CreateBuilderRequestObject{
+		Body: &oapi.CreateBuilderRequest{},
+	})
+	require.NoError(t, err)
+	created := createResp.(oapi.CreateBuilder201JSONResponse)
+
+	resp, err := svc.PruneBuilder(ctxWithBuilder(svc, created.Id), oapi.PruneBuilderRequestObject{Id: created.Id})
+	require.NoError(t, err)
+	pruned, ok := resp.(oapi.PruneBuilder202JSONResponse)
+	require.True(t, ok, "expected 202 response")
+	assert.Equal(t, oapi.BuilderStatusPruning, pruned.Status)
+
+	// Identity preserved.
+	assert.Equal(t, created.Id, pruned.Id)
+
+	// The reset runs in the background; wait for it so the disk recreation
+	// does not race the test's TempDir cleanup.
+	require.Eventually(t, func() bool {
+		b, err := svc.BuilderManager.GetBuilder(ctx(), created.Id)
+		return err == nil && b.Status == builders.StatusReady
+	}, 5*time.Second, 10*time.Millisecond, "prune must finish recreating the disk")
+}
+
+func TestPruneBuilder_InUse(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	createResp, err := svc.CreateBuilder(ctx(), oapi.CreateBuilderRequestObject{
+		Body: &oapi.CreateBuilderRequest{},
+	})
+	require.NoError(t, err)
+	created := createResp.(oapi.CreateBuilder201JSONResponse)
+
+	_, err = svc.BuilderManager.AcquireForBuild(ctx(), created.Id, "build-1")
+	require.NoError(t, err)
+
+	resp, err := svc.PruneBuilder(ctxWithBuilder(svc, created.Id), oapi.PruneBuilderRequestObject{Id: created.Id})
+	require.NoError(t, err)
+	_, ok := resp.(oapi.PruneBuilder409JSONResponse)
+	assert.True(t, ok, "expected 409 while a build holds the builder")
+}
+
+func TestPruneBuilder_NotFoundAfterResolution(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	createResp, err := svc.CreateBuilder(ctx(), oapi.CreateBuilderRequestObject{
+		Body: &oapi.CreateBuilderRequest{},
+	})
+	require.NoError(t, err)
+	created := createResp.(oapi.CreateBuilder201JSONResponse)
+
+	// Resolve, then delete underneath the handler to simulate the reaper
+	// firing between resolution and the manager call.
+	resolvedCtx := ctxWithBuilder(svc, created.Id)
+	require.NoError(t, svc.BuilderManager.DeleteBuilder(ctx(), created.Id))
+
+	resp, err := svc.PruneBuilder(resolvedCtx, oapi.PruneBuilderRequestObject{Id: created.Id})
+	require.NoError(t, err)
+	_, ok := resp.(oapi.PruneBuilder404JSONResponse)
+	assert.True(t, ok, "expected 404 when the builder is gone after resolution")
+}
+
+type createBuildErrorManager struct {
+	builddomain.Manager
+	err error
+}
+
+func (m *createBuildErrorManager) CreateBuild(context.Context, builddomain.CreateBuildRequest, []byte) (*builddomain.Build, error) {
+	return nil, m.err
+}
+
+func TestCreateBuild_BuilderInUse(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+	svc.BuildManager = &createBuildErrorManager{Manager: svc.BuildManager, err: builders.ErrInUse}
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("source", "source.tar.gz")
+	require.NoError(t, err)
+	_, err = part.Write([]byte("source"))
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+
+	resp, err := svc.CreateBuild(ctx(), oapi.CreateBuildRequestObject{
+		Body: multipart.NewReader(&body, writer.Boundary()),
+	})
+	require.NoError(t, err)
+	r, ok := resp.(oapi.CreateBuild409JSONResponse)
+	require.True(t, ok, "expected 409, got %T", resp)
+	assert.Equal(t, "builder is in use", r.Message)
+}
+
+func TestDeleteBuilder_NotFoundAfterResolution(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	createResp, err := svc.CreateBuilder(ctx(), oapi.CreateBuilderRequestObject{
+		Body: &oapi.CreateBuilderRequest{},
+	})
+	require.NoError(t, err)
+	created := createResp.(oapi.CreateBuilder201JSONResponse)
+
+	// Resolve, then delete underneath the handler to simulate the reaper
+	// firing between resolution and the manager call.
+	resolvedCtx := ctxWithBuilder(svc, created.Id)
+	require.NoError(t, svc.BuilderManager.DeleteBuilder(ctx(), created.Id))
+
+	resp, err := svc.DeleteBuilder(resolvedCtx, oapi.DeleteBuilderRequestObject{Id: created.Id})
+	require.NoError(t, err)
+	_, ok := resp.(oapi.DeleteBuilder404JSONResponse)
+	assert.True(t, ok, "expected 404 when the builder is gone after resolution")
+}
+
+func TestGetBuilder_QueueState(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	createResp, err := svc.CreateBuilder(ctx(), oapi.CreateBuilderRequestObject{
+		Body: &oapi.CreateBuilderRequest{},
+	})
+	require.NoError(t, err)
+	created := createResp.(oapi.CreateBuilder201JSONResponse)
+
+	// New fields are always present with real queue state.
+	assert.Equal(t, 1, created.MaxConcurrency)
+	assert.NotNil(t, created.QueuedBuilds, "queued_builds must be non-nil")
+	assert.Empty(t, created.QueuedBuilds)
+	assert.Nil(t, created.ActiveBuildId)
+
+	resp, err := svc.GetBuilder(ctxWithBuilder(svc, created.Id), oapi.GetBuilderRequestObject{Id: created.Id})
+	require.NoError(t, err)
+	got := resp.(oapi.GetBuilder200JSONResponse)
+	assert.Equal(t, 1, got.MaxConcurrency)
+	assert.NotNil(t, got.QueuedBuilds)
+	assert.Empty(t, got.QueuedBuilds)
+	assert.Nil(t, got.ActiveBuildId)
+}

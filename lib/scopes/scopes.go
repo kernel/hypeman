@@ -43,6 +43,11 @@ const (
 	BuildWrite  Scope = "build:write"  // create
 	BuildDelete Scope = "build:delete" // cancel
 
+	// Builder scopes
+	BuilderRead   Scope = "builder:read"
+	BuilderWrite  Scope = "builder:write" // create, prune
+	BuilderDelete Scope = "builder:delete"
+
 	// Device scopes
 	DeviceRead   Scope = "device:read"
 	DeviceWrite  Scope = "device:write"  // register
@@ -68,6 +73,7 @@ var allScopes = []Scope{
 	VolumeRead, VolumeWrite, VolumeDelete,
 	SnapshotRead, SnapshotWrite, SnapshotDelete,
 	BuildRead, BuildWrite, BuildDelete,
+	BuilderRead, BuilderWrite, BuilderDelete,
 	DeviceRead, DeviceWrite, DeviceDelete,
 	IngressRead, IngressWrite, IngressDelete,
 	ResourceRead, ResourceWrite,
@@ -201,6 +207,13 @@ var RouteScopes = map[string]Scope{
 	"DELETE /builds/{id}":     BuildDelete,
 	"GET /builds/{id}":        BuildRead,
 	"GET /builds/{id}/events": BuildRead,
+
+	// Builders
+	"GET /builders":             BuilderRead,
+	"POST /builders":            BuilderWrite,
+	"DELETE /builders/{id}":     BuilderDelete,
+	"GET /builders/{id}":        BuilderRead,
+	"POST /builders/{id}/prune": BuilderWrite,
 
 	// Devices
 	"GET /devices":           DeviceRead,

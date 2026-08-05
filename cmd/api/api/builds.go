@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/kernel/hypeman/lib/builders"
 	"github.com/kernel/hypeman/lib/builds"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/logger"
@@ -46,7 +47,7 @@ func (s *ApiService) CreateBuild(ctx context.Context, request oapi.CreateBuildRe
 
 	// Parse multipart form fields
 	var sourceData []byte
-	var baseImageDigest, cacheScope, dockerfile, globalCacheKey, imageName string
+	var baseImageDigest, builderID, cacheScope, dockerfile, globalCacheKey, imageName string
 	var timeoutSeconds, memoryMB, cpus int
 	var isAdminBuild bool
 	var secrets []builds.SecretRef
@@ -82,6 +83,15 @@ func (s *ApiService) CreateBuild(ctx context.Context, request oapi.CreateBuildRe
 				}, nil
 			}
 			baseImageDigest = string(data)
+		case "builder_id":
+			data, err := io.ReadAll(part)
+			if err != nil {
+				return oapi.CreateBuild400JSONResponse{
+					Code:    "invalid_request",
+					Message: "failed to read builder_id field",
+				}, nil
+			}
+			builderID = string(data)
 		case "cache_scope":
 			data, err := io.ReadAll(part)
 			if err != nil {
@@ -218,6 +228,7 @@ func (s *ApiService) CreateBuild(ctx context.Context, request oapi.CreateBuildRe
 	// Build domain request
 	domainReq := builds.CreateBuildRequest{
 		BaseImageDigest: baseImageDigest,
+		BuilderID:       builderID,
 		CacheScope:      cacheScope,
 		Dockerfile:      dockerfile,
 		Secrets:         secrets,
@@ -259,6 +270,16 @@ func (s *ApiService) CreateBuild(ctx context.Context, request oapi.CreateBuildRe
 			return oapi.CreateBuild400JSONResponse{
 				Code:    "invalid_source",
 				Message: err.Error(),
+			}, nil
+		case errors.Is(err, builders.ErrNotFound):
+			return oapi.CreateBuild404JSONResponse{
+				Code:    "not_found",
+				Message: "builder not found",
+			}, nil
+		case errors.Is(err, builders.ErrInUse):
+			return oapi.CreateBuild409JSONResponse{
+				Code:    "conflict",
+				Message: "builder is in use",
 			}, nil
 		default:
 			log.ErrorContext(ctx, "failed to create build", "error", err)
@@ -396,6 +417,7 @@ func buildToOAPI(b *builds.Build) oapi.Build {
 		CompletedAt:       b.CompletedAt,
 		DurationMs:        b.DurationMS,
 		BuilderInstanceId: b.BuilderInstanceID,
+		BuilderId:         b.BuilderID,
 	}
 
 	if b.Provenance != nil {
