@@ -29,8 +29,12 @@ func newPushQueue(maxConcurrent int) *pushQueue {
 
 // Enqueue adds a job to the queue. Returns the queue position: 0 if started
 // immediately, >0 if queued behind other jobs. If the key is already active
-// or pending, returns the existing position without re-enqueueing.
-func (q *pushQueue) Enqueue(key string, startFn func()) int {
+// or pending, returns the existing position without re-enqueueing. When the
+// job finishes, done runs after the key leaves the active set; until done
+// returns, Enqueue still reports the key as in flight, so callers can rely on
+// their own bookkeeping being torn down only after the queue is done with the
+// key.
+func (q *pushQueue) Enqueue(key string, startFn func(), done func()) int {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
@@ -44,8 +48,8 @@ func (q *pushQueue) Enqueue(key string, startFn func()) int {
 	}
 
 	wrappedFn := func() {
-		defer q.MarkComplete(key)
 		startFn()
+		q.complete(key, done)
 	}
 
 	if len(q.active) < q.maxConcurrent {
@@ -58,18 +62,34 @@ func (q *pushQueue) Enqueue(key string, startFn func()) int {
 	return len(q.pending)
 }
 
-func (q *pushQueue) MarkComplete(key string) {
+// complete removes the key from the active set, starts the next pending job
+// if there is capacity, and then runs done. done runs after the key is no
+// longer active so a concurrent Enqueue cannot fall into the gap between
+// "job finished" and "queue slot released".
+func (q *pushQueue) complete(key string, done func()) {
 	q.mu.Lock()
-	defer q.mu.Unlock()
-
 	delete(q.active, key)
 
+	var next *queuedPush
 	if len(q.pending) > 0 && len(q.active) < q.maxConcurrent {
-		next := q.pending[0]
+		nextJob := q.pending[0]
 		q.pending = q.pending[1:]
-		q.active[next.key] = true
+		q.active[nextJob.key] = true
+		next = &nextJob
+	}
+	q.mu.Unlock()
+
+	if next != nil {
 		go next.startFn()
 	}
+	if done != nil {
+		done()
+	}
+}
+
+// MarkComplete releases the key without running a completion callback.
+func (q *pushQueue) MarkComplete(key string) {
+	q.complete(key, nil)
 }
 
 // GetPosition returns nil if the key is active or unknown, otherwise its
