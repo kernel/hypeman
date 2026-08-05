@@ -42,7 +42,7 @@ curl -fsSL https://get.hypeman.sh/cli | bash
 
 mkdir -p ~/.config/hypeman
 cat > ~/.config/hypeman/cli.yaml <<EOF
-base_url: http://<public-ip>:4973
+base_url: http://<public-ip>:8080
 api_key: "<jwt-from-hypeman-create-token>"
 EOF
 
@@ -92,7 +92,7 @@ https://kernel-hypeman-cloudformation-prod.s3.us-east-1.amazonaws.com/v1/hypeman
 | --- | --- |
 | Region | `us-east-1` |
 | Instance type | `c8i.2xlarge` |
-| Hypeman API port | `4973` |
+| Hypeman API port | `8080` |
 | Admin access | AWS Systems Manager Session Manager |
 | SSH | Disabled unless explicitly enabled |
 | Root volume | 30 GiB encrypted EBS |
