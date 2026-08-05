@@ -621,6 +621,12 @@ func (m *manager) StopInstance(ctx context.Context, id string) (*Instance, error
 		if err := m.markRestartManualStopLocked(ctx, id); err != nil {
 			return nil, err
 		}
+		// A stopped instance can retain a vGPU assignment when the release
+		// failed during the original stop. Retry it here so the vGPU slot is
+		// not held until the next start, delete, or hypeman restart.
+		if err := m.releaseRetainedVGPULocked(ctx, id); err != nil {
+			return nil, err
+		}
 		updated, err := m.currentInstanceWithoutHydration(ctx, id)
 		if err != nil {
 			return nil, err

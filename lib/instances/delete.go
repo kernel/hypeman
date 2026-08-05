@@ -125,6 +125,15 @@ func (m *manager) deleteInstanceWithOptions(
 	}
 	m.closeFirecrackerUFFDSession(ctx, stored)
 
+	// 5b. Release the vGPU assignment if present, before any network, device,
+	// or volume teardown. A failed release retains the instance metadata, and
+	// nothing destructive has happened to its attachments yet, so a retried
+	// delete is safe.
+	if err := releaseStoredVGPU(ctx, stored); err != nil {
+		log.ErrorContext(ctx, "failed to destroy vGPU; retaining instance metadata", "instance_id", id, "error", err)
+		return fmt.Errorf("destroy vGPU: %w", err)
+	}
+
 	// 6. Release network allocation
 	if inst.NetworkEnabled {
 		m.unregisterEgressProxyInstance(ctx, id)
@@ -168,12 +177,6 @@ func (m *manager) deleteInstanceWithOptions(
 				log.WarnContext(ctx, "failed to detach volume, continuing with cleanup", "instance_id", id, "volume_id", volAttach.VolumeID, "error", err)
 			}
 		}
-	}
-
-	// 7c. Release the vGPU assignment if present.
-	if err := releaseStoredVGPU(ctx, stored); err != nil {
-		log.ErrorContext(ctx, "failed to destroy vGPU; retaining instance metadata", "instance_id", id, "error", err)
-		return fmt.Errorf("destroy vGPU: %w", err)
 	}
 
 	// 8. Delete all instance data
