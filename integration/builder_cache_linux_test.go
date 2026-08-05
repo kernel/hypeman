@@ -15,6 +15,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"testing"
@@ -51,12 +52,9 @@ func TestBuilderPersistentCacheReuse(t *testing.T) {
 	t.Chdir("..")
 
 	p := paths.New(t.TempDir())
-	networkConfig := newParallelTestNetworkConfig(t)
-	// Guest-to-host registry traffic follows the production bridge firewall path.
-	networkConfig.BridgeName = "hm" + strings.TrimPrefix(networkConfig.BridgeName, "hi")
 	cfg := &config.Config{
 		DataDir: p.DataDir(),
-		Network: networkConfig,
+		Network: newParallelTestNetworkConfig(t),
 	}
 	gateway, err := network.DeriveGateway(cfg.Network.SubnetCIDR)
 	require.NoError(t, err)
@@ -67,6 +65,7 @@ func TestBuilderPersistentCacheReuse(t *testing.T) {
 	volumeManager := volumes.NewManager(p, 0, nil)
 	networkManager := network.NewManager(p, cfg, nil)
 	require.NoError(t, networkManager.Initialize(ctx, nil))
+	allowHostRegistryTraffic(t, cfg.Network.BridgeName)
 	systemManager := system.NewManager(p)
 	require.NoError(t, systemManager.EnsureSystemFiles(ctx))
 	instanceManager := instances.NewManager(
@@ -183,6 +182,30 @@ func startBuildRegistry(t *testing.T, gateway string, p *paths.Paths, imageManag
 	t.Cleanup(func() { _ = server.Close() })
 	port := strconv.Itoa(listener.Addr().(*net.TCPAddr).Port)
 	return net.JoinHostPort(gateway, port), string(certPEM)
+}
+
+func allowHostRegistryTraffic(t *testing.T, bridge string) {
+	t.Helper()
+	if exec.Command("nft", "list", "table", "inet", "kernel_firewall").Run() != nil {
+		return
+	}
+	comment := "hypeman-builder-cache-test-" + bridge
+	output, err := exec.Command("nft", "insert", "rule", "inet", "kernel_firewall", "input",
+		"iifname", bridge, "accept", "comment", comment).CombinedOutput()
+	require.NoErrorf(t, err, "allow registry traffic: %s", output)
+	t.Cleanup(func() {
+		output, err := exec.Command("nft", "-a", "list", "chain", "inet", "kernel_firewall", "input").Output()
+		if err != nil {
+			return
+		}
+		for _, line := range strings.Split(string(output), "\n") {
+			if !strings.Contains(line, comment) {
+				continue
+			}
+			fields := strings.Fields(line)
+			_ = exec.Command("nft", "delete", "rule", "inet", "kernel_firewall", "input", "handle", fields[len(fields)-1]).Run()
+		}
+	})
 }
 
 func registryCertificate(t *testing.T, ip net.IP) ([]byte, []byte) {
