@@ -2,6 +2,7 @@ package instances
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"path/filepath"
@@ -49,6 +50,13 @@ var systemDirectories = []string{
 	"/tmp",
 	"/usr",
 	"/var",
+}
+
+func wrapCreateMdevErr(profile string, err error) error {
+	if errors.Is(err, devices.ErrVGPUNotSupportedOnMacOS) {
+		return fmt.Errorf("%w: %w", ErrInvalidRequest, err)
+	}
+	return fmt.Errorf("create vGPU mdev for profile %s: %w", profile, err)
 }
 
 // generateVsockCID converts first 8 chars of instance ID to a unique CID
@@ -275,7 +283,7 @@ func (m *manager) createInstance(
 		mdev, err := devices.CreateMdev(ctx, req.GPU.Profile, id)
 		if err != nil {
 			log.ErrorContext(ctx, "failed to create mdev", "profile", req.GPU.Profile, "error", err)
-			return nil, fmt.Errorf("create vGPU mdev for profile %s: %w", req.GPU.Profile, err)
+			return nil, wrapCreateMdevErr(req.GPU.Profile, err)
 		}
 		gpuProfile = req.GPU.Profile
 		gpuMdevUUID = mdev.UUID

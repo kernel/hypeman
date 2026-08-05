@@ -2,13 +2,7 @@
 
 package devices
 
-import (
-	"context"
-	"fmt"
-)
-
-// ErrVGPUNotSupportedOnMacOS is returned for vGPU operations on macOS
-var ErrVGPUNotSupportedOnMacOS = fmt.Errorf("vGPU (mdev) is not supported on macOS")
+import "context"
 
 // SetGPUProfileCacheTTL is a no-op on macOS.
 func SetGPUProfileCacheTTL(ttl string) {
