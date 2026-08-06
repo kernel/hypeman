@@ -203,13 +203,18 @@ func (s vendorVFIOSysfs) destroyWithOpenPaths(ctx context.Context, vfAddress, in
 		return nil
 	}
 
-	if owner, ok := s.owners[vfAddress]; ok && (instanceID == "" || owner != instanceID) {
-		log.WarnContext(ctx, "skipping vendor VFIO vGPU release owned by another instance",
-			"vf", vfAddress,
-			"owner_instance_id", owner,
-			"requesting_instance_id", instanceID,
-		)
-		return nil
+	if owner, ok := s.owners[vfAddress]; ok {
+		if instanceID == "" {
+			return fmt.Errorf("cannot release vendor VFIO vGPU on VF %s without instance ID", vfAddress)
+		}
+		if owner != instanceID {
+			log.WarnContext(ctx, "skipping vendor VFIO vGPU release owned by another instance",
+				"vf", vfAddress,
+				"owner_instance_id", owner,
+				"requesting_instance_id", instanceID,
+			)
+			return nil
+		}
 	}
 
 	if openPaths == nil {
