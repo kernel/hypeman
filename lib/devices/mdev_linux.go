@@ -92,7 +92,11 @@ func getCachedProfiles(firstVF string) []profileMetadata {
 // discoverMdevVFs returns all SR-IOV Virtual Functions available for vGPU,
 // discovered by scanning /sys/class/mdev_bus/.
 func discoverMdevVFs() ([]VirtualFunction, error) {
-	entries, err := os.ReadDir(mdevBusPath)
+	return discoverMdevVFsWith(mdevBusPath, pciDevicesPath, ListMdevDevices)
+}
+
+func discoverMdevVFsWith(busPath, pciPath string, listMdevs func() ([]MdevDevice, error)) ([]VirtualFunction, error) {
+	entries, err := os.ReadDir(busPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil // No mdev_bus means no mdev vGPU support
@@ -101,7 +105,7 @@ func discoverMdevVFs() ([]VirtualFunction, error) {
 	}
 
 	// List mdevs once and build a lookup map to avoid O(n*m) performance
-	mdevs, _ := ListMdevDevices()
+	mdevs, _ := listMdevs()
 	mdevByVF := make(map[string]bool, len(mdevs))
 	for _, mdev := range mdevs {
 		mdevByVF[mdev.VFAddress] = true
@@ -110,10 +114,27 @@ func discoverMdevVFs() ([]VirtualFunction, error) {
 	var vfs []VirtualFunction
 	for _, entry := range entries {
 		vfAddr := entry.Name()
+		types, err := os.ReadDir(filepath.Join(busPath, vfAddr, "mdev_supported_types"))
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, fmt.Errorf("read mdev supported types for VF %s: %w", vfAddr, err)
+		}
+		usable := false
+		for _, typ := range types {
+			if typ.IsDir() {
+				usable = true
+				break
+			}
+		}
+		if !usable {
+			continue
+		}
 
 		// Find parent GPU by checking physfn symlink
 		// VFs have a physfn symlink pointing to their parent Physical Function
-		physfnPath := filepath.Join("/sys/bus/pci/devices", vfAddr, "physfn")
+		physfnPath := filepath.Join(pciPath, vfAddr, "physfn")
 		parentGPU := ""
 		if target, err := os.Readlink(physfnPath); err == nil {
 			parentGPU = filepath.Base(target)
