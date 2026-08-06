@@ -107,3 +107,44 @@ func TestKeychainProviderReadsDockerConfig(t *testing.T) {
 		t.Errorf("credentials = %s/%s, want testuser/testpass", cfg.Username, cfg.Password)
 	}
 }
+
+// ctxKeychain implements authn.ContextKeychain and records the context it
+// receives, so tests can assert the caller's context is forwarded rather
+// than dropped.
+type ctxKeychain struct {
+	gotCtx context.Context
+}
+
+func (c *ctxKeychain) Resolve(_ authn.Resource) (authn.Authenticator, error) {
+	return authn.Anonymous, nil
+}
+
+func (c *ctxKeychain) ResolveContext(ctx context.Context, _ authn.Resource) (authn.Authenticator, error) {
+	c.gotCtx = ctx
+	return authn.Anonymous, nil
+}
+
+func TestKeychainProviderForwardsContext(t *testing.T) {
+	t.Parallel()
+
+	kc := &ctxKeychain{}
+	provider := &KeychainProvider{Keychain: kc}
+
+	type ctxKey struct{}
+	ctx := context.WithValue(context.Background(), ctxKey{}, "sentinel")
+
+	ref, err := name.ParseReference("registry.example.com/team/app:v1")
+	if err != nil {
+		t.Fatalf("parse reference: %v", err)
+	}
+
+	if _, err := provider.Authenticator(ctx, ref); err != nil {
+		t.Fatalf("Authenticator: %v", err)
+	}
+	if kc.gotCtx == nil {
+		t.Fatal("keychain did not receive a context")
+	}
+	if got := kc.gotCtx.Value(ctxKey{}); got != "sentinel" {
+		t.Errorf("context value = %v, want sentinel (context was not forwarded)", got)
+	}
+}

@@ -253,7 +253,7 @@ func TestImageFromCacheDockerPreservesForeignLayerURLs(t *testing.T) {
 			Digest:    manifest.Config.Digest.String(),
 		},
 		Layers: []descriptor{{
-			MediaType: string(types.DockerLayer),
+			MediaType: string(types.DockerForeignLayer),
 			Size:      manifest.Layers[0].Size,
 			Digest:    manifest.Layers[0].Digest.String(),
 			URLs:      []string{"https://example.com/foreign-layer-blob"},
@@ -283,6 +283,9 @@ func TestImageFromCacheDockerPreservesForeignLayerURLs(t *testing.T) {
 	}
 	if gotManifest.Layers[0].URLs[0] != "https://example.com/foreign-layer-blob" {
 		t.Errorf("urls = %v, want preserved", gotManifest.Layers[0].URLs)
+	}
+	if gotManifest.Layers[0].MediaType != types.OCIRestrictedLayer {
+		t.Errorf("foreign layer media type = %s, want %s", gotManifest.Layers[0].MediaType, types.OCIRestrictedLayer)
 	}
 
 	wantDigest, err := cached.Digest()

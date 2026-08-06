@@ -25,13 +25,15 @@ type KeychainProvider struct {
 	Keychain authn.Keychain
 }
 
-// Authenticator resolves credentials for the target registry from the keychain.
-func (p *KeychainProvider) Authenticator(_ context.Context, ref name.Reference) (authn.Authenticator, error) {
+// Authenticator resolves credentials for the target registry from the
+// keychain. The caller's context is forwarded so context-aware keychains
+// (authn.ContextKeychain) receive cancellation and deadlines.
+func (p *KeychainProvider) Authenticator(ctx context.Context, ref name.Reference) (authn.Authenticator, error) {
 	kc := p.Keychain
 	if kc == nil {
 		kc = authn.DefaultKeychain
 	}
-	return kc.Resolve(ref.Context())
+	return authn.Resolve(ctx, kc, ref.Context())
 }
 
 // StaticProvider always returns the same fixed credentials, regardless of

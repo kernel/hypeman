@@ -224,6 +224,8 @@ func convertToOCIMediaType(mediaType string) types.MediaType {
 		return types.OCILayer
 	case "application/vnd.docker.image.rootfs.diff.tar":
 		return types.OCIUncompressedLayer
+	case "application/vnd.docker.image.rootfs.foreign.diff.tar.gzip":
+		return types.OCIRestrictedLayer
 	default:
 		// If already OCI or unknown, return as-is
 		return types.MediaType(mediaType)
