@@ -48,6 +48,10 @@ func (m *manager) startInstance(
 		log.ErrorContext(ctx, "invalid state for start", "instance_id", id, "state", inst.State)
 		return nil, fmt.Errorf("%w: cannot start from state %s, must be Stopped", ErrInvalidState, inst.State)
 	}
+	if err := releaseStoredVGPU(ctx, stored); err != nil {
+		log.ErrorContext(ctx, "failed to release stale vGPU before start", "instance_id", id, "error", err)
+		return nil, fmt.Errorf("release stale vGPU before start: %w", err)
+	}
 
 	// 2a. Clear stale exit info from previous run and apply command overrides
 	stored.ExitCode = nil
