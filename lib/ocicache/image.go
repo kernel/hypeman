@@ -8,6 +8,7 @@
 package ocicache
 
 import (
+	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -25,11 +26,36 @@ import (
 // ErrNotFound means no manifest blob exists in the cache for the requested digest.
 var ErrNotFound = errors.New("image not found in OCI cache")
 
+// ErrInvalidDigest means a digest is not a well-formed sha256 hex string and
+// cannot be used as a cache path component.
+var ErrInvalidDigest = errors.New("invalid image digest")
+
+// blobHex validates a digest (optionally "sha256:"-prefixed) and returns its
+// hex form. The hex form is joined onto the blob directory path
+// (lib/paths.OCICacheBlob), so anything other than exactly 64 lowercase hex
+// chars would allow path traversal outside the cache.
+func blobHex(digest string) (string, error) {
+	hexDigest := strings.TrimPrefix(digest, "sha256:")
+	if len(hexDigest) != 64 {
+		return "", fmt.Errorf("%w: %s", ErrInvalidDigest, digest)
+	}
+	for i := 0; i < len(hexDigest); i++ {
+		c := hexDigest[i]
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+			return "", fmt.Errorf("%w: %s", ErrInvalidDigest, digest)
+		}
+	}
+	return hexDigest, nil
+}
+
 // ImageFromCache creates a v1.Image that reads from the OCI blob cache.
 // Docker v2 manifests are transparently converted to OCI format, matching the
 // conversion applied when images are appended to the OCI layout.
 func ImageFromCache(p *paths.Paths, digest string) (v1.Image, error) {
-	digestHex := strings.TrimPrefix(digest, "sha256:")
+	digestHex, err := blobHex(digest)
+	if err != nil {
+		return nil, err
+	}
 	manifestData, err := os.ReadFile(p.OCICacheBlob(digestHex))
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -87,23 +113,15 @@ func (img *cacheImage) MediaType() (types.MediaType, error) {
 
 // isOCIMediaType returns true if the media type is an OCI manifest type
 func isOCIMediaType(mediaType string) bool {
-	return mediaType == string(types.OCIManifestSchema1) ||
-		mediaType == "application/vnd.oci.image.manifest.v1+json"
+	return mediaType == string(types.OCIManifestSchema1)
 }
 
 func (img *cacheImage) Size() (int64, error) {
-	manifest, err := img.parseManifest()
+	raw, err := img.RawManifest()
 	if err != nil {
 		return 0, err
 	}
-	if isOCIMediaType(manifest.MediaType) {
-		return int64(len(img.manifestData)), nil
-	}
-	rawManifest, err := img.RawManifest()
-	if err != nil {
-		return 0, err
-	}
-	return int64(len(rawManifest)), nil
+	return int64(len(raw)), nil
 }
 
 func (img *cacheImage) ConfigName() (v1.Hash, error) {
@@ -124,7 +142,10 @@ func (img *cacheImage) ConfigFile() (*v1.ConfigFile, error) {
 		return nil, err
 	}
 
-	digestHex := strings.TrimPrefix(manifest.Config.Digest, "sha256:")
+	digestHex, err := blobHex(manifest.Config.Digest)
+	if err != nil {
+		return nil, err
+	}
 	configPath := img.paths.OCICacheBlob(digestHex)
 	configData, err := os.ReadFile(configPath)
 	if err != nil {
@@ -144,7 +165,10 @@ func (img *cacheImage) RawConfigFile() ([]byte, error) {
 		return nil, err
 	}
 
-	digestHex := strings.TrimPrefix(manifest.Config.Digest, "sha256:")
+	digestHex, err := blobHex(manifest.Config.Digest)
+	if err != nil {
+		return nil, err
+	}
 	configPath := img.paths.OCICacheBlob(digestHex)
 	return os.ReadFile(configPath)
 }
@@ -262,11 +286,11 @@ func (img *cacheImage) LayerByDigest(hash v1.Hash) (v1.Layer, error) {
 			}, nil
 		}
 	}
-	return nil, fmt.Errorf("layer not found: %s", hash.String())
+	return nil, fmt.Errorf("%w: %s", ErrNotFound, hash.String())
 }
 
 func (img *cacheImage) LayerByDiffID(hash v1.Hash) (v1.Layer, error) {
-	return nil, fmt.Errorf("LayerByDiffID not implemented")
+	return nil, fmt.Errorf("layerByDiffID not implemented")
 }
 
 // internal manifest structure for parsing
@@ -307,24 +331,62 @@ func (l *cacheLayer) Digest() (v1.Hash, error) {
 	return v1.NewHash(l.digest)
 }
 
-// DiffID returns an empty hash. Computing the actual DiffID requires decompressing
-// the layer which is expensive; callers that need DiffID should compute it themselves.
-func (l *cacheLayer) DiffID() (v1.Hash, error) {
-	return v1.Hash{}, nil
-}
-
 // Compressed returns a reader for the compressed layer blob from disk.
 func (l *cacheLayer) Compressed() (io.ReadCloser, error) {
-	digestHex := strings.TrimPrefix(l.digest, "sha256:")
+	digestHex, err := blobHex(l.digest)
+	if err != nil {
+		return nil, err
+	}
 	blobPath := l.paths.OCICacheBlob(digestHex)
 	return os.Open(blobPath)
 }
 
-// Uncompressed returns a reader for the layer content. Since layers are stored
-// compressed, this returns the compressed stream and relies on the caller
-// (go-containerregistry) to handle decompression based on MediaType.
+// DiffID returns an error: computing the true DiffID requires decompressing
+// the layer, which is expensive and not always needed. Callers that need it
+// should read Uncompressed() and hash the result.
+func (l *cacheLayer) DiffID() (v1.Hash, error) {
+	return v1.Hash{}, fmt.Errorf("diffID for cached layer %s requires decompressing; read Uncompressed() and hash", l.digest)
+}
+
+// Uncompressed returns a reader for the uncompressed layer content. Gzip
+// layers are decompressed on the fly; already-uncompressed (tar) layers are
+// served as stored. Other media types are unsupported because the cache
+// stores blobs as-is.
 func (l *cacheLayer) Uncompressed() (io.ReadCloser, error) {
-	return l.Compressed()
+	rc, err := l.Compressed()
+	if err != nil {
+		return nil, err
+	}
+	switch l.mediaType {
+	case string(types.OCILayer), string(types.DockerLayer):
+		gz, err := gzip.NewReader(rc)
+		if err != nil {
+			rc.Close()
+			return nil, fmt.Errorf("decompress layer %s: %w", l.digest, err)
+		}
+		return &closerChain{Reader: gz, closers: []io.Closer{gz, rc}}, nil
+	case string(types.OCIUncompressedLayer), string(types.DockerUncompressedLayer):
+		return rc, nil
+	default:
+		rc.Close()
+		return nil, fmt.Errorf("unsupported layer media type for decompression: %s", l.mediaType)
+	}
+}
+
+// closerChain closes all closers in order, returning the first error.
+type closerChain struct {
+	io.Reader
+	closers []io.Closer
+}
+
+func (c *closerChain) Close() error {
+	var firstErr error
+	for _, closer := range c.closers {
+		if err := closer.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
 }
 
 // Size returns the compressed size of the layer in bytes.

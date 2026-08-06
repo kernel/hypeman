@@ -3,8 +3,12 @@ package images
 import (
 	"errors"
 	"fmt"
+	"net/http"
+	"net/url"
 	"strings"
 	"testing"
+
+	"github.com/google/go-containerregistry/pkg/v1/remote/transport"
 )
 
 func TestClassifyRegistryError(t *testing.T) {
@@ -55,6 +59,33 @@ func TestClassifyRegistryError(t *testing.T) {
 			want: ErrNotFound,
 		},
 		{
+			name: "typed 404 -> not found",
+			in:   &transport.Error{StatusCode: http.StatusNotFound, Request: &http.Request{URL: mustURL(t, "https://example/v2/x")}},
+			want: ErrNotFound,
+		},
+		{
+			name: "typed 401 unauthorized -> not found (pull privacy)",
+			in: &transport.Error{
+				StatusCode: http.StatusUnauthorized,
+				Errors:     []transport.Diagnostic{{Code: "UNAUTHORIZED", Message: "authentication required"}},
+				Request:    &http.Request{URL: mustURL(t, "https://example/v2/private/app")},
+			},
+			want: ErrNotFound,
+		},
+		{
+			name: "typed toomanyrequests -> rate limited",
+			in: &transport.Error{
+				StatusCode: http.StatusTooManyRequests,
+				Errors:     []transport.Diagnostic{{Code: "TOOMANYREQUESTS", Message: "rate limit exceeded"}},
+			},
+			want: ErrRateLimited,
+		},
+		{
+			name: "typed 500 with 404 in request URL -> unchanged",
+			in:   &transport.Error{StatusCode: http.StatusInternalServerError, Request: &http.Request{URL: mustURL(t, "http://127.0.0.1:4040/v2/app/manifests/v404")}},
+			want: nil,
+		},
+		{
 			name: "unrecognized error returned unchanged",
 			in:   errors.New("connection refused"),
 			want: nil,
@@ -101,4 +132,13 @@ func TestClassifyRegistryErrorPrecedence(t *testing.T) {
 	if !errors.Is(err, ErrRateLimited) {
 		t.Fatalf("got %v, want ErrRateLimited", err)
 	}
+}
+
+func mustURL(t *testing.T, s string) *url.URL {
+	t.Helper()
+	u, err := url.Parse(s)
+	if err != nil {
+		t.Fatalf("parse url: %v", err)
+	}
+	return u
 }

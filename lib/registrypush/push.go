@@ -8,7 +8,6 @@ import (
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
-	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/ocicache"
 	"github.com/kernel/hypeman/lib/paths"
 )
@@ -57,10 +56,10 @@ func Push(ctx context.Context, img v1.Image, target string, provider Provider, o
 	}
 
 	if err := remote.Write(dstRef, img, remote.WithContext(ctx), remote.WithAuth(auth)); err != nil {
-		// Classify the raw registry error before adding the target reference:
-		// the classifier substring-matches its input, so the host, port, or tag
-		// of the destination must not participate in the match.
-		return nil, fmt.Errorf("push to %s: %w", dstRef, images.ClassifyRegistryError(err))
+		// Classify the raw registry error. The classifier matches typed
+		// transport errors (status/codes), so the destination reference text
+		// cannot influence the result.
+		return nil, fmt.Errorf("push to %s: %w", dstRef, classifyPushError(err))
 	}
 
 	digest, err := img.Digest()

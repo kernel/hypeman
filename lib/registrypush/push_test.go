@@ -16,6 +16,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/ocicache"
+	"github.com/kernel/hypeman/lib/ocicache/testutil"
 	"github.com/kernel/hypeman/lib/paths"
 )
 
@@ -42,7 +43,7 @@ func cacheFixture(t *testing.T) (*paths.Paths, string) {
 	if err != nil {
 		t.Fatalf("random image: %v", err)
 	}
-	digest, err := writeToCache(p, img)
+	digest, err := testutil.WriteImage(p, img)
 	if err != nil {
 		t.Fatalf("write cache: %v", err)
 	}
@@ -94,26 +95,14 @@ func TestPushFromCache(t *testing.T) {
 }
 
 // TestPushTargetTextDoesNotLeakIntoClassification guards against the
-// classifier substring-matching the destination reference itself: a target
-// containing "404" (e.g. a v404 tag) must not turn a transport failure into
-// images.ErrNotFound.
+// classifier matching the destination reference itself: a target containing
+// "404" (e.g. a v404 tag) must not turn a transport failure into
+// images.ErrNotFound. The classifier matches typed transport errors, so the
+// target text cannot participate.
 func TestPushTargetTextDoesNotLeakIntoClassification(t *testing.T) {
-	// Retry on the rare chance the random listener port itself contains "404".
-	var host string
-	for i := 0; i < 10; i++ {
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			http.Error(w, "boom", http.StatusInternalServerError)
-		}))
-		host = strings.TrimPrefix(srv.URL, "http://")
-		if !strings.Contains(host, "404") {
-			t.Cleanup(srv.Close)
-			break
-		}
-		srv.Close()
-	}
-	if strings.Contains(host, "404") {
-		t.Skip("could not get a port without 404 in it")
-	}
+	host := startServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
 
 	p, digest := cacheFixture(t)
 	_, err := PushFromCache(context.Background(), p, digest, host+"/test/app:v404", nil, Options{Insecure: true})
@@ -166,6 +155,8 @@ func TestPushBearerAuth(t *testing.T) {
 	bad := &StaticProvider{Config: authn.AuthConfig{RegistryToken: "wrong"}}
 	if _, err := PushFromCache(context.Background(), p, digest, target, bad, Options{Insecure: true}); err == nil {
 		t.Fatal("expected error pushing with wrong bearer token")
+	} else if !errors.Is(err, ErrUnauthorized) {
+		t.Errorf("err = %v, want ErrUnauthorized", err)
 	}
 }
 

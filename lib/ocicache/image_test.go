@@ -8,13 +8,14 @@ import (
 	"errors"
 	"io"
 	"os"
-	"path/filepath"
+	"strings"
 	"testing"
 
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/mutate"
 	"github.com/google/go-containerregistry/pkg/v1/random"
 	"github.com/google/go-containerregistry/pkg/v1/types"
+	"github.com/kernel/hypeman/lib/ocicache/testutil"
 	"github.com/kernel/hypeman/lib/paths"
 )
 
@@ -22,60 +23,11 @@ import (
 // manifest digest.
 func writeCacheImage(t *testing.T, p *paths.Paths, img v1.Image) string {
 	t.Helper()
-
-	blobDir := p.OCICacheBlobDir()
-	if err := os.MkdirAll(blobDir, 0755); err != nil {
-		t.Fatalf("create blob dir: %v", err)
-	}
-
-	layers, err := img.Layers()
+	digest, err := testutil.WriteImage(p, img)
 	if err != nil {
-		t.Fatalf("layers: %v", err)
+		t.Fatalf("write cache: %v", err)
 	}
-	for _, layer := range layers {
-		rc, err := layer.Compressed()
-		if err != nil {
-			t.Fatalf("layer reader: %v", err)
-		}
-		data, err := io.ReadAll(rc)
-		rc.Close()
-		if err != nil {
-			t.Fatalf("read layer: %v", err)
-		}
-		hash, err := layer.Digest()
-		if err != nil {
-			t.Fatalf("layer digest: %v", err)
-		}
-		if err := os.WriteFile(filepath.Join(blobDir, hash.Hex), data, 0644); err != nil {
-			t.Fatalf("write layer blob: %v", err)
-		}
-	}
-
-	rawConfig, err := img.RawConfigFile()
-	if err != nil {
-		t.Fatalf("raw config: %v", err)
-	}
-	configHash, err := img.ConfigName()
-	if err != nil {
-		t.Fatalf("config name: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(blobDir, configHash.Hex), rawConfig, 0644); err != nil {
-		t.Fatalf("write config blob: %v", err)
-	}
-
-	rawManifest, err := img.RawManifest()
-	if err != nil {
-		t.Fatalf("raw manifest: %v", err)
-	}
-	digest, err := img.Digest()
-	if err != nil {
-		t.Fatalf("digest: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(blobDir, digest.Hex), rawManifest, 0644); err != nil {
-		t.Fatalf("write manifest blob: %v", err)
-	}
-
-	return digest.String()
+	return digest
 }
 
 func tempPaths(t *testing.T) *paths.Paths {
@@ -169,6 +121,33 @@ func TestImageFromCacheRoundTrip(t *testing.T) {
 		if hex.EncodeToString(sum[:]) != gotHash.Hex {
 			t.Errorf("layer %d blob content does not match digest", i)
 		}
+
+		// Uncompressed content must match the source layer, and DiffID must
+		// refuse to lie rather than returning a zero hash.
+		wantUncompressed, err := wantLayers[i].Uncompressed()
+		if err != nil {
+			t.Fatalf("original layer uncompressed: %v", err)
+		}
+		wantData, err := io.ReadAll(wantUncompressed)
+		wantUncompressed.Close()
+		if err != nil {
+			t.Fatalf("read original uncompressed layer: %v", err)
+		}
+		gotUncompressed, err := gotLayers[i].Uncompressed()
+		if err != nil {
+			t.Fatalf("cached layer uncompressed: %v", err)
+		}
+		gotData, err := io.ReadAll(gotUncompressed)
+		gotUncompressed.Close()
+		if err != nil {
+			t.Fatalf("read cached uncompressed layer: %v", err)
+		}
+		if !bytes.Equal(gotData, wantData) {
+			t.Errorf("layer %d uncompressed content differs from source", i)
+		}
+		if _, err := gotLayers[i].DiffID(); err == nil {
+			t.Errorf("layer %d DiffID() should error, got nil", i)
+		}
 	}
 }
 
@@ -178,6 +157,20 @@ func TestImageFromCacheNotFound(t *testing.T) {
 	_, err := ImageFromCache(p, "sha256:"+hex.EncodeToString(make([]byte, 32)))
 	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestImageFromCacheRejectsInvalidDigests(t *testing.T) {
+	p := tempPaths(t)
+	for _, digest := range []string{
+		"sha256:../../etc/passwd",
+		"sha256:" + strings.Repeat("Z", 64),
+		"sha256:deadbeef",
+		"not-a-digest",
+	} {
+		if _, err := ImageFromCache(p, digest); !errors.Is(err, ErrInvalidDigest) {
+			t.Errorf("ImageFromCache(%q) err = %v, want ErrInvalidDigest", digest, err)
+		}
 	}
 }
 
