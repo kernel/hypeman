@@ -3,7 +3,6 @@ package instances
 import (
 	"context"
 	"errors"
-	"runtime"
 	"testing"
 
 	"github.com/kernel/hypeman/lib/devices"
@@ -25,9 +24,11 @@ func (v *recordingResourceValidator) ReserveAllocation(context.Context, string, 
 
 func (v *recordingResourceValidator) FinishAllocation(string) {}
 
-func TestCreateInstanceRejectsMacOSVGPUBeforeResourceReservation(t *testing.T) {
-	if runtime.GOOS != "darwin" {
-		t.Skip("macOS-specific validation")
+func TestCreateInstanceRejectsUnsupportedVGPUBeforeResourceReservation(t *testing.T) {
+	t.Parallel()
+
+	if devices.Capabilities().SupportsVGPU {
+		t.Skip("host platform supports vGPU")
 	}
 
 	validator := &recordingResourceValidator{}
