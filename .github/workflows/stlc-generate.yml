@@ -187,8 +187,9 @@ jobs:
           gh auth setup-git
 
       - name: Resolve the SDK commit message
-        # The merged PR's title, which survives squash, merge, and rebase alike;
-        # release-please reads it to pick the version bump.
+        # Every generated SDK change must be releasable without depending on
+        # developers to use Conventional Commit prefixes. Preserve an explicit
+        # release type when supplied; otherwise classify the change as a feature.
         id: msg
         if: github.event_name != 'pull_request'
         env:
@@ -199,6 +200,10 @@ jobs:
           set -euo pipefail
           msg=$(gh api "repos/$REPO/commits/$SHA/pulls" --jq '.[0].title // empty')
           [ -n "$msg" ] || msg=$(git log -1 --pretty=%s)
+          conventional='^(feat|fix|perf|revert)(\([^)]*\))?!?:[[:space:]]+'
+          if [[ ! "$msg" =~ $conventional ]]; then
+            msg="feat: $msg"
+          fi
           eof="MSG_$(openssl rand -hex 8)"
           {
             echo "commit_msg<<$eof"

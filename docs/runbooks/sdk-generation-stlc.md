@@ -21,6 +21,10 @@ Update `openapi.yaml` and `stainless.yaml`, then open a PR. Review the generated
 preview branches and manifest diagnostics before merging. Publishing still
 requires a manual promotion and a release-please PR merge.
 
+Every merged SDK-affecting PR becomes a releasable SDK commit automatically.
+Explicit `feat:`, `fix:`, `perf:`, and `revert:` titles are preserved; other
+titles are classified as features so release notes never silently omit them.
+
 ## Integration test
 
 Run the real generator from any branch without touching staging or production
