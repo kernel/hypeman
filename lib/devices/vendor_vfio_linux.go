@@ -22,18 +22,20 @@ const (
 )
 
 type vendorVFIOSysfs struct {
-	pciDevicesPath  string
-	procPath        string
-	vfioDevicesPath string
-	owners          map[string]string
+	pciDevicesPath    string
+	procPath          string
+	vfioDevicesPath   string
+	owners            map[string]string
+	framebufferByType map[string]int
 }
 
 var (
 	hostVendorVFIO = vendorVFIOSysfs{
-		pciDevicesPath:  pciDevicesPath,
-		procPath:        procPath,
-		vfioDevicesPath: vfioDevicesPath,
-		owners:          make(map[string]string),
+		pciDevicesPath:    pciDevicesPath,
+		procPath:          procPath,
+		vfioDevicesPath:   vfioDevicesPath,
+		owners:            make(map[string]string),
+		framebufferByType: make(map[string]int),
 	}
 	vendorVFIOMu sync.Mutex
 )
@@ -141,7 +143,7 @@ func (s vendorVFIOSysfs) create(ctx context.Context, profileName, instanceID str
 		return nil, fmt.Errorf("profile %q is not creatable on any VF (unknown profile or insufficient capacity)", profileName)
 	}
 
-	targetVF, err := s.selectLeastLoadedVF(vfs, metadata, requested.TypeName)
+	targetVF, err := s.selectLeastLoadedVF(vfs, requested.TypeName)
 	if err != nil {
 		return nil, err
 	}
@@ -270,17 +272,16 @@ func (s vendorVFIOSysfs) reconcile(ctx context.Context, protectedDevicePaths map
 	return nil
 }
 
-func (s vendorVFIOSysfs) selectLeastLoadedVF(vfs []VirtualFunction, metadata []profileMetadata, profileType string) (string, error) {
-	framebufferByType := make(map[string]int, len(metadata))
-	for _, profile := range metadata {
-		framebufferByType[profile.TypeName] = profile.FramebufferMB
-	}
-
+func (s vendorVFIOSysfs) selectLeastLoadedVF(vfs []VirtualFunction, profileType string) (string, error) {
 	usageByGPU := make(map[string]int)
 	freeByGPU := make(map[string][]VirtualFunction)
 	for _, vf := range vfs {
 		if vf.Allocated {
-			usageByGPU[vf.ParentGPU] += framebufferByType[vf.ProfileType]
+			framebuffer, ok := s.framebufferByType[vf.ProfileType]
+			if !ok {
+				return "", fmt.Errorf("framebuffer size for allocated vGPU type %s is unknown", vf.ProfileType)
+			}
+			usageByGPU[vf.ParentGPU] += framebuffer
 			continue
 		}
 		profiles, err := s.readCreatableProfiles(vf.PCIAddress)
@@ -320,6 +321,7 @@ func (s vendorVFIOSysfs) profileMetadata(vfs []VirtualFunction) ([]profileMetada
 		}
 		for _, profile := range profiles {
 			profilesByType[profile.TypeName] = profile
+			s.framebufferByType[profile.TypeName] = profile.FramebufferMB
 		}
 	}
 	profiles := make([]profileMetadata, 0, len(profilesByType))
