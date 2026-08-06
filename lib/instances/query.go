@@ -581,7 +581,7 @@ func refreshHypervisorPID(stored *StoredMetadata, state State) {
 	if stored.SocketPath == "" {
 		return
 	}
-	if pid, err := hypervisor.ResolveProcessPID(stored.SocketPath); err == nil {
+	if pid, _, err := hypervisor.ResolveProcessPID(stored.SocketPath); err == nil {
 		stored.HypervisorPID = &pid
 		return
 	}
@@ -592,14 +592,14 @@ func HypervisorProcessExists(pid int, socketPath string) bool {
 	if !ProcessExists(pid) {
 		return false
 	}
-	if runtime.GOOS != "linux" {
+	if runtime.GOOS != "linux" || socketPath == "" {
 		return true
 	}
-	if socketPath == "" {
-		return false
+	resolvedPID, confirmed, err := hypervisor.ResolveProcessPID(socketPath)
+	if err != nil || !confirmed || resolvedPID == pid {
+		return true
 	}
-	resolvedPID, err := hypervisor.ResolveProcessPID(socketPath)
-	return err == nil && resolvedPID == pid
+	return !ProcessExists(resolvedPID)
 }
 
 // ProcessExists reports whether pid belongs to a live, non-zombie process.
