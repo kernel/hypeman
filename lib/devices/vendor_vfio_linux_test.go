@@ -72,6 +72,20 @@ func TestVendorVFIODestroySkipsAssignmentOwnedByAnotherInstance(t *testing.T) {
 	assertFileValue(t, filepath.Join(device.SysfsPath, "nvidia", "current_vgpu_type"), "0")
 }
 
+func TestVendorVFIODestroyRejectsMissingInstanceIDForOwnedVF(t *testing.T) {
+	t.Parallel()
+
+	sysfs := newTestVendorVFIOSysfs(t)
+	sysfs.addVF(t, "0000:82:00.0", "0000:82:00.4", "42", "0", testCreatableTypes)
+
+	device, err := sysfs.create(context.Background(), "NVIDIA L40S-2Q", "instance-1")
+	require.NoError(t, err)
+
+	err = sysfs.destroy(context.Background(), device.VFAddress, "")
+	require.ErrorContains(t, err, "without instance ID")
+	assertFileValue(t, filepath.Join(device.SysfsPath, "nvidia", "current_vgpu_type"), "1148")
+}
+
 func TestVendorVFIODestroyRetainsAssignmentInUse(t *testing.T) {
 	t.Parallel()
 
