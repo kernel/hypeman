@@ -798,7 +798,7 @@ func (m *manager) startAndBootVM(
 }
 
 func resolveRuntimeHypervisorPID(log *slog.Logger, socketPath string, fallbackPID int) int {
-	if processExists(fallbackPID) {
+	if ProcessExists(fallbackPID) {
 		return fallbackPID
 	}
 	pid, err := hypervisor.ResolveProcessPID(socketPath)
