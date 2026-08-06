@@ -801,7 +801,7 @@ func resolveRuntimeHypervisorPID(log *slog.Logger, socketPath string, fallbackPI
 	if ProcessExists(fallbackPID) {
 		return fallbackPID
 	}
-	pid, err := hypervisor.ResolveProcessPID(socketPath)
+	pid, _, err := hypervisor.ResolveProcessPID(socketPath)
 	if err != nil {
 		log.Debug("using fallback hypervisor pid", "socket_path", socketPath, "pid", fallbackPID, "error", err)
 		return fallbackPID
