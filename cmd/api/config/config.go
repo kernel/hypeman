@@ -449,7 +449,7 @@ func defaultConfig() *Config {
 		},
 
 		Hypervisor: HypervisorConfig{
-			Default:                          "cloud-hypervisor",
+			Default:                          "firecracker",
 			CloudHypervisorDefaultVersion:    "",
 			FirecrackerBinaryPath:            "",
 			FirecrackerSnapshotMemoryBackend: "file",
