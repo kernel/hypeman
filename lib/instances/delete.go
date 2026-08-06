@@ -152,7 +152,7 @@ func (m *manager) deleteInstanceWithOptions(
 	if hadVGPUAssignment {
 		log.InfoContext(ctx, "destroying vGPU", "instance_id", id, "uuid", stored.GPUMdevUUID)
 	}
-	if err := releaseStoredVGPU(ctx, stored); err != nil {
+	if err := m.releaseStoredVGPU(ctx, stored); err != nil {
 		// Log error but continue with cleanup.
 		log.WarnContext(ctx, "failed to destroy vGPU, continuing with cleanup", "instance_id", id, "uuid", stored.GPUMdevUUID, "error", err)
 	} else if hadVGPUAssignment {

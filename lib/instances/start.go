@@ -54,7 +54,7 @@ func (m *manager) startInstance(
 	// cannot leave on-disk metadata pointing at a device that is already
 	// gone (matching releaseRetainedVGPULocked).
 	if storedVGPUDevicePath(stored) != "" {
-		if err := releaseStoredVGPU(ctx, stored); err != nil {
+		if err := m.releaseStoredVGPU(ctx, stored); err != nil {
 			log.ErrorContext(ctx, "failed to release stale vGPU before start", "instance_id", id, "error", err)
 			return nil, fmt.Errorf("release stale vGPU before start: %w", err)
 		}
@@ -181,8 +181,15 @@ func (m *manager) startInstance(
 			}
 			if err := devices.DestroyVGPU(ctx, assignment); err != nil {
 				log.WarnContext(ctx, "failed to destroy vGPU on cleanup", "instance_id", id, "uuid", device.MdevUUID, "error", err)
+				if saveErr := m.saveMetadata(meta); saveErr != nil {
+					log.ErrorContext(ctx, "failed to retain vGPU assignment metadata after cleanup failure", "instance_id", id, "error", saveErr)
+				}
 			}
 		})
+		if err := m.saveMetadata(meta); err != nil {
+			log.ErrorContext(ctx, "failed to save metadata after vGPU creation", "instance_id", id, "error", err)
+			return nil, fmt.Errorf("save metadata after vGPU creation: %w", err)
+		}
 	}
 
 	// 5. Regenerate config disk with new network configuration
