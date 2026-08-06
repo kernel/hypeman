@@ -449,6 +449,7 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 	forkMeta.ExitCode = nil
 	forkMeta.ExitMessage = ""
 	forkMeta.RestartStatus = restartpolicy.Status{}
+	clearStoredVGPUDevice(&forkMeta)
 	forkMeta.FirecrackerUFFDSessionID = ""
 	forkMeta.FirecrackerUFFDPagerVersion = ""
 	forkMeta.FirecrackerUseUFFDOnNextRestore = useFirecrackerUFFDOnNextRestore(targetHypervisor, rec.Snapshot.Kind == SnapshotKindStandby, targetState)
