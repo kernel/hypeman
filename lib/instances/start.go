@@ -184,6 +184,11 @@ func (m *manager) startInstance(
 				if saveErr := m.saveMetadata(meta); saveErr != nil {
 					log.ErrorContext(ctx, "failed to retain vGPU assignment metadata after cleanup failure", "instance_id", id, "error", saveErr)
 				}
+			} else {
+				clearStoredVGPUDevice(stored)
+				if saveErr := m.saveMetadata(meta); saveErr != nil {
+					log.ErrorContext(ctx, "failed to save metadata after vGPU cleanup", "instance_id", id, "error", saveErr)
+				}
 			}
 		})
 		if err := m.saveMetadata(meta); err != nil {
