@@ -188,7 +188,7 @@ func TestStartMonitoringPublishesGPUMetrics(t *testing.T) {
 	mgr, _, _ := monitoringTestManager(t)
 
 	originalProvider := currentGPUStatusProvider()
-	setGPUStatusProvider(func() *GPUResourceStatus {
+	setGPUStatusProvider(func(context.Context) *GPUResourceStatus {
 		return &GPUResourceStatus{
 			Mode:       "vgpu",
 			TotalSlots: 8,

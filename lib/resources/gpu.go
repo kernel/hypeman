@@ -1,7 +1,10 @@
 package resources
 
 import (
+	"context"
+
 	"github.com/kernel/hypeman/lib/devices"
+	"github.com/kernel/hypeman/lib/logger"
 )
 
 // GPUResourceStatus represents the GPU resource status for the API response.
@@ -16,31 +19,22 @@ type GPUResourceStatus struct {
 
 // GetGPUStatus returns the current GPU resource status.
 // Returns nil if no GPU is available or the mode is "none".
-func GetGPUStatus() *GPUResourceStatus {
-	mode := devices.DetectHostGPUMode()
-	if mode == devices.GPUModeNone {
+func GetGPUStatus(ctx context.Context) *GPUResourceStatus {
+	framework, vfs, err := devices.DiscoverVGPU()
+	if err != nil {
+		logger.FromContext(ctx).WarnContext(ctx, "failed to discover vGPU state", "error", err)
 		return nil
 	}
-
-	switch mode {
-	case devices.GPUModeVGPU:
-		return getVGPUStatus()
-	case devices.GPUModePassthrough:
-		return getPassthroughStatus()
-	default:
-		return nil
+	if framework != devices.VGPUFrameworkNone {
+		return getVGPUStatus(ctx, framework, vfs)
 	}
+	return getPassthroughStatus()
 }
 
-// getVGPUStatus returns GPU status for vGPU mode (SR-IOV + mdev).
-func getVGPUStatus() *GPUResourceStatus {
-	vfs, err := devices.DiscoverVFs()
-	if err != nil || len(vfs) == 0 {
-		return nil
-	}
-
-	// Count used VFs (those with mdevs)
+// getVGPUStatus returns GPU status for vGPU mode (SR-IOV).
+func getVGPUStatus(ctx context.Context, framework devices.VGPUFramework, vfs []devices.VirtualFunction) *GPUResourceStatus {
 	usedSlots := 0
+	// Count used VFs (those with a vGPU assigned)
 	for _, vf := range vfs {
 		if vf.Allocated {
 			usedSlots++
@@ -48,8 +42,9 @@ func getVGPUStatus() *GPUResourceStatus {
 	}
 
 	// Get available profiles (reuse VFs to avoid redundant discovery)
-	profiles, err := devices.ListGPUProfilesWithVFs(vfs)
+	profiles, err := devices.ListGPUProfilesWithVFs(framework, vfs)
 	if err != nil {
+		logger.FromContext(ctx).WarnContext(ctx, "failed to list vGPU profiles; reporting none", "framework", framework, "error", err)
 		profiles = nil
 	}
 
