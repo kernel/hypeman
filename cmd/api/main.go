@@ -185,6 +185,24 @@ func configureUFFDGraduationController(cfg *config.Config, instanceManager insta
 	}, logger), nil
 }
 
+func liveInstanceVGPUDevicePaths(ctx context.Context, instanceManager instances.Manager) (map[string]struct{}, error) {
+	allInstances, err := instanceManager.ListInstancesForReconcile(ctx)
+	if err != nil {
+		return nil, err
+	}
+	protected := make(map[string]struct{})
+	for _, inst := range allInstances {
+		if inst.GPUDevicePath == "" || inst.HypervisorPID == nil {
+			continue
+		}
+		if !instances.HypervisorProcessExists(*inst.HypervisorPID, inst.SocketPath) {
+			continue
+		}
+		protected[inst.GPUDevicePath] = struct{}{}
+	}
+	return protected, nil
+}
+
 func run() error {
 	startupStarted := time.Now()
 	slog.Info("starting hypeman initialization")
@@ -384,11 +402,16 @@ func run() error {
 		return fmt.Errorf("reconcile device state: %w", err)
 	}
 
-	// Reconcile mdev devices (clears orphaned vGPUs from previous runs)
-	logger.Info("Reconciling mdev devices...")
-	if err := devices.ReconcileMdevs(app.Ctx, nil); err != nil {
-		// Log but don't fail - mdev cleanup is best-effort
-		logger.Warn("failed to reconcile mdev devices", "error", err)
+	// Reconcile vGPU devices (clears orphaned vGPUs from previous runs)
+	logger.Info("Reconciling vGPU devices...")
+	protected, err := liveInstanceVGPUDevicePaths(app.Ctx, app.InstanceManager)
+	if err != nil {
+		logger.Warn("failed to list instances for vGPU reconcile protection; skipping vendor VFIO reconciliation", "error", err)
+		protected = nil
+	}
+	if err := devices.ReconcileVGPUs(app.Ctx, protected); err != nil {
+		// Log but don't fail - vGPU cleanup is best-effort
+		logger.Warn("failed to reconcile vGPU devices", "error", err)
 	}
 
 	// Wire up resource validator for aggregate limit checking
