@@ -2,7 +2,10 @@
 
 package devices
 
-import "context"
+import (
+	"context"
+	"fmt"
+)
 
 // SetGPUProfileCacheTTL is a no-op on macOS.
 func SetGPUProfileCacheTTL(ttl string) {
