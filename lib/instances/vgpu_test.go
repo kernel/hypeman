@@ -3,7 +3,10 @@ package instances
 import (
 	"context"
 	"os"
+	"path/filepath"
+	"sync"
 	"testing"
+	_ "unsafe"
 
 	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/hypervisor"
@@ -51,6 +54,73 @@ func TestCleanupFailedCreateRetainsVGPUAssignment(t *testing.T) {
 	assert.Empty(t, retained.IP)
 	assert.Empty(t, retained.Volumes)
 	assert.Empty(t, retained.DataDir)
+}
+
+//go:linkname hostVendorVFIO github.com/kernel/hypeman/lib/devices.hostVendorVFIO
+var hostVendorVFIO vendorVFIOSysfs
+
+type vendorVFIOSysfs struct {
+	pciDevicesPath  string
+	procPath        string
+	vfioDevicesPath string
+	owners          map[string]string
+}
+
+func TestStartRollbackClearsVGPUAssignmentAfterSuccessfulDestroy(t *testing.T) {
+	root := t.TempDir()
+	pciDevicesPath := filepath.Join(root, "sys", "bus", "pci", "devices")
+	vfAddress := "0000:82:00.4"
+	nvidiaPath := filepath.Join(pciDevicesPath, vfAddress, "nvidia")
+	require.NoError(t, os.MkdirAll(nvidiaPath, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(nvidiaPath, "current_vgpu_type"), []byte("0"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(nvidiaPath, "creatable_vgpu_types"), []byte("ID    : vGPU Name\n1148  : NVIDIA L40S-2Q\n"), 0o644))
+
+	originalVendorVFIO := hostVendorVFIO
+	hostVendorVFIO = vendorVFIOSysfs{
+		pciDevicesPath:  pciDevicesPath,
+		procPath:        filepath.Join(root, "proc"),
+		vfioDevicesPath: filepath.Join(root, "dev", "vfio", "devices"),
+		owners:          make(map[string]string),
+	}
+	t.Cleanup(func() { hostVendorVFIO = originalVendorVFIO })
+	require.NoError(t, os.MkdirAll(hostVendorVFIO.procPath, 0o755))
+
+	m := &manager{
+		paths:           paths.New(t.TempDir()),
+		imageManager:    readyFixtureImageManager{name: "test-image"},
+		instanceLocks:   sync.Map{},
+		bootMarkerScans: sync.Map{},
+	}
+	const id = "start-rollback"
+	require.NoError(t, m.ensureDirectories(id))
+	require.NoError(t, m.saveMetadata(&metadata{StoredMetadata: StoredMetadata{
+		Id:             id,
+		Name:           id,
+		Image:          "test-image",
+		GPUProfile:     "NVIDIA L40S-2Q",
+		HypervisorType: lifecycleNoopHypervisorType,
+		SocketPath:     m.paths.InstanceSocket(id, "noop.sock"),
+		DataDir:        m.paths.InstanceDir(id),
+	}}))
+
+	t.Setenv("TMPDIR", filepath.Join(root, "missing"))
+	_, err := m.startInstance(context.Background(), id, StartInstanceRequest{})
+	require.Error(t, err)
+
+	stored, err := m.loadMetadata(id)
+	require.NoError(t, err)
+	assert.Equal(t, "NVIDIA L40S-2Q", stored.GPUProfile)
+	assert.Empty(t, stored.GPUFramework)
+	assert.Empty(t, stored.GPUDevicePath)
+	assert.Empty(t, stored.GPUMdevUUID)
+	assertFileContents(t, filepath.Join(nvidiaPath, "current_vgpu_type"), "0")
+}
+
+func assertFileContents(t *testing.T, path, want string) {
+	t.Helper()
+	got, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, want, string(got))
 }
 
 func TestVGPUAssignmentClaimedByLiveInstanceFailsOnInvalidMetadata(t *testing.T) {
