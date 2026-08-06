@@ -37,13 +37,13 @@ var (
 	gpuStatusProvider   = GetGPUStatus
 )
 
-func currentGPUStatusProvider() func() *GPUResourceStatus {
+func currentGPUStatusProvider() func(context.Context) *GPUResourceStatus {
 	gpuStatusProviderMu.RLock()
 	defer gpuStatusProviderMu.RUnlock()
 	return gpuStatusProvider
 }
 
-func setGPUStatusProvider(fn func() *GPUResourceStatus) {
+func setGPUStatusProvider(fn func(context.Context) *GPUResourceStatus) {
 	if fn == nil {
 		fn = GetGPUStatus
 	}
@@ -427,7 +427,7 @@ func (m *Manager) GetFullStatus(ctx context.Context) (*FullResourceStatus, error
 	}
 
 	// Get GPU status
-	gpuStatus := currentGPUStatusProvider()()
+	gpuStatus := currentGPUStatusProvider()(ctx)
 
 	return &FullResourceStatus{
 		CPU:         *cpuStatus,
@@ -691,7 +691,7 @@ func (m *Manager) validateAllocationLocked(ctx context.Context, excludeID string
 
 	// Check GPU if needed
 	if req.GPUSlots > 0 {
-		gpuStatus := currentGPUStatusProvider()()
+		gpuStatus := currentGPUStatusProvider()(ctx)
 		if gpuStatus == nil {
 			return fmt.Errorf("insufficient GPU: no GPU available on this host")
 		}
