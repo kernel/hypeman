@@ -48,7 +48,7 @@ func (m *manager) releaseStoredVGPU(ctx context.Context, stored *StoredMetadata)
 }
 
 func (m *manager) vgpuAssignmentClaimedByLiveInstance(ctx context.Context, excludeID, devicePath string) (bool, error) {
-	instances, err := m.listInstances(ctx)
+	instances, err := m.ListInstancesForReconcile(ctx)
 	if err != nil {
 		return false, fmt.Errorf("list instances for vGPU release check: %w", err)
 	}
