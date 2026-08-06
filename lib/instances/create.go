@@ -265,11 +265,13 @@ func (m *manager) createInstance(
 	var gpuFramework devices.VGPUFramework
 	var gpuDevicePath string
 	var gpuMdevUUID string
+	var stored *StoredMetadata
+	var retainedVGPU *StoredMetadata
 
 	// Setup cleanup stack early so device attachment errors trigger cleanup
 	cu := cleanup.Make(func() {
 		log.DebugContext(ctx, "cleaning up instance on error", "instance_id", id)
-		m.deleteInstanceData(id)
+		m.cleanupFailedCreate(ctx, id, retainedVGPU)
 	})
 	defer cu.Clean()
 
@@ -306,6 +308,25 @@ func (m *manager) createInstance(
 			}
 			if err := devices.DestroyVGPU(ctx, assignment); err != nil {
 				log.WarnContext(ctx, "failed to destroy vGPU on cleanup", "instance_id", id, "error", err)
+				retainedVGPU = stored
+				if retainedVGPU == nil {
+					retainedVGPU = &StoredMetadata{
+						Id:                id,
+						Name:              req.Name,
+						Image:             req.Image,
+						ResolvedImage:     resolvedImageRef,
+						Platform:          imageInfo.Platform,
+						CreatedAt:         time.Now(),
+						HypervisorType:    hvType,
+						HypervisorVersion: hvVersion,
+						SocketPath:        m.paths.InstanceSocket(id, starter.SocketName()),
+						DataDir:           m.paths.InstanceDir(id),
+						GPUProfile:        gpuDevice.ProfileName,
+						GPUFramework:      gpuDevice.Framework,
+						GPUDevicePath:     gpuDevice.SysfsPath,
+						GPUMdevUUID:       gpuDevice.MdevUUID,
+					}
+				}
 			}
 		})
 	}
@@ -341,7 +362,7 @@ func (m *manager) createInstance(
 	}
 
 	// 11. Create instance metadata
-	stored := &StoredMetadata{
+	stored = &StoredMetadata{
 		Id:                       id,
 		Name:                     req.Name,
 		Image:                    req.Image,
@@ -573,6 +594,22 @@ func (m *manager) createInstance(
 	}
 	log.InfoContext(ctx, "instance created successfully", "instance_id", id, "name", req.Name, "state", finalInst.State, "hypervisor", hvType, "version", hvVersion)
 	return &finalInst, nil
+}
+
+func (m *manager) cleanupFailedCreate(ctx context.Context, id string, retainedVGPU *StoredMetadata) {
+	if retainedVGPU == nil {
+		m.deleteInstanceData(id)
+		return
+	}
+
+	log := logger.FromContext(ctx)
+	if err := m.ensureDirectories(id); err != nil {
+		log.ErrorContext(ctx, "failed to retain instance data after vGPU cleanup failure", "instance_id", id, "error", err)
+		return
+	}
+	if err := m.saveMetadata(&metadata{StoredMetadata: *retainedVGPU}); err != nil {
+		log.ErrorContext(ctx, "failed to retain vGPU assignment metadata after cleanup failure", "instance_id", id, "error", err)
+	}
 }
 
 // validateCreateRequest validates the create instance request.
