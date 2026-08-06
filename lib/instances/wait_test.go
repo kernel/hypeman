@@ -32,6 +32,9 @@ func (s *stubManager) GetInstance(ctx context.Context, id string) (*Instance, er
 func (s *stubManager) ListInstances(context.Context, *ListInstancesFilter) ([]Instance, error) {
 	return nil, nil
 }
+func (s *stubManager) ListInstancesForReconcile(context.Context) ([]Instance, error) {
+	return nil, nil
+}
 func (s *stubManager) ListSnapshots(context.Context, *ListSnapshotsFilter) ([]Snapshot, error) {
 	return nil, nil
 }
