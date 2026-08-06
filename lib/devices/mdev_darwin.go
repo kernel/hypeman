@@ -12,10 +12,9 @@ func SetGPUProfileCacheTTL(ttl string) {
 	// No-op on macOS
 }
 
-// DiscoverVFs returns an empty list on macOS.
-// SR-IOV Virtual Functions are not available on macOS.
-func DiscoverVFs() ([]VirtualFunction, error) {
-	return []VirtualFunction{}, nil
+// DiscoverVGPU reports no vGPU framework on macOS.
+func DiscoverVGPU() (VGPUFramework, []VirtualFunction, error) {
+	return VGPUFrameworkNone, nil, nil
 }
 
 // ListGPUProfiles returns an empty list on macOS.
@@ -24,7 +23,7 @@ func ListGPUProfiles() ([]GPUProfile, error) {
 }
 
 // ListGPUProfilesWithVFs returns an empty list on macOS.
-func ListGPUProfilesWithVFs(vfs []VirtualFunction) ([]GPUProfile, error) {
+func ListGPUProfilesWithVFs(framework VGPUFramework, vfs []VirtualFunction) ([]GPUProfile, error) {
 	return []GPUProfile{}, nil
 }
 
@@ -56,6 +55,10 @@ func DestroyVGPU(ctx context.Context, assignment VGPUAssignment) error {
 	if assignment.Framework != VGPUFrameworkNone && assignment.Framework != VGPUFrameworkMdev {
 		return fmt.Errorf("unknown vGPU framework %q", assignment.Framework)
 	}
+	return nil
+}
+
+func ReconcileVGPUs(ctx context.Context, protectedDevicePaths map[string]struct{}) error {
 	return nil
 }
 
