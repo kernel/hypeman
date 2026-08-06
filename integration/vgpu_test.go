@@ -36,10 +36,10 @@ import (
 //
 //	sudo go test -v -run TestVGPU -timeout 5m ./integration/...
 //
-// Note: This test verifies vGPU assignment, release on stop, reacquisition on
-// start, and PCI device visibility inside the VM. It does NOT test nvidia-smi
-// or CUDA functionality since that requires NVIDIA guest drivers pre-installed
-// in the image.
+// Note: This test verifies vGPU assignment, stop behavior (mdev releases and
+// reacquires on start; vendor VFIO retains the assignment), and PCI device
+// visibility inside the VM. It does NOT test nvidia-smi or CUDA functionality
+// since that requires NVIDIA guest drivers pre-installed in the image.
 func TestVGPU(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
@@ -88,18 +88,23 @@ func TestVGPU(t *testing.T) {
 
 	// Cleanup any orphaned instances and mdevs
 	t.Cleanup(func() {
-		if instanceID != "" {
-			if inst, err := instanceManager.GetInstance(ctx, instanceID); err == nil && inst.GPUFramework == devices.VGPUFrameworkVendorVFIO && inst.GPUDevicePath != "" {
-				err := devices.DestroyVGPU(ctx, devices.VGPUAssignment{
-					Framework:  inst.GPUFramework,
-					DevicePath: inst.GPUDevicePath,
-					InstanceID: instanceID,
-				})
-				require.NoError(t, err, "cleanup should release vendor VFIO vGPU")
-			}
-			t.Log("Cleanup: Deleting instance...")
-			instanceManager.DeleteInstance(ctx, instanceID)
+		if instanceID == "" {
+			return
 		}
+		if _, err := instanceManager.StopInstance(ctx, instanceID); err != nil {
+			t.Logf("Cleanup: stop instance: %v", err)
+		}
+		if inst, err := instanceManager.GetInstance(ctx, instanceID); err == nil && inst.GPUFramework == devices.VGPUFrameworkVendorVFIO && inst.GPUDevicePath != "" {
+			if err := devices.DestroyVGPU(ctx, devices.VGPUAssignment{
+				Framework:  inst.GPUFramework,
+				DevicePath: inst.GPUDevicePath,
+				InstanceID: instanceID,
+			}); err != nil {
+				t.Errorf("cleanup: release vendor VFIO vGPU: %v", err)
+			}
+		}
+		t.Log("Cleanup: Deleting instance...")
+		instanceManager.DeleteInstance(ctx, instanceID)
 	})
 
 	// Step 1: Ensure system files (kernel, initrd)
