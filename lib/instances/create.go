@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -95,6 +96,9 @@ func (m *manager) createInstance(
 	if err := validateCreateRequest(&req); err != nil {
 		log.ErrorContext(ctx, "invalid create request", "error", err)
 		return nil, err
+	}
+	if req.GPU != nil && req.GPU.Profile != "" && runtime.GOOS == "darwin" {
+		return nil, fmt.Errorf("%w: %w", ErrInvalidRequest, devices.ErrVGPUNotSupportedOnMacOS)
 	}
 	hvType := req.Hypervisor
 	if hvType == "" {

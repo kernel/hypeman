@@ -1,12 +1,48 @@
 package instances
 
 import (
+	"context"
 	"errors"
+	"runtime"
 	"testing"
 
 	"github.com/kernel/hypeman/lib/devices"
 	"github.com/stretchr/testify/assert"
 )
+
+type recordingResourceValidator struct {
+	reserveCalls int
+}
+
+func (v *recordingResourceValidator) ValidateAllocation(context.Context, int, int64, int64, int64, int64, int64, bool) error {
+	return nil
+}
+
+func (v *recordingResourceValidator) ReserveAllocation(context.Context, string, int, int64, int64, int64, int64, int64, bool) error {
+	v.reserveCalls++
+	return nil
+}
+
+func (v *recordingResourceValidator) FinishAllocation(string) {}
+
+func TestCreateInstanceRejectsMacOSVGPUBeforeResourceReservation(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("macOS-specific validation")
+	}
+
+	validator := &recordingResourceValidator{}
+	m := &manager{resourceValidator: validator}
+
+	_, err := m.createInstance(context.Background(), CreateInstanceRequest{
+		Name:  "instance",
+		Image: "image",
+		GPU:   &GPUConfig{Profile: "profile"},
+	})
+
+	assert.ErrorIs(t, err, ErrInvalidRequest)
+	assert.ErrorIs(t, err, devices.ErrVGPUNotSupportedOnMacOS)
+	assert.Zero(t, validator.reserveCalls)
+}
 
 func TestWrapCreateMdevErr(t *testing.T) {
 	t.Parallel()
