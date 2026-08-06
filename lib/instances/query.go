@@ -575,7 +575,7 @@ func refreshHypervisorPID(stored *StoredMetadata, state State) {
 	if !state.RequiresVMM() && state != StateUnknown {
 		return
 	}
-	if stored.HypervisorPID != nil && processExists(*stored.HypervisorPID) {
+	if stored.HypervisorPID != nil && ProcessExists(*stored.HypervisorPID) {
 		return
 	}
 	if stored.SocketPath == "" {
@@ -587,7 +587,8 @@ func refreshHypervisorPID(stored *StoredMetadata, state State) {
 	}
 }
 
-func processExists(pid int) bool {
+// ProcessExists reports whether pid belongs to a live, non-zombie process.
+func ProcessExists(pid int) bool {
 	if pid <= 0 {
 		return false
 	}
