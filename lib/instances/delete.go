@@ -174,8 +174,8 @@ func (m *manager) deleteInstanceWithOptions(
 	if path := storedVGPUDevicePath(stored); path != "" {
 		log.InfoContext(ctx, "destroying vGPU", "instance_id", id, "device_path", path)
 		if err := releaseStoredVGPU(ctx, stored); err != nil {
-			// Log error but continue with cleanup
-			log.WarnContext(ctx, "failed to destroy vGPU, continuing with cleanup", "instance_id", id, "device_path", path, "error", err)
+			log.ErrorContext(ctx, "failed to destroy vGPU; retaining instance metadata", "instance_id", id, "device_path", path, "error", err)
+			return fmt.Errorf("destroy vGPU: %w", err)
 		}
 	}
 
