@@ -25,6 +25,7 @@ on:
       - "stainless/**"
       - ".github/workflows/stlc-generate.yml"
       - ".github/actions/setup-stlc/**"
+      - ".github/scripts/normalize-sdk-commit-message*.sh"
   push:
     branches: [main]
     paths:
@@ -33,6 +34,7 @@ on:
       - "stainless/**"
       - ".github/workflows/stlc-generate.yml"
       - ".github/actions/setup-stlc/**"
+      - ".github/scripts/normalize-sdk-commit-message*.sh"
   workflow_dispatch:
     inputs:
       integration_test:
