@@ -17,6 +17,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/types"
@@ -77,11 +78,15 @@ type cacheImage struct {
 	paths        *paths.Paths
 	manifestData []byte
 	digest       string
+
+	manifestOnce sync.Once
+	manifest     *v1.Manifest
+	manifestErr  error
 }
 
 // Layers returns cacheLayer instances for each layer in the manifest.
 func (img *cacheImage) Layers() ([]v1.Layer, error) {
-	manifest, err := img.parseManifest()
+	manifest, err := img.parsedManifest()
 	if err != nil {
 		return nil, err
 	}
@@ -90,9 +95,9 @@ func (img *cacheImage) Layers() ([]v1.Layer, error) {
 	for _, layerDesc := range manifest.Layers {
 		layer := &cacheLayer{
 			paths:     img.paths,
-			digest:    layerDesc.Digest,
+			digest:    layerDesc.Digest.String(),
 			size:      layerDesc.Size,
-			mediaType: layerDesc.MediaType,
+			mediaType: string(layerDesc.MediaType),
 		}
 		layers = append(layers, layer)
 	}
@@ -101,12 +106,12 @@ func (img *cacheImage) Layers() ([]v1.Layer, error) {
 
 // MediaType returns OCI manifest type, converting from Docker v2 if needed.
 func (img *cacheImage) MediaType() (types.MediaType, error) {
-	manifest, err := img.parseManifest()
+	manifest, err := img.parsedManifest()
 	if err != nil {
 		return "", err
 	}
-	if isOCIMediaType(manifest.MediaType) {
-		return types.MediaType(manifest.MediaType), nil
+	if isOCIMediaType(string(manifest.MediaType)) {
+		return manifest.MediaType, nil
 	}
 	return types.OCIManifestSchema1, nil
 }
@@ -125,28 +130,20 @@ func (img *cacheImage) Size() (int64, error) {
 }
 
 func (img *cacheImage) ConfigName() (v1.Hash, error) {
-	manifest, err := img.parseManifest()
+	manifest, err := img.parsedManifest()
 	if err != nil {
 		return v1.Hash{}, err
 	}
-	h, err := v1.NewHash(manifest.Config.Digest)
-	if err != nil {
-		return v1.Hash{}, err
-	}
-	return h, nil
+	return manifest.Config.Digest, nil
 }
 
 func (img *cacheImage) ConfigFile() (*v1.ConfigFile, error) {
-	manifest, err := img.parseManifest()
+	manifest, err := img.parsedManifest()
 	if err != nil {
 		return nil, err
 	}
 
-	digestHex, err := blobHex(manifest.Config.Digest)
-	if err != nil {
-		return nil, err
-	}
-	configPath := img.paths.OCICacheBlob(digestHex)
+	configPath := img.paths.OCICacheBlob(manifest.Config.Digest.Hex)
 	configData, err := os.ReadFile(configPath)
 	if err != nil {
 		return nil, fmt.Errorf("read config: %w", err)
@@ -160,27 +157,23 @@ func (img *cacheImage) ConfigFile() (*v1.ConfigFile, error) {
 }
 
 func (img *cacheImage) RawConfigFile() ([]byte, error) {
-	manifest, err := img.parseManifest()
+	manifest, err := img.parsedManifest()
 	if err != nil {
 		return nil, err
 	}
 
-	digestHex, err := blobHex(manifest.Config.Digest)
-	if err != nil {
-		return nil, err
-	}
-	configPath := img.paths.OCICacheBlob(digestHex)
+	configPath := img.paths.OCICacheBlob(manifest.Config.Digest.Hex)
 	return os.ReadFile(configPath)
 }
 
 // Digest returns the manifest digest. For Docker v2, returns the digest of the
 // converted OCI manifest (which differs from the original Docker v2 digest).
 func (img *cacheImage) Digest() (v1.Hash, error) {
-	manifest, err := img.parseManifest()
+	manifest, err := img.parsedManifest()
 	if err != nil {
 		return v1.Hash{}, err
 	}
-	if isOCIMediaType(manifest.MediaType) {
+	if isOCIMediaType(string(manifest.MediaType)) {
 		return v1.NewHash(img.digest)
 	}
 	rawManifest, err := img.RawManifest()
@@ -194,46 +187,30 @@ func (img *cacheImage) Digest() (v1.Hash, error) {
 	}, nil
 }
 
-// Manifest returns the parsed manifest with Docker v2 media types converted to OCI.
+// Manifest returns the parsed manifest with Docker v2 media types converted to
+// OCI. OCI manifests are returned as-is with all fields preserved. Docker v2
+// manifests are copied and converted, preserving annotations, subject, and
+// descriptor urls/platform so the converted form is not lossy.
 func (img *cacheImage) Manifest() (*v1.Manifest, error) {
-	manifest, err := img.parseManifest()
+	manifest, err := img.parsedManifest()
 	if err != nil {
 		return nil, err
 	}
-
-	targetMediaType := types.OCIManifestSchema1
-	if isOCIMediaType(manifest.MediaType) {
-		targetMediaType = types.MediaType(manifest.MediaType)
+	if isOCIMediaType(string(manifest.MediaType)) {
+		return manifest, nil
 	}
 
-	v1Manifest := &v1.Manifest{
-		SchemaVersion: int64(manifest.SchemaVersion),
-		MediaType:     targetMediaType,
-		Config: v1.Descriptor{
-			MediaType: convertToOCIMediaType(manifest.Config.MediaType),
-			Size:      manifest.Config.Size,
-		},
+	// Copy so the cached parse is never mutated (parsedManifest caches the
+	// result); fresh slices for the fields we rewrite.
+	conv := *manifest
+	conv.MediaType = types.OCIManifestSchema1
+	conv.Config.MediaType = convertToOCIMediaType(string(manifest.Config.MediaType))
+	conv.Layers = make([]v1.Descriptor, len(manifest.Layers))
+	for i, layer := range manifest.Layers {
+		conv.Layers[i] = layer
+		conv.Layers[i].MediaType = convertToOCIMediaType(string(layer.MediaType))
 	}
-
-	configHash, err := v1.NewHash(manifest.Config.Digest)
-	if err != nil {
-		return nil, err
-	}
-	v1Manifest.Config.Digest = configHash
-
-	for _, layer := range manifest.Layers {
-		layerHash, err := v1.NewHash(layer.Digest)
-		if err != nil {
-			return nil, err
-		}
-		v1Manifest.Layers = append(v1Manifest.Layers, v1.Descriptor{
-			MediaType: convertToOCIMediaType(layer.MediaType),
-			Size:      layer.Size,
-			Digest:    layerHash,
-		})
-	}
-
-	return v1Manifest, nil
+	return &conv, nil
 }
 
 // convertToOCIMediaType converts Docker v2 media types to OCI equivalents
@@ -256,11 +233,11 @@ func convertToOCIMediaType(mediaType string) types.MediaType {
 // RawManifest returns the manifest JSON. For OCI, returns original bytes to preserve
 // digest. For Docker v2, returns the converted OCI manifest JSON.
 func (img *cacheImage) RawManifest() ([]byte, error) {
-	manifest, err := img.parseManifest()
+	manifest, err := img.parsedManifest()
 	if err != nil {
 		return nil, err
 	}
-	if isOCIMediaType(manifest.MediaType) {
+	if isOCIMediaType(string(manifest.MediaType)) {
 		return img.manifestData, nil
 	}
 	v1Manifest, err := img.Manifest()
@@ -271,18 +248,18 @@ func (img *cacheImage) RawManifest() ([]byte, error) {
 }
 
 func (img *cacheImage) LayerByDigest(hash v1.Hash) (v1.Layer, error) {
-	manifest, err := img.parseManifest()
+	manifest, err := img.parsedManifest()
 	if err != nil {
 		return nil, err
 	}
 
 	for _, layer := range manifest.Layers {
-		if layer.Digest == hash.String() {
+		if layer.Digest == hash {
 			return &cacheLayer{
 				paths:     img.paths,
-				digest:    layer.Digest,
+				digest:    layer.Digest.String(),
 				size:      layer.Size,
-				mediaType: layer.MediaType,
+				mediaType: string(layer.MediaType),
 			}, nil
 		}
 	}
@@ -293,28 +270,18 @@ func (img *cacheImage) LayerByDiffID(hash v1.Hash) (v1.Layer, error) {
 	return nil, fmt.Errorf("layerByDiffID not implemented")
 }
 
-// internal manifest structure for parsing
-type internalManifest struct {
-	SchemaVersion int    `json:"schemaVersion"`
-	MediaType     string `json:"mediaType"`
-	Config        struct {
-		MediaType string `json:"mediaType"`
-		Size      int64  `json:"size"`
-		Digest    string `json:"digest"`
-	} `json:"config"`
-	Layers []struct {
-		MediaType string `json:"mediaType"`
-		Size      int64  `json:"size"`
-		Digest    string `json:"digest"`
-	} `json:"layers"`
-}
-
-func (img *cacheImage) parseManifest() (*internalManifest, error) {
-	var manifest internalManifest
-	if err := json.Unmarshal(img.manifestData, &manifest); err != nil {
-		return nil, fmt.Errorf("parse manifest: %w", err)
-	}
-	return &manifest, nil
+// parsedManifest parses manifestData once and caches the result, since the
+// bytes come from a content-addressed blob store and are immutable.
+func (img *cacheImage) parsedManifest() (*v1.Manifest, error) {
+	img.manifestOnce.Do(func() {
+		var manifest v1.Manifest
+		if err := json.Unmarshal(img.manifestData, &manifest); err != nil {
+			img.manifestErr = fmt.Errorf("parse manifest: %w", err)
+			return
+		}
+		img.manifest = &manifest
+	})
+	return img.manifest, img.manifestErr
 }
 
 // cacheLayer implements v1.Layer by reading blobs from the filesystem.

@@ -22,20 +22,20 @@ func TestIsCacheRepo(t *testing.T) {
 }
 
 func TestLiveCacheManifestDigestsTracksAndDeduplicates(t *testing.T) {
-	r := &Registry{cacheTags: map[string]string{}}
+	r := &Registry{pushedTags: map[string]string{}}
 
 	assert.Empty(t, r.LiveCacheManifestDigests(), "empty registry has no cache roots")
 
-	r.recordCacheTag("cache/global/node", "v1", "sha256:aaa")
-	r.recordCacheTag("cache/global/node", "v2", "sha256:bbb")
+	r.recordPushedTag("cache/global/node", "v1", "sha256:aaa")
+	r.recordPushedTag("cache/global/node", "v2", "sha256:bbb")
 	// Two tags pointing at the same digest should yield one entry.
-	r.recordCacheTag("cache/global/python", "v1", "sha256:aaa")
+	r.recordPushedTag("cache/global/python", "v1", "sha256:aaa")
 
 	got := r.LiveCacheManifestDigests()
 	assert.ElementsMatch(t, []string{"sha256:aaa", "sha256:bbb"}, got)
 
 	// Overwriting a tag replaces the old digest for that tag.
-	r.recordCacheTag("cache/global/node", "v1", "sha256:ccc")
+	r.recordPushedTag("cache/global/node", "v1", "sha256:ccc")
 	got = r.LiveCacheManifestDigests()
 	assert.ElementsMatch(t, []string{"sha256:aaa", "sha256:bbb", "sha256:ccc"}, got)
 }

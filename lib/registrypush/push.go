@@ -33,10 +33,13 @@ type Options struct {
 }
 
 // Push writes img to the target reference using credentials from provider.
-// A nil provider pushes anonymously. Pushed blobs are identical to the source
-// image, so the manifest digest is preserved end to end. Registry errors are
-// classified with images.ClassifyRegistryError so callers can distinguish
-// rate limits and missing repositories from transport failures.
+// A nil provider pushes anonymously. Pushed blobs are identical to the
+// source image. For OCI images the manifest digest is preserved end to end;
+// for Docker v2 inputs the manifest is converted to OCI on push, so the
+// pushed digest is the converted digest (see Result.Digest). Registry errors
+// are classified with classifyPushError so callers can distinguish
+// authentication failures, rate limits, and missing repositories from
+// transport failures.
 func Push(ctx context.Context, img v1.Image, target string, provider Provider, opts Options) (*Result, error) {
 	var refOpts []name.Option
 	if opts.Insecure {
@@ -88,7 +91,8 @@ func Push(ctx context.Context, img v1.Image, target string, provider Provider, o
 
 // PushFromCache pushes the image stored in the local OCI cache under the
 // given manifest digest. Returns ocicache.ErrNotFound if the digest is not
-// in the cache.
+// in the cache (source phase) or images.ErrNotFound if the destination
+// registry reports the repository or manifest as missing (target phase).
 func PushFromCache(ctx context.Context, p *paths.Paths, digest, target string, provider Provider, opts Options) (*Result, error) {
 	img, err := ocicache.ImageFromCache(p, digest)
 	if err != nil {

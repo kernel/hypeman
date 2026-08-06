@@ -217,6 +217,88 @@ func dockerV2Manifest(t *testing.T, img v1.Image) []byte {
 	return data
 }
 
+// TestImageFromCacheDockerPreservesForeignLayerURLs pins the non-lossy
+// Docker→OCI conversion: descriptor urls (foreign layers) survive
+// Manifest()/RawManifest() and the converted digest is the sha256 of the
+// converted bytes.
+func TestImageFromCacheDockerPreservesForeignLayerURLs(t *testing.T) {
+	p := tempPaths(t)
+	img, err := random.Image(256, 1)
+	if err != nil {
+		t.Fatalf("random image: %v", err)
+	}
+	writeCacheImage(t, p, img)
+
+	manifest, err := img.Manifest()
+	if err != nil {
+		t.Fatalf("manifest: %v", err)
+	}
+	type descriptor struct {
+		MediaType string   `json:"mediaType"`
+		Size      int64    `json:"size"`
+		Digest    string   `json:"digest"`
+		URLs      []string `json:"urls,omitempty"`
+	}
+	dockerManifest := struct {
+		SchemaVersion int          `json:"schemaVersion"`
+		MediaType     string       `json:"mediaType"`
+		Config        descriptor   `json:"config"`
+		Layers        []descriptor `json:"layers"`
+	}{
+		SchemaVersion: 2,
+		MediaType:     string(types.DockerManifestSchema2),
+		Config: descriptor{
+			MediaType: string(types.DockerConfigJSON),
+			Size:      manifest.Config.Size,
+			Digest:    manifest.Config.Digest.String(),
+		},
+		Layers: []descriptor{{
+			MediaType: string(types.DockerLayer),
+			Size:      manifest.Layers[0].Size,
+			Digest:    manifest.Layers[0].Digest.String(),
+			URLs:      []string{"https://example.com/foreign-layer-blob"},
+		}},
+	}
+	data, err := json.Marshal(dockerManifest)
+	if err != nil {
+		t.Fatalf("marshal docker manifest: %v", err)
+	}
+	sum := sha256.Sum256(data)
+	dockerDigest := "sha256:" + hex.EncodeToString(sum[:])
+	if err := os.WriteFile(p.OCICacheBlob(hex.EncodeToString(sum[:])), data, 0644); err != nil {
+		t.Fatalf("write docker manifest blob: %v", err)
+	}
+
+	cached, err := ImageFromCache(p, dockerDigest)
+	if err != nil {
+		t.Fatalf("ImageFromCache: %v", err)
+	}
+
+	gotManifest, err := cached.Manifest()
+	if err != nil {
+		t.Fatalf("Manifest: %v", err)
+	}
+	if len(gotManifest.Layers) != 1 || len(gotManifest.Layers[0].URLs) != 1 {
+		t.Fatalf("foreign-layer urls not preserved: %+v", gotManifest.Layers)
+	}
+	if gotManifest.Layers[0].URLs[0] != "https://example.com/foreign-layer-blob" {
+		t.Errorf("urls = %v, want preserved", gotManifest.Layers[0].URLs)
+	}
+
+	wantDigest, err := cached.Digest()
+	if err != nil {
+		t.Fatalf("Digest: %v", err)
+	}
+	raw, err := cached.RawManifest()
+	if err != nil {
+		t.Fatalf("RawManifest: %v", err)
+	}
+	wantSum := sha256.Sum256(raw)
+	if wantDigest.Hex != hex.EncodeToString(wantSum[:]) {
+		t.Errorf("digest %s does not match sha256 of converted manifest", wantDigest)
+	}
+}
+
 func TestImageFromCacheDockerV2Conversion(t *testing.T) {
 	p := tempPaths(t)
 	img, err := random.Image(256, 1)
