@@ -22,8 +22,9 @@ type GPUResourceStatus struct {
 func GetGPUStatus(ctx context.Context) *GPUResourceStatus {
 	framework, vfs, err := devices.DiscoverVGPU()
 	if err != nil {
+		// A failed vGPU probe must not hide passthrough GPUs from status reporting.
 		logger.FromContext(ctx).WarnContext(ctx, "failed to discover vGPU state", "error", err)
-		return nil
+		return getPassthroughStatus()
 	}
 	if framework != devices.VGPUFrameworkNone {
 		return getVGPUStatus(ctx, framework, vfs)
