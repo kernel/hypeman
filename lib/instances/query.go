@@ -587,6 +587,21 @@ func refreshHypervisorPID(stored *StoredMetadata, state State) {
 	}
 }
 
+// HypervisorProcessExists reports whether pid owns the instance's hypervisor socket.
+func HypervisorProcessExists(pid int, socketPath string) bool {
+	if !ProcessExists(pid) {
+		return false
+	}
+	if runtime.GOOS != "linux" {
+		return true
+	}
+	if socketPath == "" {
+		return false
+	}
+	resolvedPID, err := hypervisor.ResolveProcessPID(socketPath)
+	return err == nil && resolvedPID == pid
+}
+
 // ProcessExists reports whether pid belongs to a live, non-zombie process.
 func ProcessExists(pid int) bool {
 	if pid <= 0 {
