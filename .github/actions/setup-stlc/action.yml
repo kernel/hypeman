@@ -1,0 +1,43 @@
+name: "Setup stlc"
+description: "Install the pinned stlc CLI, the Hypeman generators, and their SDK toolchains."
+
+inputs:
+  stlc-read-token:
+    description: "Classic PAT with repo scope and read access to the private stainless/stlc repositories."
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - name: Set up Node
+      uses: actions/setup-node@v4
+      with:
+        node-version: "24"
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: "stable"
+        cache: false
+
+    - name: Install pnpm
+      uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+      with:
+        version: "10.30.1"
+
+    - name: Install stlc and target generators
+      shell: bash
+      env:
+        STLC_READ_TOKEN: ${{ inputs.stlc-read-token }}
+      run: |
+        set -euo pipefail
+        git_config_key="url.https://x-access-token:${STLC_READ_TOKEN}@github.com/stainless/.insteadOf"
+        cleanup_stlc_auth() { git config --global --unset-all "$git_config_key" || true; }
+        trap cleanup_stlc_auth EXIT
+        git config --global --add "$git_config_key" "https://github.com/stainless/"
+
+        npm install -g \
+          "git+https://x-access-token:${STLC_READ_TOKEN}@github.com/stainless/stlc.git#cfc85d2651330f7ba6a94dbe8e3c92ab64124f38" \
+          "git+https://x-access-token:${STLC_READ_TOKEN}@github.com/stainless/stlc-typescript.git#cd63c03a3381e7fbf05e1de78fb3e38a1fd1aaee" \
+          "git+https://x-access-token:${STLC_READ_TOKEN}@github.com/stainless/stlc-go.git#9473a876905d28ab87c5a7bce69199a9389a2094"
+        stlc version

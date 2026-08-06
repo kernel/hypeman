@@ -22,15 +22,24 @@ targets:
     edition: go.2025-10-08
     package_name: hypeman
     production_repo: kernel/hypeman-go
+    staging_repo: kernel/hypeman-go-staging
+    publish:
+      release:
+        branch: main
+        prerelease: false
     options:
       enable_v2: true
   typescript:
     edition: typescript.2025-10-10
     package_name: "@onkernel/hypeman"
     production_repo: kernel/hypeman-ts
+    staging_repo: kernel/hypeman-ts-staging
     publish:
       npm:
         auth_method: oidc
+      release:
+        branch: main
+        prerelease: false
 
 # `environments` are a map of the name of the environment (e.g. "sandbox",
 # "production") to the corresponding url to use.

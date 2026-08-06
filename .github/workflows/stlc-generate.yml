@@ -1,0 +1,386 @@
+# Generates the TypeScript and Go SDKs with the self-hosted stlc CLI,
+# replacing the hosted-Stainless pipeline that stainless-sdks.yml used to drive.
+#
+# On pull_request: builds every target, pushes a stlc/preview/pr-N branch to each
+# SDK repo, and comments the build manifest. The branch is deleted when the PR
+# closes.
+# A workflow_dispatch with integration_test=true (allowed from any ref) runs
+# the same real generate job on a stlc/integration-test/run-<run id> branch in
+# each SDK repo and opens a do-not-merge draft PR per repo — never main, no
+# seal-back, no docs publish. See the runbook.
+# On push to main: rebuilds and pushes to each staging repo's main. The staging
+# promotion workflow fast-forwards production main, where release-please opens
+# the version + changelog PR. Merging that PR publishes the package, and
+# production releases fast-forward back into staging.
+#
+# Operator commands and recovery notes are in docs/runbooks/sdk-generation-stlc.md.
+name: Generate SDKs with stlc
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+    paths:
+      - "openapi.yaml"
+      - "stainless.yaml"
+      - "stainless/**"
+      - ".github/workflows/stlc-generate.yml"
+      - ".github/actions/setup-stlc/**"
+  push:
+    branches: [main]
+    paths:
+      - "openapi.yaml"
+      - "stainless.yaml"
+      - "stainless/**"
+      - ".github/workflows/stlc-generate.yml"
+      - ".github/actions/setup-stlc/**"
+  workflow_dispatch:
+    inputs:
+      integration_test:
+        description: "Push to stlc/integration-test/* branches and open draft PRs instead of regenerating main."
+        type: boolean
+        default: false
+
+concurrency:
+  # Last write wins on PRs: a newer push cancels an in-flight preview build so a
+  # slower run can't push stale SDK output over a newer one. Runs on main queue
+  # instead — cancelling one midway can leave the SDK repos and the custom-code
+  # tracking files here out of sync.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  STAINLESS_WORKSPACE: stainless
+  # Preview branch pushed to each SDK repo for a PR; deleted when the PR closes.
+  PREVIEW_BRANCH: stlc/preview/pr-${{ github.event.pull_request.number }}
+  # An integration-test dispatch pushes this branch instead of the preview
+  # branch or main.
+  INTEGRATION_BRANCH: stlc/integration-test/run-${{ github.run_id }}
+  SDK_REPOS: hypeman-go-staging hypeman-ts-staging
+  SDK_TARGETS: go,typescript
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    outputs:
+      skip: ${{ steps.check.outputs.skip }}
+    steps:
+      - name: Decide whether to build
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT: ${{ github.event_name }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          REPO: ${{ github.repository }}
+          REF: ${{ github.event.pull_request.head.sha || github.sha }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+          INTEGRATION_TEST: ${{ inputs.integration_test }}
+        run: |
+          set -euo pipefail
+
+          # The workspace arrives with `stlc init --from-cloud` (see the runbook).
+          # Until then this workflow is a no-op rather than a red X on every PR
+          # — except an integration-test dispatch, which runs the real generator
+          # and fails loudly instead.
+          # Queried via the API because a closed PR's merge ref can be gone by
+          # the time this runs, so a checkout is not reliable here. Only a 404
+          # means "not initialized" — anything else fails the job so a
+          # transient API error can't silently skip generation on main.
+          if ! err=$(gh api "repos/$REPO/contents/$STAINLESS_WORKSPACE/workspace.json?ref=$REF" 2>&1 >/dev/null); then
+            if printf '%s\n' "$err" | grep -q 'HTTP 404'; then
+              if [ "$INTEGRATION_TEST" = "true" ]; then
+                echo "::error::No $STAINLESS_WORKSPACE/workspace.json at $REF — the stlc workspace is not initialized (runbook cutover step 4). Integration-test mode runs the real generator and cannot proceed without it."
+                exit 1
+              fi
+              echo "::notice::No $STAINLESS_WORKSPACE/workspace.json — stlc workspace not initialized yet, skipping."
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            err=${err//$'\n'/ }
+            echo "::error::Failed to check for $STAINLESS_WORKSPACE/workspace.json: $err"
+            exit 1
+          fi
+
+          # Generation needs secrets to push to the SDK repos, which a fork PR
+          # does not get. Regenerate from a branch in this repo instead. A
+          # deleted head repo reads as a fork.
+          if [ "$EVENT" = "pull_request" ] && [ "$HEAD_REPO" != "$REPO" ]; then
+            echo "::notice::Fork PR — no push credentials, skipping SDK generation."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # A manual run rebuilds each SDK repo's main, so it only makes sense
+          # dispatched from main — unless it is an integration-test run, which
+          # pushes test branches and is allowed from any ref.
+          if [ "$EVENT" = "workflow_dispatch" ] && [ "$GITHUB_REF" != "refs/heads/main" ] && [ "$INTEGRATION_TEST" != "true" ]; then
+            echo "::notice::workflow_dispatch from $GITHUB_REF — dispatch from main to regenerate the SDKs."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Merging the seal-back PR must not trigger another build. The
+          # compare API caps the file list at 300, so a full-length list might
+          # be truncated and can't prove the push was custom-code-only.
+          if [ "$EVENT" = "push" ] && [ -n "$BEFORE" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ]; then
+            changed=$(gh api "repos/$REPO/compare/$BEFORE...$AFTER" --jq '.files[].filename')
+            count=$(printf '%s\n' "$changed" | wc -l)
+            if [ -n "$changed" ] && [ "$count" -lt 300 ] && ! printf '%s\n' "$changed" | grep -qvE "^${STAINLESS_WORKSPACE}/custom-code/"; then
+              echo "::notice::Only custom-code tracking files changed, skipping regeneration."
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
+  generate:
+    needs: guard
+    # An integration-test dispatch runs this same job but pushes the
+    # integration-test branch instead of main and opens draft PRs from it.
+    if: >-
+      needs.guard.outputs.skip != 'true' &&
+      github.event.action != 'closed' &&
+      (github.event_name == 'pull_request' || github.ref == 'refs/heads/main' || inputs.integration_test)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # The build manifest comment on the PR.
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Mint app token for the SDK repos
+        # Workflows:write because the generated SDKs contain .github/workflows.
+        # Pull-requests:write for the integration-test draft PRs (action inputs
+        # can't be conditional, so it is always requested).
+        id: sdk-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.ADMIN_APP_ID }}
+          private-key: ${{ secrets.ADMIN_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: hypeman-go,hypeman-ts,hypeman-go-staging,hypeman-ts-staging
+          permission-contents: write
+          permission-workflows: write
+          permission-pull-requests: write
+
+      - name: Setup stlc
+        uses: ./.github/actions/setup-stlc
+        with:
+          stlc-read-token: ${{ secrets.STLC_READ_TOKEN }}
+
+      - name: Configure git auth for the SDK repo pushes
+        env:
+          GH_TOKEN: ${{ steps.sdk-token.outputs.token }}
+          APP_SLUG: ${{ steps.sdk-token.outputs.app-slug }}
+        run: |
+          set -euo pipefail
+          bot_id=$(gh api "/users/${APP_SLUG}[bot]" --jq .id)
+          git config --global user.name "${APP_SLUG}[bot]"
+          git config --global user.email "${bot_id}+${APP_SLUG}[bot]@users.noreply.github.com"
+          gh auth setup-git
+
+      - name: Resolve the SDK commit message
+        # The merged PR's title, which survives squash, merge, and rebase alike;
+        # release-please reads it to pick the version bump.
+        id: msg
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          msg=$(gh api "repos/$REPO/commits/$SHA/pulls" --jq '.[0].title // empty')
+          [ -n "$msg" ] || msg=$(git log -1 --pretty=%s)
+          eof="MSG_$(openssl rand -hex 8)"
+          {
+            echo "commit_msg<<$eof"
+            echo "$msg"
+            echo "$eof"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Generate and validate SDKs
+        env:
+          # A per-PR preview branch on pull_request, the integration-test branch
+          # on an integration-test dispatch, the trunk otherwise.
+          BRANCH: ${{ inputs.integration_test && env.INTEGRATION_BRANCH || (github.event_name == 'pull_request' && env.PREVIEW_BRANCH || github.ref_name) }}
+          COMMIT_MSG: ${{ steps.msg.outputs.commit_msg }}
+          GH_TOKEN: ${{ steps.sdk-token.outputs.token }}
+        working-directory: ${{ env.STAINLESS_WORKSPACE }}
+        run: |
+          set -euo pipefail
+          commit_args=()
+          if [ -n "$COMMIT_MSG" ]; then
+            commit_args=(--commit "$COMMIT_MSG")
+          fi
+
+          # Some of our sealed custom code repairs generated baseline code and
+          # adds dependencies. Validate after integration, not before it.
+          stlc build \
+            --branch "$BRANCH" \
+            --trunk-branch main \
+            --no-lint \
+            --targets all \
+            "${commit_args[@]}"
+          stlc exec --targets "$SDK_TARGETS" -- ./scripts/bootstrap
+          stlc lint --targets "$SDK_TARGETS"
+          stlc test --targets "$SDK_TARGETS"
+          stlc exec --targets "$SDK_TARGETS" -- sh -c \
+            'status=$(git status --porcelain --untracked-files=all) && [ -z "$status" ] || { printf "%s\n" "$status" >&2; exit 1; }'
+
+          # Re-running is deterministic and pushes the already-validated commits.
+          stlc build \
+            --branch "$BRANCH" \
+            --trunk-branch main \
+            --no-lint \
+            --push \
+            --targets all
+
+      - name: Open or update draft PRs on the SDK repos
+        # Integration-test runs only: a do-not-merge draft PR per SDK repo.
+        # Links land in the run summary; cleanup is manual (see the runbook).
+        if: success() && inputs.integration_test
+        env:
+          GH_TOKEN: ${{ steps.sdk-token.outputs.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          : > "$RUNNER_TEMP/integration-prs.md"
+          for repo in $SDK_REPOS; do
+            full="${{ github.repository_owner }}/$repo"
+            title="[stlc integration test] run $GITHUB_RUN_ID"
+            body="Real \`stlc build\` output from \`.github/workflows/stlc-generate.yml\` dispatched with \`integration_test=true\` — the same generator and config as a normal build, pushed to a test branch instead of \`main\`."$'\n\n'"Run: $RUN_URL"$'\n\n'"**Do not merge.** Close this PR and delete \`$INTEGRATION_BRANCH\` when the test is done — see docs/runbooks/sdk-generation-stlc.md."
+            existing=$(gh pr list --repo "$full" --head "$INTEGRATION_BRANCH" --state open --json number --jq '.[0].number // empty')
+            if [ -n "$existing" ]; then
+              gh pr edit --repo "$full" "$existing" --title "$title" --body "$body" >/dev/null
+              url=$(gh pr view --repo "$full" "$existing" --json url --jq .url)
+              echo "updated $url"
+            else
+              url=$(gh pr create --repo "$full" --draft --base main --head "$INTEGRATION_BRANCH" --title "$title" --body "$body")
+              echo "opened $url"
+            fi
+            echo "- $full: $url" >> "$RUNNER_TEMP/integration-prs.md"
+          done
+          {
+            echo "### stlc integration test"
+            echo
+            echo "Pushed \`$INTEGRATION_BRANCH\` to each SDK repo with a real \`stlc build\` and opened/updated draft PRs (**do not merge**):"
+            echo
+            cat "$RUNNER_TEMP/integration-prs.md"
+            echo
+            echo "Cleanup is manual: close the PRs and delete \`$INTEGRATION_BRANCH\` on each repo — see docs/runbooks/sdk-generation-stlc.md."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Render the build manifest
+        # A build that dies before writing a manifest makes `stlc show` exit
+        # non-zero; don't let that mask the real failure above.
+        id: manifest
+        if: always() && github.event_name == 'pull_request'
+        continue-on-error: true
+        working-directory: ${{ env.STAINLESS_WORKSPACE }}
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          stlc show \
+            --renderer=markdown \
+            --marker '<!-- stlc-build-manifest -->' \
+            --workflow-run-url "$RUN_URL" > "$RUNNER_TEMP/manifest.md"
+          cat "$RUNNER_TEMP/manifest.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Comment the build manifest on the PR
+        if: always() && steps.manifest.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          # The marker rendered into the manifest identifies our own comment, so
+          # each run updates it in place instead of stacking new ones.
+          jq -Rs '{body: .}' "$RUNNER_TEMP/manifest.md" > "$RUNNER_TEMP/comment.json"
+          existing=$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
+            --jq '[.[] | select(.body | contains("<!-- stlc-build-manifest -->")) | .id][0] // empty')
+          # --paginate runs the --jq per page; keep the first match in case an
+          # earlier run left duplicate comments.
+          existing=${existing%%$'\n'*}
+          if [ -n "$existing" ]; then
+            gh api -X PATCH "repos/$REPO/issues/comments/$existing" --input "$RUNNER_TEMP/comment.json"
+          else
+            gh api -X POST "repos/$REPO/issues/$PR/comments" --input "$RUNNER_TEMP/comment.json"
+          fi
+
+      - name: Mint app token for the seal-back PR
+        if: success() && github.event_name != 'pull_request' && !inputs.integration_test
+        id: seal-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.ADMIN_APP_ID }}
+          private-key: ${{ secrets.ADMIN_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Seal custom-code tracking files back into this repo
+        # `stlc build` re-seals custom code and rewrites the tracking files under
+        # stainless/custom-code/. main is protected, so open a PR. Stale tracking
+        # files are what let a later build drop custom code, so land this
+        # promptly; the guard job keeps it from triggering another build.
+        if: success() && github.event_name != 'pull_request' && !inputs.integration_test
+        env:
+          GH_TOKEN: ${{ steps.seal-token.outputs.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [ -z "$(git status --porcelain -- "$STAINLESS_WORKSPACE/custom-code")" ]; then
+            echo "Tracking files already in sync — nothing to seal."
+            exit 0
+          fi
+          branch="stlc/seal-tracking"
+          git checkout -B "$branch"
+          git add "$STAINLESS_WORKSPACE/custom-code"
+          git commit -m "chore(stlc): seal custom-code tracking files"
+          git push --force "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" "$branch"
+          if [ -z "$(gh pr list --head "$branch" --state open --json number --jq '.[0].number // empty')" ]; then
+            gh pr create --base main --head "$branch" \
+              --title "chore(stlc): seal custom-code tracking files" \
+              --body "Opened by the stlc generate workflow. The last build on \`main\` re-sealed custom code and rewrote the tracking files under \`$STAINLESS_WORKSPACE/custom-code/\`; merging brings this repo back in sync with the SDK repos."
+          fi
+          if ! gh pr merge --auto --squash "$branch" 2>/dev/null; then
+            echo "::warning::Could not enable auto-merge for $branch. Merge it promptly — stale tracking files can make a later build drop custom code."
+          fi
+
+  cleanup-preview:
+    # Drop the PR's preview branch from each SDK repo once the PR closes, so
+    # previews don't pile up in the public repos.
+    needs: guard
+    if: needs.guard.outputs.skip != 'true' && github.event_name == 'pull_request' && github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Mint app token for the SDK repos
+        id: sdk-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.ADMIN_APP_ID }}
+          private-key: ${{ secrets.ADMIN_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: hypeman-go-staging,hypeman-ts-staging
+          permission-contents: write
+
+      - name: Delete the preview branches
+        env:
+          GH_TOKEN: ${{ steps.sdk-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          for repo in $SDK_REPOS; do
+            ref="repos/${{ github.repository_owner }}/$repo/git/refs/heads/$PREVIEW_BRANCH"
+            if gh api "$ref" >/dev/null 2>&1; then
+              gh api -X DELETE "$ref" && echo "deleted $PREVIEW_BRANCH in $repo"
+            fi
+          done
