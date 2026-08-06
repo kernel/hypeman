@@ -138,6 +138,52 @@ func TestVendorVFIODestroyReleasesUnboundVF(t *testing.T) {
 	}
 }
 
+func TestVendorVFIODestroyRetainsAssignmentWhenOneVFIOPathIsMissing(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		remove func(t *testing.T, sysfs testVendorVFIOSysfs, vfAddress string)
+		open   func(sysfs testVendorVFIOSysfs) string
+	}{
+		{
+			name: "missing iommu group",
+			remove: func(t *testing.T, sysfs testVendorVFIOSysfs, vfAddress string) {
+				require.NoError(t, os.Remove(filepath.Join(sysfs.pciDevicesPath, vfAddress, "iommu_group")))
+			},
+			open: func(sysfs testVendorVFIOSysfs) string {
+				return filepath.Join(sysfs.vfioDevicesPath, "vfio42")
+			},
+		},
+		{
+			name: "missing vfio device directory",
+			remove: func(t *testing.T, sysfs testVendorVFIOSysfs, vfAddress string) {
+				require.NoError(t, os.RemoveAll(filepath.Join(sysfs.pciDevicesPath, vfAddress, "vfio-dev")))
+			},
+			open: func(sysfs testVendorVFIOSysfs) string {
+				return filepath.Join(filepath.Dir(sysfs.vfioDevicesPath), "42")
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sysfs := newTestVendorVFIOSysfs(t)
+			const vfAddress = "0000:82:00.4"
+			sysfs.addVF(t, "0000:82:00.0", vfAddress, "42", "1148", "")
+			tt.remove(t, sysfs, vfAddress)
+
+			fdDir := filepath.Join(sysfs.procPath, "123", "fd")
+			require.NoError(t, os.MkdirAll(fdDir, 0755))
+			require.NoError(t, os.Symlink(tt.open(sysfs), filepath.Join(fdDir, "5")))
+
+			err := sysfs.destroy(context.Background(), vfAddress, "instance-1")
+			require.ErrorContains(t, err, "still in use")
+			assertFileValue(t, filepath.Join(sysfs.pciDevicesPath, vfAddress, "nvidia", "current_vgpu_type"), "1148")
+		})
+	}
+}
+
 func TestVendorVFIOCreateReportsCapacityWhenAllGPUsFull(t *testing.T) {
 	t.Parallel()
 
