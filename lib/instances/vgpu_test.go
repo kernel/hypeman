@@ -29,6 +29,10 @@ func TestCleanupFailedCreateRetainsVGPUAssignment(t *testing.T) {
 		GPUProfile:     "NVIDIA L40S-2Q",
 		GPUFramework:   devices.VGPUFrameworkVendorVFIO,
 		GPUDevicePath:  "/sys/bus/pci/devices/0000:82:00.4",
+		GPUMdevUUID:    "mdev-uuid",
+		NetworkEnabled: true,
+		IP:             "192.0.2.1",
+		Volumes:        []VolumeAttachment{{VolumeID: "volume"}},
 		HypervisorType: "qemu",
 		DataDir:        m.paths.InstanceDir("failed-create"),
 	}
@@ -37,9 +41,16 @@ func TestCleanupFailedCreateRetainsVGPUAssignment(t *testing.T) {
 
 	retained, err := m.loadMetadata(stored.Id)
 	require.NoError(t, err)
-	assert.Equal(t, stored.GPUProfile, retained.GPUProfile)
+	assert.Equal(t, stored.Id, retained.Id)
 	assert.Equal(t, stored.GPUFramework, retained.GPUFramework)
 	assert.Equal(t, stored.GPUDevicePath, retained.GPUDevicePath)
+	assert.Equal(t, stored.GPUMdevUUID, retained.GPUMdevUUID)
+	assert.Empty(t, retained.Name)
+	assert.Empty(t, retained.GPUProfile)
+	assert.False(t, retained.NetworkEnabled)
+	assert.Empty(t, retained.IP)
+	assert.Empty(t, retained.Volumes)
+	assert.Empty(t, retained.DataDir)
 }
 
 func TestVGPUAssignmentClaimedByLiveInstanceFailsOnInvalidMetadata(t *testing.T) {
