@@ -9,6 +9,7 @@ import (
 
 	"github.com/c2h5oh/datasize"
 	"github.com/kernel/hypeman/lib/autostandby"
+	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/healthcheck"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/images"
@@ -636,7 +637,7 @@ func TestInstanceToOAPI_OmitsPlatformWhenUnset(t *testing.T) {
 }
 
 // errCreateInstanceManager is a fake whose CreateInstance always fails with a
-// preset error, used to assert the handler maps typed image errors to statuses.
+// preset error, used to assert the handler maps typed errors to statuses.
 type errCreateInstanceManager struct {
 	instances.Manager
 	err error
@@ -650,10 +651,11 @@ func TestCreateInstance_ErrorStatusMapping(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		name     string
-		err      error
-		wantType any
-		wantCode string
+		name        string
+		err         error
+		wantType    any
+		wantCode    string
+		wantMessage string
 	}{
 		{
 			name:     "platform not available -> 404",
@@ -679,6 +681,13 @@ func TestCreateInstance_ErrorStatusMapping(t *testing.T) {
 			wantType: oapi.CreateInstance400JSONResponse{},
 			wantCode: "invalid_platform",
 		},
+		{
+			name:        "macOS vGPU unsupported -> 400",
+			err:         fmt.Errorf("%w: %w", instances.ErrInvalidRequest, devices.ErrVGPUNotSupportedOnMacOS),
+			wantType:    oapi.CreateInstance400JSONResponse{},
+			wantCode:    "invalid_request",
+			wantMessage: "invalid request: vGPU (mdev) is not supported on macOS",
+		},
 	}
 
 	for _, tc := range cases {
@@ -696,6 +705,10 @@ func TestCreateInstance_ErrorStatusMapping(t *testing.T) {
 			require.NoError(t, err)
 			require.IsType(t, tc.wantType, resp)
 			require.Equal(t, tc.wantCode, createInstanceErrorCodeOf(resp))
+			if tc.wantMessage != "" {
+				response := resp.(oapi.CreateInstance400JSONResponse)
+				require.Equal(t, tc.wantMessage, response.Message)
+			}
 		})
 	}
 }

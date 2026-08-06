@@ -35,4 +35,7 @@ var (
 
 	// ErrIOMMUGroupConflict is returned when not all devices in IOMMU group can be passed through
 	ErrIOMMUGroupConflict = errors.New("IOMMU group contains other devices that must also be passed through")
+
+	// ErrVGPUNotSupportedOnMacOS is returned for vGPU operations on macOS
+	ErrVGPUNotSupportedOnMacOS = errors.New("vGPU (mdev) is not supported on macOS")
 )

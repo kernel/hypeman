@@ -2,6 +2,7 @@ package instances
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"path/filepath"
@@ -51,6 +52,13 @@ var systemDirectories = []string{
 	"/var",
 }
 
+func wrapCreateMdevErr(profile string, err error) error {
+	if errors.Is(err, devices.ErrVGPUNotSupportedOnMacOS) {
+		return fmt.Errorf("%w: %w", ErrInvalidRequest, err)
+	}
+	return fmt.Errorf("create vGPU mdev for profile %s: %w", profile, err)
+}
+
 // generateVsockCID converts first 8 chars of instance ID to a unique CID
 // CIDs 0-2 are reserved (hypervisor, loopback, host)
 // Returns value in range 3 to 4294967295
@@ -87,6 +95,9 @@ func (m *manager) createInstance(
 	if err := validateCreateRequest(&req); err != nil {
 		log.ErrorContext(ctx, "invalid create request", "error", err)
 		return nil, err
+	}
+	if req.GPU != nil && req.GPU.Profile != "" && !devices.Capabilities().SupportsVGPU {
+		return nil, fmt.Errorf("%w: %w", ErrInvalidRequest, devices.ErrVGPUNotSupportedOnMacOS)
 	}
 	hvType := req.Hypervisor
 	if hvType == "" {
@@ -275,7 +286,7 @@ func (m *manager) createInstance(
 		mdev, err := devices.CreateMdev(ctx, req.GPU.Profile, id)
 		if err != nil {
 			log.ErrorContext(ctx, "failed to create mdev", "profile", req.GPU.Profile, "error", err)
-			return nil, fmt.Errorf("create vGPU mdev for profile %s: %w", req.GPU.Profile, err)
+			return nil, wrapCreateMdevErr(req.GPU.Profile, err)
 		}
 		gpuProfile = req.GPU.Profile
 		gpuMdevUUID = mdev.UUID
