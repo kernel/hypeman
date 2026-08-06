@@ -2,6 +2,7 @@ package instances
 
 import (
 	"context"
+	"os"
 	"testing"
 
 	"github.com/kernel/hypeman/lib/devices"
@@ -39,6 +40,17 @@ func TestCleanupFailedCreateRetainsVGPUAssignment(t *testing.T) {
 	assert.Equal(t, stored.GPUProfile, retained.GPUProfile)
 	assert.Equal(t, stored.GPUFramework, retained.GPUFramework)
 	assert.Equal(t, stored.GPUDevicePath, retained.GPUDevicePath)
+}
+
+func TestVGPUAssignmentClaimedByLiveInstanceFailsOnInvalidMetadata(t *testing.T) {
+	t.Parallel()
+
+	m := &manager{paths: paths.New(t.TempDir())}
+	require.NoError(t, m.ensureDirectories("invalid-instance"))
+	require.NoError(t, os.WriteFile(m.paths.InstanceMetadata("invalid-instance"), []byte("{"), 0o644))
+
+	_, err := m.vgpuAssignmentClaimedByLiveInstance(context.Background(), "other-instance", "/sys/bus/pci/devices/0000:82:00.4")
+	require.Error(t, err)
 }
 
 func TestStoredVGPUDevicePath(t *testing.T) {
