@@ -607,7 +607,13 @@ func (m *manager) cleanupFailedCreate(ctx context.Context, id string, retainedVG
 		log.ErrorContext(ctx, "failed to retain instance data after vGPU cleanup failure", "instance_id", id, "error", err)
 		return
 	}
-	if err := m.saveMetadata(&metadata{StoredMetadata: *retainedVGPU}); err != nil {
+	retained := StoredMetadata{
+		Id:            id,
+		GPUFramework:  retainedVGPU.GPUFramework,
+		GPUDevicePath: retainedVGPU.GPUDevicePath,
+		GPUMdevUUID:   retainedVGPU.GPUMdevUUID,
+	}
+	if err := m.saveMetadata(&metadata{StoredMetadata: retained}); err != nil {
 		log.ErrorContext(ctx, "failed to retain vGPU assignment metadata after cleanup failure", "instance_id", id, "error", err)
 	}
 }
