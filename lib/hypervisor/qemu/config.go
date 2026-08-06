@@ -94,11 +94,7 @@ func buildArgs(cfg hypervisor.VMConfig, machine MachineType) []string {
 		args = append(args, "-device", fmt.Sprintf("%s,guest-cid=%d", virtioDevice(microvm, "vhost-vsock"), cfg.VsockCID))
 	}
 
-	if cfg.VGPUDevicePath != "" {
-		args = append(args, "-device", fmt.Sprintf("vfio-pci,sysfsdev=%s", cfg.VGPUDevicePath))
-	}
-
-	// Whole-device PCI passthrough (vGPU attaches via VGPUDevicePath above)
+	// Whole-device PCI passthrough (vGPU attaches via VGPUDevicePath below)
 	for _, devicePath := range cfg.PCIDevices {
 		var deviceArg string
 		if strings.HasPrefix(devicePath, "/sys/bus/pci/devices/") {
@@ -111,6 +107,10 @@ func buildArgs(cfg hypervisor.VMConfig, machine MachineType) []string {
 			deviceArg = fmt.Sprintf("vfio-pci,host=%s", devicePath)
 		}
 		args = append(args, "-device", deviceArg)
+	}
+
+	if cfg.VGPUDevicePath != "" {
+		args = append(args, "-device", fmt.Sprintf("vfio-pci,sysfsdev=%s", cfg.VGPUDevicePath))
 	}
 
 	// Serial console output to file. Use a chardev with append=on so QEMU
