@@ -201,7 +201,12 @@ jobs:
           msg=$(gh api "repos/$REPO/commits/$SHA/pulls" --jq '.[0].title // empty')
           [ -n "$msg" ] || msg=$(git log -1 --pretty=%s)
           conventional='^(feat|fix|perf|revert)(\([^)]*\))?!?:[[:space:]]+'
-          if [[ ! "$msg" =~ $conventional ]]; then
+          breaking='^[[:alnum:]_-]+(\([^)]*\))?!:[[:space:]]+'
+          if [[ "$msg" =~ $conventional ]]; then
+            :
+          elif [[ "$msg" =~ $breaking ]]; then
+            msg="feat!: $msg"
+          else
             msg="feat: $msg"
           fi
           eof="MSG_$(openssl rand -hex 8)"
