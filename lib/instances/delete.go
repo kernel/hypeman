@@ -172,8 +172,8 @@ func (m *manager) deleteInstanceWithOptions(
 
 	// 7c. Release the vGPU assignment if present.
 	if err := releaseStoredVGPU(ctx, stored); err != nil {
-		log.ErrorContext(ctx, "failed to destroy vGPU; retaining instance metadata", "instance_id", id, "error", err)
-		return fmt.Errorf("destroy vGPU: %w", err)
+		// Log error but continue with cleanup
+		log.WarnContext(ctx, "failed to destroy vGPU, continuing with cleanup", "instance_id", id, "error", err)
 	}
 
 	// 8. Delete all instance data
