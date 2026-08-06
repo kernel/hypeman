@@ -80,6 +80,9 @@ type Manager interface {
 	// queued or running, including builds still only persisted on disk
 	// while startup recovery has not re-enqueued them yet.
 	BuilderHasBuilds(builderID string) bool
+
+	// ReadyForBuilds reports whether startup builder-image preparation has finished.
+	ReadyForBuilds() bool
 }
 
 // Config holds configuration for the build manager
@@ -209,6 +212,10 @@ func (m *manager) Start(ctx context.Context) error {
 	}()
 	m.logger.Info("build manager started")
 	return nil
+}
+
+func (m *manager) ReadyForBuilds() bool {
+	return m.builderReady.Load()
 }
 
 // ensureBuilderImage ensures the builder image is available in the image store.
