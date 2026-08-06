@@ -784,14 +784,18 @@ func parseSentinelTimestamp(line, sentinelPrefix string) (time.Time, bool) {
 	return time.Time{}, false
 }
 
-// listInstances returns all instances
+// listInstances returns all instances, skipping metadata files that cannot be loaded.
 func (m *manager) listInstances(ctx context.Context) ([]Instance, error) {
+	return m.loadInstances(ctx, true)
+}
+
+func (m *manager) loadInstances(ctx context.Context, skipInvalid bool) ([]Instance, error) {
 	ctx, span := m.tracerOrDefault().Start(ctx, "instances.list_metadata")
 	defer span.End()
 	log := logger.FromContext(ctx)
 	log.DebugContext(ctx, "listing all instances")
 
-	files, err := m.listMetadataFiles()
+	files, err := m.listMetadataFilesWithStatErrors(!skipInvalid)
 	if err != nil {
 		log.ErrorContext(ctx, "failed to list metadata files", "error", err)
 		return nil, err
@@ -809,6 +813,11 @@ func (m *manager) listInstances(ctx context.Context) ([]Instance, error) {
 		)
 		meta, err := m.loadMetadata(id)
 		if err != nil {
+			if !skipInvalid {
+				hydrateSpan.RecordError(err)
+				hydrateSpan.End()
+				return nil, fmt.Errorf("load metadata for instance %s: %w", id, err)
+			}
 			// Skip instances with invalid metadata
 			log.WarnContext(hydrateCtx, "skipping instance with invalid metadata", "instance_id", id, "error", err)
 			hydrateSpan.End()
