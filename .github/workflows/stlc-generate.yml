@@ -155,6 +155,9 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Test SDK commit message normalization
+        run: .github/scripts/normalize-sdk-commit-message.test.sh
+
       - name: Mint app token for the SDK repos
         # Workflows:write because the generated SDKs contain .github/workflows.
         # Pull-requests:write for the integration-test draft PRs (action inputs
@@ -200,15 +203,7 @@ jobs:
           set -euo pipefail
           msg=$(gh api "repos/$REPO/commits/$SHA/pulls" --jq '.[0].title // empty')
           [ -n "$msg" ] || msg=$(git log -1 --pretty=%s)
-          conventional='^(feat|fix|perf|revert)(\([^)]*\))?!?:[[:space:]]+'
-          breaking='^[[:alnum:]_-]+(\([^)]*\))?!:[[:space:]]+'
-          if [[ "$msg" =~ $conventional ]]; then
-            :
-          elif [[ "$msg" =~ $breaking ]]; then
-            msg="feat!: $msg"
-          else
-            msg="feat: $msg"
-          fi
+          msg=$(.github/scripts/normalize-sdk-commit-message.sh "$msg")
           eof="MSG_$(openssl rand -hex 8)"
           {
             echo "commit_msg<<$eof"
