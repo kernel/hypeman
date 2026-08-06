@@ -53,6 +53,12 @@ func ClassifyRegistryError(err error) error {
 		switch terr.StatusCode {
 		case http.StatusNotFound:
 			return fmt.Errorf("%w: %v", ErrNotFound, err)
+		case http.StatusUnauthorized:
+			// Bare 401s (empty diagnostics, common for HEAD or non-JSON
+			// bodies) still mean "image not visible" on pull; keep the
+			// not-found mapping for repo-existence privacy. Push handles
+			// 401/403 in registrypush before reaching this classifier.
+			return fmt.Errorf("%w: %v", ErrNotFound, err)
 		case http.StatusTooManyRequests:
 			return fmt.Errorf("%w: %v", ErrRateLimited, err)
 		}

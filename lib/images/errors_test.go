@@ -73,6 +73,11 @@ func TestClassifyRegistryError(t *testing.T) {
 			want: ErrNotFound,
 		},
 		{
+			name: "typed bare 401 (no diagnostics) -> not found (pull privacy)",
+			in:   &transport.Error{StatusCode: http.StatusUnauthorized, Request: &http.Request{URL: mustURL(t, "https://example/v2/private/app")}},
+			want: ErrNotFound,
+		},
+		{
 			name: "typed toomanyrequests -> rate limited",
 			in: &transport.Error{
 				StatusCode: http.StatusTooManyRequests,
