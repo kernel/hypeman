@@ -227,7 +227,7 @@ func (m *manager) stopInstance(
 	// 7. Release the vGPU assignment if present (frees the vGPU slot for other VMs).
 	if path := storedVGPUDevicePath(stored); path != "" {
 		log.InfoContext(ctx, "destroying vGPU on stop", "instance_id", id, "device_path", path)
-		if err := releaseStoredVGPU(ctx, stored); err != nil {
+		if err := m.releaseStoredVGPU(ctx, stored); err != nil {
 			log.WarnContext(ctx, "failed to destroy vGPU on stop; retaining assignment metadata", "instance_id", id, "device_path", path, "error", err)
 		}
 	}

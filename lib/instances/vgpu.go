@@ -20,21 +20,47 @@ func clearStoredVGPUDevice(stored *StoredMetadata) {
 	stored.GPUMdevUUID = ""
 }
 
-func releaseStoredVGPU(ctx context.Context, stored *StoredMetadata) error {
+func (m *manager) releaseStoredVGPU(ctx context.Context, stored *StoredMetadata) error {
 	path := storedVGPUDevicePath(stored)
 	if path != "" {
-		assignment := devices.VGPUAssignment{
-			Framework:  stored.GPUFramework,
-			DevicePath: path,
-			MdevUUID:   stored.GPUMdevUUID,
-			InstanceID: stored.Id,
-		}
-		if err := devices.DestroyVGPU(ctx, assignment); err != nil {
+		claimed, err := m.vgpuAssignmentClaimedByLiveInstance(ctx, stored.Id, path)
+		if err != nil {
 			return err
+		}
+		if claimed {
+			logger.FromContext(ctx).WarnContext(ctx, "dropping stale vGPU assignment claimed by another live instance",
+				"instance_id", stored.Id, "device_path", path)
+		} else {
+			assignment := devices.VGPUAssignment{
+				Framework:  stored.GPUFramework,
+				DevicePath: path,
+				MdevUUID:   stored.GPUMdevUUID,
+				InstanceID: stored.Id,
+			}
+			if err := devices.DestroyVGPU(ctx, assignment); err != nil {
+				return err
+			}
 		}
 	}
 	clearStoredVGPUDevice(stored)
 	return nil
+}
+
+func (m *manager) vgpuAssignmentClaimedByLiveInstance(ctx context.Context, excludeID, devicePath string) (bool, error) {
+	instances, err := m.listInstances(ctx)
+	if err != nil {
+		return false, fmt.Errorf("list instances for vGPU release check: %w", err)
+	}
+	for i := range instances {
+		inst := &instances[i]
+		if inst.Id == excludeID || inst.GPUDevicePath != devicePath || inst.HypervisorPID == nil {
+			continue
+		}
+		if HypervisorProcessExists(*inst.HypervisorPID, inst.SocketPath) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // releaseRetainedVGPULocked releases a vGPU assignment retained on a stopped
@@ -52,7 +78,7 @@ func (m *manager) releaseRetainedVGPULocked(ctx context.Context, id string) {
 	if storedVGPUDevicePath(stored) == "" {
 		return
 	}
-	if err := releaseStoredVGPU(ctx, stored); err != nil {
+	if err := m.releaseStoredVGPU(ctx, stored); err != nil {
 		log.WarnContext(ctx, "failed to destroy retained vGPU; retaining assignment metadata", "instance_id", id, "error", err)
 		return
 	}
