@@ -14,6 +14,28 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestListInstancesForReconcileFailsOnInvalidMetadata(t *testing.T) {
+	m := &manager{paths: paths.New(t.TempDir())}
+
+	require.NoError(t, m.ensureDirectories("valid"))
+	require.NoError(t, m.saveMetadata(&metadata{StoredMetadata: StoredMetadata{
+		Id:        "valid",
+		Name:      "valid",
+		CreatedAt: time.Now(),
+		DataDir:   m.paths.InstanceDir("valid"),
+	}}))
+	require.NoError(t, m.ensureDirectories("invalid"))
+	require.NoError(t, os.WriteFile(m.paths.InstanceMetadata("invalid"), []byte("{"), 0644))
+
+	listed, err := m.ListInstances(context.Background(), nil)
+	require.NoError(t, err)
+	require.Len(t, listed, 1)
+
+	_, err = m.ListInstancesForReconcile(context.Background())
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "load metadata for instance invalid")
+}
+
 func TestParseExitSentinelLine(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
