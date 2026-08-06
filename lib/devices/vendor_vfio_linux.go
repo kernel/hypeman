@@ -351,11 +351,10 @@ func (s vendorVFIOSysfs) vfioDeviceInUse(vfAddress string, openPaths map[string]
 	probeErrs := make([]error, 0, 2)
 
 	vfioDevices, err := os.ReadDir(filepath.Join(s.pciDevicesPath, vfAddress, "vfio-dev"))
-	if os.IsNotExist(err) {
-		return false, nil
-	}
 	if err != nil {
-		probeErrs = append(probeErrs, fmt.Errorf("read VFIO devices for VF %s: %w", vfAddress, err))
+		if !os.IsNotExist(err) {
+			probeErrs = append(probeErrs, fmt.Errorf("read VFIO devices for VF %s: %w", vfAddress, err))
+		}
 	} else {
 		for _, device := range vfioDevices {
 			devicePaths = append(devicePaths, filepath.Join(s.vfioDevicesPath, device.Name()))
@@ -363,11 +362,10 @@ func (s vendorVFIOSysfs) vfioDeviceInUse(vfAddress string, openPaths map[string]
 	}
 
 	target, err := os.Readlink(filepath.Join(s.pciDevicesPath, vfAddress, "iommu_group"))
-	if os.IsNotExist(err) {
-		return false, nil
-	}
 	if err != nil {
-		probeErrs = append(probeErrs, fmt.Errorf("read IOMMU group for VF %s: %w", vfAddress, err))
+		if !os.IsNotExist(err) {
+			probeErrs = append(probeErrs, fmt.Errorf("read IOMMU group for VF %s: %w", vfAddress, err))
+		}
 	} else {
 		devicePaths = append(devicePaths, filepath.Join(filepath.Dir(s.vfioDevicesPath), filepath.Base(target)))
 	}
