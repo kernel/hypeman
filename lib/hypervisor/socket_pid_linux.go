@@ -124,6 +124,7 @@ func socketRefForPath(socketPath string) (string, error) {
 	defer file.Close()
 
 	scanner := bufio.NewScanner(file)
+	var socketRef string
 	for scanner.Scan() {
 		fields := strings.Fields(scanner.Text())
 		if len(fields) < 7 {
@@ -140,10 +141,16 @@ func socketRefForPath(socketPath string) (string, error) {
 		if inode == "" {
 			break
 		}
-		return fmt.Sprintf("socket:[%s]", inode), nil
+		if socketRef != "" {
+			return "", fmt.Errorf("resolve process pid for socket %s: multiple socket inodes found", socketPath)
+		}
+		socketRef = fmt.Sprintf("socket:[%s]", inode)
 	}
 	if err := scanner.Err(); err != nil {
 		return "", fmt.Errorf("scan /proc/net/unix: %w", err)
+	}
+	if socketRef != "" {
+		return socketRef, nil
 	}
 	return "", fmt.Errorf("resolve process pid for socket %s: socket inode not found", socketPath)
 }

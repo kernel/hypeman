@@ -25,6 +25,22 @@ func TestResolveProcessPID(t *testing.T) {
 	require.Equal(t, os.Getpid(), pid)
 }
 
+func TestResolveProcessPIDIsUnconfirmedForDuplicateSocketPaths(t *testing.T) {
+	oldProcDir := procDir
+	procDir = t.TempDir()
+	t.Cleanup(func() { procDir = oldProcDir })
+
+	socketPath := "/tmp/test.sock"
+	require.NoError(t, os.MkdirAll(filepath.Join(procDir, "net"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(procDir, "net", "unix"), []byte(
+		"00000000: 00000002 00000000 00010000 0001 01 12345 "+socketPath+"\n"+
+			"00000000: 00000002 00000000 00010000 0001 01 67890 "+socketPath+"\n"), 0o644))
+
+	_, confirmed, err := ResolveProcessPID(socketPath)
+	require.ErrorContains(t, err, "multiple socket inodes found")
+	require.False(t, confirmed)
+}
+
 func TestResolveProcessPIDFailsWhenFDIsUnreadable(t *testing.T) {
 	oldProcDir := procDir
 	procDir = t.TempDir()
