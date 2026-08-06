@@ -246,7 +246,7 @@ func (m *manager) stopInstance(
 	}
 
 	// 7. Release the vGPU assignment if present.
-	if err := releaseStoredVGPU(ctx, stored); err != nil {
+	if err := m.releaseStoredVGPU(ctx, stored); err != nil {
 		log.WarnContext(ctx, "failed to destroy vGPU on stop; retaining assignment metadata", "instance_id", id, "error", err)
 	}
 
