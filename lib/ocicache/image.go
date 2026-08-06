@@ -68,7 +68,7 @@ func ImageFromCache(p *paths.Paths, digest string) (v1.Image, error) {
 	return &cacheImage{
 		paths:        p,
 		manifestData: manifestData,
-		digest:       digest,
+		digest:       "sha256:" + digestHex,
 	}, nil
 }
 

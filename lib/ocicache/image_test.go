@@ -349,3 +349,27 @@ func TestImageFromCacheDockerV2Conversion(t *testing.T) {
 		}
 	}
 }
+
+// TestImageFromCacheBareHexDigest pins that a bare 64-hex digest (no
+// "sha256:" prefix) resolves and yields a valid Digest(), not a parse error.
+func TestImageFromCacheBareHexDigest(t *testing.T) {
+	p := tempPaths(t)
+	img, err := random.Image(256, 1)
+	if err != nil {
+		t.Fatalf("random image: %v", err)
+	}
+	img = mutate.MediaType(img, types.OCIManifestSchema1)
+	digest := writeCacheImage(t, p, img)
+
+	cached, err := ImageFromCache(p, strings.TrimPrefix(digest, "sha256:"))
+	if err != nil {
+		t.Fatalf("ImageFromCache(bare hex): %v", err)
+	}
+	got, err := cached.Digest()
+	if err != nil {
+		t.Fatalf("Digest: %v", err)
+	}
+	if got.String() != digest {
+		t.Errorf("Digest = %s, want %s", got, digest)
+	}
+}
