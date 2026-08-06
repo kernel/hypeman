@@ -27,6 +27,7 @@ import (
 
 type Manager interface {
 	ListInstances(ctx context.Context, filter *ListInstancesFilter) ([]Instance, error)
+	ListInstancesForReconcile(ctx context.Context) ([]Instance, error)
 	ListSnapshots(ctx context.Context, filter *ListSnapshotsFilter) ([]Snapshot, error)
 	GetSnapshot(ctx context.Context, snapshotID string) (*Snapshot, error)
 	CreateInstance(ctx context.Context, req CreateInstanceRequest) (*Instance, error)
@@ -694,6 +695,11 @@ func (m *manager) UpdateInstance(ctx context.Context, id string, req UpdateInsta
 		m.notifyLifecycleEvent(ctx, LifecycleEventUpdate, inst)
 	}
 	return inst, err
+}
+
+// ListInstancesForReconcile returns every instance or an invalid metadata error.
+func (m *manager) ListInstancesForReconcile(ctx context.Context) ([]Instance, error) {
+	return m.loadInstances(ctx, false)
 }
 
 // ListInstances returns instances, optionally filtered by the given criteria.
