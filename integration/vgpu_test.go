@@ -89,6 +89,14 @@ func TestVGPU(t *testing.T) {
 	// Cleanup any orphaned instances and mdevs
 	t.Cleanup(func() {
 		if instanceID != "" {
+			if inst, err := instanceManager.GetInstance(ctx, instanceID); err == nil && inst.GPUFramework == devices.VGPUFrameworkVendorVFIO && inst.GPUDevicePath != "" {
+				err := devices.DestroyVGPU(ctx, devices.VGPUAssignment{
+					Framework:  inst.GPUFramework,
+					DevicePath: inst.GPUDevicePath,
+					InstanceID: instanceID,
+				})
+				require.NoError(t, err, "cleanup should release vendor VFIO vGPU")
+			}
 			t.Log("Cleanup: Deleting instance...")
 			instanceManager.DeleteInstance(ctx, instanceID)
 		}
@@ -243,26 +251,38 @@ func TestVGPU(t *testing.T) {
 		t.Logf("Instance GPU: profile=%s, framework=%s, device=%s", actualInst.GPUProfile, actualInst.GPUFramework, actualInst.GPUDevicePath)
 	})
 
-	t.Log("Step 10: Stopping instance to release the vGPU...")
+	t.Log("Step 10: Stopping instance...")
 	_, err = instanceManager.StopInstance(ctx, inst.Id)
 	require.NoError(t, err, "stop should succeed")
 
-	t.Run("VGPUReleasedOnStop", func(t *testing.T) {
-		stopped, err := instanceManager.GetInstance(ctx, inst.Id)
-		require.NoError(t, err)
-		assert.Empty(t, stopped.GPUDevicePath, "assignment metadata should be cleared on stop")
-		assertVGPUReleased(t, inst.GPUFramework, inst.GPUDevicePath)
-	})
+	switch inst.GPUFramework {
+	case devices.VGPUFrameworkMdev:
+		t.Run("VGPUReleasedOnStop", func(t *testing.T) {
+			stopped, err := instanceManager.GetInstance(ctx, inst.Id)
+			require.NoError(t, err)
+			assert.Empty(t, stopped.GPUDevicePath, "assignment metadata should be cleared on stop")
+			assertVGPUReleased(t, inst.GPUFramework, inst.GPUDevicePath)
+		})
 
-	t.Log("Step 11: Starting instance to reacquire a vGPU...")
-	started, err := instanceManager.StartInstance(ctx, inst.Id, instances.StartInstanceRequest{})
-	require.NoError(t, err, "start should succeed")
+		t.Log("Step 11: Starting instance to reacquire a vGPU...")
+		started, err := instanceManager.StartInstance(ctx, inst.Id, instances.StartInstanceRequest{})
+		require.NoError(t, err, "start should succeed")
 
-	t.Run("VGPUReacquiredOnStart", func(t *testing.T) {
-		require.NotEmpty(t, started.GPUDevicePath, "start should assign a vGPU")
-		assert.Equal(t, inst.GPUFramework, started.GPUFramework, "framework should match")
-		assertVGPUAssigned(t, started.GPUFramework, started.GPUDevicePath)
-	})
+		t.Run("VGPUReacquiredOnStart", func(t *testing.T) {
+			require.NotEmpty(t, started.GPUDevicePath, "start should assign a vGPU")
+			assert.Equal(t, inst.GPUFramework, started.GPUFramework, "framework should match")
+			assertVGPUAssigned(t, started.GPUFramework, started.GPUDevicePath)
+		})
+	case devices.VGPUFrameworkVendorVFIO:
+		t.Run("VGPUAssignmentRetainedOnStop", func(t *testing.T) {
+			stopped, err := instanceManager.GetInstance(ctx, inst.Id)
+			require.NoError(t, err)
+			// Release requires an instance-owned assignment, so stop retains it.
+			assert.Equal(t, inst.GPUFramework, stopped.GPUFramework, "assignment framework should be retained on stop")
+			assert.Equal(t, inst.GPUDevicePath, stopped.GPUDevicePath, "assignment metadata should be retained on stop")
+			assertVGPUAssigned(t, stopped.GPUFramework, stopped.GPUDevicePath)
+		})
+	}
 
 	t.Log("✅ vGPU test PASSED!")
 }
