@@ -245,10 +245,17 @@ func (m *manager) killHypervisor(ctx context.Context, inst *Instance) error {
 			for i := 0; i < 50; i++ { // 50 * 100ms = 5 seconds
 				var wstatus syscall.WaitStatus
 				wpid, err := syscall.Wait4(pid, &wstatus, syscall.WNOHANG, nil)
-				if err != nil || wpid == pid {
-					// Process reaped successfully or error (likely ECHILD if already reaped)
+				if err == nil && wpid == pid {
 					log.DebugContext(ctx, "hypervisor process killed and reaped", "instance_id", inst.Id, "pid", pid)
 					break
+				}
+				if err != nil {
+					// Wait4 returns ECHILD when the hypervisor is not our child
+					// (e.g. after a hypeman restart); wait until it has exited.
+					if killErr := syscall.Kill(pid, 0); killErr == syscall.ESRCH {
+						log.DebugContext(ctx, "hypervisor process killed", "instance_id", inst.Id, "pid", pid)
+						break
+					}
 				}
 				if i == 49 {
 					log.WarnContext(ctx, "hypervisor process did not exit in time", "instance_id", inst.Id, "pid", pid)
