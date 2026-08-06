@@ -25,6 +25,7 @@ on:
       - "stainless/**"
       - ".github/workflows/stlc-generate.yml"
       - ".github/actions/setup-stlc/**"
+      - ".github/scripts/normalize-sdk-commit-message*.sh"
   push:
     branches: [main]
     paths:
@@ -33,6 +34,7 @@ on:
       - "stainless/**"
       - ".github/workflows/stlc-generate.yml"
       - ".github/actions/setup-stlc/**"
+      - ".github/scripts/normalize-sdk-commit-message*.sh"
   workflow_dispatch:
     inputs:
       integration_test:
@@ -155,6 +157,9 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Test SDK commit message normalization
+        run: .github/scripts/normalize-sdk-commit-message.test.sh
+
       - name: Mint app token for the SDK repos
         # Workflows:write because the generated SDKs contain .github/workflows.
         # Pull-requests:write for the integration-test draft PRs (action inputs
@@ -187,8 +192,9 @@ jobs:
           gh auth setup-git
 
       - name: Resolve the SDK commit message
-        # The merged PR's title, which survives squash, merge, and rebase alike;
-        # release-please reads it to pick the version bump.
+        # Every generated SDK change must be releasable without depending on
+        # developers to use Conventional Commit prefixes. Preserve an explicit
+        # release type when supplied; otherwise classify the change as a feature.
         id: msg
         if: github.event_name != 'pull_request'
         env:
@@ -199,6 +205,7 @@ jobs:
           set -euo pipefail
           msg=$(gh api "repos/$REPO/commits/$SHA/pulls" --jq '.[0].title // empty')
           [ -n "$msg" ] || msg=$(git log -1 --pretty=%s)
+          msg=$(.github/scripts/normalize-sdk-commit-message.sh "$msg")
           eof="MSG_$(openssl rand -hex 8)"
           {
             echo "commit_msg<<$eof"
