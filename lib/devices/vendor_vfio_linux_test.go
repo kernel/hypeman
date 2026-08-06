@@ -169,6 +169,29 @@ func TestVendorVFIOSelectsLeastLoadedGPU(t *testing.T) {
 	assert.Equal(t, "0000:e3:00.4", device.VFAddress)
 }
 
+func TestVendorVFIOSelectsLeastLoadedGPUWithConsumedType(t *testing.T) {
+	t.Parallel()
+
+	sysfs := newTestVendorVFIOSysfs(t)
+	sysfs.addVF(t, "0000:82:00.0", "0000:82:00.4", "42", "1159", "")
+	sysfs.addVF(t, "0000:82:00.0", "0000:82:00.5", "43", "0", testCreatableTypes)
+	sysfs.addVF(t, "0000:e3:00.0", "0000:e3:00.4", "44", "0", testCreatableTypes)
+
+	vfs, err := sysfs.discoverVFs()
+	require.NoError(t, err)
+	_, err = sysfs.profileMetadata(vfs)
+	require.NoError(t, err)
+	for _, vfAddress := range []string{"0000:82:00.5", "0000:e3:00.4"} {
+		creatableTypesPath := filepath.Join(sysfs.pciDevicesPath, vfAddress, "nvidia", "creatable_vgpu_types")
+		require.NoError(t, os.Chmod(creatableTypesPath, 0644))
+		require.NoError(t, os.WriteFile(creatableTypesPath, []byte("1147  : NVIDIA L40S-1Q\n"), 0444))
+	}
+
+	device, err := sysfs.create(context.Background(), "NVIDIA L40S-1Q", "instance-1")
+	require.NoError(t, err)
+	assert.Equal(t, "0000:e3:00.4", device.VFAddress)
+}
+
 func TestVendorVFIOReconcile(t *testing.T) {
 	t.Parallel()
 
@@ -343,10 +366,11 @@ func newTestVendorVFIOSysfs(t *testing.T) testVendorVFIOSysfs {
 	require.NoError(t, os.MkdirAll(proc, 0755))
 	require.NoError(t, os.MkdirAll(vfio, 0755))
 	return testVendorVFIOSysfs{vendorVFIOSysfs{
-		pciDevicesPath:  pci,
-		procPath:        proc,
-		vfioDevicesPath: vfio,
-		owners:          make(map[string]string),
+		pciDevicesPath:    pci,
+		procPath:          proc,
+		vfioDevicesPath:   vfio,
+		owners:            make(map[string]string),
+		framebufferByType: make(map[string]int),
 	}}
 }
 
