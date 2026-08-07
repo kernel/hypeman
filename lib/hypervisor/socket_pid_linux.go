@@ -13,6 +13,9 @@ import (
 
 var procDir = "/proc"
 
+// soAcceptcon marks a listening socket in /proc/net/unix (__SO_ACCEPTCON).
+const soAcceptcon = 0x10000
+
 // ResolveProcessPID finds the process currently holding the listening Unix
 // socket for the given hypervisor control path. confirmed reports whether the
 // PID was found through socket ownership rather than its command line.
@@ -135,6 +138,12 @@ func socketRefForPath(socketPath string) (string, error) {
 		}
 		path := fields[len(fields)-1]
 		if path != socketPath {
+			continue
+		}
+		// Accepted server-side sockets list the bound path too; only the
+		// listener identifies the owning process.
+		flags, parseErr := strconv.ParseUint(fields[3], 16, 32)
+		if parseErr != nil || flags&soAcceptcon == 0 {
 			continue
 		}
 		inode := fields[6]
