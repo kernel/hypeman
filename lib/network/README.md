@@ -7,9 +7,9 @@ Manages the default virtual network for instances.
 | Platform | Network Model | Implementation |
 |----------|---------------|----------------|
 | Linux | Bridge + TAP | Linux bridge with TAP devices per VM, iptables NAT |
-| macOS | NAT | Virtualization.framework built-in NAT (192.168.64.0/24) |
+| macOS | NAT | Virtualization.framework shared NAT (default: 192.168.64.0/24) |
 
-On macOS, the network manager skips bridge/TAP creation since vz provides NAT networking automatically.
+On macOS, the network manager skips bridge/TAP creation because VZ provides the NAT network. Hypeman currently targets vmnet's default shared subnet, statically allocating guest addresses from `192.168.64.0/24` with gateway `192.168.64.1`; Linux bridge/subnet configuration does not override those values. Host-level `Shared_Net_Address` overrides are not currently supported. Other vmnet clients may receive DHCP leases in the same subnet, so concurrent tools such as Colima, Docker, or UTM can create an address-collision risk that Hypeman's allocator cannot detect.
 
 ---
 
@@ -111,10 +111,11 @@ Hypeman provides a single default network that all instances can optionally conn
 
 ### Default Network
 
-- Auto-created on first `Initialize()` call
-- Configured from environment variables (BRIDGE_NAME, SUBNET_CIDR, SUBNET_GATEWAY)
+- Initialized on the first `Initialize()` call
+- Linux creates it from bridge/subnet configuration
+- macOS targets VZ's default `192.168.64.0/24` shared NAT network regardless of Linux bridge/subnet configuration
 - Named "default" (only network in the system)
-- Always uses bridge_slave isolated mode for VM-to-VM isolation
+- Linux uses bridge_slave isolated mode for VM-to-VM isolation
 
 ### Name Uniqueness
 

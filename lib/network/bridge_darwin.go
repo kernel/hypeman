@@ -58,16 +58,10 @@ func (m *manager) tapDeviceExists(tapName string) bool {
 	return true
 }
 
-// queryNetworkState returns a stub network state for macOS.
-// On macOS, we use NAT which doesn't have a physical bridge.
+// queryNetworkState returns the default vmnet shared-NAT network targeted by
+// Hypeman. Host-level Shared_Net_Address overrides are not currently supported.
 func (m *manager) queryNetworkState(bridgeName string) (*Network, error) {
-	// Return a virtual network representing macOS NAT
-	// The actual IP will be assigned by Virtualization.framework's DHCP
-	return &Network{
-		Bridge:  "nat",
-		Gateway: "192.168.64.1", // Default macOS vz NAT gateway
-		Subnet:  "192.168.64.0/24",
-	}, nil
+	return newDefaultNetwork(vzNATBridge, vzNATSubnet, vzNATGateway), nil
 }
 
 // CleanupOrphanedTAPs is a no-op on macOS as we don't create TAP devices.

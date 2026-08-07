@@ -21,6 +21,33 @@ import (
 
 const testJWTSecret = "test-secret-key"
 
+func TestRequestTimeoutSkipsStreamingEndpoints(t *testing.T) {
+	for _, path := range []string{"/instances/test/logs", "/builds/test/events"} {
+		t.Run(path, func(t *testing.T) {
+			handler := timeoutNonStreamingRequests(10 * time.Millisecond)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				select {
+				case <-r.Context().Done():
+					return
+				case <-time.After(30 * time.Millisecond):
+					w.WriteHeader(http.StatusNoContent)
+				}
+			}))
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
+			assert.Equal(t, http.StatusNoContent, recorder.Code)
+		})
+	}
+}
+
+func TestRequestTimeoutStillAppliesToRegularEndpoints(t *testing.T) {
+	handler := timeoutNonStreamingRequests(10 * time.Millisecond)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/health", nil))
+	assert.Equal(t, http.StatusGatewayTimeout, recorder.Code)
+}
+
 func generateValidJWT(userID string) (string, error) {
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"sub": userID,

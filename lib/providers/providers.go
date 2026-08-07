@@ -391,7 +391,7 @@ func ProvideBuilderManager(p *paths.Paths, cfg *config.Config, instanceManager i
 }
 
 // ProvideBuildManager provides the build manager
-func ProvideBuildManager(p *paths.Paths, cfg *config.Config, instanceManager instances.Manager, volumeManager volumes.Manager, builderManager builders.Manager, imageManager images.Manager, log *slog.Logger) (builds.Manager, error) {
+func ProvideBuildManager(p *paths.Paths, cfg *config.Config, instanceManager instances.Manager, volumeManager volumes.Manager, builderManager builders.Manager, imageManager images.Manager, networkManager network.Manager, log *slog.Logger) (builds.Manager, error) {
 	// Read CA cert file if specified
 	var registryCACert string
 	if cfg.Registry.CACertFile != "" {
@@ -403,25 +403,12 @@ func ProvideBuildManager(p *paths.Paths, cfg *config.Config, instanceManager ins
 		log.Info("registry CA certificate loaded", "file", cfg.Registry.CACertFile)
 	}
 
-	// Rewrite localhost in RegistryURL to the subnet gateway IP so builder VMs
-	// (which run in their own network namespace) can reach the host registry.
-	// Inside a VM, "localhost" refers to the VM itself, not the host.
-	registryURL := cfg.Registry.URL
-	if registryURL == "" {
-		registryURL = "localhost:4973"
+	registryURL, err := builderRegistryURL(cfg.Registry.URL, networkManager)
+	if err != nil {
+		return nil, err
 	}
-	if strings.HasPrefix(registryURL, "localhost:") || strings.HasPrefix(registryURL, "127.0.0.1:") {
-		gateway := cfg.Network.SubnetGateway
-		if gateway == "" {
-			var err error
-			gateway, err = network.DeriveGateway(cfg.Network.SubnetCIDR)
-			if err != nil {
-				return nil, fmt.Errorf("derive gateway for registry URL rewrite: %w", err)
-			}
-		}
-		port := strings.SplitN(registryURL, ":", 2)[1]
-		registryURL = gateway + ":" + port
-		log.Info("rewrote registry URL for builder VMs", "original", cfg.Registry.URL, "rewritten", registryURL)
+	if registryURL != cfg.Registry.URL {
+		log.Info("resolved registry URL for builder VMs", "original", cfg.Registry.URL, "resolved", registryURL)
 	}
 
 	buildConfig := builds.Config{
@@ -454,4 +441,23 @@ func ProvideBuildManager(p *paths.Paths, cfg *config.Config, instanceManager ins
 	builderManager.SetBuildActivityChecker(buildManager.BuilderHasBuilds)
 
 	return buildManager, nil
+}
+
+// builderRegistryURL rewrites loopback registry addresses to the host gateway
+// visible to guests. The network manager owns platform-specific gateway selection.
+func builderRegistryURL(configuredURL string, networkManager network.Manager) (string, error) {
+	registryURL := configuredURL
+	if registryURL == "" {
+		registryURL = "localhost:4973"
+	}
+	if !strings.HasPrefix(registryURL, "localhost:") && !strings.HasPrefix(registryURL, "127.0.0.1:") {
+		return registryURL, nil
+	}
+
+	defaultNetwork, err := networkManager.EffectiveDefaultNetwork()
+	if err != nil {
+		return "", fmt.Errorf("get effective default network for registry URL rewrite: %w", err)
+	}
+	port := strings.SplitN(registryURL, ":", 2)[1]
+	return defaultNetwork.Gateway + ":" + port, nil
 }

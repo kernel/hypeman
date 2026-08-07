@@ -47,6 +47,19 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+func timeoutNonStreamingRequests(timeout time.Duration) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		timeoutHandler := middleware.Timeout(timeout)(next)
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasSuffix(r.URL.Path, "/logs") || strings.HasSuffix(r.URL.Path, "/events") {
+				next.ServeHTTP(w, r)
+				return
+			}
+			timeoutHandler.ServeHTTP(w, r)
+		})
+	}
+}
+
 func main() {
 	if err := run(); err != nil {
 		slog.Error("application terminated", "error", err)
@@ -481,7 +494,11 @@ func run() error {
 			})
 		}
 
-		r.Use(middleware.Timeout(60 * time.Second))
+		// Streaming endpoints can remain active for longer than the request timeout.
+		// In particular, cold builds routinely exceed 60 seconds while continuing
+		// to emit events; cancelling the SSE request makes the CLI report failure
+		// even though the build is still running.
+		r.Use(timeoutNonStreamingRequests(60 * time.Second))
 
 		// OpenAPI request validation with authentication
 		validatorOptions := &nethttpmiddleware.Options{

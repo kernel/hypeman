@@ -128,13 +128,13 @@ func (m *manager) createBridge(ctx context.Context, name, gateway, subnet string
 		}
 
 		expectedGW := net.ParseIP(gateway)
-		hasExpectedIP := false
-		var actualIPs []string
+		if expectedGW == nil {
+			return fmt.Errorf("invalid gateway IP: %s", gateway)
+		}
+		hasExpectedIP, hasExpectedMask := bridgeAddressMatches(addrs, expectedGW, ipNet.Mask)
+		actualIPs := make([]string, 0, len(addrs))
 		for _, addr := range addrs {
-			actualIPs = append(actualIPs, addr.IPNet.String())
-			if addr.IP.Equal(expectedGW) {
-				hasExpectedIP = true
-			}
+			actualIPs = append(actualIPs, addr.String())
 		}
 
 		if !hasExpectedIP {
@@ -144,6 +144,14 @@ func (m *manager) createBridge(ctx context.Context, name, gateway, subnet string
 				"(2) use a different BRIDGE_NAME, "+
 				"or (3) delete the bridge with: sudo ip link delete %s",
 				name, actualIPs, gateway, ones, name)
+		}
+		if !hasExpectedMask {
+			ones, _ := ipNet.Mask.Size()
+			return fmt.Errorf("bridge %s exists with gateway %s but its prefix does not match /%d (addresses: %v). "+
+				"Options: (1) update SUBNET_CIDR to match the existing bridge, "+
+				"(2) use a different BRIDGE_NAME, "+
+				"or (3) delete the bridge with: sudo ip link delete %s",
+				name, gateway, ones, actualIPs, name)
 		}
 
 		// Bridge exists with correct IP, verify it's up
@@ -1064,40 +1072,75 @@ func (m *manager) tapDeviceExists(tapName string) bool {
 	return err == nil
 }
 
-// queryNetworkState queries kernel for bridge state
+// queryNetworkState queries kernel for bridge state.
 func (m *manager) queryNetworkState(bridgeName string) (*Network, error) {
 	link, err := netlink.LinkByName(bridgeName)
 	if err != nil {
-		return nil, ErrNotFound
+		return nil, fmt.Errorf("%w: look up bridge %q: %v", ErrNotFound, bridgeName, err)
 	}
 
-	// Verify it's actually a bridge
 	if link.Type() != "bridge" {
 		return nil, fmt.Errorf("link %s is not a bridge", bridgeName)
 	}
 
-	// Get IP addresses
-	addrs, err := netlink.AddrList(link, netlink.FAMILY_V4)
+	addrs, err := listBridgeAddrsWithRetry(link)
 	if err != nil {
 		return nil, fmt.Errorf("list addresses: %w", err)
 	}
-
 	if len(addrs) == 0 {
 		return nil, fmt.Errorf("bridge has no IP addresses")
 	}
 
-	// Use first IP as gateway
-	gateway := addrs[0].IP.String()
-	subnet := addrs[0].IPNet.String()
+	// A bridge may have multiple IPv4 addresses. Prefer the configured gateway
+	// when createBridge has confirmed that it is present rather than depending on
+	// netlink address ordering.
+	gatewayAddr := addrs[0]
+	requestedNetwork, requestedErr := m.platformDefaultNetwork()
+	if requestedErr == nil {
+		gatewayAddr = selectBridgeGatewayAddr(addrs, net.ParseIP(requestedNetwork.Gateway))
+	}
 
-	// Bridge exists and has IP - that's sufficient
-	// OperState can be OperUp, OperUnknown, etc. - all are functional for our purposes
-
+	// Bridge existence plus an IPv4 address is sufficient. OperState may be
+	// OperUp or OperUnknown; both are functional for this bridge.
 	return &Network{
 		Bridge:  bridgeName,
-		Gateway: gateway,
-		Subnet:  subnet,
+		Gateway: gatewayAddr.IP.String(),
+		Subnet:  canonicalSubnetCIDR(gatewayAddr.IPNet),
 	}, nil
+}
+
+func bridgeAddressMatches(addrs []netlink.Addr, expectedGateway net.IP, expectedMask net.IPMask) (hasGateway, hasMatchingMask bool) {
+	expectedOnes, expectedBits := expectedMask.Size()
+	for _, addr := range addrs {
+		if !addr.IP.Equal(expectedGateway) {
+			continue
+		}
+		hasGateway = true
+		if addr.IPNet == nil {
+			continue
+		}
+		ones, bits := addr.IPNet.Mask.Size()
+		if ones == expectedOnes && bits == expectedBits {
+			hasMatchingMask = true
+		}
+	}
+	return hasGateway, hasMatchingMask
+}
+
+func canonicalSubnetCIDR(ipNet *net.IPNet) string {
+	if ipNet == nil {
+		return ""
+	}
+	return (&net.IPNet{IP: ipNet.IP.Mask(ipNet.Mask), Mask: ipNet.Mask}).String()
+}
+
+func selectBridgeGatewayAddr(addrs []netlink.Addr, preferredGateway net.IP) netlink.Addr {
+	for _, addr := range addrs {
+		if addr.IP.Equal(preferredGateway) {
+			return addr
+		}
+	}
+	return addrs[0]
 }
 
 // CleanupOrphanedTAPs removes TAP devices that aren't used by any running instance.

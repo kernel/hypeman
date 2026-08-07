@@ -309,9 +309,10 @@ func (m *mockSecretProvider) GetSecrets(ctx context.Context, secretIDs []string)
 
 // mockImageManager implements images.Manager for testing
 type mockImageManager struct {
-	mu          sync.RWMutex
-	images      map[string]*images.Image
-	getImageErr error
+	mu              sync.RWMutex
+	images          map[string]*images.Image
+	createImageFunc func(ctx context.Context, req images.CreateImageRequest) (*images.Image, error)
+	getImageErr     error
 }
 
 func newMockImageManager() *mockImageManager {
@@ -329,6 +330,9 @@ func (m *mockImageManager) ListImages(ctx context.Context) ([]images.Image, erro
 }
 
 func (m *mockImageManager) CreateImage(ctx context.Context, req images.CreateImageRequest) (*images.Image, error) {
+	if m.createImageFunc != nil {
+		return m.createImageFunc(ctx, req)
+	}
 	img := &images.Image{
 		Name:   req.Name,
 		Status: images.StatusPending,
@@ -479,6 +483,62 @@ func setupTestManagerWithImageMgr(t *testing.T) (*manager, *mockInstanceManager,
 	mgr.builderReady.Store(true)
 
 	return mgr, instanceMgr, volumeMgr, imageMgr, tempDir
+}
+
+func TestEnsureBuilderImageOnlyMarksReadyAfterSuccess(t *testing.T) {
+	t.Run("existing image", func(t *testing.T) {
+		mgr, _, _, imageMgr, tempDir := setupTestManagerWithImageMgr(t)
+		defer os.RemoveAll(tempDir)
+		mgr.builderReady.Store(false)
+		imageMgr.images[mgr.config.BuilderImage] = &images.Image{
+			Name:   mgr.config.BuilderImage,
+			Status: images.StatusReady,
+		}
+
+		mgr.ensureBuilderImage(context.Background())
+
+		assert.True(t, mgr.ReadyForBuilds())
+	})
+
+	t.Run("existing pending image never becomes ready", func(t *testing.T) {
+		mgr, _, _, imageMgr, tempDir := setupTestManagerWithImageMgr(t)
+		defer os.RemoveAll(tempDir)
+		mgr.builderReady.Store(false)
+		imageMgr.images[mgr.config.BuilderImage] = &images.Image{
+			Name:   mgr.config.BuilderImage,
+			Status: images.StatusPending,
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		mgr.ensureBuilderImage(ctx)
+
+		assert.False(t, mgr.ReadyForBuilds())
+	})
+
+	t.Run("existing failed image is requeued", func(t *testing.T) {
+		mgr, _, _, imageMgr, tempDir := setupTestManagerWithImageMgr(t)
+		defer os.RemoveAll(tempDir)
+		mgr.builderReady.Store(false)
+		imageMgr.images[mgr.config.BuilderImage] = &images.Image{
+			Name:   mgr.config.BuilderImage,
+			Status: images.StatusFailed,
+		}
+		createCalls := 0
+		imageMgr.createImageFunc = func(_ context.Context, req images.CreateImageRequest) (*images.Image, error) {
+			createCalls++
+			imageMgr.mu.Lock()
+			defer imageMgr.mu.Unlock()
+			image := &images.Image{Name: req.Name, Status: images.StatusReady}
+			imageMgr.images[req.Name] = image
+			return image, nil
+		}
+
+		mgr.ensureBuilderImage(context.Background())
+
+		assert.Equal(t, 1, createCalls)
+		assert.True(t, mgr.ReadyForBuilds())
+	})
 }
 
 func TestCreateBuild_Success(t *testing.T) {

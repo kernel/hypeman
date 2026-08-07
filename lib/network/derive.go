@@ -39,22 +39,18 @@ func (m *manager) deriveAllocation(ctx context.Context, instanceID string) (*All
 		return nil, nil
 	}
 
-	// 3. Derive gateway/netmask from configured subnet.
-	// This avoids transient dependence on live bridge state when callers only need
-	// metadata-derived allocation details (e.g., immediately after instance create).
-	subnet := m.config.Network.SubnetCIDR
-	_, ipNet, err := net.ParseCIDR(subnet)
+	// 3. Derive gateway/netmask from the same platform-effective network used
+	// for new allocations. This remains available without querying transient live
+	// bridge state and prevents raw config from overriding VZ's NAT network.
+	defaultNetwork, err := m.EffectiveDefaultNetwork()
+	if err != nil {
+		return nil, fmt.Errorf("get effective default network: %w", err)
+	}
+	_, ipNet, err := net.ParseCIDR(defaultNetwork.Subnet)
 	if err != nil {
 		return nil, fmt.Errorf("parse subnet CIDR: %w", err)
 	}
 	netmask := fmt.Sprintf("%d.%d.%d.%d", ipNet.Mask[0], ipNet.Mask[1], ipNet.Mask[2], ipNet.Mask[3])
-	gateway := m.config.Network.SubnetGateway
-	if gateway == "" {
-		gateway, err = DeriveGateway(subnet)
-		if err != nil {
-			return nil, fmt.Errorf("derive gateway from subnet: %w", err)
-		}
-	}
 
 	// 4. Use stored metadata to derive allocation (works for all hypervisors)
 	if meta.IP != "" && meta.MAC != "" {
@@ -81,7 +77,7 @@ func (m *manager) deriveAllocation(ctx context.Context, instanceID string) (*All
 			IP:           meta.IP,
 			MAC:          meta.MAC,
 			TAPDevice:    tap,
-			Gateway:      gateway,
+			Gateway:      defaultNetwork.Gateway,
 			Netmask:      netmask,
 			DNS:          m.config.Network.DNSServer,
 			State:        state,
