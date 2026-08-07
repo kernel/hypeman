@@ -81,6 +81,18 @@ func setupTestManager(t *testing.T) (*manager, string) {
 	return mgr, tmpDir
 }
 
+func assertFailsFastNotFound(t *testing.T, failureMessage string, action func() error) {
+	t.Helper()
+
+	start := time.Now()
+	err := action()
+	elapsed := time.Since(start)
+
+	require.Error(t, err)
+	require.ErrorIs(t, err, images.ErrNotFound)
+	require.Less(t, elapsed, 30*time.Second, failureMessage)
+}
+
 // deleteTestInstanceNow performs the same resource and metadata cleanup as
 // DeleteInstance, but skips the guest grace period. Cleanup callbacks do not
 // need to preserve guest state: the test has already made its assertions and

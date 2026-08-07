@@ -215,64 +215,72 @@ func TestCreateInstance_InvalidSizeFormat(t *testing.T) {
 	assert.Contains(t, badReq.Message, "invalid size format")
 }
 
-type captureCreateManager struct {
+type captureManager[Req any] struct {
 	instances.Manager
-	lastReq *instances.CreateInstanceRequest
+	lastID  string
+	lastReq *Req
+	result  *instances.Instance
+	err     error
+}
+
+func newCaptureManager[Req any](manager instances.Manager) captureManager[Req] {
+	return captureManager[Req]{Manager: manager}
+}
+
+func (m *captureManager[Req]) capture(id string, req Req) (*instances.Instance, error) {
+	reqCopy := req
+	m.lastID = id
+	m.lastReq = &reqCopy
+	if m.err != nil {
+		return nil, m.err
+	}
+	return m.result, nil
+}
+
+type captureCreateManager struct {
+	captureManager[instances.CreateInstanceRequest]
+}
+
+func newCaptureCreateManager(manager instances.Manager) *captureCreateManager {
+	return &captureCreateManager{captureManager: newCaptureManager[instances.CreateInstanceRequest](manager)}
 }
 
 type captureForkManager struct {
-	instances.Manager
-	lastID  string
-	lastReq *instances.ForkInstanceRequest
-	result  *instances.Instance
-	err     error
+	captureManager[instances.ForkInstanceRequest]
+}
+
+func newCaptureForkManager(manager instances.Manager) *captureForkManager {
+	return &captureForkManager{captureManager: newCaptureManager[instances.ForkInstanceRequest](manager)}
 }
 
 type captureStandbyManager struct {
-	instances.Manager
-	lastID  string
-	lastReq *instances.StandbyInstanceRequest
-	result  *instances.Instance
-	err     error
+	captureManager[instances.StandbyInstanceRequest]
+}
+
+func newCaptureStandbyManager(manager instances.Manager) *captureStandbyManager {
+	return &captureStandbyManager{captureManager: newCaptureManager[instances.StandbyInstanceRequest](manager)}
 }
 
 type captureUpdateManager struct {
-	instances.Manager
-	lastID  string
-	lastReq *instances.UpdateInstanceRequest
-	result  *instances.Instance
-	err     error
+	captureManager[instances.UpdateInstanceRequest]
+}
+
+func newCaptureUpdateManager(manager instances.Manager) *captureUpdateManager {
+	return &captureUpdateManager{captureManager: newCaptureManager[instances.UpdateInstanceRequest](manager)}
 }
 
 func (m *captureForkManager) ForkInstance(ctx context.Context, id string, req instances.ForkInstanceRequest) (*instances.Instance, error) {
-	reqCopy := req
-	m.lastID = id
-	m.lastReq = &reqCopy
-	if m.err != nil {
-		return nil, m.err
-	}
-	return m.result, nil
+	return m.capture(id, req)
 }
 
 func (m *captureStandbyManager) StandbyInstance(ctx context.Context, id string, req instances.StandbyInstanceRequest) (*instances.Instance, error) {
-	reqCopy := req
-	m.lastID = id
-	m.lastReq = &reqCopy
-	if m.err != nil {
-		return nil, m.err
-	}
-	return m.result, nil
+	return m.capture(id, req)
 }
 
 func (m *captureUpdateManager) UpdateInstance(ctx context.Context, id string, req instances.UpdateInstanceRequest) (*instances.Instance, error) {
-	reqCopy := req
-	m.lastID = id
-	m.lastReq = &reqCopy
-	if m.err != nil {
-		return nil, m.err
-	}
-	if m.result != nil {
-		return m.result, nil
+	result, err := m.capture(id, req)
+	if err != nil || result != nil {
+		return result, err
 	}
 
 	now := time.Now()
@@ -293,8 +301,10 @@ func (m *captureUpdateManager) UpdateInstance(ctx context.Context, id string, re
 }
 
 func (m *captureCreateManager) CreateInstance(ctx context.Context, req instances.CreateInstanceRequest) (*instances.Instance, error) {
-	reqCopy := req
-	m.lastReq = &reqCopy
+	result, err := m.capture("", req)
+	if err != nil || result != nil {
+		return result, err
+	}
 
 	now := time.Now()
 	return &instances.Instance{
@@ -321,7 +331,7 @@ func TestCreateInstance_OmittedHotplugSizeDefaultsToZero(t *testing.T) {
 	svc := newTestService(t)
 
 	origMgr := svc.InstanceManager
-	mockMgr := &captureCreateManager{Manager: origMgr}
+	mockMgr := newCaptureCreateManager(origMgr)
 	svc.InstanceManager = mockMgr
 
 	size := "1GB"
@@ -354,7 +364,7 @@ func TestCreateInstance_MapsNetworkEgressCredentials(t *testing.T) {
 	svc := newTestService(t)
 
 	origMgr := svc.InstanceManager
-	mockMgr := &captureCreateManager{Manager: origMgr}
+	mockMgr := newCaptureCreateManager(origMgr)
 	svc.InstanceManager = mockMgr
 
 	networkEnabled := true
@@ -433,7 +443,7 @@ func TestCreateInstance_MapsNetworkEgressEnforcementMode(t *testing.T) {
 	svc := newTestService(t)
 
 	origMgr := svc.InstanceManager
-	mockMgr := &captureCreateManager{Manager: origMgr}
+	mockMgr := newCaptureCreateManager(origMgr)
 	svc.InstanceManager = mockMgr
 
 	networkEnabled := true
@@ -494,7 +504,7 @@ func TestCreateInstance_MapsStandbyCompressionDelayInSnapshotPolicy(t *testing.T
 
 	svc := newTestService(t)
 	origMgr := svc.InstanceManager
-	mockMgr := &captureCreateManager{Manager: origMgr}
+	mockMgr := newCaptureCreateManager(origMgr)
 	svc.InstanceManager = mockMgr
 
 	delay := "2m30s"
@@ -855,7 +865,7 @@ func TestCreateInstance_MapsAutoStandbyPolicy(t *testing.T) {
 
 	svc := newTestService(t)
 	origMgr := svc.InstanceManager
-	mockMgr := &captureCreateManager{Manager: origMgr}
+	mockMgr := newCaptureCreateManager(origMgr)
 	svc.InstanceManager = mockMgr
 
 	enabled := true
@@ -898,7 +908,7 @@ func TestCreateInstance_MapsHealthCheckPolicy(t *testing.T) {
 
 	svc := newTestService(t)
 	origMgr := svc.InstanceManager
-	mockMgr := &captureCreateManager{Manager: origMgr}
+	mockMgr := newCaptureCreateManager(origMgr)
 	svc.InstanceManager = mockMgr
 
 	typ := oapi.HealthCheckTypeExec
@@ -943,7 +953,7 @@ func TestCreateInstance_MapsRestartPolicy(t *testing.T) {
 
 	svc := newTestService(t)
 	origMgr := svc.InstanceManager
-	mockMgr := &captureCreateManager{Manager: origMgr}
+	mockMgr := newCaptureCreateManager(origMgr)
 	svc.InstanceManager = mockMgr
 
 	policy := oapi.OnFailure
@@ -986,20 +996,19 @@ func TestUpdateInstance_MapsEnvPatch(t *testing.T) {
 
 	origMgr := svc.InstanceManager
 	now := time.Now()
-	mockMgr := &captureUpdateManager{
-		Manager: origMgr,
-		result: &instances.Instance{
-			StoredMetadata: instances.StoredMetadata{
-				Id:             "inst-update",
-				Name:           "inst-update",
-				Image:          "docker.io/library/alpine:latest",
-				Env:            map[string]string{"OUTBOUND_OPENAI_KEY": "rotated-key-456"},
-				CreatedAt:      now,
-				HypervisorType: hypervisor.TypeCloudHypervisor,
-			},
-			State: instances.StateRunning,
+	result := &instances.Instance{
+		StoredMetadata: instances.StoredMetadata{
+			Id:             "inst-update",
+			Name:           "inst-update",
+			Image:          "docker.io/library/alpine:latest",
+			Env:            map[string]string{"OUTBOUND_OPENAI_KEY": "rotated-key-456"},
+			CreatedAt:      now,
+			HypervisorType: hypervisor.TypeCloudHypervisor,
 		},
+		State: instances.StateRunning,
 	}
+	mockMgr := newCaptureUpdateManager(origMgr)
+	mockMgr.result = result
 	svc.InstanceManager = mockMgr
 
 	env := map[string]string{"OUTBOUND_OPENAI_KEY": "rotated-key-456"}
@@ -1033,23 +1042,22 @@ func TestUpdateInstance_MapsAutoStandbyPatch(t *testing.T) {
 
 	origMgr := svc.InstanceManager
 	now := time.Now()
-	mockMgr := &captureUpdateManager{
-		Manager: origMgr,
-		result: &instances.Instance{
-			StoredMetadata: instances.StoredMetadata{
-				Id:             "inst-update-auto-standby",
-				Name:           "inst-update-auto-standby",
-				Image:          "docker.io/library/alpine:latest",
-				CreatedAt:      now,
-				HypervisorType: hypervisor.TypeCloudHypervisor,
-				AutoStandby: &autostandby.Policy{
-					Enabled:     true,
-					IdleTimeout: "10m0s",
-				},
+	result := &instances.Instance{
+		StoredMetadata: instances.StoredMetadata{
+			Id:             "inst-update-auto-standby",
+			Name:           "inst-update-auto-standby",
+			Image:          "docker.io/library/alpine:latest",
+			CreatedAt:      now,
+			HypervisorType: hypervisor.TypeCloudHypervisor,
+			AutoStandby: &autostandby.Policy{
+				Enabled:     true,
+				IdleTimeout: "10m0s",
 			},
-			State: instances.StateStopped,
 		},
+		State: instances.StateStopped,
 	}
+	mockMgr := newCaptureUpdateManager(origMgr)
+	mockMgr.result = result
 	svc.InstanceManager = mockMgr
 
 	enabled := true
@@ -1099,23 +1107,22 @@ func TestUpdateInstance_MapsHealthCheckPatch(t *testing.T) {
 
 	origMgr := svc.InstanceManager
 	now := time.Now()
-	mockMgr := &captureUpdateManager{
-		Manager: origMgr,
-		result: &instances.Instance{
-			StoredMetadata: instances.StoredMetadata{
-				Id:             "inst-update-health-check",
-				Name:           "inst-update-health-check",
-				Image:          "docker.io/library/alpine:latest",
-				CreatedAt:      now,
-				HypervisorType: hypervisor.TypeCloudHypervisor,
-				HealthCheck: &healthcheck.Policy{
-					Type: healthcheck.TypeTCP,
-					TCP:  &healthcheck.TCPCheck{Port: 8080},
-				},
+	result := &instances.Instance{
+		StoredMetadata: instances.StoredMetadata{
+			Id:             "inst-update-health-check",
+			Name:           "inst-update-health-check",
+			Image:          "docker.io/library/alpine:latest",
+			CreatedAt:      now,
+			HypervisorType: hypervisor.TypeCloudHypervisor,
+			HealthCheck: &healthcheck.Policy{
+				Type: healthcheck.TypeTCP,
+				TCP:  &healthcheck.TCPCheck{Port: 8080},
 			},
-			State: instances.StateStopped,
 		},
+		State: instances.StateStopped,
 	}
+	mockMgr := newCaptureUpdateManager(origMgr)
+	mockMgr.result = result
 	svc.InstanceManager = mockMgr
 
 	typ := oapi.HealthCheckTypeTcp
@@ -1164,27 +1171,26 @@ func TestUpdateInstance_MapsRestartPolicyPatch(t *testing.T) {
 
 	origMgr := svc.InstanceManager
 	now := time.Now()
-	mockMgr := &captureUpdateManager{
-		Manager: origMgr,
-		result: &instances.Instance{
-			StoredMetadata: instances.StoredMetadata{
-				Id:             "inst-update-restart-policy",
-				Name:           "inst-update-restart-policy",
-				Image:          "docker.io/library/alpine:latest",
-				CreatedAt:      now,
-				HypervisorType: hypervisor.TypeCloudHypervisor,
-				RestartPolicy: &restartpolicy.Policy{
-					Policy:      restartpolicy.PolicyAlways,
-					Backoff:     "5s",
-					StableAfter: "10m0s",
-				},
-				RestartStatus: restartpolicy.Status{
-					BlockedReason: restartpolicy.BlockedReasonManualStop,
-				},
+	result := &instances.Instance{
+		StoredMetadata: instances.StoredMetadata{
+			Id:             "inst-update-restart-policy",
+			Name:           "inst-update-restart-policy",
+			Image:          "docker.io/library/alpine:latest",
+			CreatedAt:      now,
+			HypervisorType: hypervisor.TypeCloudHypervisor,
+			RestartPolicy: &restartpolicy.Policy{
+				Policy:      restartpolicy.PolicyAlways,
+				Backoff:     "5s",
+				StableAfter: "10m0s",
 			},
-			State: instances.StateStopped,
+			RestartStatus: restartpolicy.Status{
+				BlockedReason: restartpolicy.BlockedReasonManualStop,
+			},
 		},
+		State: instances.StateStopped,
 	}
+	mockMgr := newCaptureUpdateManager(origMgr)
+	mockMgr.result = result
 	svc.InstanceManager = mockMgr
 
 	policy := oapi.Always
@@ -1226,7 +1232,7 @@ func TestUpdateInstance_RejectsInvalidRestartPolicy(t *testing.T) {
 	svc := newTestService(t)
 
 	origMgr := svc.InstanceManager
-	mockMgr := &captureUpdateManager{Manager: origMgr}
+	mockMgr := newCaptureUpdateManager(origMgr)
 	svc.InstanceManager = mockMgr
 
 	now := time.Now()
@@ -1266,7 +1272,7 @@ func TestUpdateInstance_RejectsZeroAutoStandbyIgnoreDestinationPort(t *testing.T
 
 	origMgr := svc.InstanceManager
 	now := time.Now()
-	mockMgr := &captureUpdateManager{Manager: origMgr}
+	mockMgr := newCaptureUpdateManager(origMgr)
 	svc.InstanceManager = mockMgr
 
 	resolved := &instances.Instance{
@@ -1333,10 +1339,8 @@ func TestUpdateInstance_MapsInvalidRequestError(t *testing.T) {
 	svc := newTestService(t)
 
 	origMgr := svc.InstanceManager
-	mockMgr := &captureUpdateManager{
-		Manager: origMgr,
-		err:     fmt.Errorf("%w: env keys [UNRELATED_KEY] are not credential source env vars; allowed keys: [OUTBOUND_OPENAI_KEY]", instances.ErrInvalidRequest),
-	}
+	mockMgr := newCaptureUpdateManager(origMgr)
+	mockMgr.err = fmt.Errorf("%w: env keys [UNRELATED_KEY] are not credential source env vars; allowed keys: [OUTBOUND_OPENAI_KEY]", instances.ErrInvalidRequest)
 	svc.InstanceManager = mockMgr
 
 	now := time.Now()
@@ -1390,10 +1394,8 @@ func TestForkInstance_Success(t *testing.T) {
 		State: instances.StateStopped,
 	}
 
-	mockMgr := &captureForkManager{
-		Manager: svc.InstanceManager,
-		result:  forked,
-	}
+	mockMgr := newCaptureForkManager(svc.InstanceManager)
+	mockMgr.result = forked
 	svc.InstanceManager = mockMgr
 
 	resp, err := svc.ForkInstance(
@@ -1432,10 +1434,8 @@ func TestForkInstance_NotSupported(t *testing.T) {
 		State: instances.StateStopped,
 	}
 
-	mockMgr := &captureForkManager{
-		Manager: svc.InstanceManager,
-		err:     instances.ErrNotSupported,
-	}
+	mockMgr := newCaptureForkManager(svc.InstanceManager)
+	mockMgr.err = instances.ErrNotSupported
 	svc.InstanceManager = mockMgr
 
 	resp, err := svc.ForkInstance(
@@ -1469,10 +1469,8 @@ func TestForkInstance_InvalidRequest(t *testing.T) {
 		State: instances.StateStopped,
 	}
 
-	mockMgr := &captureForkManager{
-		Manager: svc.InstanceManager,
-		err:     fmt.Errorf("%w: name is required", instances.ErrInvalidRequest),
-	}
+	mockMgr := newCaptureForkManager(svc.InstanceManager)
+	mockMgr.err = fmt.Errorf("%w: name is required", instances.ErrInvalidRequest)
 	svc.InstanceManager = mockMgr
 
 	resp, err := svc.ForkInstance(
@@ -1506,10 +1504,8 @@ func TestForkInstance_InsufficientResources(t *testing.T) {
 		State: instances.StateStandby,
 	}
 
-	mockMgr := &captureForkManager{
-		Manager: svc.InstanceManager,
-		err:     fmt.Errorf("apply fork target state: %w: insufficient network bandwidth", instances.ErrInsufficientResources),
-	}
+	mockMgr := newCaptureForkManager(svc.InstanceManager)
+	mockMgr.err = fmt.Errorf("apply fork target state: %w: insufficient network bandwidth", instances.ErrInsufficientResources)
 	svc.InstanceManager = mockMgr
 
 	resp, err := svc.ForkInstance(
@@ -1543,10 +1539,8 @@ func TestStandbyInstance_InvalidRequest(t *testing.T) {
 		State: instances.StateStopped,
 	}
 
-	mockMgr := &captureStandbyManager{
-		Manager: svc.InstanceManager,
-		err:     fmt.Errorf("%w: invalid snapshot compression level", instances.ErrInvalidRequest),
-	}
+	mockMgr := newCaptureStandbyManager(svc.InstanceManager)
+	mockMgr.err = fmt.Errorf("%w: invalid snapshot compression level", instances.ErrInvalidRequest)
 	svc.InstanceManager = mockMgr
 
 	resp, err := svc.StandbyInstance(
@@ -1584,10 +1578,8 @@ func TestStandbyInstance_MapsCompressionDelay(t *testing.T) {
 		State: instances.StateRunning,
 	}
 
-	mockMgr := &captureStandbyManager{
-		Manager: svc.InstanceManager,
-		result:  &source,
-	}
+	mockMgr := newCaptureStandbyManager(svc.InstanceManager)
+	mockMgr.result = &source
 	svc.InstanceManager = mockMgr
 
 	delay := "45s"
@@ -1670,10 +1662,8 @@ func TestForkInstance_FromRunningFlagForwarded(t *testing.T) {
 		State: instances.StateStandby,
 	}
 
-	mockMgr := &captureForkManager{
-		Manager: svc.InstanceManager,
-		result:  forked,
-	}
+	mockMgr := newCaptureForkManager(svc.InstanceManager)
+	mockMgr.result = forked
 	svc.InstanceManager = mockMgr
 
 	fromRunning := true
