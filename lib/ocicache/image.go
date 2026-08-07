@@ -51,7 +51,9 @@ func blobHex(digest string) (string, error) {
 
 // ImageFromCache creates a v1.Image that reads from the OCI blob cache.
 // Docker v2 manifests are transparently converted to OCI format, matching the
-// conversion applied when images are appended to the OCI layout.
+// conversion applied when images are appended to the OCI layout. Returns
+// ErrInvalidDigest for a malformed digest and ErrNotFound when the manifest
+// blob is not in the cache.
 func ImageFromCache(p *paths.Paths, digest string) (v1.Image, error) {
 	digestHex, err := blobHex(digest)
 	if err != nil {
