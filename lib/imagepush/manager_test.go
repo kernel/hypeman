@@ -162,6 +162,32 @@ func testManager(t *testing.T, maxConcurrent int, provider registrypush.Provider
 	return mgr, digest
 }
 
+// mustPushed waits for the push to reach a terminal pushed state and returns
+// it, failing the test otherwise.
+func mustPushed(t *testing.T, mgr Manager, id string) *Push {
+	t.Helper()
+	if err := mgr.WaitForPush(context.Background(), id); err != nil {
+		t.Fatalf("WaitForPush %s: %v", id, err)
+	}
+	got, err := mgr.GetPush(context.Background(), id)
+	if err != nil {
+		t.Fatalf("GetPush %s: %v", id, err)
+	}
+	if got.Status != StatusPushed {
+		t.Fatalf("push %s status = %s, want pushed (error: %v)", id, got.Status, got.Error)
+	}
+	return got
+}
+
+func writePushes(t *testing.T, p *paths.Paths, metas ...*pushMetadata) {
+	t.Helper()
+	for _, meta := range metas {
+		if err := writeMetadata(p, meta); err != nil {
+			t.Fatalf("writeMetadata(%s): %v", meta.ID, err)
+		}
+	}
+}
+
 func TestCreatePushEndToEnd(t *testing.T) {
 	mgr, digest := testManager(t, 2, nil, nil)
 	host := openRegistry(t)
@@ -175,17 +201,7 @@ func TestCreatePushEndToEnd(t *testing.T) {
 		t.Errorf("initial status = %s, want queued or pushing", push.Status)
 	}
 
-	if err := mgr.WaitForPush(context.Background(), push.ID); err != nil {
-		t.Fatalf("WaitForPush: %v", err)
-	}
-
-	got, err := mgr.GetPush(context.Background(), push.ID)
-	if err != nil {
-		t.Fatalf("GetPush: %v", err)
-	}
-	if got.Status != StatusPushed {
-		t.Errorf("status = %s, want pushed (error: %v)", got.Status, got.Error)
-	}
+	got := mustPushed(t, mgr, push.ID)
 	if got.Digest != digest {
 		t.Errorf("digest = %s, want %s", got.Digest, digest)
 	}
@@ -432,16 +448,7 @@ func TestRecoverInterruptedPushes(t *testing.T) {
 		t.Fatalf("NewManager: %v", err)
 	}
 
-	if err := mgr.WaitForPush(context.Background(), "recovered-push"); err != nil {
-		t.Fatalf("WaitForPush recovered: %v", err)
-	}
-	got, err := mgr.GetPush(context.Background(), "recovered-push")
-	if err != nil {
-		t.Fatalf("GetPush: %v", err)
-	}
-	if got.Status != StatusPushed {
-		t.Errorf("status = %s, want pushed", got.Status)
-	}
+	mustPushed(t, mgr, "recovered-push")
 }
 
 func TestCreatePushDedupesConcurrently(t *testing.T) {
@@ -551,11 +558,7 @@ func TestRecoveryDedupesSameKey(t *testing.T) {
 
 	older := &pushMetadata{ID: "older", Status: StatusQueued, Image: "myapp:v1", Digest: digest, Target: target, Insecure: true, CreatedAt: now.Add(-time.Minute)}
 	newer := &pushMetadata{ID: "newer", Status: StatusQueued, Image: "myapp:v1", Digest: digest, Target: target, Insecure: true, CreatedAt: now}
-	for _, meta := range []*pushMetadata{older, newer} {
-		if err := writeMetadata(p, meta); err != nil {
-			t.Fatalf("writeMetadata(%s): %v", meta.ID, err)
-		}
-	}
+	writePushes(t, p, older, newer)
 
 	resolver := &fakeResolver{images: map[string]*images.Image{
 		"myapp:v1": readyImage("myapp:v1", digest),
@@ -593,16 +596,7 @@ func TestSequentialSameKeyPushesAllComplete(t *testing.T) {
 		if err != nil {
 			t.Fatalf("CreatePush #%d: %v", i, err)
 		}
-		if err := mgr.WaitForPush(context.Background(), push.ID); err != nil {
-			t.Fatalf("WaitForPush #%d: %v", i, err)
-		}
-		got, err := mgr.GetPush(context.Background(), push.ID)
-		if err != nil {
-			t.Fatalf("GetPush #%d: %v", i, err)
-		}
-		if got.Status != StatusPushed {
-			t.Fatalf("push #%d status = %s, want pushed (stuck job?)", i, got.Status)
-		}
+		mustPushed(t, mgr, push.ID)
 	}
 }
 
@@ -647,17 +641,7 @@ func TestCreatePushWithBorrowedCredentials(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreatePush: %v", err)
 	}
-	if err := mgr.WaitForPush(context.Background(), push.ID); err != nil {
-		t.Fatalf("WaitForPush: %v", err)
-	}
-
-	got, err := mgr.GetPush(context.Background(), push.ID)
-	if err != nil {
-		t.Fatalf("GetPush: %v", err)
-	}
-	if got.Status != StatusPushed {
-		t.Errorf("status = %s, want pushed (error: %v)", got.Status, got.Error)
-	}
+	mustPushed(t, mgr, push.ID)
 }
 
 func TestCredentialsNeverPersisted(t *testing.T) {
@@ -820,11 +804,7 @@ func TestRecoveryTreatsInsecureAsDistinctKey(t *testing.T) {
 
 	secure := &pushMetadata{ID: "secure", Status: StatusQueued, Image: "myapp:v1", Digest: digest, Target: target, Insecure: false, CreatedAt: now.Add(-time.Minute)}
 	insecure := &pushMetadata{ID: "insecure", Status: StatusQueued, Image: "myapp:v1", Digest: digest, Target: target, Insecure: true, CreatedAt: now}
-	for _, meta := range []*pushMetadata{secure, insecure} {
-		if err := writeMetadata(p, meta); err != nil {
-			t.Fatalf("writeMetadata(%s): %v", meta.ID, err)
-		}
-	}
+	writePushes(t, p, secure, insecure)
 
 	resolver := &fakeResolver{images: map[string]*images.Image{
 		"myapp:v1": readyImage("myapp:v1", digest),
@@ -837,15 +817,6 @@ func TestRecoveryTreatsInsecureAsDistinctKey(t *testing.T) {
 	// Same digest+target with different transport modes is distinct work:
 	// both jobs recover, neither is superseded.
 	for _, id := range []string{"secure", "insecure"} {
-		if err := mgr.WaitForPush(context.Background(), id); err != nil {
-			t.Fatalf("WaitForPush %s: %v", id, err)
-		}
-		got, err := mgr.GetPush(context.Background(), id)
-		if err != nil {
-			t.Fatalf("GetPush %s: %v", id, err)
-		}
-		if got.Status != StatusPushed {
-			t.Errorf("%s status = %s, want pushed (error: %v)", id, got.Status, got.Error)
-		}
+		mustPushed(t, mgr, id)
 	}
 }
