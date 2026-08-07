@@ -52,6 +52,82 @@ func TestForkSnapshotClearsVGPUAssignment(t *testing.T) {
 	assert.Equal(t, "/sys/bus/pci/devices/0000:82:00.4", source.GPUDevicePath)
 }
 
+func TestRestoreSnapshotDoesNotResurrectStaleVGPUAssignment(t *testing.T) {
+	mgr, _ := setupTestManager(t)
+	ctx := context.Background()
+
+	sourceID := "snapshot-vgpu-restore-stale"
+	createStoppedSnapshotSourceFixture(t, mgr, sourceID, sourceID, mgr.defaultHypervisor)
+
+	meta, err := mgr.loadMetadata(sourceID)
+	require.NoError(t, err)
+	meta.GPUProfile = "NVIDIA L40S-2Q"
+	meta.GPUFramework = devices.VGPUFramework("future-framework")
+	meta.GPUDevicePath = "/sys/bus/pci/devices/0000:82:00.4"
+	meta.GPUMdevUUID = "retained-uuid"
+	require.NoError(t, mgr.saveMetadata(meta))
+
+	snapshot, err := mgr.CreateSnapshot(ctx, sourceID, CreateSnapshotRequest{
+		Kind: SnapshotKindStopped,
+		Name: "snapshot-vgpu-restore-stale",
+	})
+	require.NoError(t, err)
+
+	// The retained assignment is released successfully after the snapshot
+	// was taken; a restore must not resurrect the snapshot's embedded copy.
+	meta, err = mgr.loadMetadata(sourceID)
+	require.NoError(t, err)
+	clearStoredVGPUDevice(&meta.StoredMetadata)
+	require.NoError(t, mgr.saveMetadata(meta))
+
+	_, err = mgr.RestoreSnapshot(ctx, sourceID, snapshot.Id, RestoreSnapshotRequest{
+		TargetState:      StateStopped,
+		TargetHypervisor: mgr.defaultHypervisor,
+	})
+	require.NoError(t, err)
+
+	restored, err := mgr.loadMetadata(sourceID)
+	require.NoError(t, err)
+	assert.Equal(t, devices.VGPUFrameworkNone, restored.GPUFramework)
+	assert.Empty(t, restored.GPUDevicePath)
+	assert.Empty(t, restored.GPUMdevUUID)
+}
+
+func TestRestoreSnapshotKeepsCurrentVGPUAssignment(t *testing.T) {
+	mgr, _ := setupTestManager(t)
+	ctx := context.Background()
+
+	sourceID := "snapshot-vgpu-restore-retained"
+	createStoppedSnapshotSourceFixture(t, mgr, sourceID, sourceID, mgr.defaultHypervisor)
+
+	snapshot, err := mgr.CreateSnapshot(ctx, sourceID, CreateSnapshotRequest{
+		Kind: SnapshotKindStopped,
+		Name: "snapshot-vgpu-restore-retained",
+	})
+	require.NoError(t, err)
+
+	// An assignment retained after the snapshot was taken (e.g. from a
+	// failed release on stop) must survive the restore for the next retry.
+	meta, err := mgr.loadMetadata(sourceID)
+	require.NoError(t, err)
+	meta.GPUFramework = devices.VGPUFramework("future-framework")
+	meta.GPUDevicePath = "/sys/bus/pci/devices/0000:82:00.4"
+	meta.GPUMdevUUID = "retained-uuid"
+	require.NoError(t, mgr.saveMetadata(meta))
+
+	_, err = mgr.RestoreSnapshot(ctx, sourceID, snapshot.Id, RestoreSnapshotRequest{
+		TargetState:      StateStopped,
+		TargetHypervisor: mgr.defaultHypervisor,
+	})
+	require.NoError(t, err)
+
+	restored, err := mgr.loadMetadata(sourceID)
+	require.NoError(t, err)
+	assert.Equal(t, devices.VGPUFramework("future-framework"), restored.GPUFramework)
+	assert.Equal(t, "/sys/bus/pci/devices/0000:82:00.4", restored.GPUDevicePath)
+	assert.Equal(t, "retained-uuid", restored.GPUMdevUUID)
+}
+
 func TestStoppedSnapshotLifecycleAndForkAfterSourceDeletion(t *testing.T) {
 	t.Parallel()
 	mgr, _ := setupTestManager(t)
