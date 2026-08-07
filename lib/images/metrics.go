@@ -11,8 +11,11 @@ import (
 
 // Metrics holds the metrics instruments for image operations.
 type Metrics struct {
-	buildDuration metric.Float64Histogram
-	pullsTotal    metric.Int64Counter
+	buildDuration      metric.Float64Histogram
+	buildPhaseDuration metric.Float64Histogram
+	ociLayerCount      metric.Int64Histogram
+	ociCompressedBytes metric.Int64Histogram
+	pullsTotal         metric.Int64Counter
 }
 
 // newMetrics creates and registers all image metrics.
@@ -22,6 +25,34 @@ func newMetrics(meter metric.Meter, m *manager) (*Metrics, error) {
 		metric.WithDescription("Time to build an image"),
 		metric.WithUnit("s"),
 		metric.WithExplicitBucketBoundaries(hypotel.BuildDurationHistogramBuckets()...),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	buildPhaseDuration, err := meter.Float64Histogram(
+		"hypeman_images_build_phase_duration_seconds",
+		metric.WithDescription("Time spent in each image build phase"),
+		metric.WithUnit("s"),
+		metric.WithExplicitBucketBoundaries(hypotel.BuildDurationHistogramBuckets()...),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	ociLayerCount, err := meter.Int64Histogram(
+		"hypeman_images_oci_layer_count",
+		metric.WithDescription("Number of layers in an OCI image being converted"),
+		metric.WithUnit("{layer}"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	ociCompressedBytes, err := meter.Int64Histogram(
+		"hypeman_images_oci_compressed_bytes",
+		metric.WithDescription("Total compressed bytes in OCI image layers being converted"),
+		metric.WithUnit("By"),
 	)
 	if err != nil {
 		return nil, err
@@ -80,8 +111,11 @@ func newMetrics(meter metric.Meter, m *manager) (*Metrics, error) {
 	}
 
 	return &Metrics{
-		buildDuration: buildDuration,
-		pullsTotal:    pullsTotal,
+		buildDuration:      buildDuration,
+		buildPhaseDuration: buildPhaseDuration,
+		ociLayerCount:      ociLayerCount,
+		ociCompressedBytes: ociCompressedBytes,
+		pullsTotal:         pullsTotal,
 	}, nil
 }
 
@@ -102,4 +136,24 @@ func (m *manager) recordPullMetrics(ctx context.Context, status string) {
 	}
 	m.metrics.pullsTotal.Add(ctx, 1,
 		metric.WithAttributes(attribute.String("status", status)))
+}
+
+func (m *manager) recordBuildPhaseMetrics(ctx context.Context, phase string, duration time.Duration, status, cacheStatus string) {
+	if m.metrics == nil {
+		return
+	}
+	m.metrics.buildPhaseDuration.Record(ctx, duration.Seconds(), metric.WithAttributes(
+		attribute.String("phase", phase),
+		attribute.String("status", status),
+		attribute.String("cache_status", cacheStatus),
+	))
+}
+
+func (m *manager) recordOCIImageMetrics(ctx context.Context, layerCount int, compressedBytes int64, cacheStatus string) {
+	if m.metrics == nil {
+		return
+	}
+	attrs := metric.WithAttributes(attribute.String("cache_status", cacheStatus))
+	m.metrics.ociLayerCount.Record(ctx, int64(layerCount), attrs)
+	m.metrics.ociCompressedBytes.Record(ctx, compressedBytes, attrs)
 }
