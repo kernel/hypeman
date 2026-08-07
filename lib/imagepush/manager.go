@@ -12,6 +12,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/paths"
+	"github.com/kernel/hypeman/lib/queue"
 	"github.com/kernel/hypeman/lib/registrypush"
 	"github.com/nrednav/cuid2"
 )
@@ -26,7 +27,7 @@ type manager struct {
 	paths    *paths.Paths
 	resolver ImageResolver
 	provider registrypush.Provider
-	queue    *pushQueue
+	queue    *queue.Queue
 
 	mu       sync.Mutex
 	inflight map[string]inflightPush // key = pushKey(digest, target, insecure)
@@ -50,7 +51,7 @@ func NewManager(p *paths.Paths, resolver ImageResolver, provider registrypush.Pr
 		paths:       p,
 		resolver:    resolver,
 		provider:    provider,
-		queue:       newPushQueue(maxConcurrent),
+		queue:       queue.New(maxConcurrent),
 		inflight:    make(map[string]inflightPush),
 		subscribers: make(map[string][]chan StatusEvent),
 	}

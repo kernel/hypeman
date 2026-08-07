@@ -25,6 +25,7 @@ import (
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/ocicache"
 	"github.com/kernel/hypeman/lib/paths"
+	"github.com/kernel/hypeman/lib/registrypush"
 )
 
 // fakeResolver resolves image names from a fixed map.
@@ -142,17 +143,28 @@ func readyImage(name_, digest string) *images.Image {
 	}
 }
 
-func TestCreatePushEndToEnd(t *testing.T) {
+// testManager wires the standard fixture: a temp OCI cache containing a ready
+// random image and a resolver mapping "myapp:v1" to it. provider and resolver
+// may be nil (default keychain provider / ready image map). Returns the
+// manager and the image's manifest digest.
+func testManager(t *testing.T, maxConcurrent int, provider registrypush.Provider, resolver ImageResolver) (Manager, string) {
+	t.Helper()
 	p, digest := cacheFixture(t)
-	host := openRegistry(t)
-	resolver := &fakeResolver{images: map[string]*images.Image{
-		"myapp:v1": readyImage("myapp:v1", digest),
-	}}
-
-	mgr, err := NewManager(p, resolver, nil, 2)
+	if resolver == nil {
+		resolver = &fakeResolver{images: map[string]*images.Image{
+			"myapp:v1": readyImage("myapp:v1", digest),
+		}}
+	}
+	mgr, err := NewManager(p, resolver, provider, maxConcurrent)
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
+	return mgr, digest
+}
+
+func TestCreatePushEndToEnd(t *testing.T) {
+	mgr, digest := testManager(t, 2, nil, nil)
+	host := openRegistry(t)
 
 	target := host + "/export/app:v1"
 	push, err := mgr.CreatePush(context.Background(), PushRequest{Image: "myapp:v1", Target: target, Insecure: true})
@@ -204,16 +216,8 @@ func TestCreatePushEndToEnd(t *testing.T) {
 }
 
 func TestCreatePushDedupesInFlight(t *testing.T) {
-	p, digest := cacheFixture(t)
+	mgr, digest := testManager(t, 2, nil, nil)
 	host, gate := gatedRegistry(t)
-	resolver := &fakeResolver{images: map[string]*images.Image{
-		"myapp:v1": readyImage("myapp:v1", digest),
-	}}
-
-	mgr, err := NewManager(p, resolver, nil, 2)
-	if err != nil {
-		t.Fatalf("NewManager: %v", err)
-	}
 
 	req := PushRequest{Image: "myapp:v1", Target: host + "/export/app:v1", Insecure: true}
 	first, err := mgr.CreatePush(context.Background(), req)
@@ -241,16 +245,8 @@ func TestCreatePushDedupesInFlight(t *testing.T) {
 }
 
 func TestCreatePushQueuesBehindConcurrencyLimit(t *testing.T) {
-	p, digest := cacheFixture(t)
+	mgr, _ := testManager(t, 1, nil, nil)
 	host, gate := gatedRegistry(t)
-	resolver := &fakeResolver{images: map[string]*images.Image{
-		"myapp:v1": readyImage("myapp:v1", digest),
-	}}
-
-	mgr, err := NewManager(p, resolver, nil, 1)
-	if err != nil {
-		t.Fatalf("NewManager: %v", err)
-	}
 
 	first, err := mgr.CreatePush(context.Background(), PushRequest{
 		Image: "myapp:v1", Target: host + "/export/a:v1", Insecure: true,
@@ -294,55 +290,45 @@ func TestCreatePushQueuesBehindConcurrencyLimit(t *testing.T) {
 	}
 }
 
-func TestCreatePushImageNotReady(t *testing.T) {
-	p, digest := cacheFixture(t)
-	resolver := &fakeResolver{images: map[string]*images.Image{
-		"myapp:v1": {Name: "myapp:v1", Digest: digest, Status: images.StatusConverting},
-	}}
-
-	mgr, err := NewManager(p, resolver, nil, 1)
-	if err != nil {
-		t.Fatalf("NewManager: %v", err)
+func TestCreatePushRejectsInvalidRequests(t *testing.T) {
+	cases := []struct {
+		name     string
+		resolver ImageResolver
+		req      PushRequest
+		want     error
+	}{
+		{
+			name:     "image not ready",
+			resolver: &fakeResolver{images: map[string]*images.Image{"myapp:v1": {Name: "myapp:v1", Digest: "sha256:0", Status: images.StatusConverting}}},
+			req:      PushRequest{Image: "myapp:v1", Target: "registry.example.com/app:v1"},
+			want:     ErrImageNotReady,
+		},
+		{
+			name:     "unknown image",
+			resolver: &fakeResolver{images: map[string]*images.Image{}},
+			req:      PushRequest{Image: "missing:v1", Target: "registry.example.com/app:v1"},
+			want:     images.ErrNotFound,
+		},
+		{
+			name: "invalid target",
+			req:  PushRequest{Image: "myapp:v1", Target: "!!!invalid"},
+			want: ErrInvalidTarget,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mgr, _ := testManager(t, 1, nil, tc.resolver)
+			if _, err := mgr.CreatePush(context.Background(), tc.req); !errors.Is(err, tc.want) {
+				t.Errorf("err = %v, want %v", err, tc.want)
+			}
+		})
 	}
 
-	_, err = mgr.CreatePush(context.Background(), PushRequest{Image: "myapp:v1", Target: "registry.example.com/app:v1"})
-	if !errors.Is(err, ErrImageNotReady) {
-		t.Errorf("err = %v, want ErrImageNotReady", err)
+	// Nothing was persisted for an invalid request.
+	mgr, _ := testManager(t, 1, nil, nil)
+	if _, err := mgr.CreatePush(context.Background(), PushRequest{Image: "myapp:v1", Target: "!!!invalid"}); !errors.Is(err, ErrInvalidTarget) {
+		t.Fatalf("err = %v, want ErrInvalidTarget", err)
 	}
-}
-
-func TestCreatePushUnknownImage(t *testing.T) {
-	p, _ := cacheFixture(t)
-	resolver := &fakeResolver{images: map[string]*images.Image{}}
-
-	mgr, err := NewManager(p, resolver, nil, 1)
-	if err != nil {
-		t.Fatalf("NewManager: %v", err)
-	}
-
-	_, err = mgr.CreatePush(context.Background(), PushRequest{Image: "missing:v1", Target: "registry.example.com/app:v1"})
-	if !errors.Is(err, images.ErrNotFound) {
-		t.Errorf("err = %v, want images.ErrNotFound", err)
-	}
-}
-
-func TestCreatePushInvalidTarget(t *testing.T) {
-	p, digest := cacheFixture(t)
-	resolver := &fakeResolver{images: map[string]*images.Image{
-		"myapp:v1": readyImage("myapp:v1", digest),
-	}}
-
-	mgr, err := NewManager(p, resolver, nil, 1)
-	if err != nil {
-		t.Fatalf("NewManager: %v", err)
-	}
-
-	_, err = mgr.CreatePush(context.Background(), PushRequest{Image: "myapp:v1", Target: "!!!invalid"})
-	if !errors.Is(err, ErrInvalidTarget) {
-		t.Errorf("err = %v, want ErrInvalidTarget", err)
-	}
-
-	// Nothing was persisted for the invalid request.
 	pushes, err := mgr.ListPushes(context.Background())
 	if err != nil {
 		t.Fatalf("ListPushes: %v", err)
@@ -353,20 +339,12 @@ func TestCreatePushInvalidTarget(t *testing.T) {
 }
 
 func TestCreatePushFailureRecorded(t *testing.T) {
-	p, digest := cacheFixture(t)
+	mgr, _ := testManager(t, 1, nil, nil)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "boom", http.StatusInternalServerError)
 	}))
 	t.Cleanup(srv.Close)
 	host := strings.TrimPrefix(srv.URL, "http://")
-
-	resolver := &fakeResolver{images: map[string]*images.Image{
-		"myapp:v1": readyImage("myapp:v1", digest),
-	}}
-	mgr, err := NewManager(p, resolver, nil, 1)
-	if err != nil {
-		t.Fatalf("NewManager: %v", err)
-	}
 
 	push, err := mgr.CreatePush(context.Background(), PushRequest{
 		Image: "myapp:v1", Target: host + "/export/app:v1", Insecure: true,
@@ -393,15 +371,8 @@ func TestCreatePushFailureRecorded(t *testing.T) {
 }
 
 func TestListPushesNewestFirst(t *testing.T) {
-	p, digest := cacheFixture(t)
+	mgr, _ := testManager(t, 2, nil, nil)
 	host := openRegistry(t)
-	resolver := &fakeResolver{images: map[string]*images.Image{
-		"myapp:v1": readyImage("myapp:v1", digest),
-	}}
-	mgr, err := NewManager(p, resolver, nil, 2)
-	if err != nil {
-		t.Fatalf("NewManager: %v", err)
-	}
 
 	first, err := mgr.CreatePush(context.Background(), PushRequest{
 		Image: "myapp:v1", Target: host + "/export/a:v1", Insecure: true,
@@ -474,16 +445,8 @@ func TestRecoverInterruptedPushes(t *testing.T) {
 }
 
 func TestCreatePushDedupesConcurrently(t *testing.T) {
-	p, digest := cacheFixture(t)
+	mgr, digest := testManager(t, 2, nil, nil)
 	host, gate := gatedRegistry(t)
-	resolver := &fakeResolver{images: map[string]*images.Image{
-		"myapp:v1": readyImage("myapp:v1", digest),
-	}}
-
-	mgr, err := NewManager(p, resolver, nil, 2)
-	if err != nil {
-		t.Fatalf("NewManager: %v", err)
-	}
 
 	req := PushRequest{Image: "myapp:v1", Target: host + "/export/app:v1", Insecure: true}
 	if _, err := mgr.CreatePush(context.Background(), req); err != nil {
@@ -529,19 +492,11 @@ func TestCreatePushDedupesConcurrently(t *testing.T) {
 }
 
 func TestCreatePushCredentialConflict(t *testing.T) {
-	p, digest := cacheFixture(t)
+	mgr, _ := testManager(t, 1, nil, nil)
 	hostA, gateA := gatedRegistry(t)
 	hostB, gateB := gatedRegistry(t)
 	targetA := hostA + "/export/a:v1"
 	targetB := hostB + "/export/b:v1"
-	resolver := &fakeResolver{images: map[string]*images.Image{
-		"myapp:v1": readyImage("myapp:v1", digest),
-	}}
-
-	mgr, err := NewManager(p, resolver, nil, 1)
-	if err != nil {
-		t.Fatalf("NewManager: %v", err)
-	}
 
 	// Credentialed in-flight push, then an anonymous request: merging would
 	// silently drop the request's intent and run under the in-flight auth.
@@ -627,15 +582,8 @@ func TestRecoveryDedupesSameKey(t *testing.T) {
 }
 
 func TestSequentialSameKeyPushesAllComplete(t *testing.T) {
-	p, digest := cacheFixture(t)
+	mgr, _ := testManager(t, 1, nil, nil)
 	host := openRegistry(t)
-	resolver := &fakeResolver{images: map[string]*images.Image{
-		"myapp:v1": readyImage("myapp:v1", digest),
-	}}
-	mgr, err := NewManager(p, resolver, nil, 1)
-	if err != nil {
-		t.Fatalf("NewManager: %v", err)
-	}
 
 	target := host + "/export/again:v1"
 	for i := 0; i < 5; i++ {
@@ -659,14 +607,9 @@ func TestSequentialSameKeyPushesAllComplete(t *testing.T) {
 }
 
 func TestWaitForPushNotFound(t *testing.T) {
-	p, _ := cacheFixture(t)
-	resolver := &fakeResolver{images: map[string]*images.Image{}}
-	mgr, err := NewManager(p, resolver, nil, 1)
-	if err != nil {
-		t.Fatalf("NewManager: %v", err)
-	}
+	mgr, _ := testManager(t, 1, nil, nil)
 
-	err = mgr.WaitForPush(context.Background(), "missing")
+	err := mgr.WaitForPush(context.Background(), "missing")
 	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("err = %v, want ErrNotFound", err)
 	}
@@ -681,7 +624,7 @@ func (erroringProvider) Authenticator(_ context.Context, _ name.Reference) (auth
 }
 
 func TestCreatePushWithBorrowedCredentials(t *testing.T) {
-	p, digest := cacheFixture(t)
+	mgr, _ := testManager(t, 1, erroringProvider{}, nil)
 
 	inner := registry.New()
 	gated := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -694,14 +637,6 @@ func TestCreatePushWithBorrowedCredentials(t *testing.T) {
 	srv := httptest.NewServer(gated)
 	t.Cleanup(srv.Close)
 	host := strings.TrimPrefix(srv.URL, "http://")
-
-	resolver := &fakeResolver{images: map[string]*images.Image{
-		"myapp:v1": readyImage("myapp:v1", digest),
-	}}
-	mgr, err := NewManager(p, resolver, erroringProvider{}, 1)
-	if err != nil {
-		t.Fatalf("NewManager: %v", err)
-	}
 
 	push, err := mgr.CreatePush(context.Background(), PushRequest{
 		Image:       "myapp:v1",
@@ -848,15 +783,8 @@ func (panickingProvider) Authenticator(_ context.Context, _ name.Reference) (aut
 }
 
 func TestExecutePushContainsPanic(t *testing.T) {
-	p, digest := cacheFixture(t)
+	mgr, _ := testManager(t, 1, panickingProvider{}, nil)
 	host := openRegistry(t)
-	resolver := &fakeResolver{images: map[string]*images.Image{
-		"myapp:v1": readyImage("myapp:v1", digest),
-	}}
-	mgr, err := NewManager(p, resolver, panickingProvider{}, 1)
-	if err != nil {
-		t.Fatalf("NewManager: %v", err)
-	}
 
 	push, err := mgr.CreatePush(context.Background(), PushRequest{
 		Image: "myapp:v1", Target: host + "/export/panic:v1", Insecure: true,

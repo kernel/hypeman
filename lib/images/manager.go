@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/paths"
+	"github.com/kernel/hypeman/lib/queue"
 	"github.com/kernel/hypeman/lib/tags"
 	"go.opentelemetry.io/otel/metric"
 )
@@ -54,7 +55,7 @@ type Manager interface {
 type manager struct {
 	paths            *paths.Paths
 	ociClient        *ociClient
-	queue            *BuildQueue
+	queue            *queue.Queue
 	createMu         sync.Mutex
 	diskUsageMu      sync.RWMutex
 	diskUsageLoaded  bool
@@ -78,7 +79,7 @@ func NewManager(p *paths.Paths, maxConcurrentBuilds int, meter metric.Meter) (Ma
 	m := &manager{
 		paths:            p,
 		ociClient:        ociClient,
-		queue:            NewBuildQueue(maxConcurrentBuilds),
+		queue:            queue.New(maxConcurrentBuilds),
 		readySubscribers: make(map[string][]chan StatusEvent),
 	}
 
@@ -265,7 +266,7 @@ func (m *manager) createAndQueueImage(ref *ResolvedRef, req CreateImageRequest, 
 	}
 
 	// Enqueue the build using digest as the queue key for deduplication
-	queuePos := m.queue.Enqueue(ref.Digest(), storedReq, func() {
+	queuePos := m.queue.Enqueue(ref.Digest(), func() {
 		m.buildImage(context.Background(), ref)
 	})
 
@@ -483,7 +484,7 @@ func (m *manager) RecoverInterruptedBuilds() {
 				}
 				// Create a ResolvedRef since we already have the digest from metadata
 				ref := NewResolvedRef(normalized, metaCopy.Digest)
-				m.queue.Enqueue(metaCopy.Digest, *metaCopy.Request, func() {
+				m.queue.Enqueue(metaCopy.Digest, func() {
 					m.buildImage(context.Background(), ref)
 				})
 			}
