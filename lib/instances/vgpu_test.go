@@ -2,11 +2,11 @@ package instances
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"sync"
 	"testing"
-	_ "unsafe"
 
 	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/hypervisor"
@@ -40,7 +40,7 @@ func TestCleanupFailedCreateRetainsVGPUAssignment(t *testing.T) {
 		DataDir:        m.paths.InstanceDir("failed-create"),
 	}
 
-	m.cleanupFailedCreate(context.Background(), stored.Id, stored)
+	assert.True(t, m.cleanupFailedCreate(context.Background(), stored.Id, stored))
 
 	retained, err := m.loadMetadata(stored.Id)
 	require.NoError(t, err)
@@ -56,40 +56,43 @@ func TestCleanupFailedCreateRetainsVGPUAssignment(t *testing.T) {
 	assert.Empty(t, retained.DataDir)
 }
 
-//go:linkname hostVendorVFIO github.com/kernel/hypeman/lib/devices.hostVendorVFIO
-var hostVendorVFIO vendorVFIOSysfs
+func TestCleanupFailedCreateDeletesDataWithoutRetainedVGPU(t *testing.T) {
+	t.Parallel()
 
-type vendorVFIOSysfs struct {
-	pciDevicesPath  string
-	procPath        string
-	vfioDevicesPath string
-	owners          map[string]string
+	m := &manager{paths: paths.New(t.TempDir())}
+	require.NoError(t, m.ensureDirectories("failed-create"))
+
+	assert.False(t, m.cleanupFailedCreate(context.Background(), "failed-create", nil))
+	_, err := m.loadMetadata("failed-create")
+	require.Error(t, err)
 }
 
-func TestStartRollbackClearsVGPUAssignmentAfterSuccessfulDestroy(t *testing.T) {
-	root := t.TempDir()
-	pciDevicesPath := filepath.Join(root, "sys", "bus", "pci", "devices")
-	vfAddress := "0000:82:00.4"
-	nvidiaPath := filepath.Join(pciDevicesPath, vfAddress, "nvidia")
-	require.NoError(t, os.MkdirAll(nvidiaPath, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(nvidiaPath, "current_vgpu_type"), []byte("0"), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(nvidiaPath, "creatable_vgpu_types"), []byte("ID    : vGPU Name\n1148  : NVIDIA L40S-2Q\n"), 0o644))
+func TestVGPUCleanupPendingErrorUnwraps(t *testing.T) {
+	t.Parallel()
 
-	originalVendorVFIO := hostVendorVFIO
-	hostVendorVFIO = vendorVFIOSysfs{
-		pciDevicesPath:  pciDevicesPath,
-		procPath:        filepath.Join(root, "proc"),
-		vfioDevicesPath: filepath.Join(root, "dev", "vfio", "devices"),
-		owners:          make(map[string]string),
-	}
-	t.Cleanup(func() { hostVendorVFIO = originalVendorVFIO })
-	require.NoError(t, os.MkdirAll(hostVendorVFIO.procPath, 0o755))
+	cause := errors.New("boot failed")
+	err := &VGPUCleanupPendingError{InstanceID: "inst-1", Err: cause}
+	assert.ErrorIs(t, err, cause)
+	assert.Contains(t, err.Error(), "inst-1")
+}
 
+func newStartRollbackVGPUManager(t *testing.T, destroy func(context.Context, devices.VGPUAssignment) error) (*manager, string) {
+	t.Helper()
 	m := &manager{
 		paths:           paths.New(t.TempDir()),
 		imageManager:    readyFixtureImageManager{name: "test-image"},
 		instanceLocks:   sync.Map{},
 		bootMarkerScans: sync.Map{},
+		createVGPU: func(_ context.Context, profileName, _ string) (*devices.VGPUDevice, error) {
+			return &devices.VGPUDevice{
+				Framework:   devices.VGPUFrameworkVendorVFIO,
+				VFAddress:   "0000:82:00.4",
+				ProfileType: "1148",
+				ProfileName: profileName,
+				SysfsPath:   "/sys/bus/pci/devices/0000:82:00.4",
+			}, nil
+		},
+		destroyVGPU: destroy,
 	}
 	const id = "start-rollback"
 	require.NoError(t, m.ensureDirectories(id))
@@ -102,10 +105,26 @@ func TestStartRollbackClearsVGPUAssignmentAfterSuccessfulDestroy(t *testing.T) {
 		SocketPath:     m.paths.InstanceSocket(id, "noop.sock"),
 		DataDir:        m.paths.InstanceDir(id),
 	}}))
+	return m, id
+}
 
-	t.Setenv("TMPDIR", filepath.Join(root, "missing"))
+func TestStartRollbackClearsVGPUAssignmentAfterSuccessfulDestroy(t *testing.T) {
+	var destroyed []devices.VGPUAssignment
+	m, id := newStartRollbackVGPUManager(t, func(_ context.Context, assignment devices.VGPUAssignment) error {
+		destroyed = append(destroyed, assignment)
+		return nil
+	})
+
+	t.Setenv("TMPDIR", filepath.Join(t.TempDir(), "missing"))
 	_, err := m.startInstance(context.Background(), id, StartInstanceRequest{})
 	require.Error(t, err)
+
+	require.Len(t, destroyed, 1)
+	assert.Equal(t, devices.VGPUAssignment{
+		Framework:  devices.VGPUFrameworkVendorVFIO,
+		DevicePath: "/sys/bus/pci/devices/0000:82:00.4",
+		InstanceID: id,
+	}, destroyed[0])
 
 	stored, err := m.loadMetadata(id)
 	require.NoError(t, err)
@@ -113,14 +132,21 @@ func TestStartRollbackClearsVGPUAssignmentAfterSuccessfulDestroy(t *testing.T) {
 	assert.Empty(t, stored.GPUFramework)
 	assert.Empty(t, stored.GPUDevicePath)
 	assert.Empty(t, stored.GPUMdevUUID)
-	assertFileContents(t, filepath.Join(nvidiaPath, "current_vgpu_type"), "0")
 }
 
-func assertFileContents(t *testing.T, path, want string) {
-	t.Helper()
-	got, err := os.ReadFile(path)
+func TestStartRollbackRetainsVGPUAssignmentAfterFailedDestroy(t *testing.T) {
+	m, id := newStartRollbackVGPUManager(t, func(context.Context, devices.VGPUAssignment) error {
+		return errors.New("destroy failed")
+	})
+
+	t.Setenv("TMPDIR", filepath.Join(t.TempDir(), "missing"))
+	_, err := m.startInstance(context.Background(), id, StartInstanceRequest{})
+	require.Error(t, err)
+
+	stored, err := m.loadMetadata(id)
 	require.NoError(t, err)
-	assert.Equal(t, want, string(got))
+	assert.Equal(t, devices.VGPUFrameworkVendorVFIO, stored.GPUFramework)
+	assert.Equal(t, "/sys/bus/pci/devices/0000:82:00.4", stored.GPUDevicePath)
 }
 
 func TestVGPUAssignmentClaimedByLiveInstanceFailsOnInvalidMetadata(t *testing.T) {

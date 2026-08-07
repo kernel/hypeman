@@ -5,8 +5,46 @@ import (
 	"path/filepath"
 
 	"github.com/kernel/hypeman/lib/devices"
+	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/logger"
 )
+
+func validateVGPUHypervisor(hvType hypervisor.Type) error {
+	if hvType != hypervisor.TypeQEMU {
+		return fmt.Errorf("vGPU is only supported with qemu, got %s", hvType)
+	}
+	return nil
+}
+
+// VGPUCleanupPendingError reports a failed create whose vGPU release also
+// failed during rollback. The instance record identified by InstanceID is
+// retained so the release can be retried; deleting the instance retries it.
+type VGPUCleanupPendingError struct {
+	InstanceID string
+	Err        error
+}
+
+func (e *VGPUCleanupPendingError) Error() string {
+	return fmt.Sprintf("%v; vGPU release failed during rollback, instance %s retains the assignment", e.Err, e.InstanceID)
+}
+
+func (e *VGPUCleanupPendingError) Unwrap() error { return e.Err }
+
+func (m *manager) createVGPUDevice(ctx context.Context, profileName, instanceID string) (*devices.VGPUDevice, error) {
+	create := m.createVGPU
+	if create == nil {
+		create = devices.CreateVGPU
+	}
+	return create(ctx, profileName, instanceID)
+}
+
+func (m *manager) destroyVGPUAssignment(ctx context.Context, assignment devices.VGPUAssignment) error {
+	destroy := m.destroyVGPU
+	if destroy == nil {
+		destroy = devices.DestroyVGPU
+	}
+	return destroy(ctx, assignment)
+}
 
 func setStoredVGPUDevice(stored *StoredMetadata, device *devices.VGPUDevice) {
 	stored.GPUFramework = device.Framework
@@ -37,7 +75,7 @@ func (m *manager) releaseStoredVGPU(ctx context.Context, stored *StoredMetadata)
 				MdevUUID:   stored.GPUMdevUUID,
 				InstanceID: stored.Id,
 			}
-			if err := devices.DestroyVGPU(ctx, assignment); err != nil {
+			if err := m.destroyVGPUAssignment(ctx, assignment); err != nil {
 				return err
 			}
 		}

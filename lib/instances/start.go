@@ -162,11 +162,11 @@ func (m *manager) startInstance(
 	// 4b. Recreate the vGPU if this instance had a GPU profile
 	// Note: GPU availability was already validated in step 2b
 	if stored.GPUProfile != "" {
-		log.InfoContext(ctx, "creating vGPU mdev for start", "instance_id", id, "profile", stored.GPUProfile)
-		device, err := devices.CreateVGPU(ctx, stored.GPUProfile, id)
+		log.InfoContext(ctx, "creating vGPU for start", "instance_id", id, "profile", stored.GPUProfile)
+		device, err := m.createVGPUDevice(ctx, stored.GPUProfile, id)
 		if err != nil {
 			log.ErrorContext(ctx, "failed to create vGPU", "instance_id", id, "profile", stored.GPUProfile, "error", err)
-			return nil, fmt.Errorf("create vGPU mdev for profile %s: %w", stored.GPUProfile, err)
+			return nil, fmt.Errorf("create vGPU for profile %s: %w", stored.GPUProfile, err)
 		}
 		setStoredVGPUDevice(stored, device)
 		log.InfoContext(ctx, "created vGPU", "instance_id", id, "profile", stored.GPUProfile, "uuid", device.MdevUUID)
@@ -179,7 +179,7 @@ func (m *manager) startInstance(
 				MdevUUID:   device.MdevUUID,
 				InstanceID: id,
 			}
-			if err := devices.DestroyVGPU(ctx, assignment); err != nil {
+			if err := m.destroyVGPUAssignment(ctx, assignment); err != nil {
 				log.WarnContext(ctx, "failed to destroy vGPU on cleanup", "instance_id", id, "uuid", device.MdevUUID, "error", err)
 				if saveErr := m.saveMetadata(meta); saveErr != nil {
 					log.ErrorContext(ctx, "failed to retain vGPU assignment metadata after cleanup failure", "instance_id", id, "error", saveErr)
