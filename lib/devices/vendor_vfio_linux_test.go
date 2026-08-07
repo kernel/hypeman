@@ -252,6 +252,33 @@ func TestVendorVFIOSelectsLeastLoadedGPUWithConsumedType(t *testing.T) {
 	assert.Equal(t, "0000:e3:00.4", device.VFAddress)
 }
 
+func TestVendorVFIOPlacementPrefersKnownLoadWhenAllocatedTypeIsUnknown(t *testing.T) {
+	t.Parallel()
+
+	// Simulates a restart: type 1159 is allocated but no longer creatable
+	// anywhere, so its framebuffer size is unknown.
+	sysfs := newTestVendorVFIOSysfs(t)
+	sysfs.addVF(t, "0000:82:00.0", "0000:82:00.4", "42", "1159", "")
+	sysfs.addVF(t, "0000:82:00.0", "0000:82:00.5", "43", "0", "1147  : NVIDIA L40S-1Q\n")
+	sysfs.addVF(t, "0000:e3:00.0", "0000:e3:00.4", "44", "0", "1147  : NVIDIA L40S-1Q\n")
+
+	device, err := sysfs.create(context.Background(), "NVIDIA L40S-1Q", "instance-1")
+	require.NoError(t, err)
+	assert.Equal(t, "0000:e3:00.4", device.VFAddress, "the GPU with unknown load should be picked last")
+}
+
+func TestVendorVFIOPlacesOnGPUWithUnknownLoadWhenItHasTheOnlyCapacity(t *testing.T) {
+	t.Parallel()
+
+	sysfs := newTestVendorVFIOSysfs(t)
+	sysfs.addVF(t, "0000:82:00.0", "0000:82:00.4", "42", "1159", "")
+	sysfs.addVF(t, "0000:82:00.0", "0000:82:00.5", "43", "0", "1147  : NVIDIA L40S-1Q\n")
+
+	device, err := sysfs.create(context.Background(), "NVIDIA L40S-1Q", "instance-1")
+	require.NoError(t, err)
+	assert.Equal(t, "0000:82:00.5", device.VFAddress)
+}
+
 func TestVendorVFIOReconcile(t *testing.T) {
 	t.Parallel()
 
