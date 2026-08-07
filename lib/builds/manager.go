@@ -244,21 +244,27 @@ func (m *manager) ensureBuilderImage(ctx context.Context) {
 	if m.config.BuilderImage != "" {
 		// Explicit builder image configured - check if already available.
 		if image, err := m.imageManager.GetImage(ctx, m.config.BuilderImage); err == nil {
-			if image.Status == images.StatusReady {
+			switch image.Status {
+			case images.StatusReady:
 				m.logger.Info("builder image already available", "image", m.config.BuilderImage)
 				m.builderReady.Store(true)
 				return
-			}
-			m.logger.Info("waiting for existing builder image", "image", m.config.BuilderImage, "status", image.Status)
-			if err := m.waitForBuilderImageReady(ctx, m.config.BuilderImage); err != nil {
-				m.logger.Warn("builder image failed to become ready", "image", m.config.BuilderImage, "error", err)
+			case images.StatusFailed:
+				// CreateImage removes failed image state and queues a fresh pull.
+				m.logger.Info("retrying failed builder image", "image", m.config.BuilderImage)
+			default:
+				m.logger.Info("waiting for existing builder image", "image", m.config.BuilderImage, "status", image.Status)
+				if err := m.waitForBuilderImageReady(ctx, m.config.BuilderImage); err != nil {
+					m.logger.Warn("builder image failed to become ready", "image", m.config.BuilderImage, "error", err)
+					return
+				}
+				m.builderReady.Store(true)
 				return
 			}
-			m.builderReady.Store(true)
-			return
 		}
 
-		// Not in store - try to pull it from remote registry.
+		// Missing or failed: pull it from the remote registry. CreateImage cleans
+		// failed metadata before re-queueing the conversion.
 		m.logger.Info("pulling builder image", "image", m.config.BuilderImage)
 		if _, err := m.imageManager.CreateImage(ctx, images.CreateImageRequest{
 			Name: m.config.BuilderImage,
