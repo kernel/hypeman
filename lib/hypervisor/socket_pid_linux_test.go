@@ -25,6 +25,29 @@ func TestResolveProcessPID(t *testing.T) {
 	require.Equal(t, os.Getpid(), pid)
 }
 
+func TestResolveProcessPIDIgnoresConnectedSocketEntries(t *testing.T) {
+	tmpDir := t.TempDir()
+	socketPath := filepath.Join(tmpDir, "test.sock")
+
+	listener, err := net.Listen("unix", socketPath)
+	require.NoError(t, err)
+	defer listener.Close()
+
+	// Accepted server-side sockets share the listener's path in
+	// /proc/net/unix; they must not make the listener's inode ambiguous.
+	conn, err := net.Dial("unix", socketPath)
+	require.NoError(t, err)
+	defer conn.Close()
+	accepted, err := listener.Accept()
+	require.NoError(t, err)
+	defer accepted.Close()
+
+	pid, confirmed, err := ResolveProcessPID(socketPath)
+	require.NoError(t, err)
+	require.True(t, confirmed)
+	require.Equal(t, os.Getpid(), pid)
+}
+
 func TestResolveProcessPIDIsUnconfirmedForDuplicateSocketPaths(t *testing.T) {
 	oldProcDir := procDir
 	procDir = t.TempDir()
