@@ -149,7 +149,7 @@ func (m *manager) CreateImage(ctx context.Context, req CreateImageRequest) (*Ima
 		}
 	} else {
 		// inspectManifestWithPlatform already classifies registry errors via
-		// wrapRegistryError, so just propagate with %w to keep the errors.Is chain.
+		// ClassifyRegistryError, so just propagate with %w to keep the errors.Is chain.
 		ref, err = normalized.ResolveForPlatform(resolveCtx, m.ociClient, platform.ToGCR())
 		if err != nil {
 			return nil, fmt.Errorf("resolve manifest for platform %s: %w", platform, err)
