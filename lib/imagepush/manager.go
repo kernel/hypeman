@@ -28,7 +28,7 @@ type manager struct {
 	queue    *pushQueue
 
 	mu       sync.Mutex
-	inflight map[string]inflightPush // key = pushKey(digest, target)
+	inflight map[string]inflightPush // key = pushKey(digest, target, insecure)
 
 	subscriberMu sync.RWMutex
 	subscribers  map[string][]chan StatusEvent // keyed by push ID
@@ -58,8 +58,12 @@ func NewManager(p *paths.Paths, resolver ImageResolver, provider registrypush.Pr
 	return m, nil
 }
 
-// pushKey identifies in-flight work by digest and target.
-func pushKey(digest, target string) string {
+// pushKey identifies in-flight work by digest, target, and transport mode:
+// the same target pushed with and without Insecure is distinct work.
+func pushKey(digest, target string, insecure bool) string {
+	if insecure {
+		return digest + "->" + target + "+insecure"
+	}
 	return digest + "->" + target
 }
 
@@ -86,7 +90,7 @@ func (m *manager) CreatePush(ctx context.Context, req PushRequest) (*Push, error
 		return nil, fmt.Errorf("%w: %v", ErrInvalidTarget, err)
 	}
 
-	key := pushKey(img.Digest, dstRef.String())
+	key := pushKey(img.Digest, dstRef.String(), req.Insecure)
 
 	// Borrowed credentials live only in this closure: the job provider is
 	// built per push and never touches disk.
@@ -118,6 +122,13 @@ func (m *manager) CreatePush(ctx context.Context, req PushRequest) (*Push, error
 	}
 	if orphan != nil && orphan.HadCredentials {
 		m.failRecovered(orphan, "push interrupted by restart: borrowed registry credentials are no longer available, retry the push")
+		orphan = nil
+	}
+	// A request that lends credentials cannot adopt a credential-less orphan:
+	// the adopted job would run under the default provider instead of the
+	// borrowed login. Supersede the orphan and create a fresh job instead.
+	if orphan != nil && req.Credentials != nil {
+		m.failRecovered(orphan, "superseded by a new push request for the same image and target")
 		orphan = nil
 	}
 	if orphan != nil {
@@ -166,6 +177,24 @@ func (m *manager) CreatePush(ctx context.Context, req PushRequest) (*Push, error
 }
 
 func (m *manager) executePush(ctx context.Context, meta *pushMetadata, provider registrypush.Provider) {
+	// Contain panics in the job goroutine: record a failed terminal and
+	// notify waiters instead of leaving the job stuck as pushing. The queue
+	// slot is released by its own deferred completion.
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Fprintf(os.Stderr, "Warning: push %s to %s panicked: %v\n", meta.ID, meta.Target, r)
+			now := time.Now()
+			errorMsg := fmt.Sprintf("push panicked: %v", r)
+			meta.Status = StatusFailed
+			meta.Error = &errorMsg
+			meta.CompletedAt = &now
+			if err := m.writeTerminal(meta); err != nil {
+				os.RemoveAll(m.paths.PushDir(meta.ID))
+			}
+			m.notify(meta.ID, StatusFailed, fmt.Errorf("push panicked: %v", r))
+		}
+	}()
+
 	meta.Status = StatusPushing
 	if err := writeMetadata(m.paths, meta); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: failed to persist push status for %s: %v\n", meta.ID, err)
@@ -238,7 +267,7 @@ func (m *manager) GetPush(ctx context.Context, id string) (*Push, error) {
 
 	push := meta.toPush()
 	if meta.Status == StatusQueued {
-		push.QueuePosition = m.queue.GetPosition(pushKey(meta.Digest, meta.Target))
+		push.QueuePosition = m.queue.GetPosition(pushKey(meta.Digest, meta.Target, meta.Insecure))
 	}
 	return push, nil
 }
@@ -253,7 +282,7 @@ func (m *manager) ListPushes(ctx context.Context) ([]Push, error) {
 	for _, meta := range metas {
 		push := meta.toPush()
 		if meta.Status == StatusQueued {
-			push.QueuePosition = m.queue.GetPosition(pushKey(meta.Digest, meta.Target))
+			push.QueuePosition = m.queue.GetPosition(pushKey(meta.Digest, meta.Target, meta.Insecure))
 		}
 		pushes = append(pushes, *push)
 	}
@@ -331,12 +360,15 @@ func (m *manager) InProgressDigests() []string {
 func (m *manager) recoverInterruptedPushes() {
 	pending, err := listPendingPushes(m.paths)
 	if err != nil {
-		return // Best effort
+		// Loud on purpose: without recovery these records stay queued on disk
+		// with nothing to run them.
+		fmt.Fprintf(os.Stderr, "Warning: could not recover interrupted pushes: %v\n", err)
+		return
 	}
 
 	seen := make(map[string]string, len(pending)) // key -> recovered push ID
 	for _, meta := range pending {
-		key := pushKey(meta.Digest, meta.Target)
+		key := pushKey(meta.Digest, meta.Target, meta.Insecure)
 
 		// Borrowed credentials do not survive a restart, so a credentialed
 		// push cannot be retried faithfully; fail it instead of re-enqueueing

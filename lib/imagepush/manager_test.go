@@ -837,3 +837,140 @@ func TestCreatePushMissingBlobs(t *testing.T) {
 		t.Errorf("err = %v, want ocicache.ErrNotFound", err)
 	}
 }
+
+// panickingProvider blows up during credential resolution, standing in for a
+// panic anywhere in the push path.
+type panickingProvider struct{}
+
+func (panickingProvider) Authenticator(_ context.Context, _ name.Reference) (authn.Authenticator, error) {
+	panic("boom")
+}
+
+func TestExecutePushContainsPanic(t *testing.T) {
+	p, digest := cacheFixture(t)
+	host := openRegistry(t)
+	resolver := &fakeResolver{images: map[string]*images.Image{
+		"myapp:v1": readyImage("myapp:v1", digest),
+	}}
+	mgr, err := NewManager(p, resolver, panickingProvider{}, 1)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	push, err := mgr.CreatePush(context.Background(), PushRequest{
+		Image: "myapp:v1", Target: host + "/export/panic:v1", Insecure: true,
+	})
+	if err != nil {
+		t.Fatalf("CreatePush: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	err = mgr.WaitForPush(ctx, push.ID)
+	if err == nil {
+		t.Fatal("WaitForPush should fail for a panicked push")
+	}
+	if !strings.Contains(err.Error(), "panicked") {
+		t.Errorf("err = %v, want panic explanation", err)
+	}
+
+	got, err := mgr.GetPush(context.Background(), push.ID)
+	if err != nil {
+		t.Fatalf("GetPush: %v", err)
+	}
+	if got.Status != StatusFailed {
+		t.Errorf("status = %s, want failed", got.Status)
+	}
+}
+
+func TestCreatePushWithCredentialsSupersedesOrphan(t *testing.T) {
+	p, digest := cacheFixture(t)
+	host := openRegistry(t)
+	target := host + "/export/supersede:v1"
+
+	resolver := &fakeResolver{images: map[string]*images.Image{
+		"myapp:v1": readyImage("myapp:v1", digest),
+	}}
+	mgr, err := NewManager(p, resolver, nil, 1)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	// A credential-less orphan cannot be adopted by a request that lends
+	// credentials: it would run under the default provider instead of the
+	// borrowed login.
+	orphan := &pushMetadata{
+		ID:        "plain-orphan",
+		Status:    StatusQueued,
+		Image:     "myapp:v1",
+		Digest:    digest,
+		Target:    target,
+		Insecure:  true,
+		CreatedAt: time.Now(),
+	}
+	if err := writeMetadata(p, orphan); err != nil {
+		t.Fatalf("writeMetadata: %v", err)
+	}
+
+	push, err := mgr.CreatePush(context.Background(), PushRequest{
+		Image:       "myapp:v1",
+		Target:      target,
+		Insecure:    true,
+		Credentials: &authn.AuthConfig{RegistryToken: "borrowed"},
+	})
+	if err != nil {
+		t.Fatalf("CreatePush: %v", err)
+	}
+	if push.ID == "plain-orphan" {
+		t.Fatal("credentialed request must not adopt a credential-less orphan")
+	}
+	if err := mgr.WaitForPush(context.Background(), push.ID); err != nil {
+		t.Fatalf("WaitForPush: %v", err)
+	}
+
+	got, err := mgr.GetPush(context.Background(), "plain-orphan")
+	if err != nil {
+		t.Fatalf("GetPush orphan: %v", err)
+	}
+	if got.Status != StatusFailed {
+		t.Errorf("orphan status = %s, want failed (superseded)", got.Status)
+	}
+}
+
+func TestRecoveryTreatsInsecureAsDistinctKey(t *testing.T) {
+	p, digest := cacheFixture(t)
+	host := openRegistry(t)
+	target := host + "/export/distinct:v1"
+	now := time.Now()
+
+	secure := &pushMetadata{ID: "secure", Status: StatusQueued, Image: "myapp:v1", Digest: digest, Target: target, Insecure: false, CreatedAt: now.Add(-time.Minute)}
+	insecure := &pushMetadata{ID: "insecure", Status: StatusQueued, Image: "myapp:v1", Digest: digest, Target: target, Insecure: true, CreatedAt: now}
+	for _, meta := range []*pushMetadata{secure, insecure} {
+		if err := writeMetadata(p, meta); err != nil {
+			t.Fatalf("writeMetadata(%s): %v", meta.ID, err)
+		}
+	}
+
+	resolver := &fakeResolver{images: map[string]*images.Image{
+		"myapp:v1": readyImage("myapp:v1", digest),
+	}}
+	mgr, err := NewManager(p, resolver, nil, 1)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	// Same digest+target with different transport modes is distinct work:
+	// both jobs recover, neither is superseded.
+	for _, id := range []string{"secure", "insecure"} {
+		if err := mgr.WaitForPush(context.Background(), id); err != nil {
+			t.Fatalf("WaitForPush %s: %v", id, err)
+		}
+		got, err := mgr.GetPush(context.Background(), id)
+		if err != nil {
+			t.Fatalf("GetPush %s: %v", id, err)
+		}
+		if got.Status != StatusPushed {
+			t.Errorf("%s status = %s, want pushed (error: %v)", id, got.Status, got.Error)
+		}
+	}
+}
