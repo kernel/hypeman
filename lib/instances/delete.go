@@ -210,10 +210,21 @@ func (m *manager) deleteInstanceWithOptions(
 func (m *manager) killHypervisor(ctx context.Context, inst *Instance) error {
 	log := logger.FromContext(ctx)
 
-	// If we have a PID, kill the process immediately
+	// The stored PID can be stale after a hypeman restart and reused by an
+	// unrelated process, so only kill a PID confirmed against the socket
+	// owner. On a confirmed mismatch, kill the owner instead.
+	pid := 0
 	if inst.HypervisorPID != nil {
-		pid := *inst.HypervisorPID
+		if HypervisorProcessExists(*inst.HypervisorPID, inst.SocketPath) {
+			pid = *inst.HypervisorPID
+		} else if resolved, confirmed, err := hypervisor.ResolveProcessPID(inst.SocketPath); err == nil && confirmed && ProcessExists(resolved) {
+			log.WarnContext(ctx, "stored hypervisor PID does not own the instance socket, killing the socket owner",
+				"instance_id", inst.Id, "stored_pid", *inst.HypervisorPID, "owner_pid", resolved)
+			pid = resolved
+		}
+	}
 
+	if pid > 0 {
 		// Check if process exists
 		if err := syscall.Kill(pid, 0); err == nil {
 			// Process exists - kill it immediately with SIGKILL
