@@ -573,8 +573,6 @@ if [ "$OS" = "darwin" ]; then
 </plist>
 PLIST
 
-    info "Loading ${SERVICE_NAME} service..."
-    launchctl load "$PLIST_PATH"
 else
     # Linux: systemd
     info "Installing systemd service..."
@@ -671,6 +669,11 @@ if [ "$OS" = "darwin" ]; then
     else
         warn "Docker not available, skipping builder image build"
     fi
+fi
+
+if [ "$OS" = "darwin" ]; then
+    info "Loading ${SERVICE_NAME} service..."
+    launchctl load "$PLIST_PATH"
 fi
 
 # =============================================================================

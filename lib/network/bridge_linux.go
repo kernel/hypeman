@@ -128,13 +128,13 @@ func (m *manager) createBridge(ctx context.Context, name, gateway, subnet string
 		}
 
 		expectedGW := net.ParseIP(gateway)
-		hasExpectedIP := false
-		var actualIPs []string
+		if expectedGW == nil {
+			return fmt.Errorf("invalid gateway IP: %s", gateway)
+		}
+		hasExpectedIP, hasExpectedMask := bridgeAddressMatches(addrs, expectedGW, ipNet.Mask)
+		actualIPs := make([]string, 0, len(addrs))
 		for _, addr := range addrs {
-			actualIPs = append(actualIPs, addr.IPNet.String())
-			if addr.IP.Equal(expectedGW) {
-				hasExpectedIP = true
-			}
+			actualIPs = append(actualIPs, addr.String())
 		}
 
 		if !hasExpectedIP {
@@ -144,6 +144,14 @@ func (m *manager) createBridge(ctx context.Context, name, gateway, subnet string
 				"(2) use a different BRIDGE_NAME, "+
 				"or (3) delete the bridge with: sudo ip link delete %s",
 				name, actualIPs, gateway, ones, name)
+		}
+		if !hasExpectedMask {
+			ones, _ := ipNet.Mask.Size()
+			return fmt.Errorf("bridge %s exists with gateway %s but its prefix does not match /%d (addresses: %v). "+
+				"Options: (1) update SUBNET_CIDR to match the existing bridge, "+
+				"(2) use a different BRIDGE_NAME, "+
+				"or (3) delete the bridge with: sudo ip link delete %s",
+				name, gateway, ones, actualIPs, name)
 		}
 
 		// Bridge exists with correct IP, verify it's up
@@ -1097,8 +1105,33 @@ func (m *manager) queryNetworkState(bridgeName string) (*Network, error) {
 	return &Network{
 		Bridge:  bridgeName,
 		Gateway: gatewayAddr.IP.String(),
-		Subnet:  gatewayAddr.IPNet.String(),
+		Subnet:  canonicalSubnetCIDR(gatewayAddr.IPNet),
 	}, nil
+}
+
+func bridgeAddressMatches(addrs []netlink.Addr, expectedGateway net.IP, expectedMask net.IPMask) (hasGateway, hasMatchingMask bool) {
+	expectedOnes, expectedBits := expectedMask.Size()
+	for _, addr := range addrs {
+		if !addr.IP.Equal(expectedGateway) {
+			continue
+		}
+		hasGateway = true
+		if addr.IPNet == nil {
+			continue
+		}
+		ones, bits := addr.IPNet.Mask.Size()
+		if ones == expectedOnes && bits == expectedBits {
+			hasMatchingMask = true
+		}
+	}
+	return hasGateway, hasMatchingMask
+}
+
+func canonicalSubnetCIDR(ipNet *net.IPNet) string {
+	if ipNet == nil {
+		return ""
+	}
+	return (&net.IPNet{IP: ipNet.IP.Mask(ipNet.Mask), Mask: ipNet.Mask}).String()
 }
 
 func selectBridgeGatewayAddr(addrs []netlink.Addr, preferredGateway net.IP) netlink.Addr {

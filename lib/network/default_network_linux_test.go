@@ -55,6 +55,27 @@ func TestSelectBridgeGatewayAddrPrefersConfiguredGateway(t *testing.T) {
 	assert.Equal(t, "10.123.0.1", selected.IP.String())
 }
 
+func TestCanonicalSubnetCIDRUsesNetworkAddress(t *testing.T) {
+	assert.Equal(t, "10.123.0.0/16", canonicalSubnetCIDR(&net.IPNet{
+		IP:   net.ParseIP("10.123.0.42"),
+		Mask: net.CIDRMask(16, 32),
+	}))
+}
+
+func TestBridgeAddressMatchesRequiresGatewayPrefix(t *testing.T) {
+	addrs := []netlink.Addr{
+		{IPNet: &net.IPNet{IP: net.ParseIP("10.123.0.1"), Mask: net.CIDRMask(16, 32)}},
+	}
+
+	hasGateway, hasMatchingMask := bridgeAddressMatches(addrs, net.ParseIP("10.123.0.1"), net.CIDRMask(24, 32))
+	assert.True(t, hasGateway)
+	assert.False(t, hasMatchingMask)
+
+	hasGateway, hasMatchingMask = bridgeAddressMatches(addrs, net.ParseIP("10.123.0.1"), net.CIDRMask(16, 32))
+	assert.True(t, hasGateway)
+	assert.True(t, hasMatchingMask)
+}
+
 func TestGetDefaultNetworkPreservesLookupError(t *testing.T) {
 	cfg := &config.Config{
 		Network: config.NetworkConfig{BridgeName: "hypeman-no-such-bridge"},

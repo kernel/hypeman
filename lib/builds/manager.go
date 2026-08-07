@@ -32,8 +32,9 @@ import (
 const (
 	// releaseBuildMaxAttempts bounds the builder-release retry at the end
 	// of a build; releaseBuildRetryDelay spaces the attempts.
-	releaseBuildMaxAttempts = 5
-	releaseBuildRetryDelay  = time.Second
+	releaseBuildMaxAttempts   = 5
+	releaseBuildRetryDelay    = time.Second
+	builderImageRetryInterval = 5 * time.Second
 )
 
 //go:embed images/generic/Dockerfile
@@ -205,10 +206,21 @@ func NewManager(
 // Start starts the build manager's background services
 func (m *manager) Start(ctx context.Context) error {
 	go func() {
-		m.ensureBuilderImage(ctx)
-		// Recover pending builds only after the builder image is ready,
-		// otherwise recovered builds fail with "builder image is being prepared".
-		m.RecoverPendingBuilds()
+		for {
+			m.ensureBuilderImage(ctx)
+			// Recover pending builds only after the builder image is ready,
+			// otherwise recovered builds fail with "builder image is being prepared".
+			if m.ReadyForBuilds() {
+				m.RecoverPendingBuilds()
+				return
+			}
+			m.logger.Warn("builder image preparation failed; retrying", "retry_in", builderImageRetryInterval)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(builderImageRetryInterval):
+			}
+		}
 	}()
 	m.logger.Info("build manager started")
 	return nil
@@ -229,16 +241,24 @@ func (m *manager) ReadyForBuilds() bool {
 //
 // This runs in a background goroutine during startup.
 func (m *manager) ensureBuilderImage(ctx context.Context) {
-	defer m.builderReady.Store(true)
-
 	if m.config.BuilderImage != "" {
-		// Explicit builder image configured - check if already available
-		if _, err := m.imageManager.GetImage(ctx, m.config.BuilderImage); err == nil {
-			m.logger.Info("builder image already available", "image", m.config.BuilderImage)
+		// Explicit builder image configured - check if already available.
+		if image, err := m.imageManager.GetImage(ctx, m.config.BuilderImage); err == nil {
+			if image.Status == images.StatusReady {
+				m.logger.Info("builder image already available", "image", m.config.BuilderImage)
+				m.builderReady.Store(true)
+				return
+			}
+			m.logger.Info("waiting for existing builder image", "image", m.config.BuilderImage, "status", image.Status)
+			if err := m.waitForBuilderImageReady(ctx, m.config.BuilderImage); err != nil {
+				m.logger.Warn("builder image failed to become ready", "image", m.config.BuilderImage, "error", err)
+				return
+			}
+			m.builderReady.Store(true)
 			return
 		}
 
-		// Not in store - try to pull it from remote registry
+		// Not in store - try to pull it from remote registry.
 		m.logger.Info("pulling builder image", "image", m.config.BuilderImage)
 		if _, err := m.imageManager.CreateImage(ctx, images.CreateImageRequest{
 			Name: m.config.BuilderImage,
@@ -248,7 +268,9 @@ func (m *manager) ensureBuilderImage(ctx context.Context) {
 		}
 		if err := m.waitForBuilderImageReady(ctx, m.config.BuilderImage); err != nil {
 			m.logger.Warn("builder image failed to become ready", "image", m.config.BuilderImage, "error", err)
+			return
 		}
+		m.builderReady.Store(true)
 		return
 	}
 
@@ -260,6 +282,7 @@ func (m *manager) ensureBuilderImage(ctx context.Context) {
 		return
 	}
 	m.config.BuilderImage = imageRef
+	m.builderReady.Store(true)
 	m.logger.Info("builder image ready", "image", imageRef)
 }
 
@@ -268,7 +291,8 @@ func (m *manager) ensureBuilderImage(ctx context.Context) {
 //
 // The flow is:
 //  1. Write embedded Dockerfile to a temp directory
-//  2. Build with Docker (uses cwd as context for COPY directives)
+//  2. Build with Docker when running from a source checkout, or reuse the
+//     installer-built local image when no source context is available
 //  3. Export with docker save to a tarball
 //  4. Load tarball with go-containerregistry and write to the shared OCI layout cache
 //  5. Call ImportLocalImage to trigger ext4 conversion
@@ -298,20 +322,32 @@ func (m *manager) buildBuilderFromDockerfile(ctx context.Context) (string, error
 		return "", fmt.Errorf("write Dockerfile: %w", err)
 	}
 
-	// Build with Docker (context is cwd = repo root in development)
-	localTag := fmt.Sprintf("hypeman-builder-tmp:%d", time.Now().Unix())
-	m.logger.Info("building builder image with Docker", "tag", localTag)
+	// Development runs have the source checkout needed by the Dockerfile's COPY
+	// directives. Installed launchd services start outside that checkout, so the
+	// installer builds this image before loading the service.
+	localTag := "hypeman/builder:latest"
+	if _, err := os.Stat("go.mod"); err == nil {
+		localTag = fmt.Sprintf("hypeman-builder-tmp:%d", time.Now().Unix())
+		m.logger.Info("building builder image with Docker", "tag", localTag)
 
-	buildCmd := exec.CommandContext(ctx, "docker", "build", "-t", localTag, "-f", dockerfilePath, ".")
-	buildCmd.Env = dockerEnv
-	if output, err := buildCmd.CombinedOutput(); err != nil {
-		return "", fmt.Errorf("docker build: %s: %w", string(output), err)
+		buildCmd := exec.CommandContext(ctx, "docker", "build", "-t", localTag, "-f", dockerfilePath, ".")
+		buildCmd.Env = dockerEnv
+		if output, err := buildCmd.CombinedOutput(); err != nil {
+			return "", fmt.Errorf("docker build: %s: %w", string(output), err)
+		}
+		defer func() {
+			rmCmd := exec.Command("docker", "rmi", localTag)
+			rmCmd.Env = dockerEnv
+			rmCmd.Run()
+		}()
+	} else {
+		inspectCmd := exec.CommandContext(ctx, "docker", "image", "inspect", localTag)
+		inspectCmd.Env = dockerEnv
+		if output, inspectErr := inspectCmd.CombinedOutput(); inspectErr != nil {
+			return "", fmt.Errorf("source checkout unavailable and local builder image %s not found: %s: %w", localTag, string(output), inspectErr)
+		}
+		m.logger.Info("using installer-built local builder image", "tag", localTag)
 	}
-	defer func() {
-		rmCmd := exec.Command("docker", "rmi", localTag)
-		rmCmd.Env = dockerEnv
-		rmCmd.Run()
-	}()
 
 	// Export image to tarball (avoids docker push)
 	tarPath := filepath.Join(tmpDir, "builder.tar")

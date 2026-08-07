@@ -481,6 +481,38 @@ func setupTestManagerWithImageMgr(t *testing.T) (*manager, *mockInstanceManager,
 	return mgr, instanceMgr, volumeMgr, imageMgr, tempDir
 }
 
+func TestEnsureBuilderImageOnlyMarksReadyAfterSuccess(t *testing.T) {
+	t.Run("existing image", func(t *testing.T) {
+		mgr, _, _, imageMgr, tempDir := setupTestManagerWithImageMgr(t)
+		defer os.RemoveAll(tempDir)
+		mgr.builderReady.Store(false)
+		imageMgr.images[mgr.config.BuilderImage] = &images.Image{
+			Name:   mgr.config.BuilderImage,
+			Status: images.StatusReady,
+		}
+
+		mgr.ensureBuilderImage(context.Background())
+
+		assert.True(t, mgr.ReadyForBuilds())
+	})
+
+	t.Run("existing pending image never becomes ready", func(t *testing.T) {
+		mgr, _, _, imageMgr, tempDir := setupTestManagerWithImageMgr(t)
+		defer os.RemoveAll(tempDir)
+		mgr.builderReady.Store(false)
+		imageMgr.images[mgr.config.BuilderImage] = &images.Image{
+			Name:   mgr.config.BuilderImage,
+			Status: images.StatusPending,
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		mgr.ensureBuilderImage(ctx)
+
+		assert.False(t, mgr.ReadyForBuilds())
+	})
+}
+
 func TestCreateBuild_Success(t *testing.T) {
 	mgr, _, _, tempDir := setupTestManager(t)
 	defer os.RemoveAll(tempDir)
