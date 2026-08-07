@@ -6,6 +6,10 @@ import (
 	"strings"
 )
 
+// RateLimitMessage is the actionable response returned to API clients when a
+// registry rejects an image request because its rate limit was exceeded.
+const RateLimitMessage = "registry rate limit exceeded; retry later or authenticate to the registry"
+
 var (
 	ErrNotFound        = errors.New("image not found")
 	ErrInvalidName     = errors.New("invalid image name")
