@@ -200,7 +200,14 @@ func TestDeleteDropsStaleVGPUClaimedByLiveInstance(t *testing.T) {
 	claimantID := "inst-live-claimant"
 	require.NoError(t, m.ensureDirectories(claimantID))
 	pid := os.Getpid()
-	socketPath := m.paths.InstanceSocket(claimantID, "noop.sock")
+	// Bind under /tmp: a t.TempDir()-derived path exceeds the macOS AF_UNIX
+	// path limit.
+	socketDir, err := os.MkdirTemp("/tmp", "hypeman-claimant-socket-")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = os.RemoveAll(socketDir)
+	})
+	socketPath := filepath.Join(socketDir, "noop.sock")
 	listener, err := net.Listen("unix", socketPath)
 	require.NoError(t, err)
 	defer listener.Close()
