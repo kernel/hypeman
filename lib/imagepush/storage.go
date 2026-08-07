@@ -125,7 +125,7 @@ func findPendingPush(p *paths.Paths, key string) (*pushMetadata, error) {
 		return nil, err
 	}
 	for _, meta := range pending {
-		if pushKey(meta.Digest, meta.Target) == key {
+		if pushKey(meta.Digest, meta.Target, meta.Insecure) == key {
 			return meta, nil
 		}
 	}
