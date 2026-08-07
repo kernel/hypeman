@@ -126,6 +126,24 @@ func TestVGPUAssignmentClaimedByLiveInstanceFailsOnInvalidMetadata(t *testing.T)
 	require.Error(t, err)
 }
 
+func TestVGPUAssignmentClaimedByLiveInstanceNormalizesLegacyMdevPath(t *testing.T) {
+	t.Parallel()
+
+	m := &manager{paths: paths.New(t.TempDir())}
+	require.NoError(t, m.ensureDirectories("legacy-claimant"))
+	pid := os.Getpid()
+	require.NoError(t, m.saveMetadata(&metadata{StoredMetadata: StoredMetadata{
+		Id:            "legacy-claimant",
+		Name:          "legacy-claimant",
+		GPUMdevUUID:   "legacy-uuid",
+		HypervisorPID: &pid,
+	}}))
+
+	claimed, err := m.vgpuAssignmentClaimedByLiveInstance(context.Background(), "other-instance", "/sys/bus/mdev/devices/legacy-uuid")
+	require.NoError(t, err)
+	assert.True(t, claimed)
+}
+
 func TestStoredVGPUDevicePath(t *testing.T) {
 	t.Parallel()
 

@@ -54,7 +54,7 @@ func (m *manager) vgpuAssignmentClaimedByLiveInstance(ctx context.Context, exclu
 	}
 	for i := range instances {
 		inst := &instances[i]
-		if inst.Id == excludeID || inst.GPUDevicePath != devicePath || inst.HypervisorPID == nil {
+		if inst.Id == excludeID || storedVGPUDevicePath(&inst.StoredMetadata) != devicePath || inst.HypervisorPID == nil {
 			continue
 		}
 		if HypervisorProcessExists(*inst.HypervisorPID, inst.SocketPath) {
