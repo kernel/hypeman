@@ -2,6 +2,7 @@ package imagepush
 
 import (
 	"errors"
+	"os"
 	"testing"
 	"time"
 
@@ -55,6 +56,32 @@ func TestReadMetadataNotFound(t *testing.T) {
 	_, err := readMetadata(p, "missing")
 	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestListPushesSkipsUnreadableMetadata(t *testing.T) {
+	p := paths.New(t.TempDir())
+	now := time.Now()
+
+	if err := writeMetadata(p, &pushMetadata{ID: "good", Status: StatusPushed, Digest: "sha256:1", Target: "t1", CreatedAt: now}); err != nil {
+		t.Fatalf("writeMetadata(good): %v", err)
+	}
+	// A corrupt record must not fail the whole listing, but must not vanish
+	// silently either: it is skipped with a warning so it stays visible.
+	badDir := p.PushDir("corrupt")
+	if err := os.MkdirAll(badDir, 0755); err != nil {
+		t.Fatalf("mkdir corrupt: %v", err)
+	}
+	if err := os.WriteFile(p.PushMetadata("corrupt"), []byte("{not json"), 0644); err != nil {
+		t.Fatalf("write corrupt metadata: %v", err)
+	}
+
+	all, err := listAllPushes(p)
+	if err != nil {
+		t.Fatalf("listAllPushes: %v", err)
+	}
+	if len(all) != 1 || all[0].ID != "good" {
+		t.Errorf("all = %v, want only good", all)
 	}
 }
 

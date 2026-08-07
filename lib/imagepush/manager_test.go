@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -472,118 +473,118 @@ func TestRecoverInterruptedPushes(t *testing.T) {
 	}
 }
 
-func TestCreatePushAdoptsOrphanedPendingJob(t *testing.T) {
+func TestCreatePushDedupesConcurrently(t *testing.T) {
 	p, digest := cacheFixture(t)
-	host := openRegistry(t)
-	target := host + "/export/orphan:v1"
-
+	host, gate := gatedRegistry(t)
 	resolver := &fakeResolver{images: map[string]*images.Image{
 		"myapp:v1": readyImage("myapp:v1", digest),
 	}}
+
+	mgr, err := NewManager(p, resolver, nil, 2)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	req := PushRequest{Image: "myapp:v1", Target: host + "/export/app:v1", Insecure: true}
+	if _, err := mgr.CreatePush(context.Background(), req); err != nil {
+		t.Fatalf("seed CreatePush: %v", err)
+	}
+
+	// Two goroutines racing CreatePush for the same digest+target must both
+	// land on the single in-flight job: one registers, the other merges.
+	const n = 2
+	ids := make([]string, n)
+	errs := make([]error, n)
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			push, err := mgr.CreatePush(context.Background(), req)
+			if push != nil {
+				ids[i] = push.ID
+			}
+			errs[i] = err
+		}(i)
+	}
+	wg.Wait()
+
+	for i := 0; i < n; i++ {
+		if errs[i] != nil {
+			t.Fatalf("concurrent CreatePush #%d: %v", i, errs[i])
+		}
+		if ids[i] != ids[0] {
+			t.Errorf("concurrent push #%d got ID %s, want %s (single job)", i, ids[i], ids[0])
+		}
+	}
+
+	if digests := mgr.InProgressDigests(); len(digests) != 1 || digests[0] != digest {
+		t.Errorf("InProgressDigests = %v, want [%s]", digests, digest)
+	}
+
+	close(gate)
+	if err := mgr.WaitForPush(context.Background(), ids[0]); err != nil {
+		t.Fatalf("WaitForPush: %v", err)
+	}
+}
+
+func TestCreatePushCredentialConflict(t *testing.T) {
+	p, digest := cacheFixture(t)
+	hostA, gateA := gatedRegistry(t)
+	hostB, gateB := gatedRegistry(t)
+	targetA := hostA + "/export/a:v1"
+	targetB := hostB + "/export/b:v1"
+	resolver := &fakeResolver{images: map[string]*images.Image{
+		"myapp:v1": readyImage("myapp:v1", digest),
+	}}
+
 	mgr, err := NewManager(p, resolver, nil, 1)
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
 
-	// Simulate an orphan: a queued record on disk that the manager does not
-	// track (it appeared after startup, e.g. left behind by a crashed
-	// process). A new push for the same image+target must adopt it instead of
-	// creating a duplicate job.
-	orphan := &pushMetadata{
-		ID:        "orphan-1",
-		Status:    StatusQueued,
-		Image:     "myapp:v1",
-		Digest:    digest,
-		Target:    target,
-		Insecure:  true,
-		CreatedAt: time.Now(),
-	}
-	if err := writeMetadata(p, orphan); err != nil {
-		t.Fatalf("writeMetadata: %v", err)
-	}
-
-	push, err := mgr.CreatePush(context.Background(), PushRequest{
-		Image: "myapp:v1", Target: target, Insecure: true,
+	// Credentialed in-flight push, then an anonymous request: merging would
+	// silently drop the request's intent and run under the in-flight auth.
+	seeded, err := mgr.CreatePush(context.Background(), PushRequest{
+		Image: "myapp:v1", Target: targetA, Insecure: true,
+		Credentials: &authn.AuthConfig{RegistryToken: "borrowed-token"},
 	})
 	if err != nil {
-		t.Fatalf("CreatePush: %v", err)
+		t.Fatalf("seed CreatePush: %v", err)
 	}
-	if push.ID != "orphan-1" {
-		t.Fatalf("push ID = %s, want orphan-1 (adopted, not duplicated)", push.ID)
-	}
-	if err := mgr.WaitForPush(context.Background(), push.ID); err != nil {
-		t.Fatalf("WaitForPush: %v", err)
+	if _, err := mgr.CreatePush(context.Background(), PushRequest{Image: "myapp:v1", Target: targetA, Insecure: true}); !errors.Is(err, ErrCredentialConflict) {
+		t.Errorf("anonymous duplicate err = %v, want ErrCredentialConflict", err)
 	}
 
-	got, err := mgr.GetPush(context.Background(), "orphan-1")
+	// Reverse: anonymous in-flight push, then a credentialed request.
+	seeded2, err := mgr.CreatePush(context.Background(), PushRequest{Image: "myapp:v1", Target: targetB, Insecure: true})
 	if err != nil {
-		t.Fatalf("GetPush: %v", err)
+		t.Fatalf("seed CreatePush 2: %v", err)
 	}
-	if got.Status != StatusPushed {
-		t.Errorf("status = %s, want pushed", got.Status)
+	if _, err := mgr.CreatePush(context.Background(), PushRequest{
+		Image: "myapp:v1", Target: targetB, Insecure: true,
+		Credentials: &authn.AuthConfig{RegistryToken: "borrowed-token"},
+	}); !errors.Is(err, ErrCredentialConflict) {
+		t.Errorf("credentialed duplicate err = %v, want ErrCredentialConflict", err)
 	}
 
-	// Exactly one job exists for the key.
+	close(gateA)
+	close(gateB)
+	if err := mgr.WaitForPush(context.Background(), seeded.ID); err != nil {
+		t.Fatalf("WaitForPush seeded: %v", err)
+	}
+	if err := mgr.WaitForPush(context.Background(), seeded2.ID); err != nil {
+		t.Fatalf("WaitForPush seeded 2: %v", err)
+	}
+
+	// The conflicted requests must not have created duplicate jobs: only the
+	// two seeds exist.
 	pushes, err := mgr.ListPushes(context.Background())
 	if err != nil {
 		t.Fatalf("ListPushes: %v", err)
 	}
-	if len(pushes) != 1 {
-		t.Errorf("len(pushes) = %d, want 1", len(pushes))
-	}
-}
-
-func TestCreatePushOrphanWithCredentialsIsFailedNotAdopted(t *testing.T) {
-	p, digest := cacheFixture(t)
-	host := openRegistry(t)
-	target := host + "/export/cred-orphan:v1"
-
-	resolver := &fakeResolver{images: map[string]*images.Image{
-		"myapp:v1": readyImage("myapp:v1", digest),
-	}}
-	mgr, err := NewManager(p, resolver, nil, 1)
-	if err != nil {
-		t.Fatalf("NewManager: %v", err)
-	}
-
-	// An orphaned record that used borrowed credentials cannot be
-	// re-executed with them: it must be closed, and a fresh job created.
-	orphan := &pushMetadata{
-		ID:             "cred-orphan",
-		Status:         StatusQueued,
-		Image:          "myapp:v1",
-		Digest:         digest,
-		Target:         target,
-		Insecure:       true,
-		HadCredentials: true,
-		CreatedAt:      time.Now(),
-	}
-	if err := writeMetadata(p, orphan); err != nil {
-		t.Fatalf("writeMetadata: %v", err)
-	}
-
-	push, err := mgr.CreatePush(context.Background(), PushRequest{
-		Image: "myapp:v1", Target: target, Insecure: true,
-	})
-	if err != nil {
-		t.Fatalf("CreatePush: %v", err)
-	}
-	if push.ID == "cred-orphan" {
-		t.Fatal("credentialed orphan must not be adopted")
-	}
-	if err := mgr.WaitForPush(context.Background(), push.ID); err != nil {
-		t.Fatalf("WaitForPush: %v", err)
-	}
-
-	got, err := mgr.GetPush(context.Background(), "cred-orphan")
-	if err != nil {
-		t.Fatalf("GetPush orphan: %v", err)
-	}
-	if got.Status != StatusFailed {
-		t.Errorf("orphan status = %s, want failed", got.Status)
-	}
-	if got.Error == nil || !strings.Contains(*got.Error, "credentials") {
-		t.Errorf("orphan error = %v, want credentials explanation", got.Error)
+	if len(pushes) != 2 {
+		t.Errorf("len(pushes) = %d, want 2 (conflicts created no jobs)", len(pushes))
 	}
 }
 
@@ -880,60 +881,6 @@ func TestExecutePushContainsPanic(t *testing.T) {
 	}
 	if got.Status != StatusFailed {
 		t.Errorf("status = %s, want failed", got.Status)
-	}
-}
-
-func TestCreatePushWithCredentialsSupersedesOrphan(t *testing.T) {
-	p, digest := cacheFixture(t)
-	host := openRegistry(t)
-	target := host + "/export/supersede:v1"
-
-	resolver := &fakeResolver{images: map[string]*images.Image{
-		"myapp:v1": readyImage("myapp:v1", digest),
-	}}
-	mgr, err := NewManager(p, resolver, nil, 1)
-	if err != nil {
-		t.Fatalf("NewManager: %v", err)
-	}
-
-	// A credential-less orphan cannot be adopted by a request that lends
-	// credentials: it would run under the default provider instead of the
-	// borrowed login.
-	orphan := &pushMetadata{
-		ID:        "plain-orphan",
-		Status:    StatusQueued,
-		Image:     "myapp:v1",
-		Digest:    digest,
-		Target:    target,
-		Insecure:  true,
-		CreatedAt: time.Now(),
-	}
-	if err := writeMetadata(p, orphan); err != nil {
-		t.Fatalf("writeMetadata: %v", err)
-	}
-
-	push, err := mgr.CreatePush(context.Background(), PushRequest{
-		Image:       "myapp:v1",
-		Target:      target,
-		Insecure:    true,
-		Credentials: &authn.AuthConfig{RegistryToken: "borrowed"},
-	})
-	if err != nil {
-		t.Fatalf("CreatePush: %v", err)
-	}
-	if push.ID == "plain-orphan" {
-		t.Fatal("credentialed request must not adopt a credential-less orphan")
-	}
-	if err := mgr.WaitForPush(context.Background(), push.ID); err != nil {
-		t.Fatalf("WaitForPush: %v", err)
-	}
-
-	got, err := mgr.GetPush(context.Background(), "plain-orphan")
-	if err != nil {
-		t.Fatalf("GetPush orphan: %v", err)
-	}
-	if got.Status != StatusFailed {
-		t.Errorf("orphan status = %s, want failed (superseded)", got.Status)
 	}
 }
 

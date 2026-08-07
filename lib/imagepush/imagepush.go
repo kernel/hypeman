@@ -27,6 +27,12 @@ var (
 	ErrNotFound      = errors.New("push not found")
 	ErrImageNotReady = errors.New("image not ready for push")
 	ErrInvalidTarget = errors.New("invalid push target")
+	// ErrCredentialConflict is returned when a push request matches an
+	// in-flight job but its credential intent differs from that job's. The
+	// manager never stores credential values, so it can only detect a
+	// presence mismatch; two requests that both borrow different credentials
+	// for the same target are indistinguishable and merge.
+	ErrCredentialConflict = errors.New("push already in flight with different credentials")
 )
 
 // PushRequest describes a request to push a hypeman image to a remote registry.
@@ -77,7 +83,9 @@ type Manager interface {
 	// CreatePush validates the request, persists a queued job, and enqueues it.
 	// A request that matches an in-flight job (same digest and target) returns
 	// the existing job instead of creating a duplicate; the in-flight job's
-	// credentials remain in effect.
+	// credentials remain in effect. A request whose credential presence
+	// differs from the in-flight job's (one borrowed, one not) returns
+	// ErrCredentialConflict instead of silently merging under the wrong auth.
 	CreatePush(ctx context.Context, req PushRequest) (*Push, error)
 	GetPush(ctx context.Context, id string) (*Push, error)
 	// ListPushes returns all pushes, newest first.
