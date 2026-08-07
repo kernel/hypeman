@@ -235,6 +235,20 @@ To upgrade the NVIDIA driver version:
    - Run GPU passthrough E2E tests
    - Verify with real CUDA workloads (e.g., ollama inference)
 
+## Rolling Back vGPU Changes
+
+Before downgrading Hypeman or the host to a version that does not support the active vGPU framework:
+
+1. Stop or delete all vGPU instances while the current Hypeman version can release their assignments.
+2. Confirm `/resources` reports `used_slots: 0`.
+3. Confirm no mdev assignments remain:
+   ```bash
+   test -z "$(find /sys/bus/mdev/devices -mindepth 1 -maxdepth 1 2>/dev/null)"
+   ```
+4. Downgrade only after both checks are clean.
+
+If assignment cleanup fails, Hypeman retains the instance metadata so a compatible version can retry it. Do not remove that metadata manually while the assignment remains active.
+
 ## Troubleshooting
 
 ### No GPU shown in /resources
