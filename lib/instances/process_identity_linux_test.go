@@ -4,12 +4,15 @@ package instances
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -58,6 +61,42 @@ func TestHypervisorProcessExistsTreatsReboundSocketPathAsAlive(t *testing.T) {
 	defer listener.Close()
 
 	assert.True(t, HypervisorProcessExists(os.Getpid(), socketPath))
+}
+
+func TestKillHypervisorSparesReusedPIDAndKillsSocketOwner(t *testing.T) {
+	socketPath := filepath.Join(t.TempDir(), "test.sock")
+	owner := exec.Command(os.Args[0], "-test.run=^TestHypervisorProcessExistsWithReboundSocketPathHelper$")
+	owner.Env = append(os.Environ(), "HYPERVISOR_SOCKET_HELPER=1", "HYPERVISOR_SOCKET_PATH="+socketPath)
+	stdin, err := owner.StdinPipe()
+	require.NoError(t, err)
+	stdout, err := owner.StdoutPipe()
+	require.NoError(t, err)
+	require.NoError(t, owner.Start())
+	t.Cleanup(func() {
+		_ = stdin.Close()
+		_ = owner.Process.Kill()
+		_ = owner.Wait()
+	})
+	_, err = bufio.NewReader(stdout).ReadString('\n')
+	require.NoError(t, err)
+
+	stale := exec.Command("sleep", "30")
+	require.NoError(t, stale.Start())
+	t.Cleanup(func() {
+		_ = stale.Process.Kill()
+		_ = stale.Wait()
+	})
+
+	stalePID := stale.Process.Pid
+	m := &manager{}
+	require.NoError(t, m.killHypervisor(context.Background(), &Instance{
+		StoredMetadata: StoredMetadata{Id: "kill-test", HypervisorPID: &stalePID, SocketPath: socketPath},
+	}))
+
+	assert.NoError(t, syscall.Kill(stalePID, 0), "unrelated process holding the stale PID must survive delete")
+	assert.True(t, WaitForProcessExit(owner.Process.Pid, 5*time.Second), "socket owner should be killed")
+	_, statErr := os.Stat(socketPath)
+	assert.True(t, os.IsNotExist(statErr), "instance socket should be removed")
 }
 
 func TestHypervisorProcessExistsRejectsDifferentLiveSocketOwner(t *testing.T) {
