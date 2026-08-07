@@ -181,6 +181,8 @@ type manager struct {
 	now                       func() time.Time
 	writeFile                 func(string, []byte, os.FileMode) error
 	deleteInstanceFn          func(context.Context, string) error
+	createVGPU                func(context.Context, string, string) (*devices.VGPUDevice, error)
+	destroyVGPU               func(context.Context, devices.VGPUAssignment) error
 	deleteSnapshotFn          func(context.Context, string) error
 	ttlReaperDeleteTimeout    time.Duration
 	egressProxy               *egressproxy.Service
@@ -281,6 +283,8 @@ func NewManagerWithConfigE(p *paths.Paths, imageManager images.Manager, systemMa
 		defaultHypervisor:                defaultHypervisor,
 		now:                              time.Now,
 		writeFile:                        os.WriteFile,
+		createVGPU:                       devices.CreateVGPU,
+		destroyVGPU:                      devices.DestroyVGPU,
 		meter:                            meter,
 		tracer:                           tracer,
 		guestMemoryPolicy:                policy,
