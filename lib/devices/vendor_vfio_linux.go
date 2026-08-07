@@ -279,12 +279,19 @@ func (s vendorVFIOSysfs) reconcile(ctx context.Context, protectedDevicePaths map
 
 func (s vendorVFIOSysfs) selectLeastLoadedVF(vfs []VirtualFunction, profileType string) (string, error) {
 	usageByGPU := make(map[string]int)
+	unknownUsageByGPU := make(map[string]bool)
 	freeByGPU := make(map[string][]VirtualFunction)
 	for _, vf := range vfs {
 		if vf.Allocated {
+			// framebufferByType only covers currently creatable profiles, so
+			// after a restart an allocated type can be missing when its
+			// capacity is exhausted. Prefer GPUs whose load is fully known
+			// instead of rejecting placement outright; the kernel driver
+			// still enforces real capacity through creatable_vgpu_types.
 			framebuffer, ok := s.framebufferByType[vf.ProfileType]
 			if !ok {
-				return "", fmt.Errorf("framebuffer size for allocated vGPU type %s is unknown", vf.ProfileType)
+				unknownUsageByGPU[vf.ParentGPU] = true
+				continue
 			}
 			usageByGPU[vf.ParentGPU] += framebuffer
 			continue
@@ -306,6 +313,9 @@ func (s vendorVFIOSysfs) selectLeastLoadedVF(vfs []VirtualFunction, profileType 
 		gpus = append(gpus, gpu)
 	}
 	sort.Slice(gpus, func(i, j int) bool {
+		if unknownUsageByGPU[gpus[i]] != unknownUsageByGPU[gpus[j]] {
+			return !unknownUsageByGPU[gpus[i]]
+		}
 		if usageByGPU[gpus[i]] == usageByGPU[gpus[j]] {
 			return gpus[i] < gpus[j]
 		}
