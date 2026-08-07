@@ -362,6 +362,7 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 
 	inst, err := s.InstanceManager.CreateInstance(ctx, domainReq)
 	if err != nil {
+		var vgpuPending *instances.VGPUCleanupPendingError
 		switch {
 		case errors.Is(err, instances.ErrImageNotReady):
 			return oapi.CreateInstance400JSONResponse{
@@ -412,6 +413,12 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 			return oapi.CreateInstance404JSONResponse{
 				Code:    "not_found",
 				Message: err.Error(),
+			}, nil
+		case errors.As(err, &vgpuPending):
+			log.ErrorContext(ctx, "failed to create instance", "error", err, "image", request.Body.Image)
+			return oapi.CreateInstance500JSONResponse{
+				Code:    "vgpu_cleanup_pending",
+				Message: fmt.Sprintf("failed to create instance; vGPU release failed during rollback and instance %s retains the assignment, delete it to retry", vgpuPending.InstanceID),
 			}, nil
 		default:
 			log.ErrorContext(ctx, "failed to create instance", "error", err, "image", request.Body.Image)
