@@ -180,6 +180,8 @@ type manager struct {
 	tracer                    trace.Tracer
 	now                       func() time.Time
 	writeFile                 func(string, []byte, os.FileMode) error
+	createVGPU                func(context.Context, string, string) (*devices.VGPUDevice, error)
+	destroyVGPU               func(context.Context, devices.VGPUAssignment) error
 	deleteSnapshotFn          func(context.Context, string) error
 	egressProxy               *egressproxy.Service
 	egressProxyServiceOptions egressproxy.ServiceOptions
@@ -278,6 +280,8 @@ func NewManagerWithConfigE(p *paths.Paths, imageManager images.Manager, systemMa
 		defaultHypervisor:                defaultHypervisor,
 		now:                              time.Now,
 		writeFile:                        os.WriteFile,
+		createVGPU:                       devices.CreateVGPU,
+		destroyVGPU:                      devices.DestroyVGPU,
 		meter:                            meter,
 		tracer:                           tracer,
 		guestMemoryPolicy:                policy,
