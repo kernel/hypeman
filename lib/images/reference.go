@@ -135,6 +135,11 @@ func (r *ResolvedRef) Digest() string {
 	return r.digest
 }
 
+// DigestRef returns the repository pinned to the resolved manifest digest.
+func (r *ResolvedRef) DigestRef() string {
+	return r.Repository() + "@" + r.Digest()
+}
+
 // DigestHex returns just the hex portion of the digest (without "sha256:" prefix).
 func (r *ResolvedRef) DigestHex() string {
 	// Strip "sha256:" prefix
@@ -148,22 +153,8 @@ func (r *ResolvedRef) DigestHex() string {
 // Resolve inspects the manifest to get the digest and returns a ResolvedRef.
 // This requires an ociClient interface for manifest inspection.
 type ManifestInspector interface {
-	inspectManifest(ctx context.Context, imageRef string) (string, error)
 	inspectManifestWithPlatform(ctx context.Context, imageRef string, platform gcr.Platform) (string, error)
 	inspectDigestPlatform(ctx context.Context, imageRef string, requested gcr.Platform) (Platform, string, error)
-}
-
-// Resolve returns a ResolvedRef by inspecting the manifest to get the authoritative digest.
-//
-// TODO(followup) kernel/hypeman#283: Resolve and ResolveForPlatform are
-// near-duplicates (platform-less vs platform-aware manifest inspection);
-// consider unifying them behind one path.
-func (r *NormalizedRef) Resolve(ctx context.Context, inspector ManifestInspector) (*ResolvedRef, error) {
-	digest, err := inspector.inspectManifest(ctx, r.String())
-	if err != nil {
-		return nil, err
-	}
-	return NewResolvedRef(r, digest), nil
 }
 
 // ResolveForPlatform returns a ResolvedRef for the manifest matching platform.

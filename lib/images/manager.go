@@ -183,7 +183,7 @@ func (m *manager) CreateImage(ctx context.Context, req CreateImageRequest) (*Ima
 	}
 
 	// Don't have this digest yet, queue the build
-	return m.createAndQueueImage(ref, req)
+	return m.createAndQueueImage(ref, req, platform)
 }
 
 // ImportLocalImage imports an image from the local OCI cache without resolving from a remote registry.
@@ -233,10 +233,10 @@ func (m *manager) ImportLocalImage(ctx context.Context, repo, reference, digest 
 	}
 
 	// Don't have this digest yet, queue the build
-	return m.createAndQueueImage(ref, CreateImageRequest{Name: imageRef})
+	return m.createAndQueueImage(ref, CreateImageRequest{Name: imageRef}, hostPlatform())
 }
 
-func (m *manager) createAndQueueImage(ref *ResolvedRef, req CreateImageRequest) (*Image, error) {
+func (m *manager) createAndQueueImage(ref *ResolvedRef, req CreateImageRequest, requestedPlatform Platform) (*Image, error) {
 	// Build one request value and reuse it for both the persisted metadata and
 	// the queue entry so they never diverge.
 	storedReq := CreateImageRequest{
@@ -246,14 +246,7 @@ func (m *manager) createAndQueueImage(ref *ResolvedRef, req CreateImageRequest) 
 	}
 	// Record the requested platform optimistically while the build is pending;
 	// buildImage overwrites it with the authoritative manifest platform once the
-	// image config is pulled. resolveRequestPlatform already validated req, so
-	// the error here is unreachable in practice.
-	// TODO(followup) kernel/hypeman#283: pass the already-parsed platform from
-	// CreateImage instead of re-resolving here (also removes this dead error path).
-	requestedPlatform, err := resolveRequestPlatform(req.Platform)
-	if err != nil {
-		return nil, err
-	}
+	// image config is pulled.
 	meta := &imageMetadata{
 		Name:      ref.String(),
 		Digest:    ref.Digest(),
@@ -304,7 +297,7 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef) {
 	// non-host-arch image (tag preserved in ref.String()/ref.Tag() for symlinks)
 	// still pulls the architecture its digest identifies. Uses the cache if the
 	// digest is already pulled.
-	pullRef := ref.Repository() + "@" + ref.Digest()
+	pullRef := ref.DigestRef()
 	result, err := m.ociClient.pullAndExport(ctx, pullRef, ref.Digest(), tempDir)
 	if err != nil {
 		m.updateStatusByDigest(ref, StatusFailed, fmt.Errorf("pull and export: %w", err))
