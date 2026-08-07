@@ -56,7 +56,7 @@ func wrapCreateVGPUErr(profile string, err error) error {
 	if errors.Is(err, devices.ErrVGPUNotSupportedOnMacOS) {
 		return fmt.Errorf("%w: %w", ErrInvalidRequest, err)
 	}
-	return fmt.Errorf("create vGPU mdev for profile %s: %w", profile, err)
+	return fmt.Errorf("create vGPU for profile %s: %w", profile, err)
 }
 
 // generateVsockCID converts first 8 chars of instance ID to a unique CID
