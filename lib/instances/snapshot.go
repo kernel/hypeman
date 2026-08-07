@@ -305,6 +305,12 @@ func (m *manager) restoreSnapshot(ctx context.Context, id string, snapshotID str
 	restored.StoppedAt = nil
 	restored.ExitCode = nil
 	restored.ExitMessage = ""
+	// vGPU assignments are live host state, not snapshot payload: keep the
+	// instance's current assignment (possibly retained from a failed release)
+	// instead of resurrecting the one embedded in the snapshot.
+	restored.GPUFramework = sourceMeta.GPUFramework
+	restored.GPUDevicePath = sourceMeta.GPUDevicePath
+	restored.GPUMdevUUID = sourceMeta.GPUMdevUUID
 	restored.HypervisorType = targetHypervisor
 	restored.HypervisorVersion = targetHypervisorVersion
 	restored.SocketPath = m.paths.InstanceSocket(id, starter.SocketName())
