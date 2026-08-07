@@ -315,8 +315,8 @@ test-linux: ensure-ch-binaries ensure-firecracker-binaries ensure-caddy-binaries
 
 # macOS tests (no sudo needed, adds e2fsprogs to PATH)
 # Uses 'go list' to discover compilable packages, then filters out packages
-# whose test files reference Linux-only symbols (network, devices, system/init).
-DARWIN_EXCLUDE_PKGS := /lib/network|/lib/devices|/lib/system/init|/cmd/vz-shim
+# whose test files reference Linux-only symbols (devices, system/init).
+DARWIN_EXCLUDE_PKGS := /lib/devices|/lib/system/init|/cmd/vz-shim
 test-darwin: build-embedded sign-vz-shim
 	@VERBOSE_FLAG=""; \
 	if [ -n "$(VERBOSE)" ]; then VERBOSE_FLAG="-v"; fi; \

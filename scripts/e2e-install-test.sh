@@ -192,6 +192,20 @@ OUTPUT=$($HYPEMAN_CMD exec "$E2E_VM_NAME" -- echo "hello from e2e") || fail "hyp
 echo "$OUTPUT" | grep -q "hello from e2e" || fail "hypeman exec output mismatch: $OUTPUT"
 pass "hypeman exec works"
 
+# Exec uses vsock and can succeed when guest networking is broken. Exercise DNS
+# and an outbound TCP connection so the macOS VZ NAT path is covered end to end.
+EGRESS_OK=false
+for i in $(seq 1 3); do
+    if $HYPEMAN_CMD exec "$E2E_VM_NAME" -- wget -q -T 10 -O /dev/null http://example.com; then
+        EGRESS_OK=true
+        break
+    fi
+    warn "guest egress attempt ${i}/3 failed"
+    sleep 2
+done
+[ "$EGRESS_OK" = true ] || fail "guest TCP egress failed"
+pass "guest TCP egress works"
+
 $HYPEMAN_CMD stop "$E2E_VM_NAME" || fail "hypeman stop failed"
 pass "hypeman stop works"
 

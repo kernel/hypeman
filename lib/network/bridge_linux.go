@@ -1064,40 +1064,50 @@ func (m *manager) tapDeviceExists(tapName string) bool {
 	return err == nil
 }
 
-// queryNetworkState queries kernel for bridge state
+// queryNetworkState queries kernel for bridge state.
 func (m *manager) queryNetworkState(bridgeName string) (*Network, error) {
 	link, err := netlink.LinkByName(bridgeName)
 	if err != nil {
-		return nil, ErrNotFound
+		return nil, fmt.Errorf("%w: look up bridge %q: %v", ErrNotFound, bridgeName, err)
 	}
 
-	// Verify it's actually a bridge
 	if link.Type() != "bridge" {
 		return nil, fmt.Errorf("link %s is not a bridge", bridgeName)
 	}
 
-	// Get IP addresses
-	addrs, err := netlink.AddrList(link, netlink.FAMILY_V4)
+	addrs, err := listBridgeAddrsWithRetry(link)
 	if err != nil {
 		return nil, fmt.Errorf("list addresses: %w", err)
 	}
-
 	if len(addrs) == 0 {
 		return nil, fmt.Errorf("bridge has no IP addresses")
 	}
 
-	// Use first IP as gateway
-	gateway := addrs[0].IP.String()
-	subnet := addrs[0].IPNet.String()
+	// A bridge may have multiple IPv4 addresses. Prefer the configured gateway
+	// when createBridge has confirmed that it is present rather than depending on
+	// netlink address ordering.
+	gatewayAddr := addrs[0]
+	requestedNetwork, requestedErr := m.platformDefaultNetwork()
+	if requestedErr == nil {
+		gatewayAddr = selectBridgeGatewayAddr(addrs, net.ParseIP(requestedNetwork.Gateway))
+	}
 
-	// Bridge exists and has IP - that's sufficient
-	// OperState can be OperUp, OperUnknown, etc. - all are functional for our purposes
-
+	// Bridge existence plus an IPv4 address is sufficient. OperState may be
+	// OperUp or OperUnknown; both are functional for this bridge.
 	return &Network{
 		Bridge:  bridgeName,
-		Gateway: gateway,
-		Subnet:  subnet,
+		Gateway: gatewayAddr.IP.String(),
+		Subnet:  gatewayAddr.IPNet.String(),
 	}, nil
+}
+
+func selectBridgeGatewayAddr(addrs []netlink.Addr, preferredGateway net.IP) netlink.Addr {
+	for _, addr := range addrs {
+		if addr.IP.Equal(preferredGateway) {
+			return addr
+		}
+	}
+	return addrs[0]
 }
 
 // CleanupOrphanedTAPs removes TAP devices that aren't used by any running instance.
