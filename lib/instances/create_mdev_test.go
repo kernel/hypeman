@@ -63,7 +63,7 @@ func TestWrapCreateVGPUErr(t *testing.T) {
 		{
 			name:        "other vGPU error",
 			err:         errors.New("boom"),
-			wantMessage: "create vGPU for profile profile: boom",
+			wantMessage: "create vGPU mdev for profile profile: boom",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
