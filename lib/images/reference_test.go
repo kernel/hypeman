@@ -11,18 +11,18 @@ import (
 // fakeInspector is a hermetic ManifestInspector for exercising the resolve seams
 // without a registry round-trip.
 type fakeInspector struct {
-	digestPlatform   Platform
-	digestResolved   string
-	digestErr        error
-	gotDigestRequest gcr.Platform
-}
-
-func (f *fakeInspector) inspectManifest(ctx context.Context, imageRef string) (string, error) {
-	return "", errors.New("not implemented")
+	manifestDigest     string
+	manifestErr        error
+	gotManifestRequest gcr.Platform
+	digestPlatform     Platform
+	digestResolved     string
+	digestErr          error
+	gotDigestRequest   gcr.Platform
 }
 
 func (f *fakeInspector) inspectManifestWithPlatform(ctx context.Context, imageRef string, platform gcr.Platform) (string, error) {
-	return "", errors.New("not implemented")
+	f.gotManifestRequest = platform
+	return f.manifestDigest, f.manifestErr
 }
 
 func (f *fakeInspector) inspectDigestPlatform(ctx context.Context, imageRef string, requested gcr.Platform) (Platform, string, error) {
@@ -31,6 +31,39 @@ func (f *fakeInspector) inspectDigestPlatform(ctx context.Context, imageRef stri
 		return Platform{}, "", f.digestErr
 	}
 	return f.digestPlatform, f.digestResolved, nil
+}
+
+func TestResolvedRefDigestRef(t *testing.T) {
+	normalized, err := ParseNormalizedRef("docker.io/library/alpine:latest")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	ref := NewResolvedRef(normalized, "sha256:abc123")
+	if got, want := ref.DigestRef(), "docker.io/library/alpine@sha256:abc123"; got != want {
+		t.Fatalf("DigestRef() = %q, want %q", got, want)
+	}
+}
+
+func TestResolveForPlatform(t *testing.T) {
+	normalized, err := ParseNormalizedRef("docker.io/library/alpine:latest")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	fake := &fakeInspector{manifestDigest: "sha256:abc123"}
+	requested := gcr.Platform{OS: "linux", Architecture: "amd64"}
+	ref, err := normalized.ResolveForPlatform(context.Background(), fake, requested)
+	if err != nil {
+		t.Fatalf("ResolveForPlatform: %v", err)
+	}
+	if ref.Digest() != fake.manifestDigest {
+		t.Fatalf("ref digest = %q, want %q", ref.Digest(), fake.manifestDigest)
+	}
+	got := fake.gotManifestRequest
+	if got.OS != requested.OS || got.Architecture != requested.Architecture || got.Variant != requested.Variant {
+		t.Fatalf("requested platform = %+v, want %+v", got, requested)
+	}
 }
 
 func TestResolveDigest_RecordsResolvedChildDigest(t *testing.T) {
