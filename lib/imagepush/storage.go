@@ -104,7 +104,11 @@ func listAllPushes(p *paths.Paths) ([]*pushMetadata, error) {
 		}
 		meta, err := readMetadata(p, entry.Name())
 		if err != nil {
-			continue // Skip invalid entries
+			// Surface unreadable records instead of swallowing them: a corrupt
+			// or half-written metadata.json would otherwise vanish from
+			// listing and recovery while its push directory lingers on disk.
+			fmt.Fprintf(os.Stderr, "Warning: skipping push %s with unreadable metadata: %v\n", entry.Name(), err)
+			continue
 		}
 		metas = append(metas, meta)
 	}
@@ -114,22 +118,6 @@ func listAllPushes(p *paths.Paths) ([]*pushMetadata, error) {
 	})
 
 	return metas, nil
-}
-
-// findPendingPush returns the oldest non-terminal push matching the key, or
-// nil when there is none. Used to adopt orphaned records instead of
-// duplicating them.
-func findPendingPush(p *paths.Paths, key string) (*pushMetadata, error) {
-	pending, err := listPendingPushes(p)
-	if err != nil {
-		return nil, err
-	}
-	for _, meta := range pending {
-		if pushKey(meta.Digest, meta.Target, meta.Insecure) == key {
-			return meta, nil
-		}
-	}
-	return nil, nil
 }
 
 // listPendingPushes returns pushes that did not reach a terminal state,

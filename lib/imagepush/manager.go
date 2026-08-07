@@ -17,8 +17,9 @@ import (
 )
 
 type inflightPush struct {
-	id     string
-	digest string
+	id             string
+	digest         string
+	hadCredentials bool
 }
 
 type manager struct {
@@ -79,6 +80,11 @@ func (m *manager) CreatePush(ctx context.Context, req PushRequest) (*Push, error
 	if img.Status != images.StatusReady {
 		return nil, fmt.Errorf("%w: %s is %s", ErrImageNotReady, img.Name, img.Status)
 	}
+	// A ready image must carry a digest; without one the dedup key below
+	// would collide across unrelated images.
+	if img.Digest == "" {
+		return nil, fmt.Errorf("%w: image %s has no digest", ErrImageNotReady, img.Name)
+	}
 
 	// Validate the target before persisting anything so typos fail fast.
 	var refOpts []name.Option
@@ -99,52 +105,27 @@ func (m *manager) CreatePush(ctx context.Context, req PushRequest) (*Push, error
 		provider = &registrypush.StaticProvider{Config: *req.Credentials}
 	}
 
-	// Hold the lock across dedup check, orphan adoption, metadata write, and
-	// registration so a concurrent request for the same digest+target cannot
-	// slip in between and leave an orphaned queued job behind.
+	// Hold the lock across the dedup check, metadata write, and registration so
+	// a concurrent request for the same digest+target cannot slip in between
+	// and create a duplicate job.
 	m.mu.Lock()
 	if existing, ok := m.inflight[key]; ok {
+		// Merge only when the credential intent matches the in-flight job. The
+		// manager never stores credential values, so it can only compare
+		// presence: a request that borrowed credentials cannot merge into an
+		// anonymous in-flight push (its auth would be silently dropped), and an
+		// anonymous request cannot merge into a credentialed one (it would
+		// silently inherit another caller's login). Both silently merge under
+		// the wrong auth otherwise; surface the conflict instead so the caller
+		// can retry once the in-flight job completes or match its credentials.
+		hadCreds := req.Credentials != nil
+		if existing.hadCredentials != hadCreds {
+			m.mu.Unlock()
+			return nil, fmt.Errorf("%w: a push of %s to %s is already in flight with different credentials; retry once it completes or match its credentials", ErrCredentialConflict, img.Digest, dstRef.String())
+		}
 		id := existing.id
 		m.mu.Unlock()
 		return m.GetPush(ctx, id)
-	}
-
-	// Adopt a pending record that exists on disk but is not tracked in memory
-	// (e.g. left behind by an interrupted recovery) instead of creating a
-	// duplicate job for the same digest+target. Records that carried borrowed
-	// credentials cannot be re-executed with them: close them with the same
-	// policy as recovery and fall through to create a fresh job (the current
-	// request may lend new credentials).
-	orphan, err := findPendingPush(m.paths, key)
-	if err != nil {
-		m.mu.Unlock()
-		return nil, fmt.Errorf("scan pending pushes: %w", err)
-	}
-	if orphan != nil && orphan.HadCredentials {
-		m.failRecovered(orphan, "push interrupted by restart: borrowed registry credentials are no longer available, retry the push")
-		orphan = nil
-	}
-	// A request that lends credentials cannot adopt a credential-less orphan:
-	// the adopted job would run under the default provider instead of the
-	// borrowed login. Supersede the orphan and create a fresh job instead.
-	if orphan != nil && req.Credentials != nil {
-		m.failRecovered(orphan, "superseded by a new push request for the same image and target")
-		orphan = nil
-	}
-	if orphan != nil {
-		m.inflight[key] = inflightPush{id: orphan.ID, digest: orphan.Digest}
-		m.mu.Unlock()
-
-		orphanCopy := *orphan
-		queuePos := m.queue.Enqueue(key, func() {
-			m.executePush(context.Background(), &orphanCopy, m.provider)
-		}, m.releaseInflight(key))
-
-		push := orphan.toPush()
-		if queuePos > 0 {
-			push.QueuePosition = &queuePos
-		}
-		return push, nil
 	}
 
 	meta := &pushMetadata{
@@ -161,7 +142,7 @@ func (m *manager) CreatePush(ctx context.Context, req PushRequest) (*Push, error
 		m.mu.Unlock()
 		return nil, fmt.Errorf("write initial metadata: %w", err)
 	}
-	m.inflight[key] = inflightPush{id: meta.ID, digest: meta.Digest}
+	m.inflight[key] = inflightPush{id: meta.ID, digest: meta.Digest, hadCredentials: meta.HadCredentials}
 	m.mu.Unlock()
 
 	metaCopy := *meta
@@ -196,6 +177,8 @@ func (m *manager) executePush(ctx context.Context, meta *pushMetadata, provider 
 	}()
 
 	meta.Status = StatusPushing
+	// Best-effort: if this write fails the job still runs and the terminal
+	// record written on completion is the source of truth for recovery.
 	if err := writeMetadata(m.paths, meta); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: failed to persist push status for %s: %v\n", meta.ID, err)
 	}
@@ -251,6 +234,9 @@ func (m *manager) writeTerminal(meta *pushMetadata) error {
 // active set, so a concurrent CreatePush never falls into a gap between job
 // completion and slot release: it either sees the inflight entry and gets the
 // finished job, or enqueues a fresh one that actually starts.
+// This relies on executePush having persisted the terminal status before it
+// returns (including from its panic handler); otherwise the record on disk
+// and the inflight map could disagree about whether the job is still running.
 func (m *manager) releaseInflight(key string) func() {
 	return func() {
 		m.mu.Lock()
@@ -260,6 +246,9 @@ func (m *manager) releaseInflight(key string) func() {
 }
 
 func (m *manager) GetPush(ctx context.Context, id string) (*Push, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	meta, err := readMetadata(m.paths, id)
 	if err != nil {
 		return nil, err
@@ -273,6 +262,9 @@ func (m *manager) GetPush(ctx context.Context, id string) (*Push, error) {
 }
 
 func (m *manager) ListPushes(ctx context.Context) ([]Push, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	metas, err := listAllPushes(m.paths)
 	if err != nil {
 		return nil, err
@@ -388,7 +380,7 @@ func (m *manager) recoverInterruptedPushes() {
 		seen[key] = meta.ID
 
 		m.mu.Lock()
-		m.inflight[key] = inflightPush{id: meta.ID, digest: meta.Digest}
+		m.inflight[key] = inflightPush{id: meta.ID, digest: meta.Digest, hadCredentials: meta.HadCredentials}
 		m.mu.Unlock()
 
 		metaCopy := *meta
