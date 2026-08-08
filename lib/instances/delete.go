@@ -85,6 +85,14 @@ func (m *manager) deleteInstanceWithOptions(
 		guest.CloseConn(dialer.Key())
 	}
 
+	// 3b. Block the restart policy before any teardown. If the delete fails
+	// partway (e.g. a failed vGPU release) the metadata is retained with the
+	// VMM already stopped, and without this marker the restart policy
+	// controller would start the instance again.
+	if err := m.markRestartManualStopLocked(ctx, id); err != nil {
+		return fmt.Errorf("block restart policy before delete: %w", err)
+	}
+
 	// 4. If active, try graceful guest shutdown before force kill.
 	gracefulShutdown := false
 	if !options.skipGracefulShutdown && (inst.State == StateRunning || inst.State == StateInitializing) {
@@ -126,9 +134,9 @@ func (m *manager) deleteInstanceWithOptions(
 	m.closeFirecrackerUFFDSession(ctx, stored)
 
 	// 5b. Release the vGPU assignment if present, before any network, device,
-	// or volume teardown. A failed release retains the instance metadata, and
-	// nothing destructive has happened to its attachments yet, so a retried
-	// delete is safe.
+	// or volume teardown. A failed release retains the instance metadata; the
+	// VMM has already been stopped, but its attachments are intact and the
+	// restart policy is blocked, so a retried delete is safe.
 	if err := releaseStoredVGPU(ctx, stored); err != nil {
 		log.ErrorContext(ctx, "failed to destroy vGPU; retaining instance metadata", "instance_id", id, "error", err)
 		return fmt.Errorf("destroy vGPU: %w", err)
