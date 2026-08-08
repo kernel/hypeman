@@ -178,6 +178,27 @@ func TestVGPUAssignmentClaimedByLiveInstanceNormalizesLegacyMdevPath(t *testing.
 	assert.True(t, claimed)
 }
 
+func TestReleaseStoredVGPUSkipsClaimScanForMdev(t *testing.T) {
+	t.Parallel()
+
+	m := &manager{
+		paths:       paths.New(t.TempDir()),
+		destroyVGPU: func(context.Context, devices.VGPUAssignment) error { return nil },
+	}
+	require.NoError(t, m.ensureDirectories("invalid-instance"))
+	require.NoError(t, os.WriteFile(m.paths.InstanceMetadata("invalid-instance"), []byte("{"), 0o644))
+
+	stored := &StoredMetadata{
+		Id:            "mdev-instance",
+		GPUFramework:  devices.VGPUFrameworkMdev,
+		GPUMdevUUID:   "uuid-1",
+		GPUDevicePath: "/sys/bus/mdev/devices/uuid-1",
+	}
+	require.NoError(t, m.releaseStoredVGPU(context.Background(), stored),
+		"an unreadable metadata file must not block mdev releases")
+	assert.Empty(t, stored.GPUDevicePath)
+}
+
 func TestStoredVGPUDevicePath(t *testing.T) {
 	t.Parallel()
 

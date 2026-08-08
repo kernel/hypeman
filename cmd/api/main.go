@@ -192,10 +192,14 @@ func liveInstanceVGPUDevicePaths(ctx context.Context, instanceManager instances.
 	}
 	protected := make(map[string]struct{})
 	for _, inst := range allInstances {
-		if inst.GPUDevicePath == "" || inst.HypervisorPID == nil {
+		if inst.GPUDevicePath == "" {
 			continue
 		}
-		if !instances.HypervisorProcessExists(*inst.HypervisorPID, inst.SocketPath) {
+		// A nil PID does not mean the assignment is orphaned: the PID is
+		// persisted only after the hypervisor starts, so a crash during boot
+		// leaves the device path without one. Only skip protection when the
+		// recorded hypervisor is known to be gone.
+		if inst.HypervisorPID != nil && !instances.HypervisorProcessExists(*inst.HypervisorPID, inst.SocketPath) {
 			continue
 		}
 		protected[inst.GPUDevicePath] = struct{}{}
