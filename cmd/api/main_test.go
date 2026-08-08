@@ -2,15 +2,18 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os/exec"
 	"testing"
 	"time"
 
 	"github.com/getkin/kin-openapi/openapi3filter"
 	"github.com/go-chi/chi/v5"
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/kernel/hypeman/lib/instances"
 	mw "github.com/kernel/hypeman/lib/middleware"
 	"github.com/kernel/hypeman/lib/oapi"
 	nethttpmiddleware "github.com/oapi-codegen/nethttp-middleware"
@@ -337,4 +340,31 @@ func TestImageNameWithSlashes_URLEncoding(t *testing.T) {
 			}
 		})
 	}
+}
+
+type vgpuReconcileManagerStub struct {
+	instances.Manager
+	list []instances.Instance
+}
+
+func (s vgpuReconcileManagerStub) ListInstancesForReconcile(context.Context) ([]instances.Instance, error) {
+	return s.list, nil
+}
+
+// The hypervisor PID is persisted only after boot, so an assignment without
+// one may belong to a VM that is still starting and must stay protected.
+func TestLiveInstanceVGPUDevicePathsProtectsAssignmentsWithoutPID(t *testing.T) {
+	dead := exec.Command("true")
+	require.NoError(t, dead.Run())
+	deadPID := dead.Process.Pid
+
+	manager := vgpuReconcileManagerStub{list: []instances.Instance{
+		{StoredMetadata: instances.StoredMetadata{Id: "booting", GPUDevicePath: "/sys/bus/pci/devices/0000:82:00.4"}},
+		{StoredMetadata: instances.StoredMetadata{Id: "dead", GPUDevicePath: "/sys/bus/pci/devices/0000:82:00.5", HypervisorPID: &deadPID}},
+	}}
+
+	protected, err := liveInstanceVGPUDevicePaths(context.Background(), manager)
+	require.NoError(t, err)
+	assert.Contains(t, protected, "/sys/bus/pci/devices/0000:82:00.4")
+	assert.NotContains(t, protected, "/sys/bus/pci/devices/0000:82:00.5")
 }
