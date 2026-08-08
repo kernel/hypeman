@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"runtime"
 	"syscall"
 	"time"
 
@@ -228,16 +229,30 @@ func (m *manager) killHypervisor(ctx context.Context, inst *Instance) error {
 	log := logger.FromContext(ctx)
 
 	// The stored PID can be stale after a hypeman restart and reused by an
-	// unrelated process, so only kill a PID confirmed against the socket
-	// owner. On a confirmed mismatch, kill the owner instead.
+	// unrelated process, so only kill a PID whose socket ownership is
+	// confirmed. On a confirmed mismatch, kill the owner instead. When
+	// ownership cannot be determined, skip the kill: leaking a hypervisor is
+	// recoverable, killing an unrelated process is not.
 	pid := 0
-	if inst.HypervisorPID != nil {
-		if HypervisorProcessExists(*inst.HypervisorPID, inst.SocketPath) {
-			pid = *inst.HypervisorPID
-		} else if resolved, confirmed, err := hypervisor.ResolveProcessPID(inst.SocketPath); err == nil && confirmed && ProcessExists(resolved) {
-			log.WarnContext(ctx, "stored hypervisor PID does not own the instance socket, killing the socket owner",
-				"instance_id", inst.Id, "stored_pid", *inst.HypervisorPID, "owner_pid", resolved)
-			pid = resolved
+	if inst.HypervisorPID != nil && ProcessExists(*inst.HypervisorPID) {
+		storedPID := *inst.HypervisorPID
+		if runtime.GOOS != "linux" || inst.SocketPath == "" {
+			pid = storedPID
+		} else if resolved, confirmed, err := hypervisor.ResolveProcessPID(inst.SocketPath); err == nil {
+			switch {
+			case resolved == storedPID:
+				pid = storedPID
+			case confirmed && ProcessExists(resolved):
+				log.WarnContext(ctx, "stored hypervisor PID does not own the instance socket, killing the socket owner",
+					"instance_id", inst.Id, "stored_pid", storedPID, "owner_pid", resolved)
+				pid = resolved
+			default:
+				log.WarnContext(ctx, "stored hypervisor PID does not own the instance socket, skipping kill",
+					"instance_id", inst.Id, "stored_pid", storedPID, "resolved_pid", resolved)
+			}
+		} else {
+			log.WarnContext(ctx, "cannot confirm hypervisor socket ownership, skipping kill of stored PID",
+				"instance_id", inst.Id, "stored_pid", storedPID, "error", err)
 		}
 	}
 
