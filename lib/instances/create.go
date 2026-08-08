@@ -316,6 +316,7 @@ func (m *manager) createInstance(
 				Framework:  gpuDevice.Framework,
 				DevicePath: gpuDevice.SysfsPath,
 				MdevUUID:   gpuDevice.MdevUUID,
+				InstanceID: id,
 			}
 			if err := devices.DestroyVGPU(ctx, assignment); err != nil {
 				log.WarnContext(ctx, "failed to destroy vGPU on cleanup", "instance_id", id, "uuid", gpuDevice.MdevUUID, "error", err)
