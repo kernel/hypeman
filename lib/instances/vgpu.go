@@ -54,9 +54,18 @@ func clearStoredVGPUDevice(stored *StoredMetadata) {
 func (m *manager) releaseStoredVGPU(ctx context.Context, stored *StoredMetadata) error {
 	path := storedVGPUDevicePath(stored)
 	if path != "" {
-		claimed, err := m.vgpuAssignmentClaimedByLiveInstance(ctx, stored.Id, path)
-		if err != nil {
-			return err
+		// Vendor VFIO VFs are reused across instances, so stale metadata can
+		// point at a path claimed by a live instance and the release must fail
+		// closed on an incomplete inventory. mdev UUIDs are unique and never
+		// reused, so skip the scan there — it would let one unreadable
+		// metadata file block every mdev release on the host.
+		claimed := false
+		if stored.GPUFramework == devices.VGPUFrameworkVendorVFIO {
+			var err error
+			claimed, err = m.vgpuAssignmentClaimedByLiveInstance(ctx, stored.Id, path)
+			if err != nil {
+				return err
+			}
 		}
 		if claimed {
 			logger.FromContext(ctx).WarnContext(ctx, "dropping stale vGPU assignment claimed by another live instance",
