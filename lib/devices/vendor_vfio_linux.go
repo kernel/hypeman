@@ -81,9 +81,13 @@ func (s vendorVFIOSysfs) discoverVFs() ([]VirtualFunction, error) {
 	return vfs, nil
 }
 
+// listProfiles aggregates creatable profiles per parent GPU. Free VFs on the
+// same GPU share its framebuffer, so counting each advertising VF overreports
+// availability. The driver only guarantees that a GPU still advertising a
+// type can fit one more instance of it, so report that per-GPU lower bound.
 func (s vendorVFIOSysfs) listProfiles(vfs []VirtualFunction) ([]GPUProfile, error) {
 	profilesByType := make(map[string]profileMetadata)
-	availability := make(map[string]int)
+	creatableGPUs := make(map[string]map[string]struct{})
 	for _, vf := range vfs {
 		creatable, err := s.readCreatableProfiles(vf.PCIAddress)
 		if err != nil {
@@ -92,7 +96,14 @@ func (s vendorVFIOSysfs) listProfiles(vfs []VirtualFunction) ([]GPUProfile, erro
 		for _, profile := range creatable {
 			profilesByType[profile.TypeName] = profile
 			if !vf.Allocated {
-				availability[profile.TypeName]++
+				gpu := vf.ParentGPU
+				if gpu == "" {
+					gpu = vf.PCIAddress
+				}
+				if creatableGPUs[profile.TypeName] == nil {
+					creatableGPUs[profile.TypeName] = make(map[string]struct{})
+				}
+				creatableGPUs[profile.TypeName][gpu] = struct{}{}
 			}
 		}
 	}
@@ -108,7 +119,7 @@ func (s vendorVFIOSysfs) listProfiles(vfs []VirtualFunction) ([]GPUProfile, erro
 		profiles = append(profiles, GPUProfile{
 			Name:          profile.Name,
 			FramebufferMB: profile.FramebufferMB,
-			Available:     availability[profile.TypeName],
+			Available:     len(creatableGPUs[profile.TypeName]),
 		})
 	}
 	return profiles, nil

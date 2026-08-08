@@ -27,6 +27,7 @@ func releaseStoredVGPU(ctx context.Context, stored *StoredMetadata) error {
 			Framework:  stored.GPUFramework,
 			DevicePath: path,
 			MdevUUID:   stored.GPUMdevUUID,
+			InstanceID: stored.Id,
 		}
 		if err := devices.DestroyVGPU(ctx, assignment); err != nil {
 			return err
