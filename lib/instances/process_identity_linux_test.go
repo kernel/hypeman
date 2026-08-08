@@ -99,6 +99,23 @@ func TestKillHypervisorSparesReusedPIDAndKillsSocketOwner(t *testing.T) {
 	assert.True(t, os.IsNotExist(statErr), "instance socket should be removed")
 }
 
+func TestKillHypervisorSkipsReusedPIDWhenSocketIsGone(t *testing.T) {
+	stale := exec.Command("sleep", "30")
+	require.NoError(t, stale.Start())
+	t.Cleanup(func() {
+		_ = stale.Process.Kill()
+		_ = stale.Wait()
+	})
+
+	stalePID := stale.Process.Pid
+	m := &manager{}
+	require.NoError(t, m.killHypervisor(context.Background(), &Instance{
+		StoredMetadata: StoredMetadata{Id: "kill-test", HypervisorPID: &stalePID, SocketPath: filepath.Join(t.TempDir(), "missing.sock")},
+	}))
+
+	assert.NoError(t, syscall.Kill(stalePID, 0), "process with unconfirmed socket ownership must not be killed")
+}
+
 func TestHypervisorProcessExistsRejectsDifferentLiveSocketOwner(t *testing.T) {
 	socketPath := filepath.Join(t.TempDir(), "test.sock")
 	listener, err := net.Listen("unix", socketPath)
