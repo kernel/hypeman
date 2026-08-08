@@ -17,6 +17,7 @@ import (
 	"github.com/kernel/hypeman/lib/instances"
 	"github.com/kernel/hypeman/lib/instances/phasetracking"
 	mw "github.com/kernel/hypeman/lib/middleware"
+	"github.com/kernel/hypeman/lib/network"
 	"github.com/kernel/hypeman/lib/oapi"
 	"github.com/kernel/hypeman/lib/paths"
 	restartpolicy "github.com/kernel/hypeman/lib/restart-policy"
@@ -45,6 +46,36 @@ func TestGetInstance_NotFound(t *testing.T) {
 	// For this test, we call the manager directly to verify the error type.
 	_, err := svc.InstanceManager.GetInstance(ctx(), "non-existent")
 	require.Error(t, err)
+}
+
+type createErrorInstanceManager struct {
+	instances.Manager
+	err error
+}
+
+func (m createErrorInstanceManager) CreateInstance(context.Context, instances.CreateInstanceRequest) (*instances.Instance, error) {
+	return nil, m.err
+}
+
+// A retained-assignment error must win over the mapping of the create error
+// it wraps, or the response omits the instance the caller has to delete.
+func TestCreateInstance_VGPUCleanupPendingBeatsWrappedErrorMapping(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+	svc.InstanceManager = createErrorInstanceManager{err: &instances.VGPUCleanupPendingError{
+		InstanceID: "inst-1",
+		Err:        network.ErrNameExists,
+	}}
+
+	resp, err := svc.CreateInstance(ctx(), oapi.CreateInstanceRequestObject{
+		Body: &oapi.CreateInstanceRequest{Image: "test-image"},
+	})
+	require.NoError(t, err)
+
+	pending, ok := resp.(oapi.CreateInstance500JSONResponse)
+	require.True(t, ok, "expected 500 vgpu_cleanup_pending, got %T", resp)
+	assert.EqualValues(t, "vgpu_cleanup_pending", pending.Code)
+	assert.Contains(t, pending.Message, "inst-1")
 }
 
 func TestCreateInstance_AutoPullImage(t *testing.T) {
