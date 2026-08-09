@@ -59,30 +59,33 @@ func TestCleanupFailedCreateDeletesDataWithoutRetainedVGPU(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestCleanupFailedCreateReportsPendingWhenRetentionFails(t *testing.T) {
+func TestCleanupFailedCreateReportsUnpersistedRetention(t *testing.T) {
 	t.Parallel()
 
 	m := &manager{paths: paths.New(t.TempDir())}
-	// A file at the guests directory path makes ensureDirectories fail even
-	// when running as root.
-	require.NoError(t, os.WriteFile(m.paths.GuestsDir(), nil, 0o644))
+	const id = "failed-create"
+	require.NoError(t, m.ensureDirectories(id))
+	require.NoError(t, os.Mkdir(m.paths.InstanceMetadata(id), 0o755))
 
 	stored := &StoredMetadata{
-		Id:            "failed-create",
+		Id:            id,
 		GPUFramework:  devices.VGPUFrameworkVendorVFIO,
 		GPUDevicePath: "/sys/bus/pci/devices/0000:82:00.4",
 	}
-	assert.True(t, m.cleanupFailedCreate(context.Background(), stored.Id, stored),
-		"a failed retention must still report the outstanding vGPU assignment")
+	assert.False(t, m.cleanupFailedCreate(context.Background(), stored.Id, stored))
 }
 
 func TestVGPUCleanupPendingErrorUnwraps(t *testing.T) {
 	t.Parallel()
 
 	cause := errors.New("boot failed")
-	err := &VGPUCleanupPendingError{InstanceID: "inst-1", Err: cause}
-	assert.ErrorIs(t, err, cause)
-	assert.Contains(t, err.Error(), "inst-1")
+	retained := &VGPUCleanupPendingError{InstanceID: "inst-1", Retained: true, Err: cause}
+	assert.ErrorIs(t, retained, cause)
+	assert.Equal(t, "boot failed; vGPU release failed during rollback, instance inst-1 retains the assignment", retained.Error())
+
+	unpersisted := &VGPUCleanupPendingError{InstanceID: "inst-1", Err: cause}
+	assert.ErrorIs(t, unpersisted, cause)
+	assert.Equal(t, "boot failed; vGPU release failed during rollback and the retention record for instance inst-1 could not be saved; the assignment is recovered on the next startup reconcile", unpersisted.Error())
 }
 
 func newStartRollbackVGPUManager(t *testing.T, destroy func(context.Context, devices.VGPUAssignment) error) (*manager, string) {
