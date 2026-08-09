@@ -227,9 +227,9 @@ func (m *manager) deleteInstanceWithOptions(
 // Used only for delete operations where we're removing all data anyway.
 // For operations that need graceful shutdown (like standby), use the hypervisor API directly.
 // It returns an error when the hypervisor may still be running: socket
-// ownership of a live stored PID could not be confirmed, or the process did
-// not exit after SIGKILL. Callers must not tear down instance resources in
-// that case.
+// ownership cannot be confirmed, SIGKILL fails with an error other than ESRCH,
+// or the process does not exit after SIGKILL. Callers must not tear down
+// instance resources in that case.
 func (m *manager) killHypervisor(ctx context.Context, inst *Instance) error {
 	log := logger.FromContext(ctx)
 
