@@ -36,10 +36,10 @@ import (
 //
 //	sudo go test -v -run TestVGPU -timeout 5m ./integration/...
 //
-// Note: This test verifies vGPU assignment, stop behavior (mdev releases and
-// reacquires on start; vendor VFIO retains the assignment), and PCI device
-// visibility inside the VM. It does NOT test nvidia-smi or CUDA functionality
-// since that requires NVIDIA guest drivers pre-installed in the image.
+// Note: This test verifies vGPU assignment, release on stop, reacquisition on
+// start, and PCI device visibility inside the VM. It does NOT test nvidia-smi
+// or CUDA functionality since that requires NVIDIA guest drivers pre-installed
+// in the image.
 func TestVGPU(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
@@ -94,17 +94,10 @@ func TestVGPU(t *testing.T) {
 		if _, err := instanceManager.StopInstance(ctx, instanceID); err != nil {
 			t.Logf("Cleanup: stop instance: %v", err)
 		}
-		if inst, err := instanceManager.GetInstance(ctx, instanceID); err == nil && inst.GPUFramework == devices.VGPUFrameworkVendorVFIO && inst.GPUDevicePath != "" {
-			if err := devices.DestroyVGPU(ctx, devices.VGPUAssignment{
-				Framework:  inst.GPUFramework,
-				DevicePath: inst.GPUDevicePath,
-				InstanceID: instanceID,
-			}); err != nil {
-				t.Errorf("cleanup: release vendor VFIO vGPU: %v", err)
-			}
-		}
 		t.Log("Cleanup: Deleting instance...")
-		instanceManager.DeleteInstance(ctx, instanceID)
+		if err := instanceManager.DeleteInstance(ctx, instanceID); err != nil {
+			t.Errorf("cleanup: delete instance: %v", err)
+		}
 	})
 
 	// Step 1: Ensure system files (kernel, initrd)
@@ -260,34 +253,22 @@ func TestVGPU(t *testing.T) {
 	_, err = instanceManager.StopInstance(ctx, inst.Id)
 	require.NoError(t, err, "stop should succeed")
 
-	switch inst.GPUFramework {
-	case devices.VGPUFrameworkMdev:
-		t.Run("VGPUReleasedOnStop", func(t *testing.T) {
-			stopped, err := instanceManager.GetInstance(ctx, inst.Id)
-			require.NoError(t, err)
-			assert.Empty(t, stopped.GPUDevicePath, "assignment metadata should be cleared on stop")
-			assertVGPUReleased(t, inst.GPUFramework, inst.GPUDevicePath)
-		})
+	t.Run("VGPUReleasedOnStop", func(t *testing.T) {
+		stopped, err := instanceManager.GetInstance(ctx, inst.Id)
+		require.NoError(t, err)
+		assert.Empty(t, stopped.GPUDevicePath, "assignment metadata should be cleared on stop")
+		assertVGPUReleased(t, inst.GPUFramework, inst.GPUDevicePath)
+	})
 
-		t.Log("Step 11: Starting instance to reacquire a vGPU...")
-		started, err := instanceManager.StartInstance(ctx, inst.Id, instances.StartInstanceRequest{})
-		require.NoError(t, err, "start should succeed")
+	t.Log("Step 11: Starting instance to reacquire a vGPU...")
+	started, err := instanceManager.StartInstance(ctx, inst.Id, instances.StartInstanceRequest{})
+	require.NoError(t, err, "start should succeed")
 
-		t.Run("VGPUReacquiredOnStart", func(t *testing.T) {
-			require.NotEmpty(t, started.GPUDevicePath, "start should assign a vGPU")
-			assert.Equal(t, inst.GPUFramework, started.GPUFramework, "framework should match")
-			assertVGPUAssigned(t, started.GPUFramework, started.GPUDevicePath)
-		})
-	case devices.VGPUFrameworkVendorVFIO:
-		t.Run("VGPUAssignmentRetainedOnStop", func(t *testing.T) {
-			stopped, err := instanceManager.GetInstance(ctx, inst.Id)
-			require.NoError(t, err)
-			// Release requires an instance-owned assignment, so stop retains it.
-			assert.Equal(t, inst.GPUFramework, stopped.GPUFramework, "assignment framework should be retained on stop")
-			assert.Equal(t, inst.GPUDevicePath, stopped.GPUDevicePath, "assignment metadata should be retained on stop")
-			assertVGPUAssigned(t, stopped.GPUFramework, stopped.GPUDevicePath)
-		})
-	}
+	t.Run("VGPUReacquiredOnStart", func(t *testing.T) {
+		require.NotEmpty(t, started.GPUDevicePath, "start should assign a vGPU")
+		assert.Equal(t, inst.GPUFramework, started.GPUFramework, "framework should match")
+		assertVGPUAssigned(t, started.GPUFramework, started.GPUDevicePath)
+	})
 
 	t.Log("✅ vGPU test PASSED!")
 }
@@ -342,6 +323,11 @@ func checkVGPUTestPrerequisites() (string, string) {
 	}
 	if framework == devices.VGPUFrameworkNone {
 		return "vGPU test requires SR-IOV VFs with an mdev or vendor VFIO vGPU framework", ""
+	}
+	if framework == devices.VGPUFrameworkVendorVFIO {
+		// CreateVGPU rejects vendor VFIO until the instance lifecycle
+		// integration lands.
+		return "vGPU test requires the vendor VFIO instance lifecycle integration", ""
 	}
 
 	// Check for available profiles
