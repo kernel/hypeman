@@ -67,6 +67,23 @@ func TestCleanupFailedCreateDeletesDataWithoutRetainedVGPU(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestCleanupFailedCreateReportsPendingWhenRetentionFails(t *testing.T) {
+	t.Parallel()
+
+	m := &manager{paths: paths.New(t.TempDir())}
+	// A file at the guests directory path makes ensureDirectories fail even
+	// when running as root.
+	require.NoError(t, os.WriteFile(m.paths.GuestsDir(), nil, 0o644))
+
+	stored := &StoredMetadata{
+		Id:            "failed-create",
+		GPUFramework:  devices.VGPUFrameworkVendorVFIO,
+		GPUDevicePath: "/sys/bus/pci/devices/0000:82:00.4",
+	}
+	assert.True(t, m.cleanupFailedCreate(context.Background(), stored.Id, stored),
+		"a failed retention must still report the outstanding vGPU assignment")
+}
+
 func TestVGPUCleanupPendingErrorUnwraps(t *testing.T) {
 	t.Parallel()
 
@@ -176,6 +193,40 @@ func TestVGPUAssignmentClaimedByLiveInstanceNormalizesLegacyMdevPath(t *testing.
 	claimed, err := m.vgpuAssignmentClaimedByLiveInstance(context.Background(), "other-instance", "/sys/bus/mdev/devices/legacy-uuid")
 	require.NoError(t, err)
 	assert.True(t, claimed)
+}
+
+func TestVGPUAssignmentClaimedByLiveInstanceProtectsNilPIDClaim(t *testing.T) {
+	t.Parallel()
+
+	m := &manager{paths: paths.New(t.TempDir())}
+	require.NoError(t, m.ensureDirectories("booting-claimant"))
+	require.NoError(t, m.saveMetadata(&metadata{StoredMetadata: StoredMetadata{
+		Id:            "booting-claimant",
+		Name:          "booting-claimant",
+		GPUDevicePath: "/sys/bus/pci/devices/0000:82:00.4",
+	}}))
+
+	claimed, err := m.vgpuAssignmentClaimedByLiveInstance(context.Background(), "other-instance", "/sys/bus/pci/devices/0000:82:00.4")
+	require.NoError(t, err)
+	assert.True(t, claimed, "a matching claim without a persisted PID must be treated as live: the PID is only persisted after the claimant boots")
+}
+
+func TestVGPUAssignmentClaimedByLiveInstanceIgnoresDeadClaim(t *testing.T) {
+	t.Parallel()
+
+	m := &manager{paths: paths.New(t.TempDir())}
+	require.NoError(t, m.ensureDirectories("dead-claimant"))
+	deadPID := 1 << 30
+	require.NoError(t, m.saveMetadata(&metadata{StoredMetadata: StoredMetadata{
+		Id:            "dead-claimant",
+		Name:          "dead-claimant",
+		GPUDevicePath: "/sys/bus/pci/devices/0000:82:00.4",
+		HypervisorPID: &deadPID,
+	}}))
+
+	claimed, err := m.vgpuAssignmentClaimedByLiveInstance(context.Background(), "other-instance", "/sys/bus/pci/devices/0000:82:00.4")
+	require.NoError(t, err)
+	assert.False(t, claimed, "a claim whose hypervisor is gone must not block the release")
 }
 
 func TestReleaseStoredVGPUSkipsClaimScanForMdev(t *testing.T) {
