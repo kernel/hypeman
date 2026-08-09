@@ -73,6 +73,8 @@ func TestCleanupFailedCreateReportsUnpersistedRetention(t *testing.T) {
 		GPUDevicePath: "/sys/bus/pci/devices/0000:82:00.4",
 	}
 	assert.False(t, m.cleanupFailedCreate(context.Background(), stored.Id, stored))
+	_, err := m.loadMetadata(id)
+	require.Error(t, err)
 }
 
 func TestVGPUCleanupPendingErrorUnwraps(t *testing.T) {
