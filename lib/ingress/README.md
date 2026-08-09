@@ -68,6 +68,30 @@ Pattern hostnames enable convention-based routing where the subdomain maps to an
 
 This routes `foobar.dev.example.com` → instance `foobar`, `myapp.dev.example.com` → instance `myapp`, etc.
 
+### Request Header Authorization
+
+A rule can require a dedicated verification header before Caddy resolves or contacts its target:
+
+```json
+{
+  "match": { "hostname": "service.example.com", "port": 443 },
+  "target": { "instance": "service", "port": 8080 },
+  "tls": true,
+  "request_header_auth": {
+    "header": "X-Origin-Verification",
+    "secret_env": "HYPEMAN_INGRESS_AUTH_SERVICE"
+  }
+}
+```
+
+Set `HYPEMAN_INGRESS_AUTH_SERVICE` in the host process environment. References must begin with `HYPEMAN_INGRESS_AUTH_`; arbitrary process environment variables cannot be referenced. Values must be non-empty printable ASCII without whitespace or Caddy matcher metacharacters (`*`, `{`, `}`). Missing or invalid values prevent ingress creation and configuration regeneration.
+
+Caddy requires an exact hostname and header-value match. Missing or incorrect credentials return 403 without resolving the dynamic upstream. Before proxying an authorized request, Caddy deletes the verification header so it is never delivered to the guest. The normal reverse proxy remains responsible for HTTP streaming, WebSocket upgrades, and server-sent events. An HTTP-to-HTTPS redirect does not require the header, but the HTTPS destination does.
+
+Ingress metadata and API responses contain only `header` and `secret_env`. The resolved value exists only in Caddy's host-local configuration, which is written owner-only, and is not included in application logs or API errors.
+
+To rotate a value, update the referenced host environment variable and restart the Hypeman API service. Startup regenerates the configuration and reloads a surviving Caddy process before accepting API traffic. If the variable is unavailable, startup fails and does not apply an unprotected route.
+
 ### Configuration Flow
 
 1. User creates an ingress via API
@@ -214,7 +238,7 @@ DELETE /ingresses/{id} - Delete ingress
 1. Extract Caddy binary (if needed)
 2. Start internal DNS server for dynamic upstream resolution (port 5353)
 3. Check for existing running Caddy (via PID file or admin API)
-4. If not running, start Caddy with generated config
+4. Reload a running Caddy with the regenerated config, or start Caddy when absent
 5. Wait for admin API to become ready
 
 ### Config Updates

@@ -1,6 +1,7 @@
 package ingress
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -8,6 +9,7 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/tags"
+	"golang.org/x/net/http/httpguts"
 )
 
 // Ingress represents an ingress resource that defines how external traffic
@@ -29,6 +31,10 @@ type Ingress struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+const requestHeaderAuthEnvPrefix = "HYPEMAN_INGRESS_AUTH_"
+
+var requestHeaderAuthEnvPattern = regexp.MustCompile(`^HYPEMAN_INGRESS_AUTH_[A-Z0-9_]+$`)
+
 // IngressRule defines a single routing rule within an ingress.
 type IngressRule struct {
 	// Match specifies the conditions for matching incoming requests.
@@ -44,6 +50,39 @@ type IngressRule struct {
 	// RedirectHTTP creates an automatic HTTP to HTTPS redirect for this hostname.
 	// Only applies when TLS is enabled.
 	RedirectHTTP bool `json:"redirect_http,omitempty"`
+
+	// RequestHeaderAuth optionally requires a dedicated request header before proxying.
+	RequestHeaderAuth *RequestHeaderAuth `json:"request_header_auth,omitempty"`
+}
+
+// RequestHeaderAuth references a host environment variable containing the expected header value.
+type RequestHeaderAuth struct {
+	Header    string `json:"header"`
+	SecretEnv string `json:"secret_env"`
+}
+
+func (a *RequestHeaderAuth) Validate() error {
+	if a == nil {
+		return nil
+	}
+	if !httpguts.ValidHeaderFieldName(a.Header) {
+		return errors.New("request_header_auth.header must be a valid HTTP header name")
+	}
+	if reservedRequestHeader(a.Header) {
+		return fmt.Errorf("request_header_auth.header %q is reserved", a.Header)
+	}
+	if !requestHeaderAuthEnvPattern.MatchString(a.SecretEnv) {
+		return fmt.Errorf("request_header_auth.secret_env must be an uppercase environment name beginning with %s", requestHeaderAuthEnvPrefix)
+	}
+	return nil
+}
+
+func reservedRequestHeader(header string) bool {
+	switch strings.ToLower(header) {
+	case "authorization", "connection", "content-length", "cookie", "host", "keep-alive", "proxy-authenticate", "proxy-authorization", "proxy-connection", "te", "trailer", "transfer-encoding", "upgrade":
+		return true
+	}
+	return strings.HasPrefix(strings.ToLower(header), "sec-websocket-")
 }
 
 // IngressMatch specifies the conditions for matching incoming requests.
@@ -198,6 +237,9 @@ func (r *CreateIngressRequest) Validate() error {
 	}
 
 	for i, rule := range r.Rules {
+		if err := rule.RequestHeaderAuth.Validate(); err != nil {
+			return &ValidationError{Field: "rules", Message: fmt.Sprintf("invalid request_header_auth in rule %d: %v", i, err)}
+		}
 		if rule.Match.Hostname == "" {
 			return &ValidationError{Field: "rules", Message: "hostname is required in rule " + strconv.Itoa(i)}
 		}

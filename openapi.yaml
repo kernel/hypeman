@@ -1463,6 +1463,20 @@ components:
           description: Target port on the instance
           example: 8080
     
+    IngressRequestHeaderAuth:
+      type: object
+      required: [header, secret_env]
+      properties:
+        header:
+          type: string
+          description: Dedicated request header that must match before proxying. Reserved authentication, cookie, host, framing, proxy, and hop-by-hop headers are not allowed.
+          example: X-Ingress-Verification
+        secret_env:
+          type: string
+          description: Host environment variable containing the expected header value. Must begin with HYPEMAN_INGRESS_AUTH_. The value is never persisted or returned.
+          pattern: ^HYPEMAN_INGRESS_AUTH_[A-Z0-9_]+$
+          example: HYPEMAN_INGRESS_AUTH_SERVICE
+
     IngressRule:
       type: object
       required: [match, target]
@@ -1479,6 +1493,8 @@ components:
           type: boolean
           description: Auto-create HTTP to HTTPS redirect for this hostname (only applies when tls is enabled)
           default: false
+        request_header_auth:
+          $ref: "#/components/schemas/IngressRequestHeaderAuth"
     
     CreateIngressRequest:
       type: object

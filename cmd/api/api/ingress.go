@@ -46,30 +46,7 @@ func (s *ApiService) CreateIngress(ctx context.Context, request oapi.CreateIngre
 	}
 
 	for i, rule := range request.Body.Rules {
-		matchPort := 80
-		if rule.Match.Port != nil {
-			matchPort = *rule.Match.Port
-		}
-		tlsEnabled := false
-		if rule.Tls != nil {
-			tlsEnabled = *rule.Tls
-		}
-		redirectHTTP := false
-		if rule.RedirectHttp != nil {
-			redirectHTTP = *rule.RedirectHttp
-		}
-		domainReq.Rules[i] = ingress.IngressRule{
-			Match: ingress.IngressMatch{
-				Hostname: rule.Match.Hostname,
-				Port:     matchPort,
-			},
-			Target: ingress.IngressTarget{
-				Instance: rule.Target.Instance,
-				Port:     rule.Target.Port,
-			},
-			TLS:          tlsEnabled,
-			RedirectHTTP: redirectHTTP,
-		}
+		domainReq.Rules[i] = ingressRuleFromOAPI(rule)
 	}
 
 	ing, err := s.IngressManager.Create(ctx, domainReq)
@@ -164,21 +141,7 @@ func (s *ApiService) DeleteIngress(ctx context.Context, request oapi.DeleteIngre
 func ingressToOAPI(ing ingress.Ingress) oapi.Ingress {
 	rules := make([]oapi.IngressRule, len(ing.Rules))
 	for i, rule := range ing.Rules {
-		port := rule.Match.GetPort()
-		tls := rule.TLS
-		redirectHTTP := rule.RedirectHTTP
-		rules[i] = oapi.IngressRule{
-			Match: oapi.IngressMatch{
-				Hostname: rule.Match.Hostname,
-				Port:     &port,
-			},
-			Target: oapi.IngressTarget{
-				Instance: rule.Target.Instance,
-				Port:     rule.Target.Port,
-			},
-			Tls:          &tls,
-			RedirectHttp: &redirectHTTP,
-		}
+		rules[i] = ingressRuleToOAPI(rule)
 	}
 
 	return oapi.Ingress{
@@ -187,5 +150,51 @@ func ingressToOAPI(ing ingress.Ingress) oapi.Ingress {
 		Tags:      toOAPITags(ing.Tags),
 		Rules:     rules,
 		CreatedAt: ing.CreatedAt,
+	}
+}
+
+func ingressRuleFromOAPI(rule oapi.IngressRule) ingress.IngressRule {
+	matchPort := 80
+	if rule.Match.Port != nil {
+		matchPort = *rule.Match.Port
+	}
+	tlsEnabled := rule.Tls != nil && *rule.Tls
+	redirectHTTP := rule.RedirectHttp != nil && *rule.RedirectHttp
+	var requestHeaderAuth *ingress.RequestHeaderAuth
+	if rule.RequestHeaderAuth != nil {
+		requestHeaderAuth = &ingress.RequestHeaderAuth{
+			Header:    rule.RequestHeaderAuth.Header,
+			SecretEnv: rule.RequestHeaderAuth.SecretEnv,
+		}
+	}
+	return ingress.IngressRule{
+		Match: ingress.IngressMatch{Hostname: rule.Match.Hostname, Port: matchPort},
+		Target: ingress.IngressTarget{
+			Instance: rule.Target.Instance,
+			Port:     rule.Target.Port,
+		},
+		TLS:               tlsEnabled,
+		RedirectHTTP:      redirectHTTP,
+		RequestHeaderAuth: requestHeaderAuth,
+	}
+}
+
+func ingressRuleToOAPI(rule ingress.IngressRule) oapi.IngressRule {
+	port := rule.Match.GetPort()
+	tls := rule.TLS
+	redirectHTTP := rule.RedirectHTTP
+	var requestHeaderAuth *oapi.IngressRequestHeaderAuth
+	if rule.RequestHeaderAuth != nil {
+		requestHeaderAuth = &oapi.IngressRequestHeaderAuth{
+			Header:    rule.RequestHeaderAuth.Header,
+			SecretEnv: rule.RequestHeaderAuth.SecretEnv,
+		}
+	}
+	return oapi.IngressRule{
+		Match:             oapi.IngressMatch{Hostname: rule.Match.Hostname, Port: &port},
+		Target:            oapi.IngressTarget{Instance: rule.Target.Instance, Port: rule.Target.Port},
+		Tls:               &tls,
+		RedirectHttp:      &redirectHTTP,
+		RequestHeaderAuth: requestHeaderAuth,
 	}
 }

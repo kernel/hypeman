@@ -189,14 +189,17 @@ func NewCaddyConfigGenerator(p *paths.Paths, listenAddress string, adminAddress 
 
 // GenerateConfig generates the Caddy JSON configuration.
 func (g *CaddyConfigGenerator) GenerateConfig(ctx context.Context, ingresses []Ingress) ([]byte, error) {
-	config := g.buildConfig(ctx, ingresses)
+	config, err := g.buildConfig(ctx, ingresses)
+	if err != nil {
+		return nil, err
+	}
 	return json.MarshalIndent(config, "", "  ")
 }
 
 // buildConfig builds the complete Caddy configuration.
 // Routes are grouped by listen port to prevent conflicts when multiple wildcard
 // ingresses match the same hostname pattern on different ports.
-func (g *CaddyConfigGenerator) buildConfig(ctx context.Context, ingresses []Ingress) map[string]interface{} {
+func (g *CaddyConfigGenerator) buildConfig(ctx context.Context, ingresses []Ingress) (map[string]interface{}, error) {
 	log := logger.FromContext(ctx)
 
 	// Group routes by listen port to isolate them in separate Caddy servers.
@@ -252,18 +255,32 @@ func (g *CaddyConfigGenerator) buildConfig(ctx context.Context, ingresses []Ingr
 				},
 			}
 
-			route := map[string]interface{}{
-				"match": []interface{}{
+			matcher := map[string]interface{}{"host": []string{hostnameMatch}}
+			handlers := []interface{}{reverseProxy}
+			if rule.RequestHeaderAuth != nil {
+				secret, err := resolveRequestHeaderAuth(rule.RequestHeaderAuth)
+				if err != nil {
+					return nil, err
+				}
+				matcher["header"] = map[string][]string{rule.RequestHeaderAuth.Header: []string{secret}}
+				handlers = []interface{}{
 					map[string]interface{}{
-						"host": []string{hostnameMatch},
+						"handler": "headers",
+						"request": map[string]interface{}{"delete": []string{rule.RequestHeaderAuth.Header}},
 					},
-				},
-				"handle":   []interface{}{reverseProxy},
-				"terminal": true,
+					reverseProxy,
+				}
 			}
 
-			// Add route to port-specific group
+			route := map[string]interface{}{
+				"match":    []interface{}{matcher},
+				"handle":   handlers,
+				"terminal": true,
+			}
 			routesByPort[port] = append(routesByPort[port], route)
+			if rule.RequestHeaderAuth != nil {
+				routesByPort[port] = append(routesByPort[port], requestHeaderDenialRoute(hostnameMatch))
+			}
 
 			// Track TLS hostnames for automation policy
 			// For patterns, use the wildcard for TLS (e.g., "*.example.com")
@@ -447,7 +464,43 @@ func (g *CaddyConfigGenerator) buildConfig(ctx context.Context, ingresses []Ingr
 		"root":   g.paths.CaddyDataDir(),
 	}
 
-	return config
+	return config, nil
+}
+
+func resolveRequestHeaderAuth(auth *RequestHeaderAuth) (string, error) {
+	if err := auth.Validate(); err != nil {
+		return "", err
+	}
+	value, ok := os.LookupEnv(auth.SecretEnv)
+	if !ok {
+		return "", fmt.Errorf("request header authorization environment variable %s is not set", auth.SecretEnv)
+	}
+	if value == "" {
+		return "", fmt.Errorf("request header authorization environment variable %s is empty", auth.SecretEnv)
+	}
+	if !validRequestHeaderAuthValue(value) {
+		return "", fmt.Errorf("request header authorization environment variable %s is not a valid header value", auth.SecretEnv)
+	}
+	return value, nil
+}
+
+func validRequestHeaderAuthValue(value string) bool {
+	for i := 0; i < len(value); i++ {
+		if value[i] < 0x21 || value[i] > 0x7e || value[i] == '*' || value[i] == '{' || value[i] == '}' {
+			return false
+		}
+	}
+	return true
+}
+
+func requestHeaderDenialRoute(hostname string) map[string]interface{} {
+	return map[string]interface{}{
+		"match": []interface{}{map[string]interface{}{"host": []string{hostname}}},
+		"handle": []interface{}{map[string]interface{}{
+			"handler": "static_response", "status_code": 403,
+		}},
+		"terminal": true,
+	}
 }
 
 // buildTLSConfig builds the TLS automation configuration.
