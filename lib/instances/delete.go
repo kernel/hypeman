@@ -243,8 +243,8 @@ func (m *manager) killHypervisor(ctx context.Context, inst *Instance) error {
 				"instance_id", inst.Id, "stored_pid", *inst.HypervisorPID, "owner_pid", pid)
 		}
 		log.DebugContext(ctx, "killing hypervisor process", "instance_id", inst.Id, "pid", pid)
-		if err := syscall.Kill(pid, syscall.SIGKILL); err != nil {
-			log.WarnContext(ctx, "failed to kill hypervisor process", "instance_id", inst.Id, "pid", pid, "error", err)
+		if err := syscall.Kill(pid, syscall.SIGKILL); err != nil && err != syscall.ESRCH {
+			return fmt.Errorf("kill hypervisor process %d: %w", pid, err)
 		}
 		if !WaitForProcessExit(pid, 30*time.Second) {
 			return fmt.Errorf("hypervisor process %d did not exit after SIGKILL", pid)
@@ -277,12 +277,12 @@ func WaitForProcessExit(pid int, timeout time.Duration) bool {
 			// Process still running (or wait status not yet available).
 		case waitErr == syscall.ECHILD:
 			// Not our child (or already reaped elsewhere). Fall back to existence check.
-			if err := syscall.Kill(pid, 0); err != nil {
+			if !ProcessExists(pid) {
 				return true
 			}
 		default:
 			// Best effort fallback on transient/unexpected wait errors.
-			if err := syscall.Kill(pid, 0); err != nil {
+			if !ProcessExists(pid) {
 				return true
 			}
 		}
