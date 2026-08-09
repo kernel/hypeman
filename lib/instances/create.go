@@ -649,9 +649,19 @@ func (m *manager) cleanupFailedCreate(ctx context.Context, id string, retainedVG
 	}
 
 	log := logger.FromContext(ctx)
+	retentionFailed := func() bool {
+		meta, err := m.loadMetadata(id)
+		if err == nil && storedVGPUDevicePath(&meta.StoredMetadata) != "" {
+			return true
+		}
+		if err := m.deleteInstanceData(id); err != nil {
+			log.ErrorContext(ctx, "failed to delete stale instance data after retention failure", "instance_id", id, "error", err)
+		}
+		return false
+	}
 	if err := m.ensureDirectories(id); err != nil {
 		log.ErrorContext(ctx, "failed to retain instance data after vGPU cleanup failure", "instance_id", id, "error", err)
-		return false
+		return retentionFailed()
 	}
 	retained := StoredMetadata{
 		Id:            id,
@@ -661,7 +671,7 @@ func (m *manager) cleanupFailedCreate(ctx context.Context, id string, retainedVG
 	}
 	if err := m.saveMetadata(&metadata{StoredMetadata: retained}); err != nil {
 		log.ErrorContext(ctx, "failed to retain vGPU assignment metadata after cleanup failure", "instance_id", id, "error", err)
-		return false
+		return retentionFailed()
 	}
 	return true
 }
