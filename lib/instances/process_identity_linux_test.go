@@ -99,7 +99,7 @@ func TestKillHypervisorSparesReusedPIDAndKillsSocketOwner(t *testing.T) {
 	assert.True(t, os.IsNotExist(statErr), "instance socket should be removed")
 }
 
-func TestKillHypervisorSkipsReusedPIDWhenSocketIsGone(t *testing.T) {
+func TestKillHypervisorFailsOnReusedPIDWhenSocketIsGone(t *testing.T) {
 	stale := exec.Command("sleep", "30")
 	require.NoError(t, stale.Start())
 	t.Cleanup(func() {
@@ -108,12 +108,33 @@ func TestKillHypervisorSkipsReusedPIDWhenSocketIsGone(t *testing.T) {
 	})
 
 	stalePID := stale.Process.Pid
+	socketPath := filepath.Join(t.TempDir(), "missing.sock")
 	m := &manager{}
-	require.NoError(t, m.killHypervisor(context.Background(), &Instance{
-		StoredMetadata: StoredMetadata{Id: "kill-test", HypervisorPID: &stalePID, SocketPath: filepath.Join(t.TempDir(), "missing.sock")},
-	}))
+	require.Error(t, m.killHypervisor(context.Background(), &Instance{
+		StoredMetadata: StoredMetadata{Id: "kill-test", HypervisorPID: &stalePID, SocketPath: socketPath},
+	}), "unconfirmed ownership of a live stored PID must fail the kill")
 
 	assert.NoError(t, syscall.Kill(stalePID, 0), "process with unconfirmed socket ownership must not be killed")
+}
+
+func TestKillHypervisorFailsOnUnconfirmedCommandLineMatch(t *testing.T) {
+	socketPath := filepath.Join(t.TempDir(), "test.sock")
+	// A process whose command line contains the socket path but that does not
+	// own a listening socket: ResolveProcessPID resolves it unconfirmed.
+	match := exec.Command("sh", "-c", "sleep 30", "sh", socketPath)
+	require.NoError(t, match.Start())
+	t.Cleanup(func() {
+		_ = match.Process.Kill()
+		_ = match.Wait()
+	})
+
+	matchPID := match.Process.Pid
+	m := &manager{}
+	require.Error(t, m.killHypervisor(context.Background(), &Instance{
+		StoredMetadata: StoredMetadata{Id: "kill-test", HypervisorPID: &matchPID, SocketPath: socketPath},
+	}), "a command-line match must not satisfy destructive ownership verification")
+
+	assert.NoError(t, syscall.Kill(matchPID, 0), "process matched only by command line must not be killed")
 }
 
 func TestHypervisorProcessExistsRejectsDifferentLiveSocketOwner(t *testing.T) {
