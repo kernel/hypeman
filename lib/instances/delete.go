@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"runtime"
 	"syscall"
 	"time"
 
@@ -217,74 +216,21 @@ func (m *manager) deleteInstanceWithOptions(
 func (m *manager) killHypervisor(ctx context.Context, inst *Instance) error {
 	log := logger.FromContext(ctx)
 
-	// The stored PID can be stale after a hypeman restart and reused by an
-	// unrelated process, so only kill a PID whose socket ownership is
-	// confirmed. On a confirmed mismatch, kill the owner instead. When
-	// ownership cannot be determined, fail: leaking a hypervisor and retrying
-	// the delete is recoverable, killing an unrelated process is not.
-	pid := 0
-	if inst.HypervisorPID != nil && ProcessExists(*inst.HypervisorPID) {
-		storedPID := *inst.HypervisorPID
-		if runtime.GOOS != "linux" || inst.SocketPath == "" {
-			pid = storedPID
-		} else {
-			resolved, confirmed, err := hypervisor.ResolveProcessPID(inst.SocketPath)
-			switch {
-			case err == nil && confirmed && resolved == storedPID:
-				pid = storedPID
-			case err == nil && confirmed && ProcessExists(resolved):
-				log.WarnContext(ctx, "stored hypervisor PID does not own the instance socket, killing the socket owner",
-					"instance_id", inst.Id, "stored_pid", storedPID, "owner_pid", resolved)
-				pid = resolved
-			case err == nil && confirmed:
-				// The confirmed owner exited between scans; nothing to kill.
-			case err != nil:
-				return fmt.Errorf("cannot confirm ownership of socket %s for stored hypervisor PID %d: %w",
-					inst.SocketPath, storedPID, err)
-			default:
-				return fmt.Errorf("cannot confirm ownership of socket %s for stored hypervisor PID %d: process %d matched by command line only",
-					inst.SocketPath, storedPID, resolved)
-			}
-		}
+	pid, err := resolveLiveHypervisorPID(inst.HypervisorPID, inst.SocketPath)
+	if err != nil {
+		return err
 	}
-
 	if pid > 0 {
-		// Check if process exists
-		if err := syscall.Kill(pid, 0); err == nil {
-			// Process exists - kill it immediately with SIGKILL
-			// No graceful shutdown needed since we're deleting all data
-			log.DebugContext(ctx, "killing hypervisor process", "instance_id", inst.Id, "pid", pid)
-			if err := syscall.Kill(pid, syscall.SIGKILL); err != nil {
-				log.WarnContext(ctx, "failed to kill hypervisor process", "instance_id", inst.Id, "pid", pid, "error", err)
-			}
-
-			// Wait for process to die and reap it to prevent zombies
-			// SIGKILL should be instant, but give it a moment
-			exited := false
-			for i := 0; i < 50; i++ { // 50 * 100ms = 5 seconds
-				var wstatus syscall.WaitStatus
-				wpid, err := syscall.Wait4(pid, &wstatus, syscall.WNOHANG, nil)
-				if err == nil && wpid == pid {
-					log.DebugContext(ctx, "hypervisor process killed and reaped", "instance_id", inst.Id, "pid", pid)
-					exited = true
-					break
-				}
-				if err != nil {
-					// Wait4 returns ECHILD when the hypervisor is not our child
-					// (e.g. after a hypeman restart); wait until it has exited.
-					if killErr := syscall.Kill(pid, 0); killErr == syscall.ESRCH {
-						log.DebugContext(ctx, "hypervisor process killed", "instance_id", inst.Id, "pid", pid)
-						exited = true
-						break
-					}
-				}
-				time.Sleep(100 * time.Millisecond)
-			}
-			if !exited {
-				return fmt.Errorf("hypervisor process %d did not exit after SIGKILL", pid)
-			}
-		} else {
-			log.DebugContext(ctx, "hypervisor process not running", "instance_id", inst.Id, "pid", pid)
+		if inst.HypervisorPID != nil && pid != *inst.HypervisorPID {
+			log.WarnContext(ctx, "stored hypervisor PID does not own the instance socket, killing the socket owner",
+				"instance_id", inst.Id, "stored_pid", *inst.HypervisorPID, "owner_pid", pid)
+		}
+		log.DebugContext(ctx, "killing hypervisor process", "instance_id", inst.Id, "pid", pid)
+		if err := syscall.Kill(pid, syscall.SIGKILL); err != nil {
+			log.WarnContext(ctx, "failed to kill hypervisor process", "instance_id", inst.Id, "pid", pid, "error", err)
+		}
+		if !WaitForProcessExit(pid, 30*time.Second) {
+			return fmt.Errorf("hypervisor process %d did not exit after SIGKILL", pid)
 		}
 	}
 

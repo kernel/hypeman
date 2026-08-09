@@ -99,6 +99,80 @@ func TestKillHypervisorSparesReusedPIDAndKillsSocketOwner(t *testing.T) {
 	assert.True(t, os.IsNotExist(statErr), "instance socket should be removed")
 }
 
+func TestForceKillHypervisorProcessFailsOnUnconfirmedOwnership(t *testing.T) {
+	process := exec.Command("sleep", "30")
+	require.NoError(t, process.Start())
+	t.Cleanup(func() {
+		_ = process.Process.Kill()
+		_ = process.Wait()
+	})
+
+	pid := process.Process.Pid
+	m := &manager{}
+	require.Error(t, m.forceKillHypervisorProcess(context.Background(), &Instance{
+		StoredMetadata: StoredMetadata{Id: "kill-test", HypervisorPID: &pid, SocketPath: filepath.Join(t.TempDir(), "missing.sock")},
+	}))
+	assert.NoError(t, syscall.Kill(pid, 0), "process with unconfirmed socket ownership must not be killed")
+}
+
+func TestRefreshHypervisorPIDPrefersSocketOwnerOverLiveStoredPID(t *testing.T) {
+	socketPath := filepath.Join(t.TempDir(), "test.sock")
+	owner := exec.Command(os.Args[0], "-test.run=^TestHypervisorProcessExistsWithReboundSocketPathHelper$")
+	owner.Env = append(os.Environ(), "HYPERVISOR_SOCKET_HELPER=1", "HYPERVISOR_SOCKET_PATH="+socketPath)
+	stdin, err := owner.StdinPipe()
+	require.NoError(t, err)
+	stdout, err := owner.StdoutPipe()
+	require.NoError(t, err)
+	require.NoError(t, owner.Start())
+	t.Cleanup(func() {
+		_ = stdin.Close()
+		_ = owner.Process.Kill()
+		_ = owner.Wait()
+	})
+	_, err = bufio.NewReader(stdout).ReadString('\n')
+	require.NoError(t, err)
+
+	stale := exec.Command("sleep", "30")
+	require.NoError(t, stale.Start())
+	t.Cleanup(func() {
+		_ = stale.Process.Kill()
+		_ = stale.Wait()
+	})
+
+	stalePID := stale.Process.Pid
+	stored := StoredMetadata{HypervisorPID: &stalePID, SocketPath: socketPath}
+	refreshHypervisorPID(&stored, StateRunning)
+	require.NotNil(t, stored.HypervisorPID)
+	assert.Equal(t, owner.Process.Pid, *stored.HypervisorPID)
+}
+
+func TestKillHypervisorSurvivesConcurrentReaper(t *testing.T) {
+	socketPath := filepath.Join(t.TempDir(), "test.sock")
+	process := exec.Command(os.Args[0], "-test.run=^TestHypervisorProcessExistsWithReboundSocketPathHelper$")
+	process.Env = append(os.Environ(), "HYPERVISOR_SOCKET_HELPER=1", "HYPERVISOR_SOCKET_PATH="+socketPath)
+	stdin, err := process.StdinPipe()
+	require.NoError(t, err)
+	stdout, err := process.StdoutPipe()
+	require.NoError(t, err)
+	require.NoError(t, process.Start())
+	_, err = bufio.NewReader(stdout).ReadString('\n')
+	require.NoError(t, err)
+
+	pid := process.Process.Pid
+	waitDone := make(chan error, 1)
+	go func() { waitDone <- process.Wait() }()
+	t.Cleanup(func() {
+		_ = stdin.Close()
+		_ = process.Process.Kill()
+		<-waitDone
+	})
+
+	m := &manager{}
+	require.NoError(t, m.killHypervisor(context.Background(), &Instance{
+		StoredMetadata: StoredMetadata{Id: "kill-test", HypervisorPID: &pid, SocketPath: socketPath},
+	}))
+}
+
 func TestKillHypervisorFailsOnReusedPIDWhenSocketIsGone(t *testing.T) {
 	stale := exec.Command("sleep", "30")
 	require.NoError(t, stale.Start())
