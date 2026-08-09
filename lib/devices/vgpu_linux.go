@@ -73,10 +73,7 @@ func CreateVGPU(ctx context.Context, profileName, instanceID string) (*VGPUDevic
 			MdevUUID:    mdev.UUID,
 		}, nil
 	case VGPUFrameworkVendorVFIO:
-		// The instance lifecycle does not yet persist vendor VFIO assignments
-		// durably or guard their release against live claims, so keep the
-		// backend out of the create path until that integration lands.
-		return nil, fmt.Errorf("vendor VFIO vGPU support is not yet integrated with the instance lifecycle")
+		return hostVendorVFIO.create(ctx, profileName, instanceID)
 	default:
 		return nil, fmt.Errorf("vGPU framework not available")
 	}
