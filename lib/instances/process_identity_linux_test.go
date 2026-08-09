@@ -211,6 +211,23 @@ func TestKillHypervisorFailsOnUnconfirmedCommandLineMatch(t *testing.T) {
 	assert.NoError(t, syscall.Kill(matchPID, 0), "process matched only by command line must not be killed")
 }
 
+func TestKillHypervisorFailsOnCommandLineMatchWithNilStoredPID(t *testing.T) {
+	socketPath := filepath.Join(t.TempDir(), "test.sock")
+	match := exec.Command("sh", "-c", "sleep 30", "sh", socketPath)
+	require.NoError(t, match.Start())
+	t.Cleanup(func() {
+		_ = match.Process.Kill()
+		_ = match.Wait()
+	})
+
+	m := &manager{}
+	require.Error(t, m.killHypervisor(context.Background(), &Instance{
+		StoredMetadata: StoredMetadata{Id: "kill-test", SocketPath: socketPath},
+	}), "a command-line match must fail closed without a stored PID")
+
+	assert.NoError(t, syscall.Kill(match.Process.Pid, 0), "process matched only by command line must not be killed")
+}
+
 func TestHypervisorProcessExistsRejectsDifferentLiveSocketOwner(t *testing.T) {
 	socketPath := filepath.Join(t.TempDir(), "test.sock")
 	listener, err := net.Listen("unix", socketPath)
