@@ -597,6 +597,11 @@ func resolveLiveHypervisorPID(storedPID *int, socketPath string) (int, error) {
 		return resolved, nil
 	case err == nil && confirmed:
 		return 0, nil
+	case err == nil && !confirmed && resolved > 0 && ProcessExists(resolved):
+		if stored != 0 {
+			return 0, fmt.Errorf("cannot confirm ownership of socket %s for stored hypervisor PID %d: process %d matched by command line only", socketPath, stored, resolved)
+		}
+		return 0, fmt.Errorf("cannot confirm ownership of socket %s: process %d matched by command line only", socketPath, resolved)
 	}
 	if stored == 0 {
 		return 0, nil
