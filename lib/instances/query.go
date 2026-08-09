@@ -575,16 +575,36 @@ func refreshHypervisorPID(stored *StoredMetadata, state State) {
 	if !state.RequiresVMM() && state != StateUnknown {
 		return
 	}
-	if stored.HypervisorPID != nil && ProcessExists(*stored.HypervisorPID) {
-		return
-	}
-	if stored.SocketPath == "" {
-		return
-	}
-	if pid, _, err := hypervisor.ResolveProcessPID(stored.SocketPath); err == nil {
+	if pid, err := resolveLiveHypervisorPID(stored.HypervisorPID, stored.SocketPath); err == nil && pid > 0 {
 		stored.HypervisorPID = &pid
-		return
 	}
+}
+
+// resolveLiveHypervisorPID returns the PID of the live hypervisor that owns
+// the instance socket, or 0 when no live hypervisor is found. It returns an
+// error when a live stored PID's socket ownership cannot be confirmed.
+func resolveLiveHypervisorPID(storedPID *int, socketPath string) (int, error) {
+	stored := 0
+	if storedPID != nil && ProcessExists(*storedPID) {
+		stored = *storedPID
+	}
+	if runtime.GOOS != "linux" || socketPath == "" {
+		return stored, nil
+	}
+	resolved, confirmed, err := hypervisor.ResolveProcessPID(socketPath)
+	switch {
+	case err == nil && confirmed && ProcessExists(resolved):
+		return resolved, nil
+	case err == nil && confirmed:
+		return 0, nil
+	}
+	if stored == 0 {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("cannot confirm ownership of socket %s for stored hypervisor PID %d: %w", socketPath, stored, err)
+	}
+	return 0, fmt.Errorf("cannot confirm ownership of socket %s for stored hypervisor PID %d: process %d matched by command line only", socketPath, stored, resolved)
 }
 
 // HypervisorProcessExists reports whether pid owns the instance's hypervisor socket.
