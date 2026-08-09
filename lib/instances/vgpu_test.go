@@ -81,6 +81,34 @@ func TestCleanupFailedCreateReportsUnpersistedRetention(t *testing.T) {
 		GPUDevicePath: "/sys/bus/pci/devices/0000:82:00.4",
 	}
 	assert.False(t, m.cleanupFailedCreate(context.Background(), stored.Id, stored))
+	_, err := m.loadMetadata(id)
+	require.Error(t, err)
+}
+
+func TestCleanupFailedCreateReportsRetainedWhenFullMetadataSurvives(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses directory permissions")
+	}
+
+	m := &manager{paths: paths.New(t.TempDir())}
+	const id = "failed-create"
+	require.NoError(t, m.ensureDirectories(id))
+	stored := &StoredMetadata{
+		Id:            id,
+		GPUFramework:  devices.VGPUFrameworkVendorVFIO,
+		GPUDevicePath: "/sys/bus/pci/devices/0000:82:00.4",
+	}
+	require.NoError(t, m.saveMetadata(&metadata{StoredMetadata: *stored}))
+
+	instanceDir := filepath.Dir(m.paths.InstanceMetadata(id))
+	require.NoError(t, os.Chmod(instanceDir, 0o555))
+	t.Cleanup(func() { _ = os.Chmod(instanceDir, 0o755) })
+
+	assert.True(t, m.cleanupFailedCreate(context.Background(), id, stored))
+	retained, err := m.loadMetadata(id)
+	require.NoError(t, err)
+	assert.Equal(t, stored.GPUFramework, retained.GPUFramework)
+	assert.Equal(t, stored.GPUDevicePath, retained.GPUDevicePath)
 }
 
 func TestVGPUCleanupPendingErrorUnwraps(t *testing.T) {
