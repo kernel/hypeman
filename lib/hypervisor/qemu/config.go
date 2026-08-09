@@ -12,10 +12,11 @@ import (
 // BuildArgs converts hypervisor.VMConfig to QEMU command-line arguments.
 func BuildArgs(cfg hypervisor.VMConfig) []string {
 	args := make([]string, 0, 64)
+	microvm := cfg.MachineType == MachineTypeMicroVM
 
 	// Machine type with KVM acceleration (arch-specific when omitted).
 	args = append(args, "-machine", machineTypeForConfig(cfg))
-	if cfg.MachineType == MachineTypeMicroVM {
+	if microvm {
 		// Do not allow a host qemu.conf to add devices outside microvm's
 		// documented eight virtio-mmio-device limit.
 		args = append(args, "-no-user-config")
@@ -30,7 +31,7 @@ func BuildArgs(cfg hypervisor.VMConfig) []string {
 	args = append(args, "-m", fmt.Sprintf("%dM", memMB))
 
 	if cfg.GuestMemory.EnableBalloon {
-		balloonOpts := []string{virtioBalloonDevice(cfg)}
+		balloonOpts := []string{virtioDevice(microvm, "virtio-balloon")}
 		if cfg.GuestMemory.DeflateOnOOM {
 			balloonOpts = append(balloonOpts, "deflate-on-oom=on")
 		}
@@ -69,7 +70,7 @@ func BuildArgs(cfg hypervisor.VMConfig) []string {
 			}
 		}
 		args = append(args, "-drive", driveOpts)
-		args = append(args, "-device", fmt.Sprintf("%s,drive=drive%d", virtioBlockDevice(cfg), i))
+		args = append(args, "-device", fmt.Sprintf("%s,drive=drive%d", virtioDevice(microvm, "virtio-blk"), i))
 	}
 
 	// Network configuration
@@ -77,13 +78,13 @@ func BuildArgs(cfg hypervisor.VMConfig) []string {
 		netdevOpts := fmt.Sprintf("tap,id=net%d,ifname=%s,script=no,downscript=no", i, net.TAPDevice)
 		args = append(args, "-netdev", netdevOpts)
 
-		deviceOpts := fmt.Sprintf("%s,netdev=net%d,mac=%s", virtioNetDevice(cfg), i, net.MAC)
+		deviceOpts := fmt.Sprintf("%s,netdev=net%d,mac=%s", virtioDevice(microvm, "virtio-net"), i, net.MAC)
 		args = append(args, "-device", deviceOpts)
 	}
 
 	// Vsock configuration
 	if cfg.VsockCID > 0 {
-		args = append(args, "-device", fmt.Sprintf("%s,guest-cid=%d", virtioVsockDevice(cfg), cfg.VsockCID))
+		args = append(args, "-device", fmt.Sprintf("%s,guest-cid=%d", virtioDevice(microvm, "vhost-vsock"), cfg.VsockCID))
 	}
 
 	// PCI device passthrough (GPU, mdev vGPU, etc.)
@@ -127,54 +128,19 @@ func BuildArgs(cfg hypervisor.VMConfig) []string {
 	return args
 }
 
-// machineType returns the default QEMU machine type for the host architecture.
-func machineType() string {
-	machine, err := ResolveMachineType("")
-	if err != nil {
-		// qemuBinaryName will report unsupported architectures before QEMU starts.
-		return "q35,accel=kvm"
-	}
-	return string(machine) + ",accel=kvm"
-}
-
 func machineTypeForConfig(cfg hypervisor.VMConfig) string {
-	machine, err := ResolveMachineType(cfg.MachineType)
-	if err != nil {
-		// StartVM and RestoreVM validate before invoking this deterministic builder.
-		return machineType()
+	machine := cfg.MachineType
+	if machine == "" {
+		// StartVM resolves the architecture default before calling BuildArgs. Keep
+		// direct BuildArgs callers deterministic for the standard QEMU profile.
+		machine, _ = ResolveMachineType("")
 	}
 	return string(machine) + ",accel=kvm"
 }
 
-func isMicroVM(cfg hypervisor.VMConfig) bool {
-	machine, err := ResolveMachineType(cfg.MachineType)
-	return err == nil && machine == MachineTypeMicroVM
-}
-
-func virtioBlockDevice(cfg hypervisor.VMConfig) string {
-	if isMicroVM(cfg) {
-		return "virtio-blk-device"
+func virtioDevice(microvm bool, name string) string {
+	if microvm {
+		return name + "-device"
 	}
-	return "virtio-blk-pci"
-}
-
-func virtioNetDevice(cfg hypervisor.VMConfig) string {
-	if isMicroVM(cfg) {
-		return "virtio-net-device"
-	}
-	return "virtio-net-pci"
-}
-
-func virtioVsockDevice(cfg hypervisor.VMConfig) string {
-	if isMicroVM(cfg) {
-		return "vhost-vsock-device"
-	}
-	return "vhost-vsock-pci"
-}
-
-func virtioBalloonDevice(cfg hypervisor.VMConfig) string {
-	if isMicroVM(cfg) {
-		return "virtio-balloon-device"
-	}
-	return "virtio-balloon-pci"
+	return name + "-pci"
 }

@@ -57,7 +57,7 @@ func TestStarterAppliesBackendMachineType(t *testing.T) {
 	assert.Equal(t, MachineTypeMicroVM, microvm.MachineType)
 
 	_, err = NewStarter().applyMachineType(hypervisor.VMConfig{MachineType: MachineTypeMicroVM}, false)
-	require.ErrorContains(t, err, "requires hypervisor qemu-microvm")
+	require.ErrorContains(t, err, "hypervisor qemu cannot use QEMU machine type")
 
 	_, err = NewMicroVMStarter().applyMachineType(hypervisor.VMConfig{}, true)
 	require.ErrorContains(t, err, "snapshot is missing")

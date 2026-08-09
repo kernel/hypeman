@@ -965,15 +965,7 @@ func TestCloudHypervisorWarmForkChain(t *testing.T) {
 
 type warmForkChainConfig struct {
 	hypervisor hypervisor.Type
-	image      string
 	namePrefix string
-}
-
-func warmForkCommand(hypervisorType hypervisor.Type) []string {
-	if hypervisorType == hypervisor.TypeQEMUMicroVM {
-		return nil
-	}
-	return []string{"sleep", "infinity"}
 }
 
 func runWarmForkChain(t *testing.T, mgr *manager, tmpDir string, cfg warmForkChainConfig) {
@@ -986,10 +978,7 @@ func runWarmForkChain(t *testing.T, mgr *manager, tmpDir string, cfg warmForkCha
 
 	imageManager, err := images.NewManager(p, 1, nil)
 	require.NoError(t, err)
-	imageName := cfg.image
-	if imageName == "" {
-		imageName = integrationTestImageRef(t, "docker.io/library/alpine:latest")
-	}
+	imageName := integrationTestImageRef(t, "docker.io/library/alpine:3.20")
 	snapshottest.EnsureImageReady(t, ctx, p, imageManager, imageName)
 
 	require.NoError(t, mgr.systemManager.EnsureSystemFiles(ctx))
@@ -1002,7 +991,8 @@ func runWarmForkChain(t *testing.T, mgr *manager, tmpDir string, cfg warmForkCha
 		Vcpus:          1,
 		NetworkEnabled: false,
 		Hypervisor:     cfg.hypervisor,
-		Cmd:            warmForkCommand(cfg.hypervisor),
+		Entrypoint:     []string{"/bin/sleep"},
+		Cmd:            []string{"86400"},
 	})
 	require.NoError(t, err)
 	require.Equal(t, cfg.hypervisor, source.HypervisorType)

@@ -19,7 +19,7 @@ func (s *Starter) PrepareFork(ctx context.Context, req hypervisor.ForkPrepareReq
 	}
 
 	snapshotDir := filepath.Dir(req.SnapshotConfigPath)
-	cfg, err := loadVMConfig(snapshotDir)
+	saved, err := loadVMConfig(snapshotDir)
 	if err != nil {
 		// The generic path points to CH's config.json; for QEMU, require qemu-config.json.
 		expectedPath := filepath.Join(snapshotDir, vmConfigFile)
@@ -28,7 +28,7 @@ func (s *Starter) PrepareFork(ctx context.Context, req hypervisor.ForkPrepareReq
 		}
 		return hypervisor.ForkPrepareResult{}, fmt.Errorf("load qemu snapshot config: %w", err)
 	}
-	cfg, err = s.applyMachineType(cfg, true)
+	cfg, err := s.applyMachineType(saved.VMConfig, true)
 	if err != nil {
 		return hypervisor.ForkPrepareResult{}, fmt.Errorf("select qemu fork machine type: %w", err)
 	}
@@ -64,7 +64,8 @@ func (s *Starter) PrepareFork(ctx context.Context, req hypervisor.ForkPrepareReq
 		}
 	}
 
-	if err := saveVMConfig(snapshotDir, cfg); err != nil {
+	saved.VMConfig = cfg
+	if err := saveVMConfig(snapshotDir, saved); err != nil {
 		return hypervisor.ForkPrepareResult{}, fmt.Errorf("write qemu snapshot config: %w", err)
 	}
 	return hypervisor.ForkPrepareResult{

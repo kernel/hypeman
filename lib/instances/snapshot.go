@@ -241,7 +241,6 @@ func (m *manager) deleteSnapshot(ctx context.Context, snapshotID string) error {
 }
 
 func (m *manager) restoreSnapshot(ctx context.Context, id string, snapshotID string, req RestoreSnapshotRequest) (_ *Instance, retErr error) {
-	log := logger.FromContext(ctx)
 	ctx, span := m.startLifecycleSpan(ctx, "instances.restore_snapshot",
 		attribute.String("instance_id", id),
 		attribute.String("operation", "restore_snapshot"),
@@ -270,6 +269,10 @@ func (m *manager) restoreSnapshot(ctx context.Context, id string, snapshotID str
 		return nil, err
 	}
 	targetHypervisor, err := m.resolveSnapshotTargetHypervisor(rec, req.TargetHypervisor)
+	if err != nil {
+		return nil, err
+	}
+	starter, targetHypervisorVersion, err := m.prepareSnapshotTarget(ctx, rec.StoredMetadata, targetHypervisor)
 	if err != nil {
 		return nil, err
 	}
@@ -303,23 +306,7 @@ func (m *manager) restoreSnapshot(ctx context.Context, id string, snapshotID str
 	restored.ExitCode = nil
 	restored.ExitMessage = ""
 	restored.HypervisorType = targetHypervisor
-	restored.MachineType, err = normalizeSnapshotMachineType(restored.MachineType, rec.StoredMetadata.HypervisorType, targetHypervisor)
-	if err != nil {
-		return nil, err
-	}
-
-	starter, err := m.getVMStarter(targetHypervisor)
-	if err != nil {
-		return nil, fmt.Errorf("get vm starter: %w", err)
-	}
-	if targetHypervisor != rec.StoredMetadata.HypervisorType {
-		hvVersion, err := starter.GetVersion(m.paths)
-		if err != nil {
-			log.WarnContext(ctx, "failed to get hypervisor version", "hypervisor", targetHypervisor, "error", err)
-			hvVersion = "unknown"
-		}
-		restored.HypervisorVersion = hvVersion
-	}
+	restored.HypervisorVersion = targetHypervisorVersion
 	restored.SocketPath = m.paths.InstanceSocket(id, starter.SocketName())
 	restored.VsockSocket = m.paths.InstanceSocket(id, hypervisor.VsockSocketNameForType(targetHypervisor))
 	clearFirecrackerUFFDRestoreState(&restored)
@@ -400,6 +387,10 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 	if err != nil {
 		return nil, err
 	}
+	starter, targetHypervisorVersion, err := m.prepareSnapshotTarget(ctx, rec.StoredMetadata, targetHypervisor)
+	if err != nil {
+		return nil, err
+	}
 
 	forkID := cuid2.Generate()
 	if _, err := m.loadMetadata(forkID); err == nil {
@@ -426,11 +417,6 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 		return nil, err
 	}
 
-	starter, err := m.getVMStarter(targetHypervisor)
-	if err != nil {
-		return nil, fmt.Errorf("get vm starter: %w", err)
-	}
-
 	now := time.Now()
 	forkMeta := cloneStoredMetadataWithoutPendingStandbyCompression(rec.StoredMetadata)
 	forkMeta.Id = forkID
@@ -441,17 +427,7 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 	forkMeta.HypervisorPID = nil
 	forkMeta.DataDir = dstDir
 	forkMeta.HypervisorType = targetHypervisor
-	forkMeta.MachineType, err = normalizeSnapshotMachineType(forkMeta.MachineType, rec.StoredMetadata.HypervisorType, targetHypervisor)
-	if err != nil {
-		return nil, err
-	}
-	if targetHypervisor != rec.StoredMetadata.HypervisorType {
-		hvVersion, err := starter.GetVersion(m.paths)
-		if err != nil {
-			hvVersion = "unknown"
-		}
-		forkMeta.HypervisorVersion = hvVersion
-	}
+	forkMeta.HypervisorVersion = targetHypervisorVersion
 	forkMeta.SocketPath = m.paths.InstanceSocket(forkID, starter.SocketName())
 	forkMeta.VsockSocket = m.paths.InstanceSocket(forkID, hypervisor.VsockSocketNameForType(targetHypervisor))
 	forkMeta.ExitCode = nil
@@ -541,6 +517,29 @@ func (m *manager) replaceInstanceWithSnapshotPayload(snapshotID, instanceID stri
 		return fmt.Errorf("restore snapshot payload: %w", err)
 	}
 	return nil
+}
+
+func (m *manager) prepareSnapshotTarget(ctx context.Context, source StoredMetadata, target hypervisor.Type) (hypervisor.VMStarter, string, error) {
+	if err := m.validateQEMUMicroVMMetadata(source, target); err != nil {
+		return nil, "", err
+	}
+	starter, err := m.getVMStarter(target)
+	if err != nil {
+		return nil, "", fmt.Errorf("get vm starter: %w", err)
+	}
+
+	version := source.HypervisorVersion
+	if target != source.HypervisorType {
+		version, err = starter.GetVersion(m.paths)
+		if err != nil {
+			if target == hypervisor.TypeQEMUMicroVM {
+				return nil, "", fmt.Errorf("get QEMU version for qemu-microvm snapshot target: %w", err)
+			}
+			logger.FromContext(ctx).WarnContext(ctx, "failed to get hypervisor version", "hypervisor", target, "error", err)
+			version = "unknown"
+		}
+	}
+	return starter, version, nil
 }
 
 func (m *manager) resolveSnapshotTargetHypervisor(rec *snapshotRecord, requested hypervisor.Type) (hypervisor.Type, error) {

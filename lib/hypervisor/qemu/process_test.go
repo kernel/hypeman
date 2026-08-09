@@ -106,13 +106,16 @@ func TestGetVersion_ParsesVersionCorrectly(t *testing.T) {
 	}
 }
 
-func TestSaveAndLoadVMConfigPreservesMachineType(t *testing.T) {
+func TestSaveAndLoadVMConfigPreservesRestoreContract(t *testing.T) {
 	dir := t.TempDir()
-	want := hypervisor.VMConfig{MachineType: MachineTypeMicroVM, VsockCID: 3}
+	want := savedVMConfig{
+		VMConfig:    hypervisor.VMConfig{MachineType: MachineTypeMicroVM, VsockCID: 3},
+		QEMUVersion: "8.2.0",
+	}
 	require.NoError(t, saveVMConfig(dir, want))
 	got, err := loadVMConfig(dir)
 	require.NoError(t, err)
-	assert.Equal(t, want.MachineType, got.MachineType)
+	assert.Equal(t, want, got)
 }
 
 func TestValidateMicroVMRestoreVersion(t *testing.T) {

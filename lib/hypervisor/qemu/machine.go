@@ -22,6 +22,17 @@ func ResolveMachineType(requested hypervisor.MachineType) (hypervisor.MachineTyp
 	return resolveMachineTypeForPlatform(requested, runtime.GOOS, runtime.GOARCH)
 }
 
+func machineTypeForHypervisor(hypervisorType hypervisor.Type) (hypervisor.MachineType, error) {
+	switch hypervisorType {
+	case hypervisor.TypeQEMU:
+		return ResolveMachineType("")
+	case hypervisor.TypeQEMUMicroVM:
+		return ResolveMachineType(MachineTypeMicroVM)
+	default:
+		return "", fmt.Errorf("unsupported QEMU hypervisor type %q", hypervisorType)
+	}
+}
+
 func resolveMachineTypeForPlatform(requested hypervisor.MachineType, goos, goarch string) (hypervisor.MachineType, error) {
 	switch goarch {
 	case "amd64":

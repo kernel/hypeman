@@ -32,7 +32,7 @@ func New(socketPath string) (*QEMU, error) {
 
 // NewForType returns a QEMU client with capabilities for the selected QEMU backend.
 func NewForType(socketPath string, hypervisorType hypervisor.Type) (*QEMU, error) {
-	return GetOrCreate(socketPath, hypervisorType)
+	return GetOrCreateForType(socketPath, hypervisorType)
 }
 
 // newClient creates a new QEMU client (internal, used by pool).

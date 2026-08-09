@@ -103,8 +103,7 @@ func (m *manager) createInstance(
 	if hvType == "" {
 		hvType = m.defaultHypervisor
 	}
-	machineType, err := m.resolveCreateMachineType(req, hvType)
-	if err != nil {
+	if err := m.validateQEMUMicroVMCreate(req, hvType); err != nil {
 		return nil, err
 	}
 
@@ -243,19 +242,9 @@ func (m *manager) createInstance(
 		return nil, fmt.Errorf("get vm starter for %s: %w", hvType, err)
 	}
 
-	// Get hypervisor version: prefer explicit request, then configured default
-	hvVersion := req.HypervisorVersion
-	if hvVersion != "" {
-		if _, err := starter.GetBinaryPath(m.paths, hvVersion); err != nil {
-			return nil, fmt.Errorf("invalid hypervisor version %q: %w", hvVersion, err)
-		}
-	} else {
-		var verErr error
-		hvVersion, verErr = starter.GetVersion(m.paths)
-		if verErr != nil {
-			log.WarnContext(ctx, "failed to get hypervisor version", "hypervisor", hvType, "error", verErr)
-			hvVersion = "unknown"
-		}
+	hvVersion, err := m.resolveCreateHypervisorVersion(ctx, starter, hvType, req.HypervisorVersion)
+	if err != nil {
+		return nil, err
 	}
 
 	// 10. Validate, resolve, and auto-bind devices (GPU passthrough)
@@ -362,7 +351,6 @@ func (m *manager) createInstance(
 		KernelVersion:            string(kernelVer),
 		HypervisorType:           hvType,
 		HypervisorVersion:        hvVersion,
-		MachineType:              machineType,
 		SocketPath:               m.paths.InstanceSocket(id, starter.SocketName()),
 		DataDir:                  m.paths.InstanceDir(id),
 		VsockCID:                 vsockCID,
@@ -760,6 +748,17 @@ func (m *manager) startAndBootVM(
 		return fmt.Errorf("get vm starter: %w", err)
 	}
 
+	// qemu-microvm snapshots are tied to the binary that boots the VM. Refresh
+	// metadata on every cold start so host upgrades do not leave the instance's
+	// reported version pinned to its original creation time.
+	if stored.HypervisorType == hypervisor.TypeQEMUMicroVM {
+		detectedVersion, err := starter.GetVersion(m.paths)
+		if err != nil {
+			return fmt.Errorf("get QEMU version for qemu-microvm start: %w", err)
+		}
+		stored.HypervisorVersion = detectedVersion
+	}
+
 	// Build VM configuration
 	inst := &Instance{StoredMetadata: *stored}
 	vmConfig, err := m.buildHypervisorConfig(ctx, inst, imageInfo, netConfig)
@@ -915,7 +914,6 @@ func (m *manager) buildHypervisorConfig(ctx context.Context, inst *Instance, ima
 	}
 
 	return hypervisor.VMConfig{
-		MachineType:   inst.MachineType,
 		VCPUs:         inst.Vcpus,
 		MemoryBytes:   inst.Size,
 		HotplugBytes:  inst.HotplugSize,

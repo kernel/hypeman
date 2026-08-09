@@ -126,10 +126,9 @@ type StoredMetadata struct {
 	KernelVersion string // Kernel version (e.g., "ch-v6.12.9")
 
 	// Hypervisor configuration
-	HypervisorType    hypervisor.Type        // Hypervisor type (e.g., "cloud-hypervisor")
-	HypervisorVersion string                 // Hypervisor version (e.g., "v51.1")
-	MachineType       hypervisor.MachineType // QEMU board type; empty for non-QEMU instances
-	HypervisorPID     *int                   // Hypervisor process ID (may be stale after host restart)
+	HypervisorType    hypervisor.Type // Hypervisor type (e.g., "cloud-hypervisor")
+	HypervisorVersion string          // Hypervisor version (e.g., "v51.1")
+	HypervisorPID     *int            // Hypervisor process ID (may be stale after host restart)
 
 	// Firecracker UFFD snapshot restore metadata.
 	FirecrackerSnapshotCacheKey     string

@@ -20,7 +20,7 @@ func TestBuildArgs_Basic(t *testing.T) {
 
 	// Check machine type (arch-dependent)
 	assert.Contains(t, args, "-machine")
-	assert.Contains(t, args, machineType())
+	assert.Contains(t, args, machineTypeForConfig(cfg))
 
 	// Check CPU
 	assert.Contains(t, args, "-cpu")

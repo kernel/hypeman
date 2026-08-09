@@ -46,7 +46,7 @@ func TestPrepareFork_RewritesSnapshotConfig(t *testing.T) {
 			},
 		},
 	}
-	require.NoError(t, saveVMConfig(snapshotDir, initial))
+	require.NoError(t, saveVMConfig(snapshotDir, savedVMConfig{VMConfig: initial, QEMUVersion: "8.2.0"}))
 
 	result, err := starter.PrepareFork(context.Background(), hypervisor.ForkPrepareRequest{
 		SnapshotConfigPath: filepath.Join(snapshotDir, "config.json"),
@@ -69,6 +69,7 @@ func TestPrepareFork_RewritesSnapshotConfig(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, MachineTypeMicroVM, updated.MachineType)
+	assert.Equal(t, "8.2.0", updated.QEMUVersion)
 	assert.Equal(t, int64(54321), updated.VsockCID)
 	assert.Equal(t, targetDir+"/vsock/fork-vsock.sock", updated.VsockSocket)
 	assert.Equal(t, targetDir+"/logs/fork-app.log", updated.SerialLogPath)
