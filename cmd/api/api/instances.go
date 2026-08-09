@@ -247,7 +247,6 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 	if request.Body.Hypervisor != nil {
 		hvType = hypervisor.Type(*request.Body.Hypervisor)
 	}
-
 	// Parse GPU configuration (vGPU mode)
 	var gpuConfig *instances.GPUConfig
 	if request.Body.Gpu != nil && request.Body.Gpu.Profile != nil && *request.Body.Gpu.Profile != "" {
@@ -1149,7 +1148,6 @@ func instanceToOAPI(inst instances.Instance) oapi.Instance {
 		HasSnapshot: lo.ToPtr(inst.HasSnapshot),
 		Hypervisor:  &hvType,
 	}
-
 	if b, err := json.Marshal(networkPayload); err == nil {
 		_ = json.Unmarshal(b, &oapiInst.Network)
 	}

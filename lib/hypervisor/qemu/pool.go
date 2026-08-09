@@ -2,6 +2,8 @@ package qemu
 
 import (
 	"sync"
+
+	"github.com/kernel/hypeman/lib/hypervisor"
 )
 
 // clientPool manages singleton QMP connections per socket path.
@@ -16,7 +18,7 @@ var clientPool = struct {
 
 // GetOrCreate returns an existing QEMU client for the socket path,
 // or creates a new one if none exists.
-func GetOrCreate(socketPath string) (*QEMU, error) {
+func GetOrCreate(socketPath string, hypervisorType hypervisor.Type) (*QEMU, error) {
 	// Try read lock first for existing connection
 	clientPool.RLock()
 	if client, ok := clientPool.clients[socketPath]; ok {
@@ -35,7 +37,7 @@ func GetOrCreate(socketPath string) (*QEMU, error) {
 	}
 
 	// Create new client
-	client, err := newClient(socketPath)
+	client, err := newClient(socketPath, hypervisorType)
 	if err != nil {
 		return nil, err
 	}

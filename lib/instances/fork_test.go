@@ -965,7 +965,15 @@ func TestCloudHypervisorWarmForkChain(t *testing.T) {
 
 type warmForkChainConfig struct {
 	hypervisor hypervisor.Type
+	image      string
 	namePrefix string
+}
+
+func warmForkCommand(hypervisorType hypervisor.Type) []string {
+	if hypervisorType == hypervisor.TypeQEMUMicroVM {
+		return nil
+	}
+	return []string{"sleep", "infinity"}
 }
 
 func runWarmForkChain(t *testing.T, mgr *manager, tmpDir string, cfg warmForkChainConfig) {
@@ -978,7 +986,10 @@ func runWarmForkChain(t *testing.T, mgr *manager, tmpDir string, cfg warmForkCha
 
 	imageManager, err := images.NewManager(p, 1, nil)
 	require.NoError(t, err)
-	imageName := integrationTestImageRef(t, "docker.io/library/alpine:latest")
+	imageName := cfg.image
+	if imageName == "" {
+		imageName = integrationTestImageRef(t, "docker.io/library/alpine:latest")
+	}
 	snapshottest.EnsureImageReady(t, ctx, p, imageManager, imageName)
 
 	require.NoError(t, mgr.systemManager.EnsureSystemFiles(ctx))
@@ -991,9 +1002,10 @@ func runWarmForkChain(t *testing.T, mgr *manager, tmpDir string, cfg warmForkCha
 		Vcpus:          1,
 		NetworkEnabled: false,
 		Hypervisor:     cfg.hypervisor,
-		Cmd:            []string{"sleep", "infinity"},
+		Cmd:            warmForkCommand(cfg.hypervisor),
 	})
 	require.NoError(t, err)
+	require.Equal(t, cfg.hypervisor, source.HypervisorType)
 	sourceID := source.Id
 	sourceDeleted := false
 	t.Cleanup(func() {
@@ -1027,6 +1039,7 @@ func runWarmForkChain(t *testing.T, mgr *manager, tmpDir string, cfg warmForkCha
 		TargetState: StateRunning,
 	})
 	require.NoError(t, err)
+	require.Equal(t, cfg.hypervisor, warm.HypervisorType)
 	warmID := warm.Id
 	warmDeleted := false
 	t.Cleanup(func() {
@@ -1045,6 +1058,7 @@ func runWarmForkChain(t *testing.T, mgr *manager, tmpDir string, cfg warmForkCha
 	})
 	require.NoError(t, err)
 	require.Equal(t, StateStopped, child.State)
+	require.Equal(t, cfg.hypervisor, child.HypervisorType)
 	childID := child.Id
 	t.Cleanup(func() { _ = deleteTestInstanceNow(context.Background(), mgr, childID) })
 

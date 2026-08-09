@@ -103,7 +103,7 @@ func traceSubsystemForType(hvType Type) string {
 		return "hypeman/hypervisor/cloudhypervisor"
 	case TypeFirecracker:
 		return "hypeman/hypervisor/firecracker"
-	case TypeQEMU:
+	case TypeQEMU, TypeQEMUMicroVM:
 		return "hypeman/hypervisor/qemu"
 	case TypeVZ:
 		return "hypeman/hypervisor/vz"

@@ -16,7 +16,7 @@ See [macOS Development](#macos-development) below for native macOS development u
 
 **Linux Prerequisites:**
 
-**Go 1.25.4+**, **KVM**, **erofs-utils**, **dnsmasq**
+**Go 1.25.4+**, **KVM**, **erofs-utils**, **dnsmasq**. QEMU development and testing also require the architecture-appropriate `qemu-system` package (for example, `qemu-system-x86` on amd64).
 
 ```bash
 # Verify prerequisites
@@ -27,7 +27,7 @@ dnsmasq --version
 **Install on Debian/Ubuntu:**
 
 ```bash
-sudo apt-get install erofs-utils dnsmasq
+sudo apt-get install erofs-utils dnsmasq qemu-system-x86
 ```
 
 **KVM Access:** User must be in `kvm` group for VM access:
@@ -126,10 +126,14 @@ Common settings:
 | `acme.dns_provider` | DNS provider for ACME challenges | _(empty)_ |
 | `acme.cloudflare_api_token` | Cloudflare API token | _(empty)_ |
 | `build.docker_socket` | Path to Docker socket | `/var/run/docker.sock` |
-| `hypervisor.default` | Default hypervisor type (`cloud-hypervisor`, `firecracker`, `qemu`, `vz`) | `cloud-hypervisor` |
+| `hypervisor.default` | Default hypervisor type (`cloud-hypervisor`, `firecracker`, `qemu`, `qemu-microvm`, `vz`) | `cloud-hypervisor` |
 | `hypervisor.firecracker_binary_path` | Optional runtime path to external Firecracker binary | _(empty = embedded)_ |
 
 Environment variables can also override any config key using `__` as the nesting separator (e.g. `CADDY__LISTEN_ADDRESS` overrides `caddy.listen_address`).
+
+### QEMU backends
+
+`qemu` uses QEMU's architecture-native standard board (`q35` on amd64 and `virt` on arm64). `qemu-microvm` is a Linux amd64-only backend using QEMU's minimal `microvm` board and virtio-mmio devices. It does not support PCI/vGPU passthrough, hotplug memory, or more than eight virtio-mmio devices. Standby restore and warm forks require the exact same QEMU version; cold-start stopped instances remain supported after an upgrade.
 
 **Important: Subnet Configuration**
 

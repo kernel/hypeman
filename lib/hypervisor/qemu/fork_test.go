@@ -18,12 +18,13 @@ func TestPrepareFork_NoSnapshotPathIsNoOp(t *testing.T) {
 }
 
 func TestPrepareFork_RewritesSnapshotConfig(t *testing.T) {
-	starter := NewStarter()
+	starter := NewMicroVMStarter()
 	snapshotDir := t.TempDir()
 
 	sourceDir := "/src/guest"
 	targetDir := "/dst/guest"
 	initial := hypervisor.VMConfig{
+		MachineType:   MachineTypeMicroVM,
 		VCPUs:         2,
 		MemoryBytes:   2 * 1024 * 1024 * 1024,
 		SerialLogPath: sourceDir + "/logs/app.log",
@@ -67,6 +68,7 @@ func TestPrepareFork_RewritesSnapshotConfig(t *testing.T) {
 	updated, err := loadVMConfig(snapshotDir)
 	require.NoError(t, err)
 
+	assert.Equal(t, MachineTypeMicroVM, updated.MachineType)
 	assert.Equal(t, int64(54321), updated.VsockCID)
 	assert.Equal(t, targetDir+"/vsock/fork-vsock.sock", updated.VsockSocket)
 	assert.Equal(t, targetDir+"/logs/fork-app.log", updated.SerialLogPath)

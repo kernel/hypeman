@@ -303,6 +303,10 @@ func (m *manager) restoreSnapshot(ctx context.Context, id string, snapshotID str
 	restored.ExitCode = nil
 	restored.ExitMessage = ""
 	restored.HypervisorType = targetHypervisor
+	restored.MachineType, err = normalizeSnapshotMachineType(restored.MachineType, rec.StoredMetadata.HypervisorType, targetHypervisor)
+	if err != nil {
+		return nil, err
+	}
 
 	starter, err := m.getVMStarter(targetHypervisor)
 	if err != nil {
@@ -437,6 +441,10 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 	forkMeta.HypervisorPID = nil
 	forkMeta.DataDir = dstDir
 	forkMeta.HypervisorType = targetHypervisor
+	forkMeta.MachineType, err = normalizeSnapshotMachineType(forkMeta.MachineType, rec.StoredMetadata.HypervisorType, targetHypervisor)
+	if err != nil {
+		return nil, err
+	}
 	if targetHypervisor != rec.StoredMetadata.HypervisorType {
 		hvVersion, err := starter.GetVersion(m.paths)
 		if err != nil {

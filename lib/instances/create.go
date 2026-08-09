@@ -103,6 +103,10 @@ func (m *manager) createInstance(
 	if hvType == "" {
 		hvType = m.defaultHypervisor
 	}
+	machineType, err := m.resolveCreateMachineType(req, hvType)
+	if err != nil {
+		return nil, err
+	}
 
 	// 2. Validate image exists and is ready; auto-pull if not found
 	log.DebugContext(ctx, "validating image", "image", req.Image)
@@ -358,6 +362,7 @@ func (m *manager) createInstance(
 		KernelVersion:            string(kernelVer),
 		HypervisorType:           hvType,
 		HypervisorVersion:        hvVersion,
+		MachineType:              machineType,
 		SocketPath:               m.paths.InstanceSocket(id, starter.SocketName()),
 		DataDir:                  m.paths.InstanceDir(id),
 		VsockCID:                 vsockCID,
@@ -910,6 +915,7 @@ func (m *manager) buildHypervisorConfig(ctx context.Context, inst *Instance, ima
 	}
 
 	return hypervisor.VMConfig{
+		MachineType:   inst.MachineType,
 		VCPUs:         inst.Vcpus,
 		MemoryBytes:   inst.Size,
 		HotplugBytes:  inst.HotplugSize,

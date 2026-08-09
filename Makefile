@@ -301,6 +301,8 @@ test-linux: ensure-ch-binaries ensure-firecracker-binaries ensure-caddy-binaries
 			"HYPEMAN_TEST_PREWARM_DIR=$${HYPEMAN_TEST_PREWARM_DIR:-}" \
 			"HYPEMAN_TEST_PREWARM_STRICT=$${HYPEMAN_TEST_PREWARM_STRICT:-}" \
 			"HYPEMAN_TEST_REGISTRY=$${HYPEMAN_TEST_REGISTRY:-}" \
+			"HYPEMAN_QEMU_BOOT_BENCH=$${HYPEMAN_QEMU_BOOT_BENCH:-}" \
+			"HYPEMAN_QEMU_BOOT_BENCH_SAMPLES=$${HYPEMAN_QEMU_BOOT_BENCH_SAMPLES:-}" \
 			go test -tags containers_image_openpgp -run=$(TEST) $$VERBOSE_FLAG -timeout=$(TEST_TIMEOUT) ./...; \
 	else \
 		sudo env "PATH=$$TEST_PATH" "DOCKER_CONFIG=$${DOCKER_CONFIG:-$$HOME/.docker}" "CI=$${CI:-}" \
@@ -310,6 +312,8 @@ test-linux: ensure-ch-binaries ensure-firecracker-binaries ensure-caddy-binaries
 			"HYPEMAN_TEST_PREWARM_DIR=$${HYPEMAN_TEST_PREWARM_DIR:-}" \
 			"HYPEMAN_TEST_PREWARM_STRICT=$${HYPEMAN_TEST_PREWARM_STRICT:-}" \
 			"HYPEMAN_TEST_REGISTRY=$${HYPEMAN_TEST_REGISTRY:-}" \
+			"HYPEMAN_QEMU_BOOT_BENCH=$${HYPEMAN_QEMU_BOOT_BENCH:-}" \
+			"HYPEMAN_QEMU_BOOT_BENCH_SAMPLES=$${HYPEMAN_QEMU_BOOT_BENCH_SAMPLES:-}" \
 			go test -tags containers_image_openpgp $$VERBOSE_FLAG -timeout=$(TEST_TIMEOUT) ./...; \
 	fi
 

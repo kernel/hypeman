@@ -13,8 +13,9 @@ import (
 
 // QEMU implements hypervisor.Hypervisor for QEMU VMM.
 type QEMU struct {
-	client     *Client
-	socketPath string // for self-removal from pool on error
+	client         *Client
+	socketPath     string // for self-removal from pool on error
+	hypervisorType hypervisor.Type
 }
 
 var balloonTargetCache hypervisor.BalloonTargetCache
@@ -26,16 +27,21 @@ func clearBalloonTargetCache(socketPath string) {
 // New returns a QEMU client for the given socket path.
 // Uses a connection pool to ensure only one connection per socket exists.
 func New(socketPath string) (*QEMU, error) {
-	return GetOrCreate(socketPath)
+	return NewForType(socketPath, hypervisor.TypeQEMU)
+}
+
+// NewForType returns a QEMU client with capabilities for the selected QEMU backend.
+func NewForType(socketPath string, hypervisorType hypervisor.Type) (*QEMU, error) {
+	return GetOrCreate(socketPath, hypervisorType)
 }
 
 // newClient creates a new QEMU client (internal, used by pool).
-func newClient(socketPath string) (*QEMU, error) {
+func newClient(socketPath string, hypervisorType hypervisor.Type) (*QEMU, error) {
 	client, err := NewClient(socketPath)
 	if err != nil {
 		return nil, fmt.Errorf("create qemu client: %w", err)
 	}
-	return &QEMU{client: client, socketPath: socketPath}, nil
+	return &QEMU{client: client, socketPath: socketPath, hypervisorType: hypervisorType}, nil
 }
 
 // Verify QEMU implements the interface
@@ -43,17 +49,17 @@ var _ hypervisor.Hypervisor = (*QEMU)(nil)
 
 // Capabilities returns the features supported by QEMU.
 func (q *QEMU) Capabilities() hypervisor.Capabilities {
-	return capabilities()
+	return capabilities(q.hypervisorType)
 }
 
-func capabilities() hypervisor.Capabilities {
+func capabilities(hypervisorType hypervisor.Type) hypervisor.Capabilities {
 	return hypervisor.Capabilities{
 		SupportsSnapshot:            true,  // Uses QMP migrate file:// for snapshot
 		SupportsHotplugMemory:       false, // Not implemented - balloon not configured
 		SupportsBalloonControl:      true,
 		SupportsPause:               true,
 		SupportsVsock:               true,
-		SupportsGPUPassthrough:      true,
+		SupportsGPUPassthrough:      hypervisorType != hypervisor.TypeQEMUMicroVM,
 		SupportsDiskIOLimit:         true,
 		SupportsGracefulVMMShutdown: true,
 		SupportsSnapshotBaseReuse:   false,

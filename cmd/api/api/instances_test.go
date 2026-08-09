@@ -316,6 +316,37 @@ func (m *captureCreateManager) CreateInstance(ctx context.Context, req instances
 	}, nil
 }
 
+func TestCreateInstance_MapsQEMUMicroVMHypervisor(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+	mockMgr := &captureCreateManager{Manager: svc.InstanceManager}
+	svc.InstanceManager = mockMgr
+	microvm := oapi.CreateInstanceRequestHypervisor(hypervisor.TypeQEMUMicroVM)
+
+	resp, err := svc.CreateInstance(ctx(), oapi.CreateInstanceRequestObject{Body: &oapi.CreateInstanceRequest{
+		Name:       "test-qemu-microvm",
+		Image:      "docker.io/library/alpine:latest",
+		Hypervisor: &microvm,
+	}})
+	require.NoError(t, err)
+	require.IsType(t, oapi.CreateInstance201JSONResponse{}, resp)
+	require.NotNil(t, mockMgr.lastReq)
+	assert.Equal(t, hypervisor.TypeQEMUMicroVM, mockMgr.lastReq.Hypervisor)
+}
+
+func TestInstanceToOAPI_QEMUMicroVMHypervisor(t *testing.T) {
+	t.Parallel()
+
+	inst := instances.Instance{StoredMetadata: instances.StoredMetadata{
+		Id: "qemu-microvm", Name: "qemu-microvm", Image: "alpine", CreatedAt: time.Now(),
+		HypervisorType: hypervisor.TypeQEMUMicroVM,
+	}}
+	oapiInst := instanceToOAPI(inst)
+	require.NotNil(t, oapiInst.Hypervisor)
+	assert.Equal(t, string(hypervisor.TypeQEMUMicroVM), string(*oapiInst.Hypervisor))
+}
+
 func TestCreateInstance_OmittedHotplugSizeDefaultsToZero(t *testing.T) {
 	t.Parallel()
 	svc := newTestService(t)

@@ -31,8 +31,10 @@ const (
 	TypeCloudHypervisor Type = "cloud-hypervisor"
 	// TypeFirecracker is the Firecracker VMM
 	TypeFirecracker Type = "firecracker"
-	// TypeQEMU is the QEMU VMM
+	// TypeQEMU is QEMU with its architecture-native standard board.
 	TypeQEMU Type = "qemu"
+	// TypeQEMUMicroVM is QEMU with the minimal x86 microvm board.
+	TypeQEMUMicroVM Type = "qemu-microvm"
 	// TypeVZ is the Virtualization.framework VMM (macOS only)
 	TypeVZ Type = "vz"
 )

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/paths"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -103,6 +104,22 @@ func TestGetVersion_ParsesVersionCorrectly(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSaveAndLoadVMConfigPreservesMachineType(t *testing.T) {
+	dir := t.TempDir()
+	want := hypervisor.VMConfig{MachineType: MachineTypeMicroVM, VsockCID: 3}
+	require.NoError(t, saveVMConfig(dir, want))
+	got, err := loadVMConfig(dir)
+	require.NoError(t, err)
+	assert.Equal(t, want.MachineType, got.MachineType)
+}
+
+func TestValidateMicroVMRestoreVersion(t *testing.T) {
+	assert.Error(t, validateMicroVMRestoreVersions("", "8.2.0"))
+	assert.Error(t, validateMicroVMRestoreVersions("unknown", "8.2.0"))
+	assert.Error(t, validateMicroVMRestoreVersions("8.1.0", "8.2.0"))
+	assert.NoError(t, validateMicroVMRestoreVersions("8.2.0", "8.2.0"))
 }
 
 func TestShouldRetryWithReducedBalloon(t *testing.T) {

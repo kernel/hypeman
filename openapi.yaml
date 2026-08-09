@@ -635,8 +635,8 @@ components:
             $ref: "#/components/schemas/VolumeMount"
         hypervisor:
           type: string
-          enum: [cloud-hypervisor, firecracker, qemu, vz]
-          description: Hypervisor to use for this instance. Defaults to server configuration.
+          enum: [cloud-hypervisor, firecracker, qemu, qemu-microvm, vz]
+          description: Hypervisor backend to use for this instance. qemu uses the architecture-native standard board; qemu-microvm uses QEMU's minimal Linux amd64 board and does not support PCI devices, hotplug memory, or more than eight virtio-mmio devices. Defaults to server configuration.
           example: cloud-hypervisor
         snapshot_policy:
           description: Snapshot policy for this instance. Controls compression settings applied when creating snapshots or entering standby, plus any default standby-only compression delay.
@@ -747,7 +747,7 @@ components:
           example: nginx1
         source_hypervisor:
           type: string
-          enum: [cloud-hypervisor, firecracker, qemu, vz]
+          enum: [cloud-hypervisor, firecracker, qemu, qemu-microvm, vz]
           description: Source instance hypervisor at snapshot creation time
           example: cloud-hypervisor
         created_at:
@@ -856,7 +856,7 @@ components:
             - Stopped snapshot defaults to Stopped
         target_hypervisor:
           type: string
-          enum: [cloud-hypervisor, firecracker, qemu, vz]
+          enum: [cloud-hypervisor, firecracker, qemu, qemu-microvm, vz]
           description: |
             Optional hypervisor override. Allowed only when restoring from a Stopped snapshot.
             Standby snapshots must restore with their original hypervisor.
@@ -881,7 +881,7 @@ components:
             - Stopped snapshot defaults to Stopped
         target_hypervisor:
           type: string
-          enum: [cloud-hypervisor, firecracker, qemu, vz]
+          enum: [cloud-hypervisor, firecracker, qemu, qemu-microvm, vz]
           description: |
             Optional hypervisor override. Allowed only when forking from a Stopped snapshot.
             Standby snapshots must fork with their original hypervisor.
@@ -1099,8 +1099,8 @@ components:
           example: false
         hypervisor:
           type: string
-          enum: [cloud-hypervisor, firecracker, qemu, vz]
-          description: Hypervisor running this instance
+          enum: [cloud-hypervisor, firecracker, qemu, qemu-microvm, vz]
+          description: Hypervisor backend running this instance
           example: cloud-hypervisor
         snapshot_policy:
           $ref: "#/components/schemas/SnapshotPolicy"
@@ -2078,7 +2078,7 @@ components:
           type: string
         hypervisor:
           type: string
-          enum: [cloud-hypervisor, firecracker, qemu, vz]
+          enum: [cloud-hypervisor, firecracker, qemu, qemu-microvm, vz]
         assigned_memory_bytes:
           type: integer
           format: int64
