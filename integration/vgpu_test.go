@@ -324,11 +324,6 @@ func checkVGPUTestPrerequisites() (string, string) {
 	if framework == devices.VGPUFrameworkNone {
 		return "vGPU test requires SR-IOV VFs with an mdev or vendor VFIO vGPU framework", ""
 	}
-	if framework == devices.VGPUFrameworkVendorVFIO {
-		// CreateVGPU rejects vendor VFIO until the instance lifecycle
-		// integration lands.
-		return "vGPU test requires the vendor VFIO instance lifecycle integration", ""
-	}
 
 	// Check for available profiles
 	profiles, err := devices.ListGPUProfiles()

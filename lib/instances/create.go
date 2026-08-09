@@ -606,8 +606,11 @@ func (m *manager) createInstance(
 	return &finalInst, nil
 }
 
-// cleanupFailedCreate reports whether it retained instance metadata for a
-// vGPU assignment whose release failed during rollback.
+// cleanupFailedCreate reports whether a vGPU assignment is still outstanding
+// after a failed create. The vGPU destroy already failed when retainedVGPU is
+// set, so the pending cleanup is reported even when the retention record
+// cannot be persisted — in that case the assignment is orphaned until the
+// next startup reconcile, and the caller must still surface it.
 func (m *manager) cleanupFailedCreate(ctx context.Context, id string, retainedVGPU *StoredMetadata) bool {
 	if retainedVGPU == nil {
 		m.deleteInstanceData(id)
@@ -617,7 +620,7 @@ func (m *manager) cleanupFailedCreate(ctx context.Context, id string, retainedVG
 	log := logger.FromContext(ctx)
 	if err := m.ensureDirectories(id); err != nil {
 		log.ErrorContext(ctx, "failed to retain instance data after vGPU cleanup failure", "instance_id", id, "error", err)
-		return false
+		return true
 	}
 	retained := StoredMetadata{
 		Id:            id,
@@ -627,7 +630,7 @@ func (m *manager) cleanupFailedCreate(ctx context.Context, id string, retainedVG
 	}
 	if err := m.saveMetadata(&metadata{StoredMetadata: retained}); err != nil {
 		log.ErrorContext(ctx, "failed to retain vGPU assignment metadata after cleanup failure", "instance_id", id, "error", err)
-		return false
+		return true
 	}
 	return true
 }
