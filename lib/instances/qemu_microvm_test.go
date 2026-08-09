@@ -5,11 +5,13 @@ import (
 	"testing"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
+	"github.com/kernel/hypeman/lib/hypervisor/qemu"
 	"github.com/stretchr/testify/require"
 )
 
 func TestValidateQEMUMicroVMCreate(t *testing.T) {
 	t.Parallel()
+	requireQEMUMicroVMValidationPlatform(t)
 	m := &manager{}
 
 	require.NoError(t, m.validateQEMUMicroVMCreate(CreateInstanceRequest{}, hypervisor.TypeQEMU))
@@ -37,6 +39,7 @@ func TestValidateQEMUMicroVMCreate(t *testing.T) {
 
 func TestValidateQEMUMicroVMMetadata(t *testing.T) {
 	t.Parallel()
+	requireQEMUMicroVMValidationPlatform(t)
 	m := &manager{}
 
 	require.NoError(t, m.validateQEMUMicroVMMetadata(StoredMetadata{}, hypervisor.TypeQEMU))
@@ -50,5 +53,12 @@ func TestValidateQEMUMicroVMMetadata(t *testing.T) {
 		err := m.validateQEMUMicroVMMetadata(meta, hypervisor.TypeQEMUMicroVM)
 		require.Error(t, err)
 		require.True(t, errors.Is(err, ErrInvalidRequest))
+	}
+}
+
+func requireQEMUMicroVMValidationPlatform(t *testing.T) {
+	t.Helper()
+	if _, err := qemu.ResolveMachineType(qemu.MachineTypeMicroVM); err != nil {
+		t.Skipf("microvm is unavailable on this platform: %v", err)
 	}
 }

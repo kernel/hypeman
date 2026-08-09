@@ -254,6 +254,11 @@ type Capabilities struct {
 	// on-disk base across restore/standby cycles.
 	SupportsSnapshotBaseReuse bool
 
+	// RequiresExactSnapshotVersion indicates memory snapshots can only restore
+	// with the exact hypervisor version that wrote them. Generic lifecycle code
+	// uses this to keep persisted version metadata strict and current.
+	RequiresExactSnapshotVersion bool
+
 	// SupportsConcurrentForkPrepare indicates stopped/standby forks can prepare
 	// separate target snapshots concurrently from the same source.
 	SupportsConcurrentForkPrepare bool

@@ -66,11 +66,16 @@ func TestStarterAppliesBackendMachineType(t *testing.T) {
 func TestMicroVMCapabilitiesExcludePCIPassthrough(t *testing.T) {
 	t.Parallel()
 	assert.True(t, capabilities(hypervisor.TypeQEMU).SupportsGPUPassthrough)
+	assert.False(t, capabilities(hypervisor.TypeQEMU).RequiresExactSnapshotVersion)
 	assert.False(t, capabilities(hypervisor.TypeQEMUMicroVM).SupportsGPUPassthrough)
+	assert.True(t, capabilities(hypervisor.TypeQEMUMicroVM).RequiresExactSnapshotVersion)
 }
 
 func TestValidateConfigMicroVM(t *testing.T) {
 	t.Parallel()
+	if _, err := ResolveMachineType(MachineTypeMicroVM); err != nil {
+		t.Skipf("microvm is unavailable on this platform: %v", err)
+	}
 	base := hypervisor.VMConfig{MachineType: MachineTypeMicroVM, Disks: make([]hypervisor.DiskConfig, 6), Networks: []hypervisor.NetworkConfig{{}}, VsockCID: 3}
 	require.NoError(t, ValidateConfig(base), "six disks, network, and vsock consume all eight slots")
 

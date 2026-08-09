@@ -251,7 +251,7 @@ func TestQEMUMicroVMEndToEnd(t *testing.T) {
 
 	inst, err = waitForInstanceState(ctx, manager, inst.Id, StateRunning, integrationTestTimeout(30*time.Second))
 	require.NoError(t, err)
-	require.NoError(t, waitForQEMUReady(ctx, inst.SocketPath, 10*time.Second))
+	require.NoError(t, waitForQEMUReady(ctx, inst.SocketPath, integrationTestTimeout(30*time.Second)))
 	assertHostCanReachNginx(t, inst.IP, 80, 30*time.Second)
 
 	config, err := qemuConfigMachineType(p.InstanceDir(inst.Id))
@@ -266,6 +266,55 @@ func TestQEMUMicroVMEndToEnd(t *testing.T) {
 	inst, err = waitForInstanceState(ctx, manager, inst.Id, StateRunning, integrationTestTimeout(30*time.Second))
 	require.NoError(t, err)
 	assert.Equal(t, hypervisor.TypeQEMUMicroVM, inst.HypervisorType)
+}
+
+func TestQEMUStoppedSnapshotSwitchesToMicroVM(t *testing.T) {
+	requireQEMUUsable(t)
+	requireMicroVMAvailable(t)
+	acquireHeavyIO(t)
+
+	manager, tmpDir := setupTestManagerForQEMU(t)
+	ctx := context.Background()
+	p := paths.New(tmpDir)
+	imageManager, err := images.NewManager(p, 1, nil)
+	require.NoError(t, err)
+	image := integrationTestImageRef(t, "docker.io/library/nginx:alpine")
+	snapshottest.EnsureImageReady(t, ctx, p, imageManager, image)
+	require.NoError(t, manager.systemManager.EnsureSystemFiles(ctx))
+
+	inst, err := manager.CreateInstance(ctx, CreateInstanceRequest{
+		Name:           "qemu-switch-to-microvm",
+		Image:          image,
+		Size:           lifecycleTestMemorySize,
+		OverlaySize:    1024 * 1024 * 1024,
+		Vcpus:          1,
+		NetworkEnabled: false,
+		Hypervisor:     hypervisor.TypeQEMU,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = deleteTestInstanceNow(context.Background(), manager, inst.Id) })
+	inst, err = waitForInstanceState(ctx, manager, inst.Id, StateRunning, integrationTestTimeout(30*time.Second))
+	require.NoError(t, err)
+
+	inst, err = manager.StopInstance(ctx, inst.Id)
+	require.NoError(t, err)
+	require.Equal(t, StateStopped, inst.State)
+	snapshot, err := manager.CreateSnapshot(ctx, inst.Id, CreateSnapshotRequest{Kind: SnapshotKindStopped})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = manager.DeleteSnapshot(context.Background(), snapshot.Id) })
+
+	inst, err = manager.RestoreSnapshot(ctx, inst.Id, snapshot.Id, RestoreSnapshotRequest{
+		TargetState:      StateRunning,
+		TargetHypervisor: hypervisor.TypeQEMUMicroVM,
+	})
+	require.NoError(t, err)
+	inst, err = waitForInstanceState(ctx, manager, inst.Id, StateRunning, integrationTestTimeout(30*time.Second))
+	require.NoError(t, err)
+	require.Equal(t, hypervisor.TypeQEMUMicroVM, inst.HypervisorType)
+
+	machineType, err := qemuConfigMachineType(p.InstanceDir(inst.Id))
+	require.NoError(t, err)
+	require.Equal(t, string(qemu.MachineTypeMicroVM), machineType)
 }
 
 func qemuConfigMachineType(instanceDir string) (string, error) {
@@ -419,7 +468,7 @@ func TestQEMUBasicEndToEnd(t *testing.T) {
 	assert.FileExists(t, p.InstanceConfigDisk(inst.Id))
 
 	// Wait for VM to be fully running
-	err = waitForQEMUReady(ctx, inst.SocketPath, 10*time.Second)
+	err = waitForQEMUReady(ctx, inst.SocketPath, integrationTestTimeout(30*time.Second))
 	require.NoError(t, err, "QEMU VM should reach running state")
 	inst, err = waitForInstanceState(ctx, manager, inst.Id, StateRunning, integrationTestTimeout(20*time.Second))
 	require.NoError(t, err, "instance should reach Running state")

@@ -225,7 +225,9 @@ func (s *Starter) startQEMUProcess(ctx context.Context, p *paths.Paths, version 
 		return 0, nil, nil, fmt.Errorf("socket already in use, QEMU may be running at %s", socketPath)
 	}
 
-	// Remove stale socket if exists
+	// A graceful guest shutdown can leave the old QMP client pooled even though
+	// the process exited. Drop it before this process reuses the socket path.
+	resetClient(socketPath)
 	os.Remove(socketPath)
 
 	// Create command

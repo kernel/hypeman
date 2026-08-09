@@ -748,13 +748,12 @@ func (m *manager) startAndBootVM(
 		return fmt.Errorf("get vm starter: %w", err)
 	}
 
-	// qemu-microvm snapshots are tied to the binary that boots the VM. Refresh
-	// metadata on every cold start so host upgrades do not leave the instance's
-	// reported version pinned to its original creation time.
-	if stored.HypervisorType == hypervisor.TypeQEMUMicroVM {
+	// Version-locked snapshot backends must refresh metadata on every cold
+	// start so host upgrades do not leave the reported version stale.
+	if requiresExactSnapshotVersion(stored.HypervisorType) {
 		detectedVersion, err := starter.GetVersion(m.paths)
 		if err != nil {
-			return fmt.Errorf("get QEMU version for qemu-microvm start: %w", err)
+			return fmt.Errorf("get version for hypervisor %s start: %w", stored.HypervisorType, err)
 		}
 		stored.HypervisorVersion = detectedVersion
 	}

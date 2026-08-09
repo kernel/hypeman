@@ -978,7 +978,7 @@ func runWarmForkChain(t *testing.T, mgr *manager, tmpDir string, cfg warmForkCha
 
 	imageManager, err := images.NewManager(p, 1, nil)
 	require.NoError(t, err)
-	imageName := integrationTestImageRef(t, "docker.io/library/alpine:3.20")
+	imageName := integrationTestImageRef(t, "docker.io/library/nginx:alpine")
 	snapshottest.EnsureImageReady(t, ctx, p, imageManager, imageName)
 
 	require.NoError(t, mgr.systemManager.EnsureSystemFiles(ctx))

@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestGetOrCreateForTypeRejectsCachedBackendMismatch(t *testing.T) {
+func TestGetOrCreateForTypeReplacesCachedBackendMismatch(t *testing.T) {
 	socketPath := t.TempDir() + "/qemu.sock"
 	clientPool.Lock()
 	clientPool.clients[socketPath] = &QEMU{socketPath: socketPath, hypervisorType: hypervisor.TypeQEMU}
@@ -19,5 +19,10 @@ func TestGetOrCreateForTypeRejectsCachedBackendMismatch(t *testing.T) {
 	})
 
 	_, err := GetOrCreateForType(socketPath, hypervisor.TypeQEMUMicroVM)
-	require.ErrorContains(t, err, "pooled as hypervisor qemu, not qemu-microvm")
+	require.ErrorContains(t, err, "create qemu client")
+
+	clientPool.RLock()
+	_, stillCached := clientPool.clients[socketPath]
+	clientPool.RUnlock()
+	require.False(t, stillCached, "stale backend client must be removed before reconnect")
 }

@@ -14,13 +14,13 @@ func (m *manager) resolveCreateHypervisorVersion(
 	hvType hypervisor.Type,
 	requested string,
 ) (string, error) {
-	if hvType == hypervisor.TypeQEMUMicroVM {
+	if requiresExactSnapshotVersion(hvType) {
 		detected, err := starter.GetVersion(m.paths)
 		if err != nil {
-			return "", fmt.Errorf("get QEMU version for qemu-microvm: %w", err)
+			return "", fmt.Errorf("get version for hypervisor %s: %w", hvType, err)
 		}
 		if requested != "" && requested != detected {
-			return "", fmt.Errorf("%w: requested qemu-microvm version %q does not match installed QEMU %q", ErrInvalidRequest, requested, detected)
+			return "", fmt.Errorf("%w: requested hypervisor %s version %q does not match installed version %q", ErrInvalidRequest, hvType, requested, detected)
 		}
 		return detected, nil
 	}
@@ -38,4 +38,9 @@ func (m *manager) resolveCreateHypervisorVersion(
 		return "unknown", nil
 	}
 	return version, nil
+}
+
+func requiresExactSnapshotVersion(hvType hypervisor.Type) bool {
+	capabilities, ok := hypervisor.CapabilitiesForType(hvType)
+	return ok && capabilities.RequiresExactSnapshotVersion
 }

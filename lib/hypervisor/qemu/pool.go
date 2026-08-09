@@ -1,7 +1,6 @@
 package qemu
 
 import (
-	"fmt"
 	"sync"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
@@ -27,11 +26,8 @@ func GetOrCreate(socketPath string) (*QEMU, error) {
 func GetOrCreateForType(socketPath string, hypervisorType hypervisor.Type) (*QEMU, error) {
 	// Try read lock first for existing connection
 	clientPool.RLock()
-	if client, ok := clientPool.clients[socketPath]; ok {
+	if client, ok := clientPool.clients[socketPath]; ok && client.hypervisorType == hypervisorType {
 		clientPool.RUnlock()
-		if client.hypervisorType != hypervisorType {
-			return nil, poolTypeMismatchError(socketPath, client.hypervisorType, hypervisorType)
-		}
 		return client, nil
 	}
 	clientPool.RUnlock()
@@ -42,10 +38,13 @@ func GetOrCreateForType(socketPath string, hypervisorType hypervisor.Type) (*QEM
 
 	// Double-check after acquiring write lock
 	if client, ok := clientPool.clients[socketPath]; ok {
-		if client.hypervisorType != hypervisorType {
-			return nil, poolTypeMismatchError(socketPath, client.hypervisorType, hypervisorType)
+		if client.hypervisorType == hypervisorType {
+			return client, nil
 		}
-		return client, nil
+		delete(clientPool.clients, socketPath)
+		if client.client != nil {
+			_ = client.client.Close()
+		}
 	}
 
 	// Create new client
@@ -58,8 +57,17 @@ func GetOrCreateForType(socketPath string, hypervisorType hypervisor.Type) (*QEM
 	return client, nil
 }
 
-func poolTypeMismatchError(socketPath string, cached, requested hypervisor.Type) error {
-	return fmt.Errorf("QEMU client for %s is pooled as hypervisor %s, not %s", socketPath, cached, requested)
+// resetClient synchronously drops a pooled connection before a new QEMU
+// process reuses the same socket path.
+func resetClient(socketPath string) {
+	clientPool.Lock()
+	defer clientPool.Unlock()
+	if client, ok := clientPool.clients[socketPath]; ok {
+		delete(clientPool.clients, socketPath)
+		if client.client != nil {
+			_ = client.client.Close()
+		}
+	}
 }
 
 // Remove closes and removes a client from the pool.
