@@ -93,18 +93,43 @@ func (m *manager) releaseStoredVGPU(ctx context.Context, stored *StoredMetadata)
 	return nil
 }
 
+// vgpuAssignmentClaimedByLiveInstance reports whether another instance's
+// stored metadata claims devicePath. It reads raw metadata instead of
+// hydrating full instances: the scan runs on every vendor VFIO release, and
+// deriving state would query the hypervisor of every instance on the host.
+// It fails closed: unreadable metadata is an error, and a matching claim
+// without a persisted PID counts as live because the PID is only persisted
+// after the claimant's hypervisor starts.
 func (m *manager) vgpuAssignmentClaimedByLiveInstance(ctx context.Context, excludeID, devicePath string) (bool, error) {
-	instances, err := m.ListInstancesForReconcile(ctx)
+	files, err := m.listMetadataFilesWithStatErrors(true)
 	if err != nil {
 		return false, fmt.Errorf("list instances for vGPU release check: %w", err)
 	}
-	for i := range instances {
-		inst := &instances[i]
-		if inst.Id == excludeID || storedVGPUDevicePath(&inst.StoredMetadata) != devicePath || inst.HypervisorPID == nil {
+	for _, file := range files {
+		id := filepath.Base(filepath.Dir(file))
+		if id == excludeID {
 			continue
 		}
-		if HypervisorProcessExists(*inst.HypervisorPID, inst.SocketPath) {
+		meta, err := m.loadMetadata(id)
+		if err != nil {
+			return false, fmt.Errorf("load metadata for vGPU release check: instance %s: %w", id, err)
+		}
+		stored := &meta.StoredMetadata
+		if storedVGPUDevicePath(stored) != devicePath {
+			continue
+		}
+		if stored.HypervisorPID == nil {
 			return true, nil
+		}
+		if HypervisorProcessExists(*stored.HypervisorPID, stored.SocketPath) {
+			return true, nil
+		}
+		// The stored PID can be stale after a hypeman restart; a live owner
+		// of the claimant's socket still marks the claim as live.
+		if stored.SocketPath != "" && !ProcessExists(*stored.HypervisorPID) {
+			if owner, _, err := hypervisor.ResolveProcessPID(stored.SocketPath); err == nil && ProcessExists(owner) {
+				return true, nil
+			}
 		}
 	}
 	return false, nil
