@@ -582,7 +582,9 @@ func refreshHypervisorPID(stored *StoredMetadata, state State) {
 
 // resolveLiveHypervisorPID returns the PID of the live hypervisor that owns
 // the instance socket, or 0 when no live hypervisor is found. It returns an
-// error when a live stored PID's socket ownership cannot be confirmed.
+// error when socket ownership cannot be confirmed: a live process matches the
+// socket path by command line only, or a live stored PID's ownership cannot be
+// verified.
 func resolveLiveHypervisorPID(storedPID *int, socketPath string) (int, error) {
 	stored := 0
 	if storedPID != nil && ProcessExists(*storedPID) {
