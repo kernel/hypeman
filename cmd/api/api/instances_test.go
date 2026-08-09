@@ -64,6 +64,7 @@ func TestCreateInstance_VGPUCleanupPendingBeatsWrappedErrorMapping(t *testing.T)
 	svc := newTestService(t)
 	svc.InstanceManager = createErrorInstanceManager{err: &instances.VGPUCleanupPendingError{
 		InstanceID: "inst-1",
+		Retained:   true,
 		Err:        network.ErrNameExists,
 	}}
 
@@ -76,6 +77,28 @@ func TestCreateInstance_VGPUCleanupPendingBeatsWrappedErrorMapping(t *testing.T)
 	require.True(t, ok, "expected 500 vgpu_cleanup_pending, got %T", resp)
 	assert.EqualValues(t, "vgpu_cleanup_pending", pending.Code)
 	assert.Contains(t, pending.Message, "inst-1")
+	assert.Contains(t, pending.Message, "delete it to retry")
+}
+
+func TestCreateInstance_VGPUCleanupPendingWithoutRetentionUsesReconcileGuidance(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+	svc.InstanceManager = createErrorInstanceManager{err: &instances.VGPUCleanupPendingError{
+		InstanceID: "inst-1",
+		Err:        network.ErrNameExists,
+	}}
+
+	resp, err := svc.CreateInstance(ctx(), oapi.CreateInstanceRequestObject{
+		Body: &oapi.CreateInstanceRequest{Image: "test-image"},
+	})
+	require.NoError(t, err)
+
+	pending, ok := resp.(oapi.CreateInstance500JSONResponse)
+	require.True(t, ok, "expected 500 vgpu_cleanup_pending, got %T", resp)
+	assert.EqualValues(t, "vgpu_cleanup_pending", pending.Code)
+	assert.Contains(t, pending.Message, "retention record for instance inst-1 could not be saved")
+	assert.Contains(t, pending.Message, "startup reconcile")
+	assert.NotContains(t, pending.Message, "delete")
 }
 
 func TestCreateInstance_AutoPullImage(t *testing.T) {
