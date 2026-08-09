@@ -346,12 +346,16 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 		var vgpuPending *instances.VGPUCleanupPendingError
 		switch {
 		// Checked first: it wraps the original create error, so a later
-		// errors.Is case would match the cause and hide the retained instance.
+		// errors.Is case would match the cause and hide the pending vGPU cleanup.
 		case errors.As(err, &vgpuPending):
 			log.ErrorContext(ctx, "failed to create instance", "error", err, "image", request.Body.Image)
+			message := fmt.Sprintf("failed to create instance; vGPU release failed during rollback and instance %s retains the assignment, delete it to retry", vgpuPending.InstanceID)
+			if !vgpuPending.Retained {
+				message = fmt.Sprintf("failed to create instance; vGPU release failed during rollback and the retention record for instance %s could not be saved; the assignment is recovered on the next startup reconcile", vgpuPending.InstanceID)
+			}
 			return oapi.CreateInstance500JSONResponse{
 				Code:    "vgpu_cleanup_pending",
-				Message: fmt.Sprintf("failed to create instance; vGPU release failed during rollback and instance %s retains the assignment, delete it to retry", vgpuPending.InstanceID),
+				Message: message,
 			}, nil
 		case errors.Is(err, instances.ErrImageNotReady):
 			return oapi.CreateInstance400JSONResponse{
