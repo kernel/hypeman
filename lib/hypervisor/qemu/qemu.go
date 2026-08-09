@@ -71,7 +71,7 @@ func capabilities(hypervisorType hypervisor.Type) hypervisor.Capabilities {
 // This sends a graceful shutdown signal to the guest.
 func (q *QEMU) DeleteVM(ctx context.Context) error {
 	if err := q.client.SystemPowerdown(); err != nil {
-		Remove(q.socketPath)
+		removeClient(q)
 		return err
 	}
 	clearBalloonTargetCache(q.socketPath)
@@ -81,11 +81,11 @@ func (q *QEMU) DeleteVM(ctx context.Context) error {
 // Shutdown stops the QEMU process.
 func (q *QEMU) Shutdown(ctx context.Context) error {
 	if err := q.client.Quit(); err != nil {
-		Remove(q.socketPath)
+		removeClient(q)
 		return err
 	}
-	// Connection is gone after quit, remove from pool
-	Remove(q.socketPath)
+	// Connection is gone after quit, remove this generation from the pool.
+	removeClient(q)
 	clearBalloonTargetCache(q.socketPath)
 	return nil
 }
@@ -94,7 +94,7 @@ func (q *QEMU) Shutdown(ctx context.Context) error {
 func (q *QEMU) GetVMInfo(ctx context.Context) (*hypervisor.VMInfo, error) {
 	status, err := q.client.Status()
 	if err != nil {
-		Remove(q.socketPath)
+		removeClient(q)
 		return nil, fmt.Errorf("query status: %w", err)
 	}
 
@@ -129,7 +129,7 @@ func (q *QEMU) GetVMInfo(ctx context.Context) (*hypervisor.VMInfo, error) {
 // Pause suspends VM execution.
 func (q *QEMU) Pause(ctx context.Context) error {
 	if err := q.client.Stop(); err != nil {
-		Remove(q.socketPath)
+		removeClient(q)
 		return err
 	}
 	return nil
@@ -138,7 +138,7 @@ func (q *QEMU) Pause(ctx context.Context) error {
 // Resume continues VM execution.
 func (q *QEMU) Resume(ctx context.Context) error {
 	if err := q.client.Continue(); err != nil {
-		Remove(q.socketPath)
+		removeClient(q)
 		return err
 	}
 	return nil
@@ -153,13 +153,13 @@ func (q *QEMU) Snapshot(ctx context.Context, destPath string) error {
 	memoryFile := destPath + "/memory"
 	uri := "exec:cat > " + memoryFile
 	if err := q.client.Migrate(uri); err != nil {
-		Remove(q.socketPath)
+		removeClient(q)
 		return fmt.Errorf("migrate: %w", err)
 	}
 
 	// Wait for migration to complete
 	if err := q.client.WaitMigration(ctx, migrationTimeout); err != nil {
-		Remove(q.socketPath)
+		removeClient(q)
 		return fmt.Errorf("wait migration: %w", err)
 	}
 
@@ -197,7 +197,7 @@ func (q *QEMU) SetTargetGuestMemoryBytes(ctx context.Context, bytes int64) error
 		return fmt.Errorf("target guest memory %d must be non-negative", bytes)
 	}
 	if err := q.client.Balloon(bytes); err != nil {
-		Remove(q.socketPath)
+		removeClient(q)
 		return fmt.Errorf("set balloon target: %w", err)
 	}
 	balloonTargetCache.Store(q.socketPath, bytes)

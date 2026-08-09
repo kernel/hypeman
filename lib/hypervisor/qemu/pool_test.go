@@ -7,6 +7,27 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestRemoveClientDoesNotEvictReplacement(t *testing.T) {
+	socketPath := t.TempDir() + "/qemu.sock"
+	stale := &QEMU{socketPath: socketPath, hypervisorType: hypervisor.TypeQEMU}
+	replacement := &QEMU{socketPath: socketPath, hypervisorType: hypervisor.TypeQEMUMicroVM}
+	clientPool.Lock()
+	clientPool.clients[socketPath] = replacement
+	clientPool.Unlock()
+	t.Cleanup(func() {
+		clientPool.Lock()
+		delete(clientPool.clients, socketPath)
+		clientPool.Unlock()
+	})
+
+	removeClient(stale)
+
+	clientPool.RLock()
+	got := clientPool.clients[socketPath]
+	clientPool.RUnlock()
+	require.Same(t, replacement, got)
+}
+
 func TestGetOrCreateForTypeReplacesCachedBackendMismatch(t *testing.T) {
 	socketPath := t.TempDir() + "/qemu.sock"
 	clientPool.Lock()

@@ -24,7 +24,6 @@ func GetOrCreate(socketPath string) (*QEMU, error) {
 
 // GetOrCreateForType returns a QEMU client with the requested backend identity.
 func GetOrCreateForType(socketPath string, hypervisorType hypervisor.Type) (*QEMU, error) {
-	// Try read lock first for existing connection
 	clientPool.RLock()
 	if client, ok := clientPool.clients[socketPath]; ok && client.hypervisorType == hypervisorType {
 		clientPool.RUnlock()
@@ -32,54 +31,75 @@ func GetOrCreateForType(socketPath string, hypervisorType hypervisor.Type) (*QEM
 	}
 	clientPool.RUnlock()
 
-	// Need to create new connection - acquire write lock
 	clientPool.Lock()
-	defer clientPool.Unlock()
-
-	// Double-check after acquiring write lock
 	if client, ok := clientPool.clients[socketPath]; ok {
 		if client.hypervisorType == hypervisorType {
+			clientPool.Unlock()
 			return client, nil
 		}
 		delete(clientPool.clients, socketPath)
+		clientPool.Unlock()
+
+		// A backend switch needs a fresh client, but a stuck disconnect must not
+		// hold the host-wide pool lock. Once it completes, retry so a concurrent
+		// creator for this socket can win normally.
 		if client.client != nil {
 			_ = client.client.Close()
 		}
+		return GetOrCreateForType(socketPath, hypervisorType)
 	}
 
-	// Create new client
 	client, err := newClient(socketPath, hypervisorType)
 	if err != nil {
+		clientPool.Unlock()
 		return nil, err
 	}
-
 	clientPool.clients[socketPath] = client
+	clientPool.Unlock()
 	return client, nil
 }
 
-// resetClient synchronously drops a pooled connection before a new QEMU
-// process reuses the same socket path.
+// resetClient drops a pooled connection before a new QEMU process reuses the
+// same socket path. Disconnect happens outside the pool lock and stale users
+// can only remove their own client generation.
 func resetClient(socketPath string) {
-	clientPool.Lock()
-	defer clientPool.Unlock()
-	if client, ok := clientPool.clients[socketPath]; ok {
-		delete(clientPool.clients, socketPath)
-		if client.client != nil {
-			_ = client.client.Close()
-		}
-	}
+	client := takeClient(socketPath, nil)
+	closeClientAsync(client)
 }
 
-// Remove closes and removes a client from the pool.
-// Called automatically on errors to allow fresh reconnection.
-// Close is done asynchronously to avoid blocking if the connection is in a bad state.
+// removeClient removes client only if it is still the current generation for
+// its socket path. This prevents a late error from an old QEMU process from
+// evicting the replacement process's client.
+func removeClient(client *QEMU) {
+	if client == nil {
+		return
+	}
+	removed := takeClient(client.socketPath, client)
+	closeClientAsync(removed)
+}
+
+// Remove closes and removes the current client for socketPath.
 func Remove(socketPath string) {
+	client := takeClient(socketPath, nil)
+	closeClientAsync(client)
+}
+
+// takeClient removes the current client. When expected is non-nil, removal is
+// conditional on pointer identity to protect against socket-path reuse.
+func takeClient(socketPath string, expected *QEMU) *QEMU {
 	clientPool.Lock()
 	defer clientPool.Unlock()
 
-	if client, ok := clientPool.clients[socketPath]; ok {
-		delete(clientPool.clients, socketPath)
-		// Close asynchronously to avoid blocking on stuck connections
+	client, ok := clientPool.clients[socketPath]
+	if !ok || (expected != nil && client != expected) {
+		return nil
+	}
+	delete(clientPool.clients, socketPath)
+	return client
+}
+
+func closeClientAsync(client *QEMU) {
+	if client != nil && client.client != nil {
 		go client.client.Close()
 	}
 }
