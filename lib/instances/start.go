@@ -146,11 +146,11 @@ func (m *manager) startInstance(
 	// 4b. Recreate the vGPU if this instance had a GPU profile
 	// Note: GPU availability was already validated in step 2b
 	if stored.GPUProfile != "" {
-		log.InfoContext(ctx, "creating vGPU for start", "instance_id", id, "profile", stored.GPUProfile)
+		log.InfoContext(ctx, "creating vGPU mdev for start", "instance_id", id, "profile", stored.GPUProfile)
 		device, err := devices.CreateVGPU(ctx, stored.GPUProfile, id)
 		if err != nil {
 			log.ErrorContext(ctx, "failed to create vGPU", "instance_id", id, "profile", stored.GPUProfile, "error", err)
-			return nil, fmt.Errorf("create vGPU for profile %s: %w", stored.GPUProfile, err)
+			return nil, fmt.Errorf("create vGPU mdev for profile %s: %w", stored.GPUProfile, err)
 		}
 		setStoredVGPUDevice(stored, device)
 		// Add vGPU cleanup to stack
