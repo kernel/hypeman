@@ -467,6 +467,11 @@ func (g *CaddyConfigGenerator) buildConfig(ctx context.Context, ingresses []Ingr
 	return config, nil
 }
 
+const (
+	requestHeaderAuthValueMinBytes = 32
+	requestHeaderAuthValueMaxBytes = 256
+)
+
 func resolveRequestHeaderAuth(auth *RequestHeaderAuth) (string, error) {
 	if err := auth.Validate(); err != nil {
 		return "", err
@@ -475,16 +480,16 @@ func resolveRequestHeaderAuth(auth *RequestHeaderAuth) (string, error) {
 	if !ok {
 		return "", fmt.Errorf("request header authorization environment variable %s is not set", auth.SecretEnv)
 	}
-	if value == "" {
-		return "", fmt.Errorf("request header authorization environment variable %s is empty", auth.SecretEnv)
-	}
 	if !validRequestHeaderAuthValue(value) {
-		return "", fmt.Errorf("request header authorization environment variable %s is not a valid header value", auth.SecretEnv)
+		return "", fmt.Errorf("request header authorization environment variable %s is invalid", auth.SecretEnv)
 	}
 	return value, nil
 }
 
 func validRequestHeaderAuthValue(value string) bool {
+	if len(value) < requestHeaderAuthValueMinBytes || len(value) > requestHeaderAuthValueMaxBytes {
+		return false
+	}
 	for i := 0; i < len(value); i++ {
 		if value[i] < 0x21 || value[i] > 0x7e || value[i] == '*' || value[i] == '{' || value[i] == '}' {
 			return false

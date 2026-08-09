@@ -11,7 +11,8 @@ import (
 )
 
 func TestIngressRequestHeaderAuthAPIRoundTrip(t *testing.T) {
-	t.Setenv("HYPEMAN_INGRESS_AUTH_SERVICE", "secret-value")
+	const secret = "0123456789abcdef0123456789abcdef"
+	t.Setenv("HYPEMAN_INGRESS_AUTH_SERVICE", secret)
 	port := 443
 	tls := true
 	redirect := true
@@ -36,7 +37,7 @@ func TestIngressRequestHeaderAuthAPIRoundTrip(t *testing.T) {
 	encoded, err := json.Marshal(roundTrip)
 	require.NoError(t, err)
 	assert.Contains(t, string(encoded), "HYPEMAN_INGRESS_AUTH_SERVICE")
-	assert.NotContains(t, string(encoded), "secret-value")
+	assert.NotContains(t, string(encoded), secret)
 }
 
 func TestIngressRequestHeaderAuthOmittedWhenUnprotected(t *testing.T) {

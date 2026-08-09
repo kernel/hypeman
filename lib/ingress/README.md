@@ -84,7 +84,7 @@ A rule can require a dedicated verification header before Caddy resolves or cont
 }
 ```
 
-Set `HYPEMAN_INGRESS_AUTH_SERVICE` in the host process environment. References must begin with `HYPEMAN_INGRESS_AUTH_`; arbitrary process environment variables cannot be referenced. Values must be non-empty printable ASCII without whitespace or Caddy matcher metacharacters (`*`, `{`, `}`). Missing or invalid values prevent ingress creation and configuration regeneration.
+Set `HYPEMAN_INGRESS_AUTH_SERVICE` in the host process environment. References must begin with `HYPEMAN_INGRESS_AUTH_`; arbitrary process environment variables cannot be referenced. Use a cryptographically random bearer secret whose encoded value is 32–256 bytes of printable ASCII without whitespace or Caddy matcher metacharacters (`*`, `{`, `}`). For example, encode at least 32 random bytes as base64. Missing or invalid values prevent ingress creation and configuration regeneration.
 
 Caddy requires an exact hostname and header-value match. Missing or incorrect credentials return 403 without resolving the dynamic upstream. Before proxying an authorized request, Caddy deletes the verification header so it is never delivered to the guest. The normal reverse proxy remains responsible for HTTP streaming, WebSocket upgrades, and server-sent events. An HTTP-to-HTTPS redirect does not require the header, but the HTTPS destination does.
 

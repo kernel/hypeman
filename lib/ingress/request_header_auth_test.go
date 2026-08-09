@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -14,7 +15,7 @@ import (
 const (
 	testAuthEnv    = "HYPEMAN_INGRESS_AUTH_TEST"
 	testAuthHeader = "X-Ingress-Verification"
-	testAuthValue  = "test-secret-value"
+	testAuthValue  = "0123456789abcdef0123456789abcdef"
 )
 
 func TestGenerateConfigWithRequestHeaderAuth(t *testing.T) {
@@ -107,6 +108,35 @@ func TestRequestHeaderAuthEnvironmentFailuresDoNotExposeValues(t *testing.T) {
 			assert.NotContains(t, err.Error(), value)
 		}
 		assert.NotContains(t, err.Error(), "DO_NOT_EXPOSE")
+	}
+}
+
+func TestRequestHeaderAuthValueLengthBoundaries(t *testing.T) {
+	auth := &RequestHeaderAuth{Header: testAuthHeader, SecretEnv: testAuthEnv}
+	tests := []struct {
+		length int
+		valid  bool
+	}{
+		{length: 31, valid: false},
+		{length: 32, valid: true},
+		{length: 256, valid: true},
+		{length: 257, valid: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(strconv.Itoa(tt.length), func(t *testing.T) {
+			value := strings.Repeat("a", tt.length)
+			t.Setenv(testAuthEnv, value)
+
+			resolved, err := resolveRequestHeaderAuth(auth)
+			if tt.valid {
+				require.NoError(t, err)
+				assert.Equal(t, value, resolved)
+				return
+			}
+			require.EqualError(t, err, "request header authorization environment variable "+testAuthEnv+" is invalid")
+			assert.Empty(t, resolved)
+		})
 	}
 }
 
