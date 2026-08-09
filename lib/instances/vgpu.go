@@ -5,7 +5,6 @@ import (
 	"path/filepath"
 
 	"github.com/kernel/hypeman/lib/devices"
-	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/logger"
 )
 
@@ -17,15 +16,19 @@ func validateVGPUHypervisor(hvType hypervisor.Type) error {
 }
 
 // VGPUCleanupPendingError reports a failed create whose vGPU release also
-// failed during rollback. The instance record identified by InstanceID is
-// retained so the release can be retried; deleting the instance retries it.
+// failed during rollback. When Retained is true, deleting the retained instance
+// retries the release; otherwise startup reconciliation recovers the assignment.
 type VGPUCleanupPendingError struct {
 	InstanceID string
+	Retained   bool
 	Err        error
 }
 
 func (e *VGPUCleanupPendingError) Error() string {
-	return fmt.Sprintf("%v; vGPU release failed during rollback, instance %s retains the assignment", e.Err, e.InstanceID)
+	if e.Retained {
+		return fmt.Sprintf("%v; vGPU release failed during rollback, instance %s retains the assignment", e.Err, e.InstanceID)
+	}
+	return fmt.Sprintf("%v; vGPU release failed during rollback and the retention record for instance %s could not be saved; the assignment is recovered on the next startup reconcile", e.Err, e.InstanceID)
 }
 
 func (e *VGPUCleanupPendingError) Unwrap() error { return e.Err }
@@ -121,15 +124,9 @@ func (m *manager) vgpuAssignmentClaimedByLiveInstance(ctx context.Context, exclu
 		if stored.HypervisorPID == nil {
 			return true, nil
 		}
-		if HypervisorProcessExists(*stored.HypervisorPID, stored.SocketPath) {
+		pid, err := resolveLiveHypervisorPID(stored.HypervisorPID, stored.SocketPath)
+		if err != nil || pid > 0 {
 			return true, nil
-		}
-		// The stored PID can be stale after a hypeman restart; a live owner
-		// of the claimant's socket still marks the claim as live.
-		if stored.SocketPath != "" && !ProcessExists(*stored.HypervisorPID) {
-			if owner, _, err := hypervisor.ResolveProcessPID(stored.SocketPath); err == nil && ProcessExists(owner) {
-				return true, nil
-			}
 		}
 	}
 	return false, nil
