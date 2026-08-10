@@ -159,14 +159,21 @@ func (s vendorVFIOSysfs) create(ctx context.Context, profileName, instanceID str
 	if err := os.WriteFile(currentTypePath, []byte(requested.TypeName), 0200); err != nil {
 		return nil, fmt.Errorf("create vGPU on VF %s: %w", targetVF, err)
 	}
+	device := VGPUDevice{
+		Framework:   VGPUFrameworkVendorVFIO,
+		VFAddress:   targetVF,
+		ProfileType: requested.TypeName,
+		ProfileName: profileName,
+		SysfsPath:   filepath.Join(s.pciDevicesPath, targetVF),
+	}
 	currentType, err := readCurrentVGPUType(currentTypePath)
 	if err != nil {
 		verifyErr := fmt.Errorf("verify vGPU on VF %s: %w", targetVF, err)
-		return nil, rollbackVendorVFIOCreate(currentTypePath, targetVF, verifyErr)
+		return nil, s.rollbackCreate(currentTypePath, targetVF, instanceID, device, verifyErr)
 	}
 	if currentType != requested.TypeName {
 		verifyErr := fmt.Errorf("verify vGPU on VF %s: type is %s, want %s", targetVF, currentType, requested.TypeName)
-		return nil, rollbackVendorVFIOCreate(currentTypePath, targetVF, verifyErr)
+		return nil, s.rollbackCreate(currentTypePath, targetVF, instanceID, device, verifyErr)
 	}
 	s.owners[targetVF] = instanceID
 
@@ -175,13 +182,7 @@ func (s vendorVFIOSysfs) create(ctx context.Context, profileName, instanceID str
 		"vf", targetVF,
 		"instance_id", instanceID,
 	)
-	return &VGPUDevice{
-		Framework:   VGPUFrameworkVendorVFIO,
-		VFAddress:   targetVF,
-		ProfileType: requested.TypeName,
-		ProfileName: profileName,
-		SysfsPath:   filepath.Join(s.pciDevicesPath, targetVF),
-	}, nil
+	return &device, nil
 }
 
 func (s vendorVFIOSysfs) destroy(ctx context.Context, vfAddress, instanceID string) error {
@@ -475,9 +476,13 @@ func framebufferFromProfileName(name string) int {
 	return gb * 1024
 }
 
-func rollbackVendorVFIOCreate(currentTypePath, vfAddress string, verifyErr error) error {
+func (s vendorVFIOSysfs) rollbackCreate(currentTypePath, vfAddress, instanceID string, device VGPUDevice, verifyErr error) error {
 	if err := os.WriteFile(currentTypePath, []byte("0"), 0200); err != nil {
-		return errors.Join(verifyErr, fmt.Errorf("roll back vGPU on VF %s: %w", vfAddress, err))
+		s.owners[vfAddress] = instanceID
+		return &VGPUCreateCleanupPendingError{
+			Device: device,
+			Err:    errors.Join(verifyErr, fmt.Errorf("roll back vGPU on VF %s: %w", vfAddress, err)),
+		}
 	}
 	return verifyErr
 }
