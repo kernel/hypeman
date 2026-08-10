@@ -186,6 +186,32 @@ func TestDeleteBlocksRestartPolicyWhenVGPUReleaseFails(t *testing.T) {
 		"a failed delete must not leave the instance restartable")
 }
 
+func TestDeletePersistsVGPUReleaseBeforeTeardown(t *testing.T) {
+	m, id := newLifecycleNoopManagerWithInstance(t, StateStopped, time.Now().UTC())
+	var persisted *metadata
+	deviceManager := &recordingDeviceManager{
+		onMarkDetached: func() {
+			var err error
+			persisted, err = m.loadMetadata(id)
+			require.NoError(t, err)
+		},
+	}
+	m.deviceManager = deviceManager
+	meta, err := m.loadMetadata(id)
+	require.NoError(t, err)
+	meta.GPUProfile = "NVIDIA L40S-2Q"
+	meta.GPUDevicePath = "/sys/bus/mdev/devices/test-mdev"
+	meta.GPUMdevUUID = "test-mdev"
+	meta.Devices = []string{"dev-1"}
+	require.NoError(t, m.saveMetadata(meta))
+
+	require.NoError(t, m.DeleteInstance(context.Background(), id))
+	require.NotNil(t, persisted)
+	assert.Empty(t, persisted.GPUDevicePath)
+	assert.Empty(t, persisted.GPUMdevUUID)
+	assert.Equal(t, "NVIDIA L40S-2Q", persisted.GPUProfile)
+}
+
 func TestDeleteReleasesVGPUBeforeTeardown(t *testing.T) {
 	m, id := newLifecycleNoopManagerWithInstance(t, StateStopped, time.Now().UTC())
 	deviceManager := &recordingDeviceManager{}
@@ -275,12 +301,16 @@ func TestStopStoppedInstanceVGPUReleaseFailureRemainsNoop(t *testing.T) {
 // teardown calls. Only the methods delete exercises are implemented.
 type recordingDeviceManager struct {
 	devices.Manager
-	detached []string
-	unbound  []string
+	detached       []string
+	unbound        []string
+	onMarkDetached func()
 }
 
 func (m *recordingDeviceManager) MarkDetached(ctx context.Context, deviceID string) error {
 	m.detached = append(m.detached, deviceID)
+	if m.onMarkDetached != nil {
+		m.onMarkDetached()
+	}
 	return nil
 }
 

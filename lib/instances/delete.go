@@ -137,9 +137,16 @@ func (m *manager) deleteInstanceWithOptions(
 	// or volume teardown. A failed release retains the instance metadata; the
 	// VMM has already been stopped, but its attachments are intact and the
 	// restart policy is blocked, so a retried delete is safe.
+	hadVGPUAssignment := storedVGPUDevicePath(stored) != ""
 	if err := releaseStoredVGPU(ctx, stored); err != nil {
 		log.ErrorContext(ctx, "failed to destroy vGPU; retaining instance metadata", "instance_id", id, "error", err)
 		return fmt.Errorf("destroy vGPU: %w", err)
+	}
+	if hadVGPUAssignment {
+		if err := m.saveMetadata(meta); err != nil {
+			log.ErrorContext(ctx, "failed to save metadata after vGPU release", "instance_id", id, "error", err)
+			return fmt.Errorf("save metadata after vGPU release: %w", err)
+		}
 	}
 
 	// 6. Release network allocation
