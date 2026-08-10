@@ -34,19 +34,29 @@ func (m *manager) validateCreateVMConfig(starter hypervisor.VMStarter, req Creat
 	))
 }
 
-// validateStoredVMConfig applies the same backend validation before a stopped
-// snapshot is restored or forked onto a target hypervisor.
-func (m *manager) validateStoredVMConfig(starter hypervisor.VMStarter, meta StoredMetadata, hvType hypervisor.Type) error {
+// validateStoredVMConfig applies backend validation before a snapshot is
+// restored or forked onto a target hypervisor.
+func (m *manager) validateStoredVMConfig(starter hypervisor.VMStarter, snapshotKind SnapshotKind, meta StoredMetadata, hvType hypervisor.Type) error {
+	return validatePlannedVMConfig(starter, hvType, m.plannedStoredVMConfig(snapshotKind, meta))
+}
+
+func (m *manager) plannedStoredVMConfig(snapshotKind SnapshotKind, meta StoredMetadata) hypervisor.VMConfig {
 	pciDeviceCount := len(meta.Devices)
 	if meta.GPUMdevUUID != "" || meta.GPUProfile != "" {
 		pciDeviceCount++
 	}
-	return validatePlannedVMConfig(starter, hvType, m.plannedVMConfig(
+	config := m.plannedVMConfig(
 		meta.HotplugSize,
 		meta.Volumes,
 		meta.NetworkEnabled,
 		pciDeviceCount,
-	))
+	)
+	if snapshotKind == SnapshotKindStandby {
+		// Standby restore/fork reuses the frozen snapshot device model, so live
+		// host balloon policy must not change its preflight device count.
+		config.GuestMemory = hypervisor.GuestMemoryConfig{}
+	}
+	return config
 }
 
 func (m *manager) plannedVMConfig(

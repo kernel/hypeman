@@ -272,7 +272,7 @@ func (m *manager) restoreSnapshot(ctx context.Context, id string, snapshotID str
 	if err != nil {
 		return nil, err
 	}
-	starter, targetHypervisorVersion, err := m.prepareSnapshotTarget(ctx, rec.StoredMetadata, targetHypervisor)
+	starter, targetHypervisorVersion, err := m.prepareSnapshotTarget(ctx, rec.Snapshot.Kind, rec.StoredMetadata, targetHypervisor)
 	if err != nil {
 		return nil, err
 	}
@@ -387,7 +387,7 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 	if err != nil {
 		return nil, err
 	}
-	starter, targetHypervisorVersion, err := m.prepareSnapshotTarget(ctx, rec.StoredMetadata, targetHypervisor)
+	starter, targetHypervisorVersion, err := m.prepareSnapshotTarget(ctx, rec.Snapshot.Kind, rec.StoredMetadata, targetHypervisor)
 	if err != nil {
 		return nil, err
 	}
@@ -519,12 +519,12 @@ func (m *manager) replaceInstanceWithSnapshotPayload(snapshotID, instanceID stri
 	return nil
 }
 
-func (m *manager) prepareSnapshotTarget(ctx context.Context, source StoredMetadata, target hypervisor.Type) (hypervisor.VMStarter, string, error) {
+func (m *manager) prepareSnapshotTarget(ctx context.Context, snapshotKind SnapshotKind, source StoredMetadata, target hypervisor.Type) (hypervisor.VMStarter, string, error) {
 	starter, err := m.getVMStarter(target)
 	if err != nil {
 		return nil, "", fmt.Errorf("get vm starter: %w", err)
 	}
-	if err := m.validateStoredVMConfig(starter, source, target); err != nil {
+	if err := m.validateStoredVMConfig(starter, snapshotKind, source, target); err != nil {
 		return nil, "", err
 	}
 

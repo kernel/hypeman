@@ -3,6 +3,7 @@ package instances
 import (
 	"testing"
 
+	"github.com/kernel/hypeman/lib/guestmemory"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -31,4 +32,16 @@ func TestPlannedVMConfigWithoutOptionalDevices(t *testing.T) {
 	require.Len(t, config.Disks, baseInstanceDiskCount)
 	assert.Empty(t, config.Networks)
 	assert.Empty(t, config.PCIDevices)
+}
+
+func TestPlannedStoredVMConfigStandbyIgnoresLiveBalloonPolicy(t *testing.T) {
+	t.Parallel()
+	m := &manager{guestMemoryPolicy: guestmemory.Policy{Enabled: true, ReclaimEnabled: true}}
+
+	stopped := m.plannedStoredVMConfig(SnapshotKindStopped, StoredMetadata{})
+	assert.True(t, stopped.GuestMemory.EnableBalloon)
+
+	standby := m.plannedStoredVMConfig(SnapshotKindStandby, StoredMetadata{})
+	assert.Empty(t, standby.GuestMemory)
+	assert.False(t, standby.GuestMemory.EnableBalloon)
 }
