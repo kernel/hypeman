@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/egressproxy"
 	"github.com/kernel/hypeman/lib/instances/phasetracking"
 	"github.com/kernel/hypeman/lib/logger"
@@ -62,6 +61,8 @@ func (m *manager) startInstance(
 			return nil, fmt.Errorf("save metadata after stale vGPU release: %w", err)
 		}
 	}
+
+	rollbackMeta := *meta
 
 	// 2a. Clear stale exit info from previous run and apply command overrides
 	stored.ExitCode = nil
@@ -167,26 +168,11 @@ func (m *manager) startInstance(
 			log.ErrorContext(ctx, "failed to create vGPU", "instance_id", id, "profile", stored.GPUProfile, "error", err)
 			return nil, fmt.Errorf("create vGPU for profile %s: %w", stored.GPUProfile, err)
 		}
-		setStoredVGPUDevice(stored, device)
+		assignedAt := m.nowUTC()
+		setStoredVGPUDevice(stored, device, assignedAt)
 		// Add vGPU cleanup to stack
 		cu.Add(func() {
-			assignment := devices.VGPUAssignment{
-				Framework:  device.Framework,
-				DevicePath: device.SysfsPath,
-				MdevUUID:   device.MdevUUID,
-				InstanceID: id,
-			}
-			if err := m.destroyVGPUAssignment(ctx, assignment); err != nil {
-				log.WarnContext(ctx, "failed to destroy vGPU on cleanup", "instance_id", id, "error", err)
-				if saveErr := m.saveMetadata(meta); saveErr != nil {
-					log.ErrorContext(ctx, "failed to retain vGPU assignment metadata after cleanup failure", "instance_id", id, "error", saveErr)
-				}
-			} else {
-				clearStoredVGPUDevice(stored)
-				if saveErr := m.saveMetadata(meta); saveErr != nil {
-					log.ErrorContext(ctx, "failed to save metadata after vGPU cleanup", "instance_id", id, "error", saveErr)
-				}
-			}
+			m.cleanupStartVGPU(ctx, id, device, assignedAt, rollbackMeta)
 		})
 		if err := m.saveMetadata(meta); err != nil {
 			log.ErrorContext(ctx, "failed to save metadata after vGPU creation", "instance_id", id, "error", err)

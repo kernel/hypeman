@@ -172,26 +172,62 @@ func configureUFFDGraduationController(cfg *config.Config, instanceManager insta
 	}, logger), nil
 }
 
-func liveInstanceVGPUDevicePaths(ctx context.Context, instanceManager instances.Manager) (map[string]struct{}, error) {
+const vgpuAssignmentStartupGracePeriod = 5 * time.Minute
+
+func liveInstanceVGPUDevicePaths(ctx context.Context, instanceManager instances.Manager) (map[string]struct{}, time.Duration, error) {
 	allInstances, err := instanceManager.ListInstancesForReconcile(ctx)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	protected := make(map[string]struct{})
+	var retryAfter time.Duration
 	for _, inst := range allInstances {
 		if inst.GPUDevicePath == "" {
 			continue
 		}
-		// A nil PID does not mean the assignment is orphaned: the PID is
-		// persisted only after the hypervisor starts, so a crash during boot
-		// leaves the device path without one. Only skip protection when the
-		// recorded hypervisor is known to be gone.
-		if inst.HypervisorPID != nil && !instances.HypervisorProcessExists(*inst.HypervisorPID, inst.SocketPath) {
+		if inst.HypervisorPID != nil {
+			if !instances.HypervisorProcessIdentityExists(*inst.HypervisorPID, inst.HypervisorStartTime, inst.SocketPath) {
+				continue
+			}
+			protected[inst.GPUDevicePath] = struct{}{}
+			continue
+		}
+		if inst.GPUAssignedAt == nil {
+			continue
+		}
+		remaining := vgpuAssignmentStartupGracePeriod - time.Since(*inst.GPUAssignedAt)
+		if remaining <= 0 {
 			continue
 		}
 		protected[inst.GPUDevicePath] = struct{}{}
+		if retryAfter == 0 || remaining < retryAfter {
+			retryAfter = remaining
+		}
 	}
-	return protected, nil
+	return protected, retryAfter, nil
+}
+
+func reconcileVGPUs(ctx context.Context, instanceManager instances.Manager, logger *slog.Logger) {
+	protected, retryAfter, err := liveInstanceVGPUDevicePaths(ctx, instanceManager)
+	if err != nil {
+		logger.Warn("failed to list instances for vGPU reconcile protection; skipping vendor VFIO reconciliation", "error", err)
+		return
+	}
+	if err := devices.ReconcileVGPUs(ctx, protected); err != nil {
+		logger.Warn("failed to reconcile vGPU devices", "error", err)
+	}
+	if retryAfter <= 0 {
+		return
+	}
+	go func() {
+		timer := time.NewTimer(retryAfter)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+		case <-timer.C:
+			reconcileVGPUs(ctx, instanceManager, logger)
+		}
+	}()
 }
 
 func run() error {
@@ -386,15 +422,7 @@ func run() error {
 
 	// Reconcile vGPU devices (clears orphaned vGPUs from previous runs)
 	logger.Info("Reconciling vGPU devices...")
-	protected, err := liveInstanceVGPUDevicePaths(app.Ctx, app.InstanceManager)
-	if err != nil {
-		logger.Warn("failed to list instances for vGPU reconcile protection; skipping vendor VFIO reconciliation", "error", err)
-		protected = nil
-	}
-	if err := devices.ReconcileVGPUs(app.Ctx, protected); err != nil {
-		// Log but don't fail - vGPU cleanup is best-effort
-		logger.Warn("failed to reconcile vGPU devices", "error", err)
-	}
+	reconcileVGPUs(ctx, app.InstanceManager, logger)
 
 	// Wire up resource validator for aggregate limit checking
 	// This enables the instance manager to validate CPU, memory, network, and GPU
