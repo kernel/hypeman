@@ -113,6 +113,8 @@ func TestRestoreSnapshotKeepsCurrentVGPUAssignment(t *testing.T) {
 	meta.GPUFramework = devices.VGPUFramework("future-framework")
 	meta.GPUDevicePath = "/sys/bus/pci/devices/0000:82:00.4"
 	meta.GPUMdevUUID = "retained-uuid"
+	assignedAt := time.Now().UTC().Truncate(time.Second)
+	meta.GPUAssignedAt = &assignedAt
 	require.NoError(t, mgr.saveMetadata(meta))
 
 	_, err = mgr.RestoreSnapshot(ctx, sourceID, snapshot.Id, RestoreSnapshotRequest{
@@ -126,6 +128,8 @@ func TestRestoreSnapshotKeepsCurrentVGPUAssignment(t *testing.T) {
 	assert.Equal(t, devices.VGPUFramework("future-framework"), restored.GPUFramework)
 	assert.Equal(t, "/sys/bus/pci/devices/0000:82:00.4", restored.GPUDevicePath)
 	assert.Equal(t, "retained-uuid", restored.GPUMdevUUID)
+	require.NotNil(t, restored.GPUAssignedAt)
+	assert.True(t, assignedAt.Equal(*restored.GPUAssignedAt))
 }
 
 func TestStoppedSnapshotLifecycleAndForkAfterSourceDeletion(t *testing.T) {
