@@ -634,6 +634,66 @@ func TestCreatePushDedupSurvivesTornDownKey(t *testing.T) {
 	mustPushed(t, mgr, push.ID)
 }
 
+func TestCreatePushDedupWaitersMergeIntoSuccessor(t *testing.T) {
+	mgr, digest := testManager(t, 1, nil, nil)
+	host := openRegistry(t)
+	target := host + "/export/app:v1"
+
+	dstRef, err := name.ParseReference(target, name.Insecure)
+	if err != nil {
+		t.Fatalf("ParseReference: %v", err)
+	}
+	key := pushKey(digest, dstRef.String(), true)
+
+	// Two concurrent creates racing the same torn-down key: one must create
+	// the successor job and the other must merge into it — not wait out the
+	// successor and then start a duplicate push.
+	m := mgr.(*manager)
+	m.mu.Lock()
+	m.inflight[key] = inflightPush{id: "ghost", digest: digest}
+	m.mu.Unlock()
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		m.mu.Lock()
+		delete(m.inflight, key)
+		m.mu.Unlock()
+	}()
+
+	ids := make([]string, 2)
+	errs := make([]error, 2)
+	var wg sync.WaitGroup
+	for i := range ids {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			push, err := mgr.CreatePush(context.Background(), PushRequest{Image: "myapp:v1", Target: target, Insecure: true})
+			if push != nil {
+				ids[i] = push.ID
+			}
+			errs[i] = err
+		}(i)
+	}
+	wg.Wait()
+
+	for i := range ids {
+		if errs[i] != nil {
+			t.Fatalf("CreatePush #%d: %v", i, errs[i])
+		}
+	}
+	if ids[0] != ids[1] {
+		t.Errorf("concurrent creates got IDs %s and %s, want one shared successor job", ids[0], ids[1])
+	}
+	mustPushed(t, mgr, ids[0])
+
+	pushes, err := mgr.ListPushes(context.Background())
+	if err != nil {
+		t.Fatalf("ListPushes: %v", err)
+	}
+	if len(pushes) != 1 {
+		t.Errorf("len(pushes) = %d, want 1 (no duplicate after the successor)", len(pushes))
+	}
+}
+
 func TestWaitForPushCancellation(t *testing.T) {
 	mgr, _ := testManager(t, 1, nil, nil)
 	host, gate := gatedRegistry(t)

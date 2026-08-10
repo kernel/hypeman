@@ -140,9 +140,12 @@ func (m *manager) CreatePush(ctx context.Context, req PushRequest) (*Push, error
 			if errors.Is(err, ErrNotFound) {
 				// The job's terminal record could not be persisted and its
 				// directory was dropped; the queue completion hook releases the
-				// inflight entry moments later. Wait it out and retry the dedup
-				// rather than surface a bare ErrNotFound from a create call.
-				if err := m.waitForInflightRelease(ctx, key); err != nil {
+				// inflight entry moments later. Wait for that entry (not just the
+				// key) to go away, then retry the dedup: a concurrent waiter that
+				// got here first may already have registered a successor, which
+				// this retry merges into instead of surfacing a bare ErrNotFound
+				// from a create call.
+				if err := m.waitForInflightRelease(ctx, key, id); err != nil {
 					return nil, err
 				}
 				continue
@@ -269,18 +272,20 @@ func (m *manager) releaseInflight(key string) func() {
 	}
 }
 
-// waitForInflightRelease blocks until the key's inflight entry is dropped.
-// The queue releases the key's active slot before it runs the completion
-// hook, so once the entry is gone a fresh Enqueue for the key starts
-// immediately. Only useful in the narrow window where a job's record was
-// dropped by the persist-failure path; the hook runs moments later, and the
-// caller's context bounds the wait.
-func (m *manager) waitForInflightRelease(ctx context.Context, key string) error {
+// waitForInflightRelease blocks until the key's torn-down inflight entry is
+// dropped — or replaced by a successor job a concurrent create registered
+// first, which the caller then merges into by retrying the dedup. Waiting on
+// the entry's id rather than the key's absence is what keeps a second waiter
+// from parking until the successor finishes and then starting a duplicate
+// push. The queue releases the key's active slot before it runs the
+// completion hook, so once the torn-down entry is gone a fresh Enqueue for
+// the key starts immediately. The caller's context bounds the wait.
+func (m *manager) waitForInflightRelease(ctx context.Context, key, tornDownID string) error {
 	for {
 		m.mu.Lock()
-		_, ok := m.inflight[key]
+		existing, ok := m.inflight[key]
 		m.mu.Unlock()
-		if !ok {
+		if !ok || existing.id != tornDownID {
 			return nil
 		}
 		select {
