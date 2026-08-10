@@ -185,8 +185,6 @@ func configureUFFDGraduationController(cfg *config.Config, instanceManager insta
 	}, logger), nil
 }
 
-const vgpuAssignmentStartupGracePeriod = 5 * time.Minute
-
 func liveInstanceVGPUDevicePaths(ctx context.Context, instanceManager instances.Manager) (map[string]struct{}, time.Duration, error) {
 	allInstances, err := instanceManager.ListInstancesForReconcile(ctx)
 	if err != nil {
@@ -208,7 +206,7 @@ func liveInstanceVGPUDevicePaths(ctx context.Context, instanceManager instances.
 		if inst.GPUAssignedAt == nil {
 			continue
 		}
-		remaining := vgpuAssignmentStartupGracePeriod - time.Since(*inst.GPUAssignedAt)
+		remaining := instances.VGPUAssignmentStartupGracePeriod - time.Since(*inst.GPUAssignedAt)
 		if remaining <= 0 {
 			continue
 		}
@@ -223,8 +221,9 @@ func liveInstanceVGPUDevicePaths(ctx context.Context, instanceManager instances.
 func reconcileVGPUs(ctx context.Context, instanceManager instances.Manager, logger *slog.Logger) {
 	protected, retryAfter, err := liveInstanceVGPUDevicePaths(ctx, instanceManager)
 	if err != nil {
-		logger.Warn("failed to list instances for vGPU reconcile protection; skipping vendor VFIO reconciliation", "error", err)
-		return
+		logger.Warn("failed to list instances for vGPU reconcile protection; reconciling mdev only", "error", err)
+		protected = nil
+		retryAfter = 0
 	}
 	if err := devices.ReconcileVGPUs(ctx, protected); err != nil {
 		logger.Warn("failed to reconcile vGPU devices", "error", err)

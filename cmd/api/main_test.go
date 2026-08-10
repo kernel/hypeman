@@ -400,7 +400,7 @@ func TestLiveInstanceVGPUDevicePathsBoundsProtectionWithoutPID(t *testing.T) {
 	require.NoError(t, dead.Run())
 	deadPID := dead.Process.Pid
 	recent := time.Now().Add(-time.Minute)
-	stale := time.Now().Add(-vgpuAssignmentStartupGracePeriod - time.Minute)
+	stale := time.Now().Add(-instances.VGPUAssignmentStartupGracePeriod - time.Minute)
 
 	manager := vgpuReconcileManagerStub{list: []instances.Instance{
 		{StoredMetadata: instances.StoredMetadata{Id: "booting", GPUDevicePath: "/sys/bus/pci/devices/0000:82:00.4", GPUAssignedAt: &recent}},
@@ -412,7 +412,7 @@ func TestLiveInstanceVGPUDevicePathsBoundsProtectionWithoutPID(t *testing.T) {
 	protected, retryAfter, err := liveInstanceVGPUDevicePaths(context.Background(), manager)
 	require.NoError(t, err)
 	require.Positive(t, retryAfter)
-	require.LessOrEqual(t, retryAfter, vgpuAssignmentStartupGracePeriod)
+	require.LessOrEqual(t, retryAfter, instances.VGPUAssignmentStartupGracePeriod)
 	assert.Contains(t, protected, "/sys/bus/pci/devices/0000:82:00.4")
 	assert.NotContains(t, protected, "/sys/bus/pci/devices/0000:82:00.5")
 	assert.NotContains(t, protected, "/sys/bus/pci/devices/0000:82:00.6")
