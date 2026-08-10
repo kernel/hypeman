@@ -41,6 +41,7 @@ const (
 	// hypervisor API socket serializes requests, so a snapshot in flight can
 	// otherwise park derive_state for tens of seconds.
 	getVMInfoTimeout = 500 * time.Millisecond
+	linuxBootIDPath  = "/proc/sys/kernel/random/boot_id"
 )
 
 // hypervisorStateCacheEntry stores the last observed hypervisor VM state for
@@ -576,21 +577,22 @@ func refreshHypervisorPID(stored *StoredMetadata, state State) {
 	if !state.RequiresVMM() && state != StateUnknown {
 		return
 	}
-	if pid, err := resolveLiveHypervisorPID(stored.HypervisorPID, stored.HypervisorStartTime, stored.SocketPath); err == nil && pid > 0 {
-		if stored.HypervisorPID == nil || pid != *stored.HypervisorPID || stored.HypervisorStartTime == 0 {
-			stored.HypervisorStartTime = processStartTime(pid)
+	if pid, err := resolveLiveHypervisorPID(stored.HypervisorPID, stored.HypervisorStartTime, stored.HypervisorBootID, stored.SocketPath); err == nil && pid > 0 {
+		if stored.HypervisorPID == nil || pid != *stored.HypervisorPID || stored.HypervisorStartTime == 0 || stored.HypervisorBootID == "" {
+			setHypervisorProcessIdentity(stored, pid)
+		} else {
+			stored.HypervisorPID = &pid
 		}
-		stored.HypervisorPID = &pid
 	}
 }
 
 // resolveLiveHypervisorPID returns the PID of the live hypervisor that owns
 // the instance socket, or 0 when no live hypervisor is found. A live stored PID
-// whose recorded start time matches is returned without socket confirmation. It
-// returns an error when socket ownership cannot be confirmed: a live process
-// matches the socket path by command line only, or a live stored PID's ownership
-// cannot be verified.
-func resolveLiveHypervisorPID(storedPID *int, storedStartTime uint64, socketPath string) (int, error) {
+// whose recorded boot ID and start time match is returned without socket
+// confirmation. It returns an error when socket ownership cannot be confirmed:
+// a live process matches the socket path by command line only, or a live stored
+// PID's ownership cannot be verified.
+func resolveLiveHypervisorPID(storedPID *int, storedStartTime uint64, storedBootID, socketPath string) (int, error) {
 	stored := 0
 	if storedPID != nil && ProcessExists(*storedPID) {
 		stored = *storedPID
@@ -598,7 +600,8 @@ func resolveLiveHypervisorPID(storedPID *int, storedStartTime uint64, socketPath
 	if runtime.GOOS != "linux" || socketPath == "" {
 		return stored, nil
 	}
-	if stored != 0 && storedStartTime != 0 && processStartTime(stored) == storedStartTime {
+	bootID := hostBootID()
+	if stored != 0 && storedStartTime != 0 && storedBootID != "" && bootID != "" && storedBootID == bootID && processStartTime(stored) == storedStartTime {
 		return stored, nil
 	}
 	var resolved int
@@ -634,12 +637,19 @@ func resolveLiveHypervisorPID(storedPID *int, storedStartTime uint64, socketPath
 
 // HypervisorProcessIdentityExists reports whether pid still identifies the
 // recorded hypervisor process. A matching start time is sufficient while its
-// control socket is still being created.
-func HypervisorProcessIdentityExists(pid int, startTime uint64, socketPath string) bool {
+// control socket is still being created, but only during the recorded host boot.
+func HypervisorProcessIdentityExists(pid int, startTime uint64, bootID, socketPath string) bool {
 	if !ProcessExists(pid) {
 		return false
 	}
-	if startTime != 0 {
+	if startTime != 0 && bootID != "" {
+		currentBootID := hostBootID()
+		if currentBootID == "" {
+			return HypervisorProcessExists(pid, socketPath)
+		}
+		if currentBootID != bootID {
+			return false
+		}
 		currentStartTime := processStartTime(pid)
 		if currentStartTime == 0 {
 			return true
@@ -700,6 +710,23 @@ func readLinuxProcessState(pid int) (string, error) {
 		return fields[1], nil
 	}
 	return "", fmt.Errorf("process state missing from %s", statusPath)
+}
+
+func hostBootID() string {
+	if runtime.GOOS != "linux" {
+		return ""
+	}
+	data, err := os.ReadFile(linuxBootIDPath)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
+func setHypervisorProcessIdentity(stored *StoredMetadata, pid int) {
+	stored.HypervisorPID = &pid
+	stored.HypervisorStartTime = processStartTime(pid)
+	stored.HypervisorBootID = hostBootID()
 }
 
 // processStartTime returns the start time (field 22 of /proc/<pid>/stat, clock

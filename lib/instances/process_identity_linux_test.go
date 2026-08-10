@@ -20,7 +20,7 @@ import (
 
 func TestResolveLiveHypervisorPIDWithoutStoredPID(t *testing.T) {
 	t.Run("missing socket", func(t *testing.T) {
-		pid, err := resolveLiveHypervisorPID(nil, 0, filepath.Join(t.TempDir(), "missing.sock"))
+		pid, err := resolveLiveHypervisorPID(nil, 0, "", filepath.Join(t.TempDir(), "missing.sock"))
 		require.NoError(t, err)
 		assert.Zero(t, pid)
 	})
@@ -31,7 +31,7 @@ func TestResolveLiveHypervisorPIDWithoutStoredPID(t *testing.T) {
 		require.NoError(t, err)
 		defer listener.Close()
 
-		pid, err := resolveLiveHypervisorPID(nil, 0, socketPath)
+		pid, err := resolveLiveHypervisorPID(nil, 0, "", socketPath)
 		require.NoError(t, err)
 		assert.Equal(t, os.Getpid(), pid)
 	})
@@ -59,7 +59,7 @@ func TestResolveLiveHypervisorPIDUsesMatchingStartTime(t *testing.T) {
 	startTime := processStartTime(pid)
 	require.NotZero(t, startTime)
 
-	resolved, err := resolveLiveHypervisorPID(&pid, startTime, filepath.Join(t.TempDir(), "missing.sock"))
+	resolved, err := resolveLiveHypervisorPID(&pid, startTime, hostBootID(), filepath.Join(t.TempDir(), "missing.sock"))
 	require.NoError(t, err)
 	assert.Equal(t, pid, resolved)
 }
@@ -83,6 +83,7 @@ func TestKillHypervisorUsesMatchingStartTimeWhenSocketIsGone(t *testing.T) {
 			Id:                  "kill-test",
 			HypervisorPID:       &pid,
 			HypervisorStartTime: startTime,
+			HypervisorBootID:    hostBootID(),
 			SocketPath:          socketPath,
 		},
 	}))
@@ -90,6 +91,31 @@ func TestKillHypervisorUsesMatchingStartTimeWhenSocketIsGone(t *testing.T) {
 	assert.ErrorIs(t, syscall.Kill(pid, 0), syscall.ESRCH)
 	_, statErr := os.Stat(socketPath)
 	assert.True(t, os.IsNotExist(statErr), "instance socket should be removed")
+}
+
+func TestKillHypervisorFailsOnMatchingStartTimeFromDifferentBoot(t *testing.T) {
+	process := exec.Command("sleep", "30")
+	require.NoError(t, process.Start())
+	t.Cleanup(func() {
+		_ = process.Process.Kill()
+		_ = process.Wait()
+	})
+
+	pid := process.Process.Pid
+	startTime := processStartTime(pid)
+	require.NotZero(t, startTime)
+
+	m := &manager{}
+	require.Error(t, m.killHypervisor(context.Background(), &Instance{
+		StoredMetadata: StoredMetadata{
+			Id:                  "kill-test",
+			HypervisorPID:       &pid,
+			HypervisorStartTime: startTime,
+			HypervisorBootID:    "different-boot",
+			SocketPath:          filepath.Join(t.TempDir(), "missing.sock"),
+		},
+	}))
+	assert.NoError(t, syscall.Kill(pid, 0), "process identity from a different boot must not be killed")
 }
 
 func TestKillHypervisorFailsOnMismatchedStartTime(t *testing.T) {
@@ -110,6 +136,7 @@ func TestKillHypervisorFailsOnMismatchedStartTime(t *testing.T) {
 			Id:                  "kill-test",
 			HypervisorPID:       &pid,
 			HypervisorStartTime: startTime + 1,
+			HypervisorBootID:    hostBootID(),
 			SocketPath:          filepath.Join(t.TempDir(), "missing.sock"),
 		},
 	}))
@@ -128,8 +155,11 @@ func TestHypervisorProcessIdentityExistsUsesStartTime(t *testing.T) {
 	startTime := processStartTime(os.Getpid())
 	require.NotZero(t, startTime)
 	socketPath := filepath.Join(t.TempDir(), "missing.sock")
-	assert.True(t, HypervisorProcessIdentityExists(os.Getpid(), startTime, socketPath))
-	assert.False(t, HypervisorProcessIdentityExists(os.Getpid(), startTime+1, socketPath))
+	bootID := hostBootID()
+	require.NotEmpty(t, bootID)
+	assert.True(t, HypervisorProcessIdentityExists(os.Getpid(), startTime, bootID, socketPath))
+	assert.False(t, HypervisorProcessIdentityExists(os.Getpid(), startTime+1, bootID, socketPath))
+	assert.False(t, HypervisorProcessIdentityExists(os.Getpid(), startTime, "different-boot", socketPath))
 }
 
 func TestHypervisorProcessExistsWithReboundSocketPathHelper(t *testing.T) {
@@ -273,6 +303,7 @@ func TestRefreshHypervisorPIDBackfillsStartTime(t *testing.T) {
 
 	require.NotZero(t, stored.HypervisorStartTime)
 	assert.Equal(t, processStartTime(pid), stored.HypervisorStartTime)
+	assert.Equal(t, hostBootID(), stored.HypervisorBootID)
 }
 
 func TestKillHypervisorSurvivesConcurrentReaper(t *testing.T) {
