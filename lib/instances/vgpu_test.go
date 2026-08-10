@@ -3,6 +3,7 @@ package instances
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -128,6 +129,35 @@ func TestVGPUCleanupPendingErrorUnwraps(t *testing.T) {
 	assert.Equal(t, "boot failed; vGPU release failed during rollback and the retention record for instance inst-1 could not be saved; the assignment is recovered on the next startup reconcile", unpersisted.Error())
 }
 
+func TestVGPUDevicePendingCleanup(t *testing.T) {
+	t.Parallel()
+
+	device := devices.VGPUDevice{
+		Framework: devices.VGPUFrameworkVendorVFIO,
+		SysfsPath: "/sys/bus/pci/devices/0000:82:00.4",
+	}
+	cause := errors.New("rollback failed")
+	pending := &devices.VGPUCreateCleanupPendingError{Device: device, Err: cause}
+
+	wrapped := fmt.Errorf("create failed: %w", pending)
+	actual, ok := vgpuDevicePendingCleanup(wrapped)
+	require.True(t, ok)
+	assert.Equal(t, device, *actual)
+
+	assignedAt := time.Now().UTC()
+	retained := retainedVGPUFromCreateError("inst-1", assignedAt, wrapped)
+	require.NotNil(t, retained)
+	assert.Equal(t, "inst-1", retained.Id)
+	assert.Equal(t, device.Framework, retained.GPUFramework)
+	assert.Equal(t, device.SysfsPath, retained.GPUDevicePath)
+	assert.Equal(t, assignedAt, *retained.GPUAssignedAt)
+
+	actual, ok = vgpuDevicePendingCleanup(cause)
+	assert.False(t, ok)
+	assert.Nil(t, actual)
+	assert.Nil(t, retainedVGPUFromCreateError("inst-1", assignedAt, cause))
+}
+
 func newStartRollbackVGPUManager(t *testing.T, destroy func(context.Context, devices.VGPUAssignment) error) (*manager, string) {
 	t.Helper()
 	m := &manager{
@@ -158,6 +188,32 @@ func newStartRollbackVGPUManager(t *testing.T, destroy func(context.Context, dev
 		DataDir:        m.paths.InstanceDir(id),
 	}}))
 	return m, id
+}
+
+func TestStartRetainsVGPUWhenCreateRollbackFails(t *testing.T) {
+	m, id := newStartRollbackVGPUManager(t, func(context.Context, devices.VGPUAssignment) error {
+		return nil
+	})
+	device := devices.VGPUDevice{
+		Framework:   devices.VGPUFrameworkVendorVFIO,
+		VFAddress:   "0000:82:00.4",
+		ProfileType: "1148",
+		ProfileName: "NVIDIA L40S-2Q",
+		SysfsPath:   "/sys/bus/pci/devices/0000:82:00.4",
+	}
+	cause := errors.New("create verification and rollback failed")
+	m.createVGPU = func(context.Context, string, string) (*devices.VGPUDevice, error) {
+		return nil, &devices.VGPUCreateCleanupPendingError{Device: device, Err: cause}
+	}
+
+	_, err := m.startInstance(context.Background(), id, StartInstanceRequest{})
+	require.ErrorIs(t, err, cause)
+
+	stored, err := m.loadMetadata(id)
+	require.NoError(t, err)
+	assert.Equal(t, device.Framework, stored.GPUFramework)
+	assert.Equal(t, device.SysfsPath, stored.GPUDevicePath)
+	assert.NotNil(t, stored.GPUAssignedAt)
 }
 
 func TestStartRollbackClearsVGPUAssignmentAfterSuccessfulDestroy(t *testing.T) {
