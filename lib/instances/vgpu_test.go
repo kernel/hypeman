@@ -153,7 +153,7 @@ func newStartRollbackVGPUManager(t *testing.T, destroy func(context.Context, dev
 		Name:           id,
 		Image:          "test-image",
 		GPUProfile:     "NVIDIA L40S-2Q",
-		HypervisorType: lifecycleNoopHypervisorType,
+		HypervisorType: hypervisor.TypeQEMU,
 		SocketPath:     m.paths.InstanceSocket(id, "noop.sock"),
 		DataDir:        m.paths.InstanceDir(id),
 	}}))
