@@ -310,6 +310,7 @@ func (m *manager) restoreInstance(
 
 	// Store the PID for later cleanup
 	stored.HypervisorPID = &pid
+	stored.HypervisorStartTime = processStartTime(pid)
 
 	// 6. Transition: Paused → Running (resume)
 	resumeCtx, resumeSpanEnd := m.startLifecycleStep(ctx, "resume_vm",
