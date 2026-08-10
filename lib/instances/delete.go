@@ -92,6 +92,13 @@ func (m *manager) deleteInstanceWithOptions(
 	if err := m.markRestartManualStopLocked(ctx, id); err != nil {
 		return fmt.Errorf("block restart policy before delete: %w", err)
 	}
+	// markRestartManualStopLocked persists through a separate metadata load.
+	// Reload it so later saves in this delete do not overwrite the block.
+	meta, err = m.loadMetadata(id)
+	if err != nil {
+		return fmt.Errorf("reload metadata after blocking restart policy: %w", err)
+	}
+	stored = &meta.StoredMetadata
 
 	// 4. If active, try graceful guest shutdown before force kill.
 	gracefulShutdown := false

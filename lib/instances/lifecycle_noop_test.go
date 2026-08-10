@@ -199,6 +199,7 @@ func TestDeletePersistsVGPUReleaseBeforeTeardown(t *testing.T) {
 	m.deviceManager = deviceManager
 	meta, err := m.loadMetadata(id)
 	require.NoError(t, err)
+	meta.RestartPolicy = &restartpolicy.Policy{Policy: restartpolicy.PolicyAlways}
 	meta.GPUProfile = "NVIDIA L40S-2Q"
 	meta.GPUDevicePath = "/sys/bus/mdev/devices/test-mdev"
 	meta.GPUMdevUUID = "test-mdev"
@@ -210,6 +211,7 @@ func TestDeletePersistsVGPUReleaseBeforeTeardown(t *testing.T) {
 	assert.Empty(t, persisted.GPUDevicePath)
 	assert.Empty(t, persisted.GPUMdevUUID)
 	assert.Equal(t, "NVIDIA L40S-2Q", persisted.GPUProfile)
+	assert.Equal(t, restartpolicy.BlockedReasonManualStop, persisted.RestartStatus.BlockedReason)
 }
 
 func TestDeleteReleasesVGPUBeforeTeardown(t *testing.T) {
