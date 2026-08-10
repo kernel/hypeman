@@ -130,7 +130,8 @@ type StoredMetadata struct {
 	HypervisorType      hypervisor.Type // Hypervisor type (e.g., "cloud-hypervisor")
 	HypervisorVersion   string          // Hypervisor version (e.g., "v51.1")
 	HypervisorPID       *int            // Hypervisor process ID (may be stale after host restart)
-	HypervisorStartTime uint64          // Start time of HypervisorPID from /proc/<pid>/stat (clock ticks since boot); confirms process identity across PID reuse. 0 = unknown.
+	HypervisorStartTime uint64          // Start time of HypervisorPID from /proc/<pid>/stat (clock ticks since boot). 0 = unknown.
+	HypervisorBootID    string          // Linux boot ID recorded with HypervisorStartTime; scopes the process identity across host reboots.
 
 	// Firecracker UFFD snapshot restore metadata.
 	FirecrackerSnapshotCacheKey     string
