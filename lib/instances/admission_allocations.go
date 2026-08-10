@@ -108,6 +108,7 @@ func (m *manager) rollbackAdmissionAllocationActive(stored *StoredMetadata) {
 	// allocation marked active. Clear the in-memory PID first so any later sync
 	// from this metadata view also treats the instance as inactive.
 	stored.HypervisorPID = nil
+	stored.HypervisorStartTime = 0
 	m.setAdmissionAllocationActive(stored, false)
 }
 
