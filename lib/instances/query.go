@@ -577,7 +577,7 @@ func refreshHypervisorPID(stored *StoredMetadata, state State) {
 		return
 	}
 	if pid, err := resolveLiveHypervisorPID(stored.HypervisorPID, stored.HypervisorStartTime, stored.SocketPath); err == nil && pid > 0 {
-		if stored.HypervisorPID == nil || pid != *stored.HypervisorPID {
+		if stored.HypervisorPID == nil || pid != *stored.HypervisorPID || stored.HypervisorStartTime == 0 {
 			stored.HypervisorStartTime = processStartTime(pid)
 		}
 		stored.HypervisorPID = &pid
