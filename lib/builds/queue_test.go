@@ -1,6 +1,8 @@
 package builds
 
 import (
+	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -16,7 +18,7 @@ func TestBuildQueue_EnqueueStartsImmediately(t *testing.T) {
 	done := make(chan struct{})
 
 	// Enqueue first build - should start immediately
-	pos := queue.Enqueue("build-1", CreateBuildRequest{}, func() {
+	pos := queue.Enqueue(context.Background(), "build-1", CreateBuildRequest{}, func(context.Context) {
 		started <- "build-1"
 		<-done // Wait for signal
 	})
@@ -42,7 +44,7 @@ func TestBuildQueue_QueueWhenAtCapacity(t *testing.T) {
 
 	// Start first build
 	wg.Add(1)
-	pos1 := queue.Enqueue("build-1", CreateBuildRequest{}, func() {
+	pos1 := queue.Enqueue(context.Background(), "build-1", CreateBuildRequest{}, func(context.Context) {
 		wg.Done()
 		<-done // Block
 	})
@@ -52,11 +54,11 @@ func TestBuildQueue_QueueWhenAtCapacity(t *testing.T) {
 	wg.Wait()
 
 	// Second build should be queued
-	pos2 := queue.Enqueue("build-2", CreateBuildRequest{}, func() {})
+	pos2 := queue.Enqueue(context.Background(), "build-2", CreateBuildRequest{}, func(context.Context) {})
 	assert.Equal(t, 1, pos2, "second build should be queued at position 1")
 
 	// Third build should be queued at position 2
-	pos3 := queue.Enqueue("build-3", CreateBuildRequest{}, func() {})
+	pos3 := queue.Enqueue(context.Background(), "build-3", CreateBuildRequest{}, func(context.Context) {})
 	assert.Equal(t, 2, pos3, "third build should be queued at position 2")
 
 	close(done)
@@ -67,7 +69,7 @@ func TestBuildQueue_DeduplicationActive(t *testing.T) {
 	done := make(chan struct{})
 
 	// Start a build
-	queue.Enqueue("build-1", CreateBuildRequest{}, func() {
+	queue.Enqueue(context.Background(), "build-1", CreateBuildRequest{}, func(context.Context) {
 		<-done
 	})
 
@@ -75,7 +77,7 @@ func TestBuildQueue_DeduplicationActive(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	// Try to enqueue the same build again - should return position 0 (active)
-	pos := queue.Enqueue("build-1", CreateBuildRequest{}, func() {})
+	pos := queue.Enqueue(context.Background(), "build-1", CreateBuildRequest{}, func(context.Context) {})
 	assert.Equal(t, 0, pos, "re-enqueueing active build should return position 0")
 
 	close(done)
@@ -86,16 +88,16 @@ func TestBuildQueue_DeduplicationPending(t *testing.T) {
 	done := make(chan struct{})
 
 	// Fill the queue
-	queue.Enqueue("build-1", CreateBuildRequest{}, func() {
+	queue.Enqueue(context.Background(), "build-1", CreateBuildRequest{}, func(context.Context) {
 		<-done
 	})
 
 	// Add a second build to pending
-	pos1 := queue.Enqueue("build-2", CreateBuildRequest{}, func() {})
+	pos1 := queue.Enqueue(context.Background(), "build-2", CreateBuildRequest{}, func(context.Context) {})
 	assert.Equal(t, 1, pos1)
 
 	// Try to enqueue build-2 again - should return same position
-	pos2 := queue.Enqueue("build-2", CreateBuildRequest{}, func() {})
+	pos2 := queue.Enqueue(context.Background(), "build-2", CreateBuildRequest{}, func(context.Context) {})
 	assert.Equal(t, 1, pos2, "re-enqueueing pending build should return same position")
 
 	close(done)
@@ -106,13 +108,13 @@ func TestBuildQueue_Cancel(t *testing.T) {
 	done := make(chan struct{})
 
 	// Fill the queue
-	queue.Enqueue("build-1", CreateBuildRequest{}, func() {
+	queue.Enqueue(context.Background(), "build-1", CreateBuildRequest{}, func(context.Context) {
 		<-done
 	})
 
 	// Add to pending
-	queue.Enqueue("build-2", CreateBuildRequest{}, func() {})
-	queue.Enqueue("build-3", CreateBuildRequest{}, func() {})
+	queue.Enqueue(context.Background(), "build-2", CreateBuildRequest{}, func(context.Context) {})
+	queue.Enqueue(context.Background(), "build-3", CreateBuildRequest{}, func(context.Context) {})
 
 	// Cancel build-2
 	cancelled := queue.Cancel("build-2")
@@ -134,11 +136,11 @@ func TestBuildQueue_GetPosition(t *testing.T) {
 	queue := NewBuildQueue(1)
 	done := make(chan struct{})
 
-	queue.Enqueue("build-1", CreateBuildRequest{}, func() {
+	queue.Enqueue(context.Background(), "build-1", CreateBuildRequest{}, func(context.Context) {
 		<-done
 	})
-	queue.Enqueue("build-2", CreateBuildRequest{}, func() {})
-	queue.Enqueue("build-3", CreateBuildRequest{}, func() {})
+	queue.Enqueue(context.Background(), "build-2", CreateBuildRequest{}, func(context.Context) {})
+	queue.Enqueue(context.Background(), "build-3", CreateBuildRequest{}, func(context.Context) {})
 
 	// Active build has no position (returns nil)
 	pos1 := queue.GetPosition("build-1")
@@ -168,14 +170,14 @@ func TestBuildQueue_AutoStartNextOnComplete(t *testing.T) {
 	completionOrder := []string{}
 
 	// Add builds
-	queue.Enqueue("build-1", CreateBuildRequest{}, func() {
+	queue.Enqueue(context.Background(), "build-1", CreateBuildRequest{}, func(context.Context) {
 		started <- "build-1"
 		time.Sleep(10 * time.Millisecond)
 		mu.Lock()
 		completionOrder = append(completionOrder, "build-1")
 		mu.Unlock()
 	})
-	queue.Enqueue("build-2", CreateBuildRequest{}, func() {
+	queue.Enqueue(context.Background(), "build-2", CreateBuildRequest{}, func(context.Context) {
 		started <- "build-2"
 		time.Sleep(10 * time.Millisecond)
 		mu.Lock()
@@ -208,8 +210,8 @@ func TestBuildQueue_Counts(t *testing.T) {
 	assert.Equal(t, 0, queue.QueueLength())
 
 	done := make(chan struct{})
-	queue.Enqueue("build-1", CreateBuildRequest{}, func() { <-done })
-	queue.Enqueue("build-2", CreateBuildRequest{}, func() { <-done })
+	queue.Enqueue(context.Background(), "build-1", CreateBuildRequest{}, func(context.Context) { <-done })
+	queue.Enqueue(context.Background(), "build-2", CreateBuildRequest{}, func(context.Context) { <-done })
 
 	// Wait for them to start
 	time.Sleep(10 * time.Millisecond)
@@ -219,7 +221,7 @@ func TestBuildQueue_Counts(t *testing.T) {
 	assert.Equal(t, 2, queue.QueueLength())
 
 	// Add a pending one
-	queue.Enqueue("build-3", CreateBuildRequest{}, func() {})
+	queue.Enqueue(context.Background(), "build-3", CreateBuildRequest{}, func(context.Context) {})
 
 	assert.Equal(t, 2, queue.ActiveCount())
 	assert.Equal(t, 1, queue.PendingCount())
@@ -233,8 +235,8 @@ func TestBuildQueue_SerialKeySerializesSameKey(t *testing.T) {
 
 	release := make(chan struct{})
 	started := make(chan string, 3)
-	startFn := func(id string) func() {
-		return func() {
+	startFn := func(id string) func(context.Context) {
+		return func(context.Context) {
 			started <- id
 			<-release
 		}
@@ -242,8 +244,8 @@ func TestBuildQueue_SerialKeySerializesSameKey(t *testing.T) {
 
 	// Two builds with the same serial key: only the first starts even though
 	// a concurrency slot is free.
-	pos1 := queue.EnqueueSerial("build-1", CreateBuildRequest{}, "builder-a", startFn("build-1"))
-	pos2 := queue.EnqueueSerial("build-2", CreateBuildRequest{}, "builder-a", startFn("build-2"))
+	pos1 := queue.EnqueueSerial(context.Background(), "build-1", CreateBuildRequest{}, "builder-a", startFn("build-1"))
+	pos2 := queue.EnqueueSerial(context.Background(), "build-2", CreateBuildRequest{}, "builder-a", startFn("build-2"))
 
 	assert.Equal(t, 0, pos1)
 	assert.Equal(t, 1, pos2)
@@ -258,7 +260,7 @@ func TestBuildQueue_SerialKeySerializesSameKey(t *testing.T) {
 	assert.Equal(t, 1, queue.PendingCount())
 
 	// A build with a different key starts immediately in the free slot.
-	pos3 := queue.EnqueueSerial("build-3", CreateBuildRequest{}, "builder-b", startFn("build-3"))
+	pos3 := queue.EnqueueSerial(context.Background(), "build-3", CreateBuildRequest{}, "builder-b", startFn("build-3"))
 	assert.Equal(t, 0, pos3)
 	select {
 	case id := <-started:
@@ -288,17 +290,17 @@ func TestBuildQueue_SerialKeySkipsBlockedPending(t *testing.T) {
 		release[id] = make(chan struct{})
 	}
 	started := make(chan string, 4)
-	startFn := func(id string) func() {
-		return func() {
+	startFn := func(id string) func(context.Context) {
+		return func(context.Context) {
 			started <- id
 			<-release[id]
 		}
 	}
 
-	queue.EnqueueSerial("build-1", CreateBuildRequest{}, "builder-a", startFn("build-1"))
-	queue.EnqueueSerial("build-2", CreateBuildRequest{}, "builder-b", startFn("build-2"))
-	pos3 := queue.EnqueueSerial("build-3", CreateBuildRequest{}, "builder-a", startFn("build-3"))
-	pos4 := queue.EnqueueSerial("build-4", CreateBuildRequest{}, "builder-c", startFn("build-4"))
+	queue.EnqueueSerial(context.Background(), "build-1", CreateBuildRequest{}, "builder-a", startFn("build-1"))
+	queue.EnqueueSerial(context.Background(), "build-2", CreateBuildRequest{}, "builder-b", startFn("build-2"))
+	pos3 := queue.EnqueueSerial(context.Background(), "build-3", CreateBuildRequest{}, "builder-a", startFn("build-3"))
+	pos4 := queue.EnqueueSerial(context.Background(), "build-4", CreateBuildRequest{}, "builder-c", startFn("build-4"))
 	assert.Equal(t, 1, pos3)
 	assert.Equal(t, 2, pos4, "queue positions retain submission order")
 
@@ -344,15 +346,15 @@ func TestBuildQueue_ReleaseSerialKeyStartsSameKeyPending(t *testing.T) {
 
 	release := make(chan struct{})
 	started := make(chan string, 2)
-	startFn := func(id string) func() {
-		return func() {
+	startFn := func(id string) func(context.Context) {
+		return func(context.Context) {
 			started <- id
 			<-release
 		}
 	}
 
-	queue.EnqueueSerial("build-1", CreateBuildRequest{}, "builder-a", startFn("build-1"))
-	queue.EnqueueSerial("build-2", CreateBuildRequest{}, "builder-a", startFn("build-2"))
+	queue.EnqueueSerial(context.Background(), "build-1", CreateBuildRequest{}, "builder-a", startFn("build-1"))
+	queue.EnqueueSerial(context.Background(), "build-2", CreateBuildRequest{}, "builder-a", startFn("build-2"))
 
 	select {
 	case id := <-started:
@@ -380,11 +382,11 @@ func TestBuildQueue_SerialKeyIntrospection(t *testing.T) {
 	queue := NewBuildQueue(1)
 
 	release := make(chan struct{})
-	startFn := func() { <-release }
+	startFn := func(context.Context) { <-release }
 
-	queue.EnqueueSerial("build-1", CreateBuildRequest{}, "builder-a", startFn)
-	queue.EnqueueSerial("build-2", CreateBuildRequest{}, "builder-a", startFn)
-	queue.EnqueueSerial("build-3", CreateBuildRequest{}, "builder-b", startFn)
+	queue.EnqueueSerial(context.Background(), "build-1", CreateBuildRequest{}, "builder-a", startFn)
+	queue.EnqueueSerial(context.Background(), "build-2", CreateBuildRequest{}, "builder-a", startFn)
+	queue.EnqueueSerial(context.Background(), "build-3", CreateBuildRequest{}, "builder-b", startFn)
 
 	active := queue.ActiveBuildForSerialKey("builder-a")
 	require.NotNil(t, active)
@@ -410,12 +412,12 @@ func TestBuildQueue_HasSerialKeyAcrossPendingToActiveTransition(t *testing.T) {
 		release := make(chan struct{})
 		started := make(chan string, 2)
 
-		queue.EnqueueSerial("build-1", CreateBuildRequest{}, "builder-a", func() {
+		queue.EnqueueSerial(context.Background(), "build-1", CreateBuildRequest{}, "builder-a", func(context.Context) {
 			started <- "build-1"
 			<-release
 		})
 		require.Equal(t, "build-1", <-started)
-		queue.EnqueueSerial("build-2", CreateBuildRequest{}, "builder-a", func() {
+		queue.EnqueueSerial(context.Background(), "build-2", CreateBuildRequest{}, "builder-a", func(context.Context) {
 			started <- "build-2"
 			<-release
 		})
@@ -430,6 +432,121 @@ func TestBuildQueue_HasSerialKeyAcrossPendingToActiveTransition(t *testing.T) {
 	}
 }
 
+// TestBuildQueue_ShutdownCancelsAndAwaitsActiveBuilds verifies Shutdown
+// cancels every active build's run context and blocks until their goroutines
+// have returned.
+func TestBuildQueue_ShutdownCancelsAndAwaitsActiveBuilds(t *testing.T) {
+	queue := NewBuildQueue(2)
+
+	cancelled := make(chan string, 2)
+	for _, id := range []string{"build-1", "build-2"} {
+		queue.Enqueue(context.Background(), id, CreateBuildRequest{}, func(ctx context.Context) {
+			<-ctx.Done()
+			cancelled <- id
+		})
+	}
+	require.Equal(t, 2, queue.ActiveCount())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	require.NoError(t, queue.Shutdown(ctx))
+
+	// Shutdown only returns after both goroutines exited.
+	assert.ElementsMatch(t, []string{"build-1", "build-2"}, []string{<-cancelled, <-cancelled})
+	assert.Equal(t, 0, queue.ActiveCount())
+}
+
+// TestBuildQueue_ShutdownLeavesPendingForRecovery verifies pending builds are
+// not started during shutdown; they stay queued so startup recovery can
+// re-enqueue them from disk.
+func TestBuildQueue_ShutdownLeavesPendingForRecovery(t *testing.T) {
+	queue := NewBuildQueue(1)
+
+	started := make(chan string, 2)
+	queue.Enqueue(context.Background(), "build-1", CreateBuildRequest{}, func(ctx context.Context) {
+		started <- "build-1"
+		<-ctx.Done()
+	})
+	require.Equal(t, "build-1", <-started)
+
+	queue.Enqueue(context.Background(), "build-2", CreateBuildRequest{}, func(ctx context.Context) {
+		started <- "build-2"
+	})
+	require.Equal(t, 1, queue.PendingCount())
+
+	require.NoError(t, queue.Shutdown(context.Background()))
+
+	select {
+	case id := <-started:
+		t.Fatalf("pending build %s started during shutdown", id)
+	default:
+	}
+	pos := queue.GetPosition("build-2")
+	require.NotNil(t, pos, "pending build must stay queued for recovery")
+	assert.Equal(t, 1, *pos)
+}
+
+// TestBuildQueue_EnqueueAfterShutdownStaysPending verifies work submitted
+// after shutdown never starts.
+func TestBuildQueue_EnqueueAfterShutdownStaysPending(t *testing.T) {
+	queue := NewBuildQueue(1)
+	require.NoError(t, queue.Shutdown(context.Background()))
+
+	ran := make(chan struct{}, 1)
+	pos := queue.Enqueue(context.Background(), "build-1", CreateBuildRequest{}, func(ctx context.Context) {
+		ran <- struct{}{}
+	})
+	assert.Equal(t, 1, pos, "build enqueued after shutdown is pending, not started")
+	select {
+	case <-ran:
+		t.Fatal("build started after shutdown")
+	default:
+	}
+}
+
+// TestBuildQueue_ShutdownIsIdempotent verifies a second Shutdown returns
+// immediately without re-cancelling or deadlocking.
+func TestBuildQueue_ShutdownIsIdempotent(t *testing.T) {
+	queue := NewBuildQueue(1)
+	require.NoError(t, queue.Shutdown(context.Background()))
+	require.NoError(t, queue.Shutdown(context.Background()))
+}
+
+// TestBuildQueue_ShutdownRace stresses Enqueue/Cancel/ReleaseSerialKey racing
+// Shutdown; run with -race.
+func TestBuildQueue_ShutdownRace(t *testing.T) {
+	for i := 0; i < 50; i++ {
+		queue := NewBuildQueue(2)
+		var wg sync.WaitGroup
+		for j := 0; j < 4; j++ {
+			id := fmt.Sprintf("build-%d", j)
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				queue.EnqueueSerial(context.Background(), id, CreateBuildRequest{}, "builder-a", func(ctx context.Context) {
+					select {
+					case <-ctx.Done():
+					case <-time.After(20 * time.Millisecond):
+					}
+				})
+			}()
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			queue.Shutdown(context.Background())
+		}()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			queue.Cancel("build-2")
+			queue.ReleaseSerialKey("build-1")
+		}()
+		wg.Wait()
+		require.NoError(t, queue.Shutdown(context.Background()))
+	}
+}
+
 // TestBuildQueue_ReleaseSerialKeyStartsSuccessorAtFullCapacity releases the
 // serial key while the build keeps its global slot (post-build work) and
 // verifies the serialized successor starts anyway: at MaxConcurrentBuilds=1
@@ -440,14 +557,14 @@ func TestBuildQueue_ReleaseSerialKeyStartsSuccessorAtFullCapacity(t *testing.T) 
 	release := make(chan struct{})
 	started := make(chan string, 2)
 
-	queue.EnqueueSerial("build-1", CreateBuildRequest{}, "builder-a", func() {
+	queue.EnqueueSerial(context.Background(), "build-1", CreateBuildRequest{}, "builder-a", func(context.Context) {
 		started <- "build-1"
 		// VM phase done; the build keeps its global slot for post-build
 		// work and only completes after release closes.
 		queue.ReleaseSerialKey("build-1")
 		<-release
 	})
-	queue.EnqueueSerial("build-2", CreateBuildRequest{}, "builder-a", func() {
+	queue.EnqueueSerial(context.Background(), "build-2", CreateBuildRequest{}, "builder-a", func(context.Context) {
 		started <- "build-2"
 		<-release
 	})

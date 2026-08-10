@@ -97,9 +97,6 @@ type BuildPolicy struct {
 	// NetworkMode controls network access during build
 	// "isolated" = no network, "egress" = outbound allowed
 	NetworkMode string `json:"network_mode,omitempty"`
-
-	// AllowedDomains restricts egress to specific domains (only when NetworkMode="egress")
-	AllowedDomains []string `json:"allowed_domains,omitempty"`
 }
 
 // SecretRef references a secret to inject during build

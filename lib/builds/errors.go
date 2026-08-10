@@ -30,6 +30,15 @@ var (
 	// ErrBuilderNotReady is returned when the builder image is not available
 	ErrBuilderNotReady = errors.New("builder image not ready")
 
-	// ErrBuildInProgress is returned when trying to cancel a build that's already complete
+	// ErrBuildInProgress is returned when cancelling a queued build that was
+	// already picked up and started running between the status check and the
+	// queue removal.
 	ErrBuildInProgress = errors.New("build in progress")
+
+	// ErrInvalidSecretID is returned when a secret ID is empty or contains
+	// path separators
+	ErrInvalidSecretID = errors.New("invalid secret id")
+
+	// ErrSecretNotFound is returned when a requested secret has no value
+	ErrSecretNotFound = errors.New("secret not found")
 )

@@ -322,11 +322,11 @@ func TestBuilderQueueSerialization(t *testing.T) {
 	started := make(chan string, 3)
 	req := CreateBuildRequest{BuilderID: "builder-a"}
 
-	pos1 := mgr.queue.EnqueueSerial("build-1", req, req.BuilderID, func() {
+	pos1 := mgr.queue.EnqueueSerial(context.Background(), "build-1", req, req.BuilderID, func(context.Context) {
 		started <- "build-1"
 		<-release
 	})
-	pos2 := mgr.queue.EnqueueSerial("build-2", req, req.BuilderID, func() {
+	pos2 := mgr.queue.EnqueueSerial(context.Background(), "build-2", req, req.BuilderID, func(context.Context) {
 		started <- "build-2"
 		<-release
 	})
@@ -376,8 +376,8 @@ func TestBuilderDeleteAndPruneBlockedByQueuedBuilds(t *testing.T) {
 	release := make(chan struct{})
 	defer close(release)
 	req := CreateBuildRequest{BuilderID: builder.ID}
-	mgr.queue.EnqueueSerial("build-1", req, builder.ID, func() { <-release })
-	mgr.queue.EnqueueSerial("build-2", req, builder.ID, func() { <-release })
+	mgr.queue.EnqueueSerial(context.Background(), "build-1", req, builder.ID, func(context.Context) { <-release })
+	mgr.queue.EnqueueSerial(context.Background(), "build-2", req, builder.ID, func(context.Context) { <-release })
 
 	err = mgr.builderManager.DeleteBuilder(ctx, builder.ID)
 	assert.ErrorIs(t, err, builders.ErrInUse, "delete must be blocked by a running build")

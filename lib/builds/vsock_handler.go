@@ -19,6 +19,7 @@ type VsockMessage struct {
 	Log       string            `json:"log,omitempty"`
 	SecretIDs []string          `json:"secret_ids,omitempty"` // For secrets request
 	Secrets   map[string]string `json:"secrets,omitempty"`    // For secrets response
+	Error     string            `json:"error,omitempty"`      // Set on a secrets response when the host could not provide every requested secret
 }
 
 // SecretsRequest is sent by the builder agent to fetch secrets

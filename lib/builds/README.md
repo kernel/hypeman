@@ -242,7 +242,7 @@ queued → building → pushing → ready
 
 1. **Isolation**: Each build runs in a fresh microVM (Cloud Hypervisor)
 2. **Rootless**: BuildKit runs without root privileges
-3. **Network Control**: `network_mode: isolated` or `egress` with optional domain allowlist
+3. **Network Control**: `network_mode: isolated` or `egress` (outbound allowed)
 4. **Secret Handling**: Secrets fetched via vsock, never written to disk in guest
 5. **Cache Isolation**: Per-tenant cache scopes prevent cross-tenant cache poisoning
 6. **Registry Auth**: Short-lived JWT tokens scoped to specific repositories (builds/{id}, cache/{scope})

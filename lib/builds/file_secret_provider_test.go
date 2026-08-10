@@ -32,17 +32,19 @@ func TestFileSecretProvider_GetSecrets(t *testing.T) {
 		assert.Equal(t, "github-secret-value", secrets["github_token"])
 	})
 
-	t.Run("missing secrets are skipped", func(t *testing.T) {
+	t.Run("missing secret is an error", func(t *testing.T) {
 		secrets, err := provider.GetSecrets(ctx, []string{"npm_token", "nonexistent"})
-		require.NoError(t, err)
-		assert.Len(t, secrets, 1)
-		assert.Equal(t, "npm-secret-value", secrets["npm_token"])
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrSecretNotFound)
+		assert.Contains(t, err.Error(), "nonexistent")
+		assert.Nil(t, secrets)
 	})
 
-	t.Run("all missing secrets returns empty map", func(t *testing.T) {
+	t.Run("all missing secrets is an error", func(t *testing.T) {
 		secrets, err := provider.GetSecrets(ctx, []string{"missing1", "missing2"})
-		require.NoError(t, err)
-		assert.Empty(t, secrets)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrSecretNotFound)
+		assert.Nil(t, secrets)
 	})
 
 	t.Run("whitespace is trimmed", func(t *testing.T) {
@@ -51,16 +53,27 @@ func TestFileSecretProvider_GetSecrets(t *testing.T) {
 		assert.Equal(t, "trimmed", secrets["with_whitespace"])
 	})
 
-	t.Run("path traversal is blocked", func(t *testing.T) {
+	t.Run("path traversal is an error", func(t *testing.T) {
 		secrets, err := provider.GetSecrets(ctx, []string{"../etc/passwd", "../../root/.ssh/id_rsa"})
-		require.NoError(t, err)
-		assert.Empty(t, secrets)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrInvalidSecretID)
+		assert.Nil(t, secrets)
 	})
 
-	t.Run("special characters in ID are blocked", func(t *testing.T) {
-		secrets, err := provider.GetSecrets(ctx, []string{"foo/bar", "baz\\qux", "..", "."})
-		require.NoError(t, err)
-		assert.Empty(t, secrets)
+	t.Run("special characters in ID are an error", func(t *testing.T) {
+		for _, id := range []string{"foo/bar", "baz\\qux", "..", "."} {
+			secrets, err := provider.GetSecrets(ctx, []string{id})
+			require.Error(t, err, "id %q", id)
+			assert.ErrorIs(t, err, ErrInvalidSecretID, "id %q", id)
+			assert.Nil(t, secrets, "id %q", id)
+		}
+	})
+
+	t.Run("empty ID is an error", func(t *testing.T) {
+		secrets, err := provider.GetSecrets(ctx, []string{""})
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrInvalidSecretID)
+		assert.Nil(t, secrets)
 	})
 
 	t.Run("empty request returns empty map", func(t *testing.T) {
@@ -89,6 +102,17 @@ func TestFileSecretProvider_ContextCancellation(t *testing.T) {
 	secrets, err := provider.GetSecrets(ctx, []string{"secretA", "secretB", "secretC"})
 	// May return partial results or context error
 	assert.True(t, err == context.Canceled || len(secrets) <= 3)
+}
+
+func TestValidateSecretID(t *testing.T) {
+	for _, id := range []string{"npm_token", "github-token", "token.json", "a.b_c-d"} {
+		assert.NoError(t, ValidateSecretID(id), "id %q", id)
+	}
+	for _, id := range []string{"", "../secret", "a/b", "a\\b", "..", "."} {
+		err := ValidateSecretID(id)
+		require.Error(t, err, "id %q", id)
+		assert.ErrorIs(t, err, ErrInvalidSecretID, "id %q", id)
+	}
 }
 
 func TestNoOpSecretProvider(t *testing.T) {

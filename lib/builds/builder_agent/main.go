@@ -35,6 +35,13 @@ const (
 	vsockPort  = 5001 // Build agent port (different from exec agent)
 )
 
+var (
+	// secretsDir is where fetched secrets are written for buildctl secret mounts
+	secretsDir = "/run/secrets"
+	// secretsTimeout bounds how long the build waits for the host to provide secrets
+	secretsTimeout = 30 * time.Second
+)
+
 // BuildConfig matches the BuildConfig type from lib/builds/types.go
 type BuildConfig struct {
 	JobID            string            `json:"job_id"`
@@ -93,6 +100,7 @@ type VsockMessage struct {
 	Log       string            `json:"log,omitempty"`
 	SecretIDs []string          `json:"secret_ids,omitempty"` // For secrets request to host
 	Secrets   map[string]string `json:"secrets,omitempty"`    // For secrets response from host
+	Error     string            `json:"error,omitempty"`      // Set on a secrets response when the host could not provide every requested secret
 }
 
 // Global state for the result to send when host connects
@@ -106,6 +114,8 @@ var (
 	buildConfigLock sync.Mutex
 	secretsReady    = make(chan struct{})
 	secretsOnce     sync.Once
+	secretsErr      error
+	secretsErrLock  sync.Mutex
 
 	// Encoder lock protects concurrent access to json.Encoder
 	// (the goroutine sending build_result and the main loop handling get_status)
@@ -268,8 +278,10 @@ func handleHostConnection(conn net.Conn) {
 			// Request secrets if we have any configured
 			if err := handleSecretsRequest(encoder, decoder); err != nil {
 				log.Printf("Failed to fetch secrets: %v", err)
+				setSecretsErr(err)
 			}
-			// Signal that secrets are ready (even if failed, build can proceed)
+			// Signal that the secrets exchange completed; the build checks
+			// secretsErr and fails rather than proceeding without required secrets.
 			secretsOnce.Do(func() {
 				close(secretsReady)
 			})
@@ -402,13 +414,29 @@ func handleSecretsRequest(encoder *json.Encoder, decoder *json.Decoder) error {
 		return fmt.Errorf("unexpected response type: %s", resp.Type)
 	}
 
-	// Write secrets to /run/secrets/
-	if err := os.MkdirAll("/run/secrets", 0700); err != nil {
+	if resp.Error != "" {
+		return fmt.Errorf("host could not provide secrets: %s", resp.Error)
+	}
+
+	// Every requested secret must be present; building without a required
+	// secret fails later with a much less clear error.
+	var missing []string
+	for _, id := range secretIDs {
+		if _, ok := resp.Secrets[id]; !ok {
+			missing = append(missing, id)
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("host did not provide secrets: %s", strings.Join(missing, ", "))
+	}
+
+	// Write secrets to the secrets dir
+	if err := os.MkdirAll(secretsDir, 0700); err != nil {
 		return fmt.Errorf("create secrets dir: %w", err)
 	}
 
 	for id, value := range resp.Secrets {
-		secretPath := fmt.Sprintf("/run/secrets/%s", id)
+		secretPath := filepath.Join(secretsDir, id)
 		if err := os.WriteFile(secretPath, []byte(value), 0600); err != nil {
 			return fmt.Errorf("write secret %s: %w", id, err)
 		}
@@ -416,6 +444,45 @@ func handleSecretsRequest(encoder *json.Encoder, decoder *json.Decoder) error {
 	}
 
 	log.Printf("Received %d secrets", len(resp.Secrets))
+	return nil
+}
+
+// setSecretsErr records a secrets-exchange failure so the build fails with it.
+func setSecretsErr(err error) {
+	secretsErrLock.Lock()
+	secretsErr = err
+	secretsErrLock.Unlock()
+}
+
+// waitForSecrets blocks until the host completes the secrets exchange for
+// the configured secrets. Any failure — host-side fetch errors, a timeout,
+// or a secret that never landed on disk — is fatal to the build: proceeding
+// without a required secret only produces a more confusing error later.
+func waitForSecrets(ctx context.Context, secrets []SecretRef) error {
+	if len(secrets) == 0 {
+		return nil
+	}
+
+	select {
+	case <-secretsReady:
+	case <-time.After(secretsTimeout):
+		return fmt.Errorf("timed out after %s waiting for secrets from host", secretsTimeout)
+	case <-ctx.Done():
+		return fmt.Errorf("build timeout while waiting for secrets")
+	}
+
+	secretsErrLock.Lock()
+	err := secretsErr
+	secretsErrLock.Unlock()
+	if err != nil {
+		return fmt.Errorf("fetch secrets: %w", err)
+	}
+
+	for _, s := range secrets {
+		if _, err := os.Stat(filepath.Join(secretsDir, s.ID)); err != nil {
+			return fmt.Errorf("required secret %q was not provided by the host", s.ID)
+		}
+	}
 	return nil
 }
 
@@ -473,27 +540,20 @@ func runBuildProcess() {
 		defer cancel()
 	}
 
-	// Wait for secrets if any are configured
+	// Wait for secrets if any are configured. Secrets are required: any
+	// failure here fails the build instead of proceeding without them.
 	if len(config.Secrets) > 0 {
 		log.Printf("Waiting for secrets from host...")
-		select {
-		case <-secretsReady:
-			log.Printf("Secrets ready, proceeding with build")
-		case <-time.After(30 * time.Second):
-			log.Printf("Warning: Timeout waiting for secrets, proceeding anyway")
-			// Signal secrets ready to avoid blocking other goroutines
-			secretsOnce.Do(func() {
-				close(secretsReady)
-			})
-		case <-ctx.Done():
+		if err := waitForSecrets(ctx, config.Secrets); err != nil {
 			setResult(BuildResult{
 				Success:    false,
-				Error:      "build timeout while waiting for secrets",
+				Error:      err.Error(),
 				Logs:       logWriter.String(),
 				DurationMS: time.Since(start).Milliseconds(),
 			})
 			return
 		}
+		log.Printf("Secrets ready, proceeding with build")
 	}
 
 	// Ensure Dockerfile exists (either in source or provided via config)
@@ -881,7 +941,7 @@ func runBuild(ctx context.Context, config *BuildConfig, logWriter io.Writer) (st
 
 	// Add secret mounts
 	for _, secret := range config.Secrets {
-		secretPath := fmt.Sprintf("/run/secrets/%s", secret.ID)
+		secretPath := filepath.Join(secretsDir, secret.ID)
 		args = append(args, "--secret", fmt.Sprintf("id=%s,src=%s", secret.ID, secretPath))
 	}
 
