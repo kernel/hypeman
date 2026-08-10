@@ -23,10 +23,20 @@ const soAcceptcon = 0x10000
 // socket for the given hypervisor control path. confirmed reports whether the
 // PID was found through socket ownership rather than its command line.
 func ResolveProcessPID(socketPath string) (pid int, confirmed bool, err error) {
+	return resolveProcessPID(socketPath, 0)
+}
+
+// ResolveProcessPIDForOwner resolves a socket while preferring an expected
+// owner when the socket descriptor is temporarily shared with a child process.
+func ResolveProcessPIDForOwner(socketPath string, ownerPID int) (pid int, confirmed bool, err error) {
+	return resolveProcessPID(socketPath, ownerPID)
+}
+
+func resolveProcessPID(socketPath string, ownerPID int) (pid int, confirmed bool, err error) {
 	socketRef, socketErr := socketRefForPath(socketPath)
 	var refErr error
 	if socketErr == nil {
-		pid, refErr = pidBySocketRef(socketRef)
+		pid, refErr = pidBySocketRef(socketRef, ownerPID)
 		if refErr == nil {
 			return pid, true, nil
 		}
@@ -44,12 +54,13 @@ func ResolveProcessPID(socketPath string) (pid int, confirmed bool, err error) {
 	return 0, false, fmt.Errorf("resolve process pid for socket %s: %w", socketPath, ErrNoOwningProcess)
 }
 
-func pidBySocketRef(socketRef string) (int, error) {
+func pidBySocketRef(socketRef string, ownerPID int) (int, error) {
 	procEntries, err := os.ReadDir(procDir)
 	if err != nil {
 		return 0, fmt.Errorf("read /proc: %w", err)
 	}
 
+	var owners []int
 	var scanErr error
 	for _, entry := range procEntries {
 		if !entry.IsDir() {
@@ -79,11 +90,25 @@ func pidBySocketRef(socketRef string) (int, error) {
 				continue
 			}
 			if strings.TrimSpace(target) == socketRef {
-				return pid, nil
+				owners = append(owners, pid)
+				break
 			}
 		}
 	}
 
+	if ownerPID > 0 {
+		for _, pid := range owners {
+			if pid == ownerPID {
+				return pid, nil
+			}
+		}
+	}
+	if len(owners) == 1 {
+		return owners[0], nil
+	}
+	if len(owners) > 1 {
+		return 0, fmt.Errorf("resolve process pid for %s: multiple owning processes found: %v", socketRef, owners)
+	}
 	if scanErr != nil {
 		return 0, fmt.Errorf("resolve process pid for %s: inspect process fds: %w", socketRef, scanErr)
 	}
