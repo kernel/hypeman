@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/devices"
+	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/logger"
 )
 
@@ -15,6 +16,10 @@ func validateVGPUHypervisor(hvType hypervisor.Type) error {
 	}
 	return nil
 }
+
+// VGPUAssignmentStartupGracePeriod bounds how long an assignment without a
+// persisted hypervisor PID is treated as potentially live.
+const VGPUAssignmentStartupGracePeriod = 5 * time.Minute
 
 // VGPUCleanupPendingError reports a failed create whose vGPU release also
 // failed during rollback. When Retained is true, deleting the retained instance
@@ -125,9 +130,9 @@ func (m *manager) releaseStoredVGPU(ctx context.Context, stored *StoredMetadata)
 // stored metadata claims devicePath. It reads raw metadata instead of
 // hydrating full instances: the scan runs on every vendor VFIO release, and
 // deriving state would query the hypervisor of every instance on the host.
-// A confirmed live claimant returns true. Unreadable metadata, a missing PID,
-// or unverifiable process ownership returns an error so the requester retains
-// its assignment for a later retry.
+// A confirmed live claimant returns true. Unreadable metadata, a recent
+// assignment without a PID, or unverifiable process ownership returns an error
+// so the requester retains its assignment for a later retry.
 func (m *manager) vgpuAssignmentClaimedByLiveInstance(ctx context.Context, excludeID, devicePath string) (bool, error) {
 	files, err := m.listMetadataFilesWithStatErrors(true)
 	if err != nil {
@@ -147,7 +152,10 @@ func (m *manager) vgpuAssignmentClaimedByLiveInstance(ctx context.Context, exclu
 			continue
 		}
 		if stored.HypervisorPID == nil {
-			return false, fmt.Errorf("cannot confirm liveness of vGPU claimant %s on %s: no persisted hypervisor PID", id, devicePath)
+			if stored.GPUAssignedAt == nil || time.Since(*stored.GPUAssignedAt) >= VGPUAssignmentStartupGracePeriod {
+				continue
+			}
+			return false, fmt.Errorf("cannot confirm liveness of recent vGPU claimant %s on %s: no persisted hypervisor PID", id, devicePath)
 		}
 		pid, err := resolveLiveHypervisorPID(stored.HypervisorPID, stored.HypervisorStartTime, stored.SocketPath)
 		if err != nil {
