@@ -12,17 +12,11 @@ import (
 
 	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/hypervisor"
+	"github.com/kernel/hypeman/lib/network"
 	"github.com/kernel/hypeman/lib/paths"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-func TestValidateVGPUHypervisor(t *testing.T) {
-	t.Parallel()
-
-	assert.NoError(t, validateVGPUHypervisor(hypervisor.TypeQEMU))
-	assert.EqualError(t, validateVGPUHypervisor(hypervisor.TypeCloudHypervisor), "vGPU is only supported with qemu, got cloud-hypervisor")
-}
 
 func TestCleanupFailedCreateRetainsVGPUAssignment(t *testing.T) {
 	t.Parallel()
@@ -158,6 +152,22 @@ func TestVGPUDevicePendingCleanup(t *testing.T) {
 	assert.Nil(t, retainedVGPUFromCreateError("inst-1", assignedAt, cause))
 }
 
+type startRetentionNetworkManager struct {
+	network.Manager
+	config       network.NetworkConfig
+	releaseCalls int
+}
+
+func (m *startRetentionNetworkManager) CreateAllocation(context.Context, network.AllocateRequest) (*network.NetworkConfig, error) {
+	config := m.config
+	return &config, nil
+}
+
+func (m *startRetentionNetworkManager) ReleaseAllocation(context.Context, *network.Allocation) error {
+	m.releaseCalls++
+	return nil
+}
+
 func newStartRollbackVGPUManager(t *testing.T, destroy func(context.Context, devices.VGPUAssignment) error) (*manager, string) {
 	t.Helper()
 	m := &manager{
@@ -194,6 +204,27 @@ func TestStartRetainsVGPUWhenCreateRollbackFails(t *testing.T) {
 	m, id := newStartRollbackVGPUManager(t, func(context.Context, devices.VGPUAssignment) error {
 		return nil
 	})
+	networkManager := &startRetentionNetworkManager{config: network.NetworkConfig{
+		IP:        "192.0.2.20",
+		MAC:       "02:00:00:00:00:20",
+		TAPDevice: "tap-new",
+	}}
+	m.networkManager = networkManager
+
+	previousProgramStart := time.Now().Add(-time.Hour).UTC()
+	previousExitCode := 23
+	meta, err := m.loadMetadata(id)
+	require.NoError(t, err)
+	meta.NetworkEnabled = true
+	meta.IP = "192.0.2.10"
+	meta.MAC = "02:00:00:00:00:10"
+	meta.Entrypoint = []string{"old-entrypoint"}
+	meta.Cmd = []string{"old-command"}
+	meta.ProgramStartedAt = &previousProgramStart
+	meta.ExitCode = &previousExitCode
+	meta.ExitMessage = "previous exit"
+	require.NoError(t, m.saveMetadata(meta))
+
 	device := devices.VGPUDevice{
 		Framework:   devices.VGPUFrameworkVendorVFIO,
 		VFAddress:   "0000:82:00.4",
@@ -206,7 +237,10 @@ func TestStartRetainsVGPUWhenCreateRollbackFails(t *testing.T) {
 		return nil, &devices.VGPUCreateCleanupPendingError{Device: device, Err: cause}
 	}
 
-	_, err := m.startInstance(context.Background(), id, StartInstanceRequest{})
+	_, err = m.startInstance(context.Background(), id, StartInstanceRequest{
+		Entrypoint: []string{"new-entrypoint"},
+		Cmd:        []string{"new-command"},
+	})
 	require.ErrorIs(t, err, cause)
 
 	stored, err := m.loadMetadata(id)
@@ -214,6 +248,32 @@ func TestStartRetainsVGPUWhenCreateRollbackFails(t *testing.T) {
 	assert.Equal(t, device.Framework, stored.GPUFramework)
 	assert.Equal(t, device.SysfsPath, stored.GPUDevicePath)
 	assert.NotNil(t, stored.GPUAssignedAt)
+	assert.Equal(t, []string{"old-entrypoint"}, stored.Entrypoint)
+	assert.Equal(t, []string{"old-command"}, stored.Cmd)
+	assert.Equal(t, previousProgramStart, *stored.ProgramStartedAt)
+	assert.Equal(t, previousExitCode, *stored.ExitCode)
+	assert.Equal(t, "previous exit", stored.ExitMessage)
+	assert.Equal(t, "192.0.2.10", stored.IP)
+	assert.Equal(t, "02:00:00:00:00:10", stored.MAC)
+	assert.Equal(t, 1, networkManager.releaseCalls)
+}
+
+func TestStartDoesNotRestrictVGPUHypervisor(t *testing.T) {
+	m, id := newStartRollbackVGPUManager(t, func(context.Context, devices.VGPUAssignment) error {
+		return nil
+	})
+	meta, err := m.loadMetadata(id)
+	require.NoError(t, err)
+	meta.HypervisorType = hypervisor.TypeCloudHypervisor
+	require.NoError(t, m.saveMetadata(meta))
+
+	cause := errors.New("create failed")
+	m.createVGPU = func(context.Context, string, string) (*devices.VGPUDevice, error) {
+		return nil, cause
+	}
+
+	_, err = m.startInstance(context.Background(), id, StartInstanceRequest{})
+	assert.ErrorIs(t, err, cause)
 }
 
 func TestStartRollbackClearsVGPUAssignmentAfterSuccessfulDestroy(t *testing.T) {
