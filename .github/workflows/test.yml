@@ -170,26 +170,16 @@ jobs:
         run: |
           set -euo pipefail
 
-          runner_cgroup="$(awk -F: '$1 == "0" { print $3 }' /proc/self/cgroup)"
+          run_prefix="ci-${{ github.run_id }}-${{ github.run_attempt }}"
           guest_pids=()
-          if [ -n "$runner_cgroup" ] && [ "$runner_cgroup" != "/" ]; then
-            for proc in /proc/[0-9]*; do
-              process_cgroup="$(awk -F: '$1 == "0" { print $3 }' "$proc/cgroup" 2>/dev/null || true)"
-              if [ "$process_cgroup" != "$runner_cgroup" ]; then
-                continue
-              fi
-
-              comm="$(cat "$proc/comm" 2>/dev/null || true)"
-              cmdline="$(tr '\0' ' ' < "$proc/cmdline" 2>/dev/null || true)"
-              case "$comm" in
-                cloud-hypervis|firecracker|qemu-system-*)
-                  if [[ "$cmdline" == *"/ci/"* ]]; then
-                    guest_pids+=("${proc##*/}")
-                  fi
-                  ;;
-              esac
-            done
-          fi
+          mapfile -t vmm_pids < <(pgrep -x 'cloud-hyperviso|firecracker|qemu-system-.*' || true)
+          for pid in "${vmm_pids[@]}"; do
+            proc="/proc/$pid"
+            cmdline="$(cat "$proc/cmdline" 2>/dev/null | tr '\0' ' ' || true)"
+            if [[ "$cmdline" == *"/ci/"* ]] && sudo grep -zFqx "HYPEMAN_UFFD_SYSTEMD_INSTANCE_PREFIX=$run_prefix" "$proc/environ" 2>/dev/null; then
+              guest_pids+=("$pid")
+            fi
+          done
 
           if (( ${#guest_pids[@]} > 0 )); then
             echo "Stopping leftover test VMs: ${guest_pids[*]}"
