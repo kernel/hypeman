@@ -68,12 +68,16 @@ type fakeValidatingStarter struct {
 }
 
 func (s fakeValidatingStarter) ValidateConfig(VMConfig) error { return s.err }
+func (s fakeStarter) ValidateConfig(VMConfig) error           { return nil }
 
 func (s fakeStarter) SocketName() string { return "fake.sock" }
 func (s fakeStarter) GetBinaryPath(*paths.Paths, string) (string, error) {
 	return "", nil
 }
 func (s fakeStarter) GetVersion(*paths.Paths) (string, error) { return "test", nil }
+func (s fakeStarter) ResolveVersion(*paths.Paths, string) (string, error) {
+	return "test", nil
+}
 func (s fakeStarter) StartVM(context.Context, *paths.Paths, string, string, VMConfig) (int, Hypervisor, error) {
 	return 42, s.returned, nil
 }
@@ -94,9 +98,7 @@ func TestWrapVMStarterPreservesConfigValidation(t *testing.T) {
 	t.Parallel()
 	want := errors.New("invalid backend config")
 	starter := WrapVMStarter(TypeQEMUMicroVM, fakeValidatingStarter{err: want})
-	validator, ok := starter.(VMConfigValidator)
-	require.True(t, ok)
-	assert.ErrorIs(t, validator.ValidateConfig(VMConfig{}), want)
+	assert.ErrorIs(t, starter.ValidateConfig(VMConfig{}), want)
 }
 
 func TestWrapHypervisorCreatesChildSpan(t *testing.T) {

@@ -1,6 +1,7 @@
 package qemu
 
 import (
+	"fmt"
 	"sync"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
@@ -24,32 +25,31 @@ func GetOrCreate(socketPath string) (*QEMU, error) {
 
 // GetOrCreateForType returns a QEMU client with the requested backend identity.
 func GetOrCreateForType(socketPath string, hypervisorType hypervisor.Type) (*QEMU, error) {
+	requestedProfile, err := profileForType(hypervisorType)
+	if err != nil {
+		return nil, err
+	}
+
 	clientPool.RLock()
-	if client, ok := clientPool.clients[socketPath]; ok && client.hypervisorType == hypervisorType {
+	if client, ok := clientPool.clients[socketPath]; ok {
 		clientPool.RUnlock()
+		if client.profile.hypervisorType() != hypervisorType {
+			return nil, poolTypeMismatchError(socketPath, client.profile.hypervisorType(), hypervisorType)
+		}
 		return client, nil
 	}
 	clientPool.RUnlock()
 
 	clientPool.Lock()
 	if client, ok := clientPool.clients[socketPath]; ok {
-		if client.hypervisorType == hypervisorType {
-			clientPool.Unlock()
-			return client, nil
-		}
-		delete(clientPool.clients, socketPath)
 		clientPool.Unlock()
-
-		// A backend switch needs a fresh client, but a stuck disconnect must not
-		// hold the host-wide pool lock. Once it completes, retry so a concurrent
-		// creator for this socket can win normally.
-		if client.client != nil {
-			_ = client.client.Close()
+		if client.profile.hypervisorType() != hypervisorType {
+			return nil, poolTypeMismatchError(socketPath, client.profile.hypervisorType(), hypervisorType)
 		}
-		return GetOrCreateForType(socketPath, hypervisorType)
+		return client, nil
 	}
 
-	client, err := newClient(socketPath, hypervisorType)
+	client, err := newClient(socketPath, requestedProfile)
 	if err != nil {
 		clientPool.Unlock()
 		return nil, err
@@ -57,6 +57,10 @@ func GetOrCreateForType(socketPath string, hypervisorType hypervisor.Type) (*QEM
 	clientPool.clients[socketPath] = client
 	clientPool.Unlock()
 	return client, nil
+}
+
+func poolTypeMismatchError(socketPath string, cached, requested hypervisor.Type) error {
+	return fmt.Errorf("QEMU client for %s is pooled as hypervisor %s, not %s", socketPath, cached, requested)
 }
 
 // resetClient drops a pooled connection before a new QEMU process reuses the

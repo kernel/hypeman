@@ -185,16 +185,26 @@ func (r *qemuInstanceResolver) ResolveInstance(ctx context.Context, nameOrID str
 func requireQEMUUsable(t *testing.T) {
 	t.Helper()
 
-	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
-		t.Skip("/dev/kvm not available, skipping on this platform")
+	failOrSkip := func(format string, args ...any) {
+		t.Helper()
+		if runtime.GOOS == "linux" && os.Getenv("CI") != "" {
+			t.Fatalf(format, args...)
+		}
+		t.Skipf(format, args...)
 	}
+
+	kvm, err := os.OpenFile("/dev/kvm", os.O_RDWR, 0)
+	if err != nil {
+		failOrSkip("/dev/kvm is not usable: %v", err)
+	}
+	_ = kvm.Close()
 
 	starter := qemu.NewStarter()
 	if _, err := starter.GetBinaryPath(nil, ""); err != nil {
-		t.Skipf("QEMU not available: %v", err)
+		failOrSkip("QEMU not available: %v", err)
 	}
 	if _, err := starter.GetVersion(nil); err != nil {
-		t.Skipf("QEMU is installed but not usable: %v", err)
+		failOrSkip("QEMU is installed but not usable: %v", err)
 	}
 }
 

@@ -9,8 +9,8 @@ import (
 
 func TestRemoveClientDoesNotEvictReplacement(t *testing.T) {
 	socketPath := t.TempDir() + "/qemu.sock"
-	stale := &QEMU{socketPath: socketPath, hypervisorType: hypervisor.TypeQEMU}
-	replacement := &QEMU{socketPath: socketPath, hypervisorType: hypervisor.TypeQEMUMicroVM}
+	stale := &QEMU{socketPath: socketPath, profile: StandardProfile{}}
+	replacement := &QEMU{socketPath: socketPath, profile: MicroVMProfile{}}
 	clientPool.Lock()
 	clientPool.clients[socketPath] = replacement
 	clientPool.Unlock()
@@ -28,10 +28,10 @@ func TestRemoveClientDoesNotEvictReplacement(t *testing.T) {
 	require.Same(t, replacement, got)
 }
 
-func TestGetOrCreateForTypeReplacesCachedBackendMismatch(t *testing.T) {
+func TestGetOrCreateForTypeRejectsCachedBackendMismatch(t *testing.T) {
 	socketPath := t.TempDir() + "/qemu.sock"
 	clientPool.Lock()
-	clientPool.clients[socketPath] = &QEMU{socketPath: socketPath, hypervisorType: hypervisor.TypeQEMU}
+	clientPool.clients[socketPath] = &QEMU{socketPath: socketPath, profile: StandardProfile{}}
 	clientPool.Unlock()
 	t.Cleanup(func() {
 		clientPool.Lock()
@@ -40,10 +40,10 @@ func TestGetOrCreateForTypeReplacesCachedBackendMismatch(t *testing.T) {
 	})
 
 	_, err := GetOrCreateForType(socketPath, hypervisor.TypeQEMUMicroVM)
-	require.ErrorContains(t, err, "create qemu client")
+	require.ErrorContains(t, err, "pooled as hypervisor qemu, not qemu-microvm")
 
 	clientPool.RLock()
-	_, stillCached := clientPool.clients[socketPath]
+	cached := clientPool.clients[socketPath]
 	clientPool.RUnlock()
-	require.False(t, stillCached, "stale backend client must be removed before reconnect")
+	require.Equal(t, hypervisor.TypeQEMU, cached.profile.hypervisorType(), "a stale caller must not evict the live client")
 }

@@ -193,7 +193,7 @@ func (m *manager) startInstance(
 		attribute.String("hypervisor", string(stored.HypervisorType)),
 		attribute.String("operation", "start_vm"),
 	)
-	if err := m.startAndBootVM(startVMCtx, stored, imageInfo, netConfig); err != nil {
+	if err := m.startAndBootVM(startVMCtx, stored, imageInfo, netConfig, true); err != nil {
 		startVMSpanEnd(err)
 		log.ErrorContext(ctx, "failed to start and boot VM", "instance_id", id, "error", err)
 		return nil, err

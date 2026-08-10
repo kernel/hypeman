@@ -119,11 +119,11 @@ func TestSaveAndLoadVMConfigPreservesRestoreContract(t *testing.T) {
 	assert.Equal(t, want, got)
 }
 
-func TestValidateMicroVMRestoreVersion(t *testing.T) {
-	assert.Error(t, validateMicroVMRestoreVersions("", "8.2.0"))
-	assert.Error(t, validateMicroVMRestoreVersions("unknown", "8.2.0"))
-	assert.Error(t, validateMicroVMRestoreVersions("8.1.0", "8.2.0"))
-	assert.NoError(t, validateMicroVMRestoreVersions("8.2.0", "8.2.0"))
+func TestValidateRestoreVersion(t *testing.T) {
+	assert.Error(t, validateRestoreVersions("", "8.2.0"))
+	assert.Error(t, validateRestoreVersions("unknown", "8.2.0"))
+	assert.Error(t, validateRestoreVersions("8.1.0", "8.2.0"))
+	assert.NoError(t, validateRestoreVersions("8.2.0", "8.2.0"))
 }
 
 func TestShouldRetryWithReducedBalloon(t *testing.T) {

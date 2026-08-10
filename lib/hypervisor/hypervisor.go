@@ -91,18 +91,15 @@ func CapabilitiesForType(t Type) (Capabilities, bool) {
 	return caps, ok
 }
 
-// VMConfigValidator is implemented by starters with backend-specific VM
-// configuration constraints. Managers can use it for side-effect-free preflight
-// validation; starters must still validate the final config at launch/restore.
-type VMConfigValidator interface {
-	ValidateConfig(VMConfig) error
-}
-
 // VMStarter handles the full VM startup sequence.
 // Each hypervisor implements its own startup flow:
 // - Cloud Hypervisor: starts process, configures via HTTP API, boots via HTTP API
 // - QEMU: converts config to command-line args, starts process (VM runs immediately)
 type VMStarter interface {
+	// ValidateConfig performs side-effect-free backend validation. Managers call
+	// it during preflight; starters must also validate final launch/restore state.
+	ValidateConfig(VMConfig) error
+
 	// SocketName returns the socket filename for this hypervisor.
 	// Uses short names to stay within Unix socket path length limits (SUN_LEN ~108 bytes).
 	SocketName() string
@@ -110,10 +107,12 @@ type VMStarter interface {
 	// GetBinaryPath returns the path to the hypervisor binary, extracting if needed.
 	GetBinaryPath(p *paths.Paths, version string) (string, error)
 
-	// GetVersion returns the version of the hypervisor binary.
-	// For embedded binaries (Cloud Hypervisor), returns the latest supported version.
-	// For system binaries (QEMU), queries the installed binary for its version.
+	// GetVersion returns the default or installed hypervisor version.
 	GetVersion(p *paths.Paths) (string, error)
+
+	// ResolveVersion validates an optional requested version and returns the
+	// concrete binary version to persist for a new VM or snapshot target.
+	ResolveVersion(p *paths.Paths, requested string) (string, error)
 
 	// StartVM launches the hypervisor process and boots the VM.
 	// Returns the process ID and a Hypervisor client for subsequent operations.

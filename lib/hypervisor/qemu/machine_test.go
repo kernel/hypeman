@@ -47,14 +47,14 @@ func TestResolveMachineTypeForPlatform(t *testing.T) {
 func TestStarterSelectsAndValidatesPrivateMachineType(t *testing.T) {
 	t.Parallel()
 
-	standard, err := machineTypeForHypervisor(hypervisor.TypeQEMU)
+	standard, err := (StandardProfile{}).machineType()
 	require.NoError(t, err)
 	assert.Equal(t, standardMachineType(), standard)
 
 	if _, err := microVMMachineType(); err != nil {
 		return
 	}
-	microvm, err := machineTypeForHypervisor(hypervisor.TypeQEMUMicroVM)
+	microvm, err := (MicroVMProfile{}).machineType()
 	require.NoError(t, err)
 	assert.Equal(t, MachineTypeMicroVM, microvm)
 
@@ -67,10 +67,10 @@ func TestStarterSelectsAndValidatesPrivateMachineType(t *testing.T) {
 
 func TestMicroVMCapabilitiesExcludePCIPassthrough(t *testing.T) {
 	t.Parallel()
-	assert.True(t, capabilities(hypervisor.TypeQEMU).SupportsGPUPassthrough)
-	assert.False(t, capabilities(hypervisor.TypeQEMU).RequiresHostSnapshotVersion)
-	assert.False(t, capabilities(hypervisor.TypeQEMUMicroVM).SupportsGPUPassthrough)
-	assert.True(t, capabilities(hypervisor.TypeQEMUMicroVM).RequiresHostSnapshotVersion)
+	assert.True(t, (StandardProfile{}).capabilities().SupportsGPUPassthrough)
+	assert.True(t, (StandardProfile{}).capabilities().RequiresHostSnapshotVersion)
+	assert.False(t, (MicroVMProfile{}).capabilities().SupportsGPUPassthrough)
+	assert.True(t, (MicroVMProfile{}).capabilities().RequiresHostSnapshotVersion)
 }
 
 func TestValidateConfigMicroVM(t *testing.T) {

@@ -13,9 +13,9 @@ import (
 
 // QEMU implements hypervisor.Hypervisor for QEMU VMM.
 type QEMU struct {
-	client         *Client
-	socketPath     string // for self-removal from pool on error
-	hypervisorType hypervisor.Type
+	client     *Client
+	socketPath string // for self-removal from pool on error
+	profile    profile
 }
 
 var balloonTargetCache hypervisor.BalloonTargetCache
@@ -36,12 +36,12 @@ func NewForType(socketPath string, hypervisorType hypervisor.Type) (*QEMU, error
 }
 
 // newClient creates a new QEMU client (internal, used by pool).
-func newClient(socketPath string, hypervisorType hypervisor.Type) (*QEMU, error) {
+func newClient(socketPath string, selectedProfile profile) (*QEMU, error) {
 	client, err := NewClient(socketPath)
 	if err != nil {
 		return nil, fmt.Errorf("create qemu client: %w", err)
 	}
-	return &QEMU{client: client, socketPath: socketPath, hypervisorType: hypervisorType}, nil
+	return &QEMU{client: client, socketPath: socketPath, profile: selectedProfile}, nil
 }
 
 // Verify QEMU implements the interface
@@ -49,22 +49,7 @@ var _ hypervisor.Hypervisor = (*QEMU)(nil)
 
 // Capabilities returns the features supported by QEMU.
 func (q *QEMU) Capabilities() hypervisor.Capabilities {
-	return capabilities(q.hypervisorType)
-}
-
-func capabilities(hypervisorType hypervisor.Type) hypervisor.Capabilities {
-	return hypervisor.Capabilities{
-		SupportsSnapshot:            true,  // Uses QMP migrate file:// for snapshot
-		SupportsHotplugMemory:       false, // Not implemented - balloon not configured
-		SupportsBalloonControl:      true,
-		SupportsPause:               true,
-		SupportsVsock:               true,
-		SupportsGPUPassthrough:      hypervisorType != hypervisor.TypeQEMUMicroVM,
-		SupportsDiskIOLimit:         true,
-		SupportsGracefulVMMShutdown: true,
-		SupportsSnapshotBaseReuse:   false,
-		RequiresHostSnapshotVersion: hypervisorType == hypervisor.TypeQEMUMicroVM,
-	}
+	return q.profile.capabilities()
 }
 
 // DeleteVM removes the VM configuration from QEMU.

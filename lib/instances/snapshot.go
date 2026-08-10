@@ -530,13 +530,9 @@ func (m *manager) prepareSnapshotTarget(ctx context.Context, source StoredMetada
 
 	version := source.HypervisorVersion
 	if target != source.HypervisorType {
-		version, err = starter.GetVersion(m.paths)
+		version, err = m.resolveCreateHypervisorVersion(ctx, starter, target, "")
 		if err != nil {
-			if requiresHostSnapshotVersion(target) {
-				return nil, "", fmt.Errorf("get version for hypervisor %s snapshot target: %w", target, err)
-			}
-			logger.FromContext(ctx).WarnContext(ctx, "failed to get hypervisor version", "hypervisor", target, "error", err)
-			version = "unknown"
+			return nil, "", fmt.Errorf("resolve hypervisor %s snapshot target version: %w", target, err)
 		}
 	}
 	return starter, version, nil

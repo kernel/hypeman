@@ -254,13 +254,17 @@ func TestForkInstanceStoppedSourceUsesReadLock(t *testing.T) {
 
 type concurrentForkPrepareTestStarter struct{}
 
-func (concurrentForkPrepareTestStarter) SocketName() string { return "concurrent-fork-test.sock" }
+func (concurrentForkPrepareTestStarter) ValidateConfig(hypervisor.VMConfig) error { return nil }
+func (concurrentForkPrepareTestStarter) SocketName() string                       { return "concurrent-fork-test.sock" }
 
 func (concurrentForkPrepareTestStarter) GetBinaryPath(*paths.Paths, string) (string, error) {
 	return "", nil
 }
 
 func (concurrentForkPrepareTestStarter) GetVersion(*paths.Paths) (string, error) { return "test", nil }
+func (concurrentForkPrepareTestStarter) ResolveVersion(*paths.Paths, string) (string, error) {
+	return "test", nil
+}
 
 func (concurrentForkPrepareTestStarter) StartVM(context.Context, *paths.Paths, string, string, hypervisor.VMConfig) (int, hypervisor.Hypervisor, error) {
 	return 0, nil, nil

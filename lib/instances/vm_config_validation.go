@@ -8,6 +8,17 @@ import (
 
 const baseInstanceDiskCount = 3 // rootfs, writable overlay, and config disk
 
+func instanceDiskCount(volumes []VolumeAttachment) int {
+	count := baseInstanceDiskCount
+	for _, volume := range volumes {
+		count++
+		if volume.Overlay {
+			count++
+		}
+	}
+	return count
+}
+
 // validateCreateVMConfig performs side-effect-free backend validation against
 // the complete device plan before image, PCI, network, or filesystem work.
 func (m *manager) validateCreateVMConfig(starter hypervisor.VMStarter, req CreateInstanceRequest, hvType hypervisor.Type) error {
@@ -44,13 +55,7 @@ func (m *manager) plannedVMConfig(
 	networkEnabled bool,
 	pciDeviceCount int,
 ) hypervisor.VMConfig {
-	diskCount := baseInstanceDiskCount
-	for _, volume := range volumes {
-		diskCount++
-		if volume.Overlay {
-			diskCount++
-		}
-	}
+	diskCount := instanceDiskCount(volumes)
 
 	config := hypervisor.VMConfig{
 		HotplugBytes: hotplugBytes,
@@ -66,11 +71,7 @@ func (m *manager) plannedVMConfig(
 }
 
 func validatePlannedVMConfig(starter hypervisor.VMStarter, hvType hypervisor.Type, config hypervisor.VMConfig) error {
-	validator, ok := starter.(hypervisor.VMConfigValidator)
-	if !ok {
-		return nil
-	}
-	if err := validator.ValidateConfig(config); err != nil {
+	if err := starter.ValidateConfig(config); err != nil {
 		return fmt.Errorf("%w: hypervisor %s: %v", ErrInvalidRequest, hvType, err)
 	}
 	return nil

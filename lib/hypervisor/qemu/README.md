@@ -10,7 +10,7 @@ The `qemu-microvm` backend uses QEMU's Linux amd64-only `microvm` board. Upstrea
 
 It cannot use PCI/VFIO/vGPU devices or hotplug memory. QEMU limits it to eight virtio-mmio devices; Hypeman counts rootfs, overlay, config disk, attached-volume disks (an overlay volume consumes two), network, vsock, and the optional balloon before starting QEMU.
 
-A `qemu-microvm` standby snapshot or warm fork may restore only with the exact QEMU version that wrote its memory image. Hypeman records the running binary's version in `qemu-config.json` and checks it before restore. If QEMU changes, restore a stopped snapshot with `target_state: Stopped` and start it normally, or recreate the instance; an instance already in `Stopped` state can always cold-start. A stopped snapshot may switch between `qemu`, `qemu-microvm`, and other hypervisors; the target backend determines the internal QEMU board.
+A `qemu` or `qemu-microvm` standby snapshot or warm fork may restore only with the exact QEMU version that wrote its memory image. Both backends use the single system-installed binary and unversioned machine aliases, so Hypeman cannot relaunch a historical writer or promise cross-version migration compatibility. Hypeman records the running binary's version in `qemu-config.json` and checks it before restore (older standard-QEMU snapshots fall back to the version in instance metadata). If QEMU changes, restore a stopped snapshot with `target_state: Stopped` and start it normally, or recreate the instance; an instance already in `Stopped` state can always cold-start. A stopped snapshot may switch between `qemu`, `qemu-microvm`, and other hypervisors; the target backend determines the internal QEMU board.
 
 ## Boot comparison
 

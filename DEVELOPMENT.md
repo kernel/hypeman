@@ -133,7 +133,7 @@ Environment variables can also override any config key using `__` as the nesting
 
 ### QEMU backends
 
-`qemu` uses QEMU's architecture-native standard board (`q35` on amd64 and `virt` on arm64). `qemu-microvm` is a Linux amd64-only backend using QEMU's minimal `microvm` board and virtio-mmio devices; upstream does not register an equivalent `microvm` machine in `qemu-system-aarch64`. It does not support PCI/vGPU passthrough, hotplug memory, or more than eight virtio-mmio devices. Standby restore and warm forks require the exact QEMU version recorded when the memory image was written. After an upgrade, restore a stopped snapshot or recreate the instance; instances already in `Stopped` state still cold-start normally.
+`qemu` uses QEMU's architecture-native standard board (`q35` on amd64 and `virt` on arm64). `qemu-microvm` is a Linux amd64-only backend using QEMU's minimal `microvm` board and virtio-mmio devices; upstream does not register an equivalent `microvm` machine in `qemu-system-aarch64`. It does not support PCI/vGPU passthrough, hotplug memory, or more than eight virtio-mmio devices. For both `qemu` and `qemu-microvm`, standby restore and warm forks require the exact QEMU version recorded when the memory image was written. After an upgrade, restore a stopped snapshot or recreate the instance; instances already in `Stopped` state still cold-start normally.
 
 **Important: Subnet Configuration**
 

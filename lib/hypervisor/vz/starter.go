@@ -100,6 +100,8 @@ func NewStarter() *Starter {
 
 var _ hypervisor.VMStarter = (*Starter)(nil)
 
+func (s *Starter) ValidateConfig(hypervisor.VMConfig) error { return nil }
+
 func (s *Starter) SocketName() string {
 	return "vz.sock"
 }
@@ -111,6 +113,13 @@ func (s *Starter) GetBinaryPath(p *paths.Paths, version string) (string, error) 
 
 // GetVersion returns "vz-shim".
 func (s *Starter) GetVersion(p *paths.Paths) (string, error) {
+	return "vz-shim", nil
+}
+
+func (s *Starter) ResolveVersion(p *paths.Paths, requested string) (string, error) {
+	if requested != "" && requested != "vz-shim" {
+		return "", fmt.Errorf("unsupported vz version %q", requested)
+	}
 	return "vz-shim", nil
 }
 

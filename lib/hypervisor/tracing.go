@@ -283,12 +283,12 @@ func (s *tracingVMStarter) GetVersion(p *paths.Paths) (string, error) {
 	return s.next.GetVersion(p)
 }
 
+func (s *tracingVMStarter) ResolveVersion(p *paths.Paths, requested string) (string, error) {
+	return s.next.ResolveVersion(p, requested)
+}
+
 func (s *tracingVMStarter) ValidateConfig(config VMConfig) error {
-	validator, ok := s.next.(VMConfigValidator)
-	if !ok {
-		return nil
-	}
-	return validator.ValidateConfig(config)
+	return s.next.ValidateConfig(config)
 }
 
 func (s *tracingVMStarter) StartVM(ctx context.Context, p *paths.Paths, version string, socketPath string, config VMConfig) (pid int, hv Hypervisor, err error) {
