@@ -298,7 +298,7 @@ func (d *CaddyDaemon) ReloadConfig(config []byte) error {
 			return specificErr
 		}
 
-		return fmt.Errorf("caddy reload failed (status %d): %s", resp.StatusCode, bodyStr)
+		return fmt.Errorf("caddy reload failed (status %d)", resp.StatusCode)
 	}
 
 	return nil

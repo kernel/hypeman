@@ -68,6 +68,30 @@ Pattern hostnames enable convention-based routing where the subdomain maps to an
 
 This routes `foobar.dev.example.com` → instance `foobar`, `myapp.dev.example.com` → instance `myapp`, etc.
 
+### Request Header Authorization
+
+A rule can require a dedicated verification header before Caddy resolves or contacts its target:
+
+```json
+{
+  "match": { "hostname": "service.example.com", "port": 443 },
+  "target": { "instance": "service", "port": 8080 },
+  "tls": true,
+  "request_header_auth": {
+    "header": "X-Origin-Verification",
+    "value": "0123456789abcdef0123456789abcdef"
+  }
+}
+```
+
+Use a cryptographically random bearer secret whose encoded value is 32–256 bytes of printable ASCII without whitespace or Caddy matcher metacharacters (`*`, `{`, `}`). For example, encode at least 32 random bytes as base64. Invalid values prevent ingress creation and configuration regeneration.
+
+Caddy requires an exact hostname and header-value match. Missing or incorrect credentials return 403 without resolving the dynamic upstream. Before proxying an authorized request, Caddy deletes the verification header so it is never delivered to the guest. The normal reverse proxy remains responsible for HTTP streaming, WebSocket upgrades, and server-sent events. An HTTP-to-HTTPS redirect does not require the header, but the HTTPS destination does.
+
+The value is sensitive but follows the same API visibility model as instance environment variables: authenticated create, get, and list responses include it. Clients should hide it by default and require an explicit option to display it. Hypeman persists ingress metadata and generated Caddy configuration in owner-only files. The value is not included in application logs or errors.
+
+To rotate a value, delete and recreate the ingress with the replacement value. Caddy applies each configuration change with a live reload.
+
 ### Configuration Flow
 
 1. User creates an ingress via API
@@ -137,6 +161,7 @@ The ingress manager logs warnings in these situations:
 
 - Uses HTTP Host header matching (HTTP) or SNI (HTTPS)
 - Supports exact hostnames (`api.example.com`) and patterns (`{instance}.example.com`)
+- Exact hostnames take precedence over matching patterns on the same port
 - Pattern hostnames enable convention-based routing (e.g., `foobar.example.com` → instance `foobar`)
 - Hostnames must be unique across all ingresses
 - Default 404 response for unmatched hostnames

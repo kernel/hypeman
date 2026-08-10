@@ -189,20 +189,55 @@ func NewCaddyConfigGenerator(p *paths.Paths, listenAddress string, adminAddress 
 
 // GenerateConfig generates the Caddy JSON configuration.
 func (g *CaddyConfigGenerator) GenerateConfig(ctx context.Context, ingresses []Ingress) ([]byte, error) {
-	config := g.buildConfig(ctx, ingresses)
+	config, err := g.buildConfig(ctx, ingresses)
+	if err != nil {
+		return nil, err
+	}
 	return json.MarshalIndent(config, "", "  ")
+}
+
+type caddyRouteSet struct {
+	exact    []interface{}
+	patterns []interface{}
+}
+
+func (r *caddyRouteSet) append(pattern bool, routes ...interface{}) {
+	if pattern {
+		r.patterns = append(r.patterns, routes...)
+		return
+	}
+	r.exact = append(r.exact, routes...)
+}
+
+func (r *caddyRouteSet) prependExact(route interface{}) {
+	r.exact = append([]interface{}{route}, r.exact...)
+}
+
+func (r *caddyRouteSet) ordered() []interface{} {
+	routes := make([]interface{}, 0, len(r.exact)+len(r.patterns))
+	routes = append(routes, r.exact...)
+	return append(routes, r.patterns...)
+}
+
+func routesForPort(routesByPort map[int]*caddyRouteSet, port int) *caddyRouteSet {
+	routes := routesByPort[port]
+	if routes == nil {
+		routes = &caddyRouteSet{}
+		routesByPort[port] = routes
+	}
+	return routes
 }
 
 // buildConfig builds the complete Caddy configuration.
 // Routes are grouped by listen port to prevent conflicts when multiple wildcard
 // ingresses match the same hostname pattern on different ports.
-func (g *CaddyConfigGenerator) buildConfig(ctx context.Context, ingresses []Ingress) map[string]interface{} {
+func (g *CaddyConfigGenerator) buildConfig(ctx context.Context, ingresses []Ingress) (map[string]interface{}, error) {
 	log := logger.FromContext(ctx)
 
 	// Group routes by listen port to isolate them in separate Caddy servers.
 	// This prevents conflicts when multiple wildcard ingresses match the same
 	// hostname pattern on different ports (e.g., *.host.kernel.sh:443 and *.host.kernel.sh:3000).
-	routesByPort := map[int][]interface{}{}
+	routesByPort := map[int]*caddyRouteSet{}
 	tlsHostnames := []string{}
 	tlsPortsByHostname := map[string][]int{} // Track which ports need TLS for each hostname
 	tlsEnabledPorts := map[int]bool{}        // Track which ports have at least one TLS route
@@ -210,12 +245,13 @@ func (g *CaddyConfigGenerator) buildConfig(ctx context.Context, ingresses []Ingr
 	for _, ingress := range ingresses {
 		for _, rule := range ingress.Rules {
 			port := rule.Match.GetPort()
+			isPattern := rule.Match.IsPattern()
 
 			// Determine hostname pattern (wildcard or literal) and instance expression
 			var hostnameMatch string
 			var instanceExpr string
 
-			if rule.Match.IsPattern() {
+			if isPattern {
 				// Pattern hostname - parse and use wildcard + Caddy placeholders
 				pattern, err := rule.Match.ParsePattern()
 				if err != nil {
@@ -252,18 +288,33 @@ func (g *CaddyConfigGenerator) buildConfig(ctx context.Context, ingresses []Ingr
 				},
 			}
 
-			route := map[string]interface{}{
-				"match": []interface{}{
+			matcher := map[string]interface{}{"host": []string{hostnameMatch}}
+			handlers := []interface{}{reverseProxy}
+			if rule.RequestHeaderAuth != nil {
+				if err := rule.RequestHeaderAuth.Validate(); err != nil {
+					return nil, err
+				}
+				matcher["header"] = map[string][]string{rule.RequestHeaderAuth.Header: []string{rule.RequestHeaderAuth.Value}}
+				handlers = []interface{}{
 					map[string]interface{}{
-						"host": []string{hostnameMatch},
+						"handler": "headers",
+						"request": map[string]interface{}{"delete": []string{rule.RequestHeaderAuth.Header}},
 					},
-				},
-				"handle":   []interface{}{reverseProxy},
-				"terminal": true,
+					reverseProxy,
+				}
 			}
 
-			// Add route to port-specific group
-			routesByPort[port] = append(routesByPort[port], route)
+			route := map[string]interface{}{
+				"match":    []interface{}{matcher},
+				"handle":   handlers,
+				"terminal": true,
+			}
+			routes := routesForPort(routesByPort, port)
+			if rule.RequestHeaderAuth != nil {
+				routes.append(isPattern, route, requestHeaderDenialRoute(hostnameMatch))
+			} else {
+				routes.append(isPattern, route)
+			}
 
 			// Track TLS hostnames for automation policy
 			// For patterns, use the wildcard for TLS (e.g., "*.example.com")
@@ -293,7 +344,7 @@ func (g *CaddyConfigGenerator) buildConfig(ctx context.Context, ingresses []Ingr
 						},
 						"terminal": true,
 					}
-					routesByPort[80] = append(routesByPort[80], redirectRoute)
+					routesForPort(routesByPort, 80).append(isPattern, redirectRoute)
 				}
 			}
 		}
@@ -351,11 +402,11 @@ func (g *CaddyConfigGenerator) buildConfig(ctx context.Context, ingresses []Ingr
 					"terminal": true,
 				}
 				// Prepend so API redirect takes precedence
-				routesByPort[80] = append([]interface{}{apiRedirectRoute}, routesByPort[80]...)
+				routesForPort(routesByPort, 80).prependExact(apiRedirectRoute)
 			}
 		}
 		// Prepend API route so it takes precedence over wildcards
-		routesByPort[apiListenPort] = append([]interface{}{apiRoute}, routesByPort[apiListenPort]...)
+		routesForPort(routesByPort, apiListenPort).prependExact(apiRoute)
 	}
 
 	// Build base config (admin API only)
@@ -394,7 +445,7 @@ func (g *CaddyConfigGenerator) buildConfig(ctx context.Context, ingresses []Ingr
 		}
 
 		for _, port := range ports {
-			routes := routesByPort[port]
+			routes := routesByPort[port].ordered()
 
 			// Add catch-all at the end of each server's routes
 			allRoutes := append(routes, catchAllRoute)
@@ -447,7 +498,17 @@ func (g *CaddyConfigGenerator) buildConfig(ctx context.Context, ingresses []Ingr
 		"root":   g.paths.CaddyDataDir(),
 	}
 
-	return config
+	return config, nil
+}
+
+func requestHeaderDenialRoute(hostname string) map[string]interface{} {
+	return map[string]interface{}{
+		"match": []interface{}{map[string]interface{}{"host": []string{hostname}}},
+		"handle": []interface{}{map[string]interface{}{
+			"handler": "static_response", "status_code": 403,
+		}},
+		"terminal": true,
+	}
 }
 
 // buildTLSConfig builds the TLS automation configuration.
