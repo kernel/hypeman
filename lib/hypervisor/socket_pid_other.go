@@ -9,3 +9,8 @@ import "fmt"
 func ResolveProcessPID(socketPath string) (int, bool, error) {
 	return 0, false, fmt.Errorf("resolve process pid for socket %s: not supported on this platform", socketPath)
 }
+
+// ResolveProcessPIDForOwner is only implemented on Linux.
+func ResolveProcessPIDForOwner(socketPath string, _ int) (int, bool, error) {
+	return ResolveProcessPID(socketPath)
+}
