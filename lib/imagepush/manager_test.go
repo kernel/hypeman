@@ -464,12 +464,11 @@ func TestCreatePushDedupesConcurrently(t *testing.T) {
 	host, gate := gatedRegistry(t)
 
 	req := PushRequest{Image: "myapp:v1", Target: host + "/export/app:v1", Insecure: true}
-	if _, err := mgr.CreatePush(context.Background(), req); err != nil {
-		t.Fatalf("seed CreatePush: %v", err)
-	}
 
-	// Two goroutines racing CreatePush for the same digest+target must both
-	// land on the single in-flight job: one registers, the other merges.
+	// Two goroutines racing CreatePush for the same digest+target — including
+	// the registration itself — must both land on the single job: one
+	// registers, the other merges. The gated registry keeps the winner in
+	// flight so the race cannot resolve before both calls return.
 	const n = 2
 	ids := make([]string, n)
 	errs := make([]error, n)
@@ -558,6 +557,137 @@ func TestCreatePushCredentialConflict(t *testing.T) {
 	}
 }
 
+func TestCreatePushCredentialMismatch(t *testing.T) {
+	mgr, _ := testManager(t, 1, nil, nil)
+	host, gate := gatedRegistry(t)
+	target := host + "/export/app:v1"
+
+	seeded, err := mgr.CreatePush(context.Background(), PushRequest{
+		Image: "myapp:v1", Target: target, Insecure: true,
+		Credentials: &authn.AuthConfig{RegistryToken: "token-a"},
+	})
+	if err != nil {
+		t.Fatalf("seed CreatePush: %v", err)
+	}
+
+	// A different borrowed login for the same in-flight work must conflict:
+	// merging would run the request under token-a's principal.
+	if _, err := mgr.CreatePush(context.Background(), PushRequest{
+		Image: "myapp:v1", Target: target, Insecure: true,
+		Credentials: &authn.AuthConfig{RegistryToken: "token-b"},
+	}); !errors.Is(err, ErrCredentialConflict) {
+		t.Errorf("mismatched-credential duplicate err = %v, want ErrCredentialConflict", err)
+	}
+
+	// The same borrowed login merges into the in-flight job.
+	dup, err := mgr.CreatePush(context.Background(), PushRequest{
+		Image: "myapp:v1", Target: target, Insecure: true,
+		Credentials: &authn.AuthConfig{RegistryToken: "token-a"},
+	})
+	if err != nil {
+		t.Fatalf("same-credential duplicate: %v", err)
+	}
+	if dup.ID != seeded.ID {
+		t.Errorf("same-credential duplicate got ID %s, want %s", dup.ID, seeded.ID)
+	}
+
+	close(gate)
+	if err := mgr.WaitForPush(context.Background(), seeded.ID); err != nil {
+		t.Fatalf("WaitForPush: %v", err)
+	}
+}
+
+func TestCreatePushDedupSurvivesTornDownKey(t *testing.T) {
+	mgr, digest := testManager(t, 1, nil, nil)
+	host := openRegistry(t)
+	target := host + "/export/app:v1"
+
+	dstRef, err := name.ParseReference(target, name.Insecure)
+	if err != nil {
+		t.Fatalf("ParseReference: %v", err)
+	}
+	key := pushKey(digest, dstRef.String(), true)
+
+	// Simulate the persist-failure teardown window: the job's record is gone
+	// from disk but its inflight entry is still registered, released by the
+	// queue completion hook moments later.
+	m := mgr.(*manager)
+	m.mu.Lock()
+	m.inflight[key] = inflightPush{id: "ghost", digest: digest}
+	m.mu.Unlock()
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		m.mu.Lock()
+		delete(m.inflight, key)
+		m.mu.Unlock()
+	}()
+
+	// The dedup path must wait out the torn-down key and create a fresh job,
+	// not surface ErrNotFound from a create.
+	push, err := mgr.CreatePush(context.Background(), PushRequest{Image: "myapp:v1", Target: target, Insecure: true})
+	if err != nil {
+		t.Fatalf("CreatePush: %v", err)
+	}
+	if push.ID == "ghost" {
+		t.Fatal("CreatePush returned the torn-down job")
+	}
+	mustPushed(t, mgr, push.ID)
+}
+
+func TestWaitForPushCancellation(t *testing.T) {
+	mgr, _ := testManager(t, 1, nil, nil)
+	host, gate := gatedRegistry(t)
+
+	push, err := mgr.CreatePush(context.Background(), PushRequest{Image: "myapp:v1", Target: host + "/export/app:v1", Insecure: true})
+	if err != nil {
+		t.Fatalf("CreatePush: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() { errCh <- mgr.WaitForPush(ctx, push.ID) }()
+	cancel()
+	if err := <-errCh; !errors.Is(err, context.Canceled) {
+		t.Errorf("WaitForPush err = %v, want context.Canceled", err)
+	}
+
+	// Let the in-flight job finish so its writes land before the fixture's
+	// TempDir cleanup.
+	close(gate)
+	if err := mgr.WaitForPush(context.Background(), push.ID); err != nil {
+		t.Fatalf("WaitForPush after cancel: %v", err)
+	}
+}
+
+func TestInProgressDigestsDedupesAcrossTargets(t *testing.T) {
+	mgr, digest := testManager(t, 2, nil, nil)
+	hostA, gateA := gatedRegistry(t)
+	hostB, gateB := gatedRegistry(t)
+
+	// The same image pushed to two targets is two jobs but one live digest:
+	// the GC needs the digest kept alive once, not per target.
+	pushes := make([]string, 0, 2)
+	for _, target := range []string{hostA + "/export/a:v1", hostB + "/export/b:v1"} {
+		push, err := mgr.CreatePush(context.Background(), PushRequest{Image: "myapp:v1", Target: target, Insecure: true})
+		if err != nil {
+			t.Fatalf("CreatePush %s: %v", target, err)
+		}
+		pushes = append(pushes, push.ID)
+	}
+
+	if digests := mgr.InProgressDigests(); len(digests) != 1 || digests[0] != digest {
+		t.Errorf("InProgressDigests = %v, want [%s]", digests, digest)
+	}
+
+	// Drain the gated jobs so their writes land before the fixture's TempDir
+	// cleanup.
+	close(gateA)
+	close(gateB)
+	for _, id := range pushes {
+		mustPushed(t, mgr, id)
+	}
+}
+
 func TestRecoveryDedupesSameKey(t *testing.T) {
 	p, digest := cacheFixture(t)
 	host := openRegistry(t)
@@ -587,8 +717,8 @@ func TestRecoveryDedupesSameKey(t *testing.T) {
 	if got.Status != StatusFailed {
 		t.Errorf("newer status = %s, want failed (superseded)", got.Status)
 	}
-	if got.Error == nil || !strings.Contains(*got.Error, "superseded") {
-		t.Errorf("newer error = %v, want superseded explanation", got.Error)
+	if got.Error == nil || !strings.Contains(*got.Error, "duplicate of push job older") {
+		t.Errorf("newer error = %v, want duplicate-of-older explanation", got.Error)
 	}
 	// WaitForPush on the superseded job surfaces the failure rather than hanging.
 	if err := mgr.WaitForPush(context.Background(), "newer"); err == nil {
@@ -865,8 +995,38 @@ func TestRecoveryTreatsInsecureAsDistinctKey(t *testing.T) {
 	}
 
 	// Same digest+target with different transport modes is distinct work:
-	// both jobs recover, neither is superseded.
+	// both jobs recover, neither is superseded. Both pushes still go over
+	// plain HTTP here: go-containerregistry's Registry.Scheme maps loopback
+	// and RFC1918 hosts to http on its own, so an httptest registry cannot
+	// exercise the secure transport — what this pins down is the key
+	// distinction, not the wire behavior.
 	for _, id := range []string{"secure", "insecure"} {
 		mustPushed(t, mgr, id)
 	}
+}
+
+func TestRecoverySweepsOrphanDirs(t *testing.T) {
+	p, digest := cacheFixture(t)
+	host := openRegistry(t)
+
+	meta := &pushMetadata{ID: "real", Status: StatusQueued, Image: "myapp:v1", Digest: digest, Target: host + "/export/real:v1", Insecure: true, CreatedAt: time.Now()}
+	writePushes(t, p, meta)
+	// A crash between the push-dir MkdirAll and the metadata rename leaves an
+	// empty dir; startup recovery sweeps it since it holds no record.
+	if err := os.MkdirAll(p.PushDir("orphan"), 0755); err != nil {
+		t.Fatalf("mkdir orphan: %v", err)
+	}
+
+	resolver := &fakeResolver{images: map[string]*images.Image{
+		"myapp:v1": readyImage("myapp:v1", digest),
+	}}
+	mgr, err := NewManager(p, resolver, nil, 1)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	if _, err := os.Stat(p.PushDir("orphan")); !os.IsNotExist(err) {
+		t.Errorf("orphan dir still exists after recovery (stat err = %v)", err)
+	}
+	mustPushed(t, mgr, "real")
 }

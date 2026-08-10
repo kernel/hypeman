@@ -19,9 +19,9 @@ import (
 )
 
 type inflightPush struct {
-	id             string
-	digest         string
-	hadCredentials bool
+	id              string
+	digest          string
+	credFingerprint string
 }
 
 type manager struct {
@@ -101,6 +101,7 @@ func (m *manager) CreatePush(ctx context.Context, req PushRequest) (*Push, error
 	}
 
 	key := pushKey(img.Digest, dstRef.String(), req.Insecure)
+	fingerprint := credFingerprint(req.Credentials)
 
 	// Borrowed credentials live only in this closure: the job provider is
 	// built per push and never touches disk.
@@ -111,43 +112,62 @@ func (m *manager) CreatePush(ctx context.Context, req PushRequest) (*Push, error
 
 	// Hold the lock across the dedup check, metadata write, and registration so
 	// a concurrent request for the same digest+target cannot slip in between
-	// and create a duplicate job.
-	m.mu.Lock()
-	if existing, ok := m.inflight[key]; ok {
-		// Merge only when the credential intent matches the in-flight job. The
-		// manager never stores credential values, so it can only compare
-		// presence: a request that borrowed credentials cannot merge into an
-		// anonymous in-flight push (its auth would be silently dropped), and an
-		// anonymous request cannot merge into a credentialed one (it would
-		// silently inherit another caller's login). Both silently merge under
-		// the wrong auth otherwise; surface the conflict instead so the caller
-		// can retry once the in-flight job completes or match its credentials.
-		hadCreds := credsPresent(req.Credentials)
-		if existing.hadCredentials != hadCreds {
+	// and create a duplicate job. The write is one small fsync'd file; keeping
+	// it under the lock is what lets the dedup path hand back a durable record,
+	// and it only briefly stalls InProgressDigests — cheap next to the registry
+	// I/O that dominates a push.
+	var meta *pushMetadata
+	for {
+		m.mu.Lock()
+		if existing, ok := m.inflight[key]; ok {
+			// Merge only when the in-flight job runs under the same credentials
+			// as the request. The manager never stores credential values, so it
+			// compares fingerprints: a request that borrowed credentials cannot
+			// merge into an anonymous in-flight push (its auth would be silently
+			// dropped), an anonymous request cannot merge into a credentialed one
+			// (it would silently inherit another caller's login), and two
+			// requests that borrowed different logins cannot merge either — one
+			// would run under the other caller's auth, and an instance can serve
+			// more than one principal. Surface the conflict instead so the caller
+			// can retry once the in-flight job completes or match its credentials.
+			if existing.credFingerprint != fingerprint {
+				m.mu.Unlock()
+				return nil, fmt.Errorf("%w: a push of %s to %s is already in flight with different credentials; retry once it completes or match its credentials", ErrCredentialConflict, img.Digest, dstRef.String())
+			}
+			id := existing.id
 			m.mu.Unlock()
-			return nil, fmt.Errorf("%w: a push of %s to %s is already in flight with different credentials; retry once it completes or match its credentials", ErrCredentialConflict, img.Digest, dstRef.String())
+			push, err := m.GetPush(ctx, id)
+			if errors.Is(err, ErrNotFound) {
+				// The job's terminal record could not be persisted and its
+				// directory was dropped; the queue completion hook releases the
+				// inflight entry moments later. Wait it out and retry the dedup
+				// rather than surface a bare ErrNotFound from a create call.
+				if err := m.waitForInflightRelease(ctx, key); err != nil {
+					return nil, err
+				}
+				continue
+			}
+			return push, err
 		}
-		id := existing.id
-		m.mu.Unlock()
-		return m.GetPush(ctx, id)
-	}
 
-	meta := &pushMetadata{
-		ID:             cuid2.Generate(),
-		Status:         StatusQueued,
-		Image:          img.Name,
-		Digest:         img.Digest,
-		Target:         dstRef.String(),
-		Insecure:       req.Insecure,
-		HadCredentials: credsPresent(req.Credentials),
-		CreatedAt:      time.Now(),
-	}
-	if err := writeMetadata(m.paths, meta); err != nil {
+		meta = &pushMetadata{
+			ID:             cuid2.Generate(),
+			Status:         StatusQueued,
+			Image:          img.Name,
+			Digest:         img.Digest,
+			Target:         dstRef.String(),
+			Insecure:       req.Insecure,
+			HadCredentials: credsPresent(req.Credentials),
+			CreatedAt:      time.Now(),
+		}
+		if err := writeMetadata(m.paths, meta); err != nil {
+			m.mu.Unlock()
+			return nil, fmt.Errorf("write initial metadata: %w", err)
+		}
+		m.inflight[key] = inflightPush{id: meta.ID, digest: meta.Digest, credFingerprint: fingerprint}
 		m.mu.Unlock()
-		return nil, fmt.Errorf("write initial metadata: %w", err)
+		break
 	}
-	m.inflight[key] = inflightPush{id: meta.ID, digest: meta.Digest, hadCredentials: meta.HadCredentials}
-	m.mu.Unlock()
 
 	metaCopy := *meta
 	queuePos := m.queue.Enqueue(key, func() {
@@ -246,6 +266,28 @@ func (m *manager) releaseInflight(key string) func() {
 		m.mu.Lock()
 		delete(m.inflight, key)
 		m.mu.Unlock()
+	}
+}
+
+// waitForInflightRelease blocks until the key's inflight entry is dropped.
+// The queue releases the key's active slot before it runs the completion
+// hook, so once the entry is gone a fresh Enqueue for the key starts
+// immediately. Only useful in the narrow window where a job's record was
+// dropped by the persist-failure path; the hook runs moments later, and the
+// caller's context bounds the wait.
+func (m *manager) waitForInflightRelease(ctx context.Context, key string) error {
+	for {
+		m.mu.Lock()
+		_, ok := m.inflight[key]
+		m.mu.Unlock()
+		if !ok {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(5 * time.Millisecond):
+		}
 	}
 }
 
@@ -355,6 +397,11 @@ func (m *manager) InProgressDigests() []string {
 }
 
 func (m *manager) recoverInterruptedPushes() {
+	// A crash between the push-dir MkdirAll and the metadata rename leaves an
+	// empty dir no listing can read and no recovery can act on; sweep it now,
+	// while no CreatePush can be mid-write.
+	removeOrphanedPushDirs(m.paths)
+
 	pending, err := listPendingPushes(m.paths)
 	if err != nil {
 		// Loud on purpose: without recovery these records stay queued on disk
@@ -375,17 +422,22 @@ func (m *manager) recoverInterruptedPushes() {
 			continue
 		}
 
-		// Duplicate records for one logical push can accumulate on disk;
-		// recover the oldest and close the rest so nothing is left forever
-		// queued.
+		// Duplicate records for one logical push can accumulate on disk.
+		// listPendingPushes runs oldest-first, so the first record seen for a
+		// key is the original request: recover that one and close the rest so
+		// nothing is left forever queued. Oldest wins because it is the record
+		// a waiter is most likely to hold, and a stable choice matters more
+		// than which duplicate happened to be written last.
 		if chosen, ok := seen[key]; ok {
-			m.failRecovered(meta, fmt.Sprintf("superseded by duplicate push job %s for the same image and target", chosen))
+			m.failRecovered(meta, fmt.Sprintf("duplicate of push job %s for the same image and target (oldest record wins)", chosen))
 			continue
 		}
 		seen[key] = meta.ID
 
+		// Recovered jobs are anonymous by policy (credentialed ones are failed
+		// above), so their credential fingerprint is the empty string.
 		m.mu.Lock()
-		m.inflight[key] = inflightPush{id: meta.ID, digest: meta.Digest, hadCredentials: meta.HadCredentials}
+		m.inflight[key] = inflightPush{id: meta.ID, digest: meta.Digest}
 		m.mu.Unlock()
 
 		metaCopy := *meta

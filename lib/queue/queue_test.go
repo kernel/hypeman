@@ -73,13 +73,14 @@ func TestDedupesByKey(t *testing.T) {
 	q := New(1)
 	release := make(chan struct{})
 	started := make(chan struct{}, 1)
+	done := make(chan struct{})
 	var ran int64
 
 	q.Enqueue("same", func() {
 		started <- struct{}{}
 		atomic.AddInt64(&ran, 1)
 		<-release
-	}, nil)
+	}, func() { close(done) })
 	<-started
 
 	// Duplicate enqueues of an active key must not start another job.
@@ -90,7 +91,9 @@ func TestDedupesByKey(t *testing.T) {
 	}
 
 	close(release)
-	time.Sleep(50 * time.Millisecond)
+	// The completion hook runs after the key leaves the active set, so once
+	// it fires the job is fully drained — no sleep-based guesswork.
+	<-done
 
 	if atomic.LoadInt64(&ran) != 1 {
 		t.Errorf("job ran %d times, want 1", ran)

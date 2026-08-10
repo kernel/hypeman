@@ -9,7 +9,10 @@ package imagepush
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/google/go-containerregistry/pkg/authn"
@@ -59,6 +62,17 @@ func credsPresent(c *authn.AuthConfig) bool {
 		return false
 	}
 	return c.Username != "" || c.Password != "" || c.Auth != "" || c.IdentityToken != "" || c.RegistryToken != ""
+}
+
+// credFingerprint hashes borrowed credentials so in-flight dedup can tell
+// "same login" from "different login" without retaining the secret material.
+// Anonymous configs (nil or empty) all share the empty fingerprint.
+func credFingerprint(c *authn.AuthConfig) string {
+	if !credsPresent(c) {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(strings.Join([]string{c.Username, c.Password, c.Auth, c.IdentityToken, c.RegistryToken}, "\x00")))
+	return hex.EncodeToString(sum[:])
 }
 
 // Push is the state of one push job.

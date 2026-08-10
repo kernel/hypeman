@@ -63,8 +63,11 @@ func (q *Queue) Enqueue(key string, startFn func(), done func()) int {
 
 	if len(q.active) < q.maxConcurrent {
 		q.active[key] = true
-		// Safe to launch under the lock: wrappedFn blocks on complete's lock
-		// until Enqueue returns, so no key can start before its slot is held.
+		// The key enters the active set before the goroutine launches, both
+		// under the lock, so a concurrent Enqueue always observes the slot and
+		// dedups. The goroutine may run to completion before Enqueue returns,
+		// but its deferred complete then blocks on q.mu, so every state
+		// transition still serializes after this call.
 		go wrappedFn()
 		return 0
 	}

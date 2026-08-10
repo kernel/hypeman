@@ -2,6 +2,7 @@ package imagepush
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -121,6 +122,13 @@ func listAllPushes(p *paths.Paths) ([]*pushMetadata, error) {
 		}
 		meta, err := readMetadata(p, entry.Name())
 		if err != nil {
+			// A missing metadata.json is not an anomaly: the dir belongs to a
+			// CreatePush writing right now or to a crash orphan swept at the
+			// next startup. Warning here would fire on every list for as long
+			// as the dir lingers.
+			if errors.Is(err, ErrNotFound) {
+				continue
+			}
 			// Surface unreadable records instead of swallowing them: a corrupt
 			// or half-written metadata.json would otherwise vanish from
 			// listing and recovery while its push directory lingers on disk.
@@ -135,6 +143,26 @@ func listAllPushes(p *paths.Paths) ([]*pushMetadata, error) {
 	})
 
 	return metas, nil
+}
+
+// removeOrphanedPushDirs deletes push directories that never received a
+// metadata.json (a crash between MkdirAll and the metadata rename). They hold
+// no record to recover and would otherwise linger on disk forever. Only safe
+// at startup, before any CreatePush can be mid-write.
+func removeOrphanedPushDirs(p *paths.Paths) {
+	entries, err := os.ReadDir(p.PushesDir())
+	if err != nil {
+		return // nothing to sweep; listing errors surface in recovery proper
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		if _, err := os.Stat(p.PushMetadata(entry.Name())); errors.Is(err, os.ErrNotExist) {
+			fmt.Fprintf(os.Stderr, "Warning: removing orphaned push directory %s (no metadata.json)\n", entry.Name())
+			os.RemoveAll(p.PushDir(entry.Name()))
+		}
+	}
 }
 
 // listPendingPushes returns pushes that did not reach a terminal state,
@@ -153,7 +181,13 @@ func listPendingPushes(p *paths.Paths) ([]*pushMetadata, error) {
 		}
 	}
 
-	sort.Slice(pending, func(i, j int) bool {
+	sort.SliceStable(pending, func(i, j int) bool {
+		// CreatedAt ties are broken by ID so recovery order — and with it the
+		// "oldest record wins" dedup in recoverInterruptedPushes — is
+		// deterministic across restarts.
+		if pending[i].CreatedAt.Equal(pending[j].CreatedAt) {
+			return pending[i].ID < pending[j].ID
+		}
 		return pending[i].CreatedAt.Before(pending[j].CreatedAt)
 	})
 
