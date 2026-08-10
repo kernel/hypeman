@@ -124,7 +124,7 @@ func (m *manager) vgpuAssignmentClaimedByLiveInstance(ctx context.Context, exclu
 		if stored.HypervisorPID == nil {
 			return true, nil
 		}
-		pid, err := resolveLiveHypervisorPID(stored.HypervisorPID, stored.SocketPath)
+		pid, err := resolveLiveHypervisorPID(stored.HypervisorPID, stored.HypervisorStartTime, stored.SocketPath)
 		if err != nil || pid > 0 {
 			return true, nil
 		}
