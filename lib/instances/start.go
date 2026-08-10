@@ -175,6 +175,14 @@ func (m *manager) startInstance(
 		log.InfoContext(ctx, "creating vGPU for start", "instance_id", id, "profile", stored.GPUProfile)
 		device, err := m.createVGPUDevice(ctx, stored.GPUProfile, id)
 		if err != nil {
+			if pendingDevice, ok := vgpuDevicePendingCleanup(err); ok {
+				assignedAt := m.nowUTC()
+				setStoredVGPUDevice(stored, pendingDevice, assignedAt)
+				if saveErr := m.saveMetadata(meta); saveErr != nil {
+					log.ErrorContext(ctx, "failed to retain vGPU assignment after create rollback failure", "instance_id", id, "error", saveErr)
+					return nil, fmt.Errorf("create vGPU for profile %s: %w; retain assignment: %v", stored.GPUProfile, err, saveErr)
+				}
+			}
 			log.ErrorContext(ctx, "failed to create vGPU", "instance_id", id, "profile", stored.GPUProfile, "error", err)
 			return nil, fmt.Errorf("create vGPU for profile %s: %w", stored.GPUProfile, err)
 		}

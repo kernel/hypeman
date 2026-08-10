@@ -2,6 +2,7 @@ package instances
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"time"
@@ -46,6 +47,28 @@ func (m *manager) createVGPUDevice(ctx context.Context, profileName, instanceID 
 		create = devices.CreateVGPU
 	}
 	return create(ctx, profileName, instanceID)
+}
+
+func vgpuDevicePendingCleanup(err error) (*devices.VGPUDevice, bool) {
+	var pending *devices.VGPUCreateCleanupPendingError
+	if !errors.As(err, &pending) {
+		return nil, false
+	}
+	return &pending.Device, true
+}
+
+func retainedVGPUFromCreateError(instanceID string, assignedAt time.Time, err error) *StoredMetadata {
+	device, ok := vgpuDevicePendingCleanup(err)
+	if !ok {
+		return nil
+	}
+	return &StoredMetadata{
+		Id:            instanceID,
+		GPUFramework:  device.Framework,
+		GPUDevicePath: device.SysfsPath,
+		GPUMdevUUID:   device.MdevUUID,
+		GPUAssignedAt: &assignedAt,
+	}
 }
 
 func (m *manager) destroyVGPUAssignment(ctx context.Context, assignment devices.VGPUAssignment) error {
