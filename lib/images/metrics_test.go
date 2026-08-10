@@ -61,6 +61,18 @@ func TestImageBuildPhaseMetrics(t *testing.T) {
 	bytesHistogram, ok := bytes.Data.(metricdata.Histogram[int64])
 	require.True(t, ok)
 	require.Equal(t, int64(2_467_319_902), bytesHistogram.DataPoints[0].Sum)
+	require.Equal(t, []float64{
+		1 << 20,
+		4 << 20,
+		16 << 20,
+		64 << 20,
+		256 << 20,
+		1 << 30,
+		2 << 30,
+		4 << 30,
+		8 << 30,
+		16 << 30,
+	}, bytesHistogram.DataPoints[0].Bounds)
 	requireMetricAttributes(t, bytesHistogram.DataPoints[0].Attributes, map[string]string{"cache_status": "hit"})
 }
 

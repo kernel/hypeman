@@ -53,6 +53,18 @@ func newMetrics(meter metric.Meter, m *manager) (*Metrics, error) {
 		"hypeman_images_oci_compressed_bytes",
 		metric.WithDescription("Total compressed bytes in OCI image layers being converted"),
 		metric.WithUnit("By"),
+		metric.WithExplicitBucketBoundaries(
+			1<<20,
+			4<<20,
+			16<<20,
+			64<<20,
+			256<<20,
+			1<<30,
+			2<<30,
+			4<<30,
+			8<<30,
+			16<<30,
+		),
 	)
 	if err != nil {
 		return nil, err
