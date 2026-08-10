@@ -381,7 +381,7 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 		case errors.Is(err, images.ErrRateLimited):
 			return oapi.CreateInstance429JSONResponse{
 				Code:    "rate_limited",
-				Message: "registry rate limit exceeded; retry later or authenticate to the registry",
+				Message: images.RateLimitMessage,
 			}, nil
 		case errors.Is(err, images.ErrNotFound):
 			return oapi.CreateInstance404JSONResponse{

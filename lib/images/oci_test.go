@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -22,6 +23,18 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestPullResultMeasureRecordsFailure(t *testing.T) {
+	result := &pullResult{}
+	wantErr := errors.New("boom")
+
+	err := result.measure("registry_pull", func() error { return wantErr })
+
+	require.ErrorIs(t, err, wantErr)
+	require.Len(t, result.Phases, 1)
+	assert.Equal(t, "registry_pull", result.Phases[0].Phase)
+	assert.Equal(t, "failed", result.Phases[0].Status)
+}
 
 const testImageKernelVersion = "ch-6.12.8-kernel-1.6-202603301"
 
@@ -402,6 +415,16 @@ func TestDockerSaveToOCILayoutCacheHit(t *testing.T) {
 	assert.Equal(t, "/app", result.Metadata.WorkingDir)
 	assert.Equal(t, digestStr, result.Digest)
 	assert.Equal(t, testImageKernelVersion, result.Metadata.Labels["io.kernel.kernel-version"])
+	assert.True(t, result.CacheHit)
+	assert.Positive(t, result.LayerCount)
+	assert.Positive(t, result.CompressedBytes)
+	require.Len(t, result.Phases, 3)
+	assert.Equal(t, "oci_cache_lookup", result.Phases[0].Phase)
+	assert.Equal(t, "metadata_extract", result.Phases[1].Phase)
+	assert.Equal(t, "layer_unpack", result.Phases[2].Phase)
+	for _, phase := range result.Phases {
+		assert.Equal(t, "success", phase.Status)
+	}
 
 	// Verify rootfs was unpacked (umoci extracts directly into exportDir)
 	agentPath := filepath.Join(exportDir, "usr", "local", "bin", "guest-agent")

@@ -3,6 +3,7 @@ package images
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +16,24 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestConversionFailedErr(t *testing.T) {
+	t.Run("without detail", func(t *testing.T) {
+		assert.EqualError(t, conversionFailedErr(nil, nil), "image conversion failed")
+	})
+
+	t.Run("with stored message", func(t *testing.T) {
+		message := "converter exited"
+		assert.EqualError(t, conversionFailedErr(&message, nil), "image conversion failed: converter exited")
+	})
+
+	t.Run("with cause", func(t *testing.T) {
+		cause := errors.New("converter exited")
+		err := conversionFailedErr(nil, cause)
+		assert.EqualError(t, err, "image conversion failed: converter exited")
+		assert.ErrorIs(t, err, cause)
+	})
+}
 
 func TestCreateImage(t *testing.T) {
 	dataDir := t.TempDir()

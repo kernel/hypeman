@@ -12,7 +12,7 @@
 # Key differences from Linux (see config.example.yaml):
 # - hypervisor.default: Use "vz" (Virtualization.framework) instead of cloud-hypervisor/qemu
 # - data_dir: Uses macOS conventions (~/Library/Application Support)
-# - Network settings: network.bridge_name, subnet_cidr, etc. are IGNORED (vz uses NAT)
+# - Network settings: network.bridge_name, subnet_cidr, etc. are IGNORED (Hypeman targets VZ's default 192.168.64.0/24 shared NAT)
 # - Rate limiting: Not supported on macOS (no tc/HTB equivalent)
 # - GPU passthrough: Not supported on macOS
 # =============================================================================
@@ -53,10 +53,14 @@ hypervisor:
 # =============================================================================
 # Network Configuration (DIFFERENT ON MACOS)
 # =============================================================================
-# On macOS with vz, network is handled automatically via NAT:
-# - VMs get IP addresses from 192.168.64.0/24 via DHCP
-# - No TAP devices, bridges, or iptables needed
-# - The following settings are IGNORED on macOS:
+# On macOS with VZ, Hypeman targets Virtualization.framework's default shared NAT:
+# - Hypeman statically allocates VM addresses from 192.168.64.0/24
+# - The expected host gateway is 192.168.64.1
+# - A host-level vmnet Shared_Net_Address override is not currently supported
+# - Other vmnet clients can receive DHCP leases in the same subnet; avoid running
+#   overlapping VM workloads when static-address collisions are possible
+# - No TAP devices, user-created bridges, or iptables rules are needed
+# - The following settings are IGNORED on macOS because VZ owns the network:
 #   network.bridge_name, subnet_cidr, subnet_gateway, uplink_interface
 network:
   dns_server: 8.8.8.8
@@ -98,8 +102,9 @@ caddy:
 # =============================================================================
 # Build System Configuration
 # =============================================================================
-# For builds on macOS with vz, the registry URL needs to be accessible from
-# NAT VMs. Since vz uses 192.168.64.0/24 for NAT, the host is at 192.168.64.1.
+# For builds on macOS with VZ, the registry URL needs to be accessible from
+# NAT VMs. On the default shared NAT targeted by Hypeman, the host is at
+# 192.168.64.1.
 #
 # IMPORTANT: "host.docker.internal" does NOT work in vz VMs - that's a Docker
 # Desktop-specific hostname. Use the NAT gateway IP instead.

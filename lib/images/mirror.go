@@ -53,7 +53,7 @@ func MirrorBaseImage(ctx context.Context, registryURL string, req MirrorRequest,
 		remote.WithAuthFromKeychain(authn.DefaultKeychain),
 		remote.WithPlatform(platform.ToGCR()))
 	if err != nil {
-		return nil, fmt.Errorf("pull source image: %w", wrapRegistryError(err))
+		return nil, fmt.Errorf("pull source image: %w", ClassifyRegistryError(err))
 	}
 
 	// Get the digest
@@ -88,7 +88,7 @@ func MirrorBaseImage(ctx context.Context, registryURL string, req MirrorRequest,
 	}
 
 	if err := remote.Write(dstRef, img, opts...); err != nil {
-		return nil, fmt.Errorf("push to local registry: %w", wrapRegistryError(err))
+		return nil, fmt.Errorf("push to local registry: %w", ClassifyRegistryError(err))
 	}
 
 	return &MirrorResult{

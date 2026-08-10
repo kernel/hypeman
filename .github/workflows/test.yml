@@ -168,6 +168,30 @@ jobs:
       - name: Cleanup
         if: always()
         run: |
+          set -euo pipefail
+
+          run_prefix="ci-${{ github.run_id }}-${{ github.run_attempt }}"
+          guest_pids=()
+          mapfile -t vmm_pids < <(pgrep -x 'cloud-hyperviso|firecracker|qemu-system-.*' || true)
+          for pid in "${vmm_pids[@]}"; do
+            proc="/proc/$pid"
+            cmdline="$(cat "$proc/cmdline" 2>/dev/null | tr '\0' ' ' || true)"
+            if [[ "$cmdline" == *"/ci/"* ]] && sudo grep -zFqx "HYPEMAN_UFFD_SYSTEMD_INSTANCE_PREFIX=$run_prefix" "$proc/environ" 2>/dev/null; then
+              guest_pids+=("$pid")
+            fi
+          done
+
+          if (( ${#guest_pids[@]} > 0 )); then
+            echo "Stopping leftover test VMs: ${guest_pids[*]}"
+            sudo kill -TERM "${guest_pids[@]}" 2>/dev/null || true
+            sleep 2
+            for pid in "${guest_pids[@]}"; do
+              if sudo kill -0 "$pid" 2>/dev/null; then
+                sudo kill -KILL "$pid" 2>/dev/null || true
+              fi
+            done
+          fi
+
           units="$(systemctl list-units --all --full --plain 'hypeman-uffd@ci-${{ github.run_id }}-${{ github.run_attempt }}-*.service' --no-legend | awk '{print $1}' || true)"
           if [ -n "$units" ]; then
             echo "$units" | xargs -r sudo systemctl stop || true
@@ -264,6 +288,16 @@ jobs:
         run: |
           export HYPEMAN_TEST_PREWARM_DIR="$HOME/.cache/hypeman-ci/darwin-arm64"
           make test
+      - name: Run VZ builder integration test
+        env:
+          HYPEMAN_RUN_BUILDER_INTEGRATION_TEST: "1"
+        run: |
+          # Self-hosted runners retain Docker layers across jobs. Reclaim them so
+          # the builder image and two VZ builds have predictable disk headroom.
+          docker system prune --all --force --volumes
+          PATH="/opt/homebrew/opt/e2fsprogs/sbin:$PATH" \
+            go test -count=1 -tags containers_image_openpgp \
+              -run='^TestBuilderPersistentCacheReuse$' -timeout=20m -v ./integration
       - name: Cleanup
         if: always()
         run: |
@@ -284,7 +318,25 @@ jobs:
           go-version: '1.25.4'
           cache: false
       - name: Install dependencies
-        run: brew list caddy &>/dev/null || brew install caddy
+        run: |
+          brew list caddy &>/dev/null || brew install caddy
+          if ! docker info >/dev/null 2>&1; then
+            colima start || {
+              colima stop --force || true
+              colima start
+            }
+          fi
+          for attempt in {1..30}; do
+            if docker info >/dev/null 2>&1; then
+              break
+            fi
+            echo "waiting for Docker daemon (${attempt}/30)"
+            sleep 2
+          done
+          docker info >/dev/null
+          # Self-hosted runners retain Docker layers across jobs. Start the
+          # install E2E with deterministic headroom for its builder image.
+          docker system prune --all --force --volumes
       - name: Run E2E install test
         run: bash scripts/e2e-install-test.sh
       - name: Run E2E CLI-only install test

@@ -34,6 +34,10 @@ type Manager interface {
 	GetAllocation(ctx context.Context, instanceID string) (*Allocation, error)
 	ListAllocations(ctx context.Context) ([]Allocation, error)
 	NameExists(ctx context.Context, name string, excludeInstanceID string) (bool, error)
+	// EffectiveDefaultNetwork returns the platform backend's default network.
+	// Before Initialize it returns the network the backend will create or attach;
+	// after Initialize it returns the backend state cached by the manager.
+	EffectiveDefaultNetwork() (*Network, error)
 
 	// CleanupOrphanedTAPs removes TAP devices not associated with any preserved
 	// instance. Pass minAge>0 to skip TAPs younger than that, which avoids racing
@@ -92,40 +96,34 @@ func NewManager(p *paths.Paths, cfg *config.Config, meter metric.Meter) Manager 
 func (m *manager) Initialize(ctx context.Context, runningInstanceIDs []string) error {
 	log := logger.FromContext(ctx)
 
-	// Derive gateway from subnet if not explicitly configured
-	gateway := m.config.Network.SubnetGateway
-	if gateway == "" {
-		var err error
-		gateway, err = DeriveGateway(m.config.Network.SubnetCIDR)
-		if err != nil {
-			return fmt.Errorf("derive gateway from subnet: %w", err)
-		}
-	}
-
-	log.InfoContext(ctx, "initializing network manager",
-		"bridge", m.config.Network.BridgeName,
-		"subnet", m.config.Network.SubnetCIDR,
-		"gateway", gateway)
-
-	// Check for subnet conflicts with existing host routes before creating bridge
-	if err := m.checkSubnetConflicts(ctx, m.config.Network.SubnetCIDR); err != nil {
+	requestedNetwork, err := m.platformDefaultNetwork()
+	if err != nil {
 		return err
 	}
 
-	// Ensure default network bridge exists and iptables rules are configured
-	// createBridge is idempotent - handles both new and existing bridges
-	if err := m.createBridge(ctx, m.config.Network.BridgeName, gateway, m.config.Network.SubnetCIDR); err != nil {
+	log.InfoContext(ctx, "initializing network manager",
+		"bridge", requestedNetwork.Bridge,
+		"subnet", requestedNetwork.Subnet,
+		"gateway", requestedNetwork.Gateway)
+
+	// Check for subnet conflicts with existing host routes before creating bridge.
+	if err := m.checkSubnetConflicts(ctx, requestedNetwork.Subnet); err != nil {
+		return err
+	}
+
+	// Ensure the platform backend is initialized. On Linux this creates the
+	// configured bridge; on Darwin VZ supplies its own NAT network.
+	if err := m.createBridge(ctx, requestedNetwork.Bridge, requestedNetwork.Gateway, requestedNetwork.Subnet); err != nil {
 		return fmt.Errorf("setup default network: %w", err)
 	}
-	m.setDefaultNetwork(&Network{
-		Name:    "default",
-		Subnet:  m.config.Network.SubnetCIDR,
-		Gateway: gateway,
-		Bridge:  m.config.Network.BridgeName,
-		// Per-TAP port isolation is the default network policy used by createTAPDevice.
-		Isolated: true,
-		Default:  true,
-	})
+
+	// The backend state is authoritative once initialization has completed. In
+	// particular, VZ's NAT subnet must win over Linux-oriented config defaults.
+	effectiveNetwork, err := m.getDefaultNetwork(ctx)
+	if err != nil {
+		return fmt.Errorf("get effective default network: %w", err)
+	}
+	m.setDefaultNetwork(effectiveNetwork)
 
 	// Cleanup orphaned TAP devices from previous runs (crashes, power loss, etc.).
 	// Startup runs before any concurrent CreateAllocation can be in flight, so no
@@ -163,23 +161,41 @@ func (m *manager) setDefaultNetwork(network *Network) {
 	m.defaultNetwork = cloneNetwork(network)
 }
 
-// getDefaultNetwork gets the default network details from kernel state
+func newDefaultNetwork(bridge, subnet, gateway string) *Network {
+	return &Network{
+		Name:     "default",
+		Subnet:   subnet,
+		Gateway:  gateway,
+		Bridge:   bridge,
+		Isolated: true,
+		Default:  true,
+	}
+}
+
+// EffectiveDefaultNetwork returns one platform-authoritative network identity.
+// The pre-initialization value is useful to dependency providers that need the
+// guest-visible gateway before the manager's startup initialization runs.
+func (m *manager) EffectiveDefaultNetwork() (*Network, error) {
+	if network := m.cachedDefaultNetwork(); network != nil {
+		return network, nil
+	}
+	return m.platformDefaultNetwork()
+}
+
+// getDefaultNetwork gets the default network details from backend state.
 func (m *manager) getDefaultNetwork(ctx context.Context) (*Network, error) {
-	// Query from kernel
 	state, err := m.queryNetworkState(m.config.Network.BridgeName)
 	if err != nil {
-		return nil, ErrNotFound
+		return nil, fmt.Errorf("query default network state: %w", err)
 	}
 
-	return &Network{
-		Name:      "default",
-		Subnet:    state.Subnet,
-		Gateway:   state.Gateway,
-		Bridge:    m.config.Network.BridgeName,
-		Isolated:  true,
-		Default:   true,
-		CreatedAt: time.Time{}, // Unknown for default
-	}, nil
+	bridge := state.Bridge
+	if bridge == "" {
+		bridge = m.config.Network.BridgeName
+	}
+	network := newDefaultNetwork(bridge, state.Subnet, state.Gateway)
+	network.CreatedAt = time.Time{} // Unknown for default
+	return network, nil
 }
 
 // SetupHTB initializes HTB qdisc on the bridge for upload fair sharing.

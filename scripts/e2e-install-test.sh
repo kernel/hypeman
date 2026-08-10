@@ -192,11 +192,88 @@ OUTPUT=$($HYPEMAN_CMD exec "$E2E_VM_NAME" -- echo "hello from e2e") || fail "hyp
 echo "$OUTPUT" | grep -q "hello from e2e" || fail "hypeman exec output mismatch: $OUTPUT"
 pass "hypeman exec works"
 
+# Exec uses vsock and can succeed when guest networking is broken. Exercise DNS
+# and an outbound TCP connection so the macOS VZ NAT path is covered end to end.
+EGRESS_OK=false
+for i in $(seq 1 3); do
+    if $HYPEMAN_CMD exec "$E2E_VM_NAME" -- wget -q -T 10 -O /dev/null http://example.com; then
+        EGRESS_OK=true
+        break
+    fi
+    warn "guest egress attempt ${i}/3 failed"
+    sleep 2
+done
+[ "$EGRESS_OK" = true ] || fail "guest TCP egress failed"
+pass "guest TCP egress works"
+
 $HYPEMAN_CMD stop "$E2E_VM_NAME" || fail "hypeman stop failed"
 pass "hypeman stop works"
 
 $HYPEMAN_CMD rm "$E2E_VM_NAME" || fail "hypeman rm failed"
 pass "hypeman rm works"
+
+# Build a real image through the installed CLI. This exercises provider wiring,
+# the VZ builder VM, guest-to-host registry access, and the resulting image.
+E2E_BUILD_VM_NAME="e2e-build-test-vm"
+BUILD_CONTEXT=$(mktemp -d)
+BUILD_OUTPUT_FILE=$(mktemp)
+trap 'rm -rf "${BUILD_CONTEXT:-}" "${BUILD_OUTPUT_FILE:-}"' EXIT
+cat > "$BUILD_CONTEXT/Dockerfile" <<'EOF'
+FROM alpine:3.20
+RUN printf 'hypeman-build-e2e\n' > /build-marker
+CMD ["sh", "-c", "sleep 600"]
+EOF
+
+BUILD_OK=false
+for i in $(seq 1 30); do
+    if $HYPEMAN_CMD build --file Dockerfile --timeout 600 \
+        --image-name e2e/build-smoke:latest "$BUILD_CONTEXT" >"$BUILD_OUTPUT_FILE" 2>&1; then
+        BUILD_OK=true
+        break
+    fi
+    if ! grep -q "builder image is being prepared" "$BUILD_OUTPUT_FILE"; then
+        cat "$BUILD_OUTPUT_FILE"
+        FAILED_BUILD_ID=$(sed -n 's/^Build started: //p' "$BUILD_OUTPUT_FILE" | tail -1)
+        if [ -n "$FAILED_BUILD_ID" ]; then
+            $HYPEMAN_CMD --format json build get "$FAILED_BUILD_ID" || true
+        fi
+        for LOG_FILE in "$HOME/Library/Application Support/hypeman/logs/hypeman.log" /var/lib/hypeman/logs/hypeman.log; do
+            if [ -f "$LOG_FILE" ]; then
+                tail -200 "$LOG_FILE"
+            fi
+        done
+        fail "hypeman build failed"
+    fi
+    warn "builder image is still being prepared (${i}/30)"
+    sleep 5
+done
+[ "$BUILD_OK" = true ] || { cat "$BUILD_OUTPUT_FILE"; fail "hypeman build did not become ready"; }
+cat "$BUILD_OUTPUT_FILE"
+BUILD_ID=$(sed -n 's/^Build started: //p' "$BUILD_OUTPUT_FILE" | tail -1)
+[ -n "$BUILD_ID" ] || fail "hypeman build output did not include a build ID"
+BUILD_IMAGE=$($HYPEMAN_CMD --format json --transform image_ref build get "$BUILD_ID") || fail "hypeman build get failed"
+BUILD_IMAGE=${BUILD_IMAGE#\"}
+BUILD_IMAGE=${BUILD_IMAGE%\"}
+[ -n "$BUILD_IMAGE" ] || fail "completed build did not include image_ref"
+pass "hypeman build works"
+
+$HYPEMAN_CMD run --name "$E2E_BUILD_VM_NAME" "$BUILD_IMAGE" || fail "running built image failed"
+BUILD_VM_READY=false
+for i in $(seq 1 30); do
+    if OUTPUT=$($HYPEMAN_CMD exec "$E2E_BUILD_VM_NAME" -- cat /build-marker 2>/dev/null); then
+        if echo "$OUTPUT" | grep -q "hypeman-build-e2e"; then
+            BUILD_VM_READY=true
+            break
+        fi
+    fi
+    sleep 2
+done
+[ "$BUILD_VM_READY" = true ] || fail "built image did not become ready with expected marker"
+pass "image produced by hypeman build runs"
+
+$HYPEMAN_CMD stop "$E2E_BUILD_VM_NAME" || fail "stopping built image failed"
+$HYPEMAN_CMD rm "$E2E_BUILD_VM_NAME" || fail "removing built image instance failed"
+rm -rf "$BUILD_CONTEXT" "$BUILD_OUTPUT_FILE"
 
 # =============================================================================
 # Phase 5: Cleanup

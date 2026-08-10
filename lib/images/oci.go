@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
@@ -97,14 +98,14 @@ func (c *ociClient) inspectManifestWithPlatform(ctx context.Context, imageRef st
 		remote.WithAuthFromKeychain(authn.DefaultKeychain),
 		remote.WithPlatform(platform))
 	if err != nil {
-		return "", fmt.Errorf("fetch manifest: %w", wrapRegistryError(err))
+		return "", fmt.Errorf("fetch manifest: %w", ClassifyRegistryError(err))
 	}
 
 	// remote.Image is lazy, so the "no child with platform" error for a multi-arch
 	// index surfaces here rather than from remote.Image above; classify it too.
 	digest, err := img.Digest()
 	if err != nil {
-		return "", fmt.Errorf("get image digest: %w", wrapRegistryError(err))
+		return "", fmt.Errorf("get image digest: %w", ClassifyRegistryError(err))
 	}
 
 	return digest.String(), nil
@@ -123,10 +124,10 @@ func (c *ociClient) inspectManifestWithPlatform(ctx context.Context, imageRef st
 //     to a host-matching child and the requested platform would never be checked.
 //   - For an index, WithPlatform IS correct: it selects the child for the
 //     requested platform (a missing child surfaces as "no child with platform"
-//     -> ErrPlatformNotAvailable -> 404 via wrapRegistryError).
+//     -> ErrPlatformNotAvailable -> 404 via ClassifyRegistryError).
 //
 // A digest absent from the registry surfaces as a not-found error, classified by
-// wrapRegistryError.
+// ClassifyRegistryError.
 func (c *ociClient) inspectDigestPlatform(ctx context.Context, imageRef string, requested gcr.Platform) (Platform, string, error) {
 	ref, err := name.ParseReference(imageRef)
 	if err != nil {
@@ -137,7 +138,7 @@ func (c *ociClient) inspectDigestPlatform(ctx context.Context, imageRef string, 
 		remote.WithContext(ctx),
 		remote.WithAuthFromKeychain(authn.DefaultKeychain))
 	if err != nil {
-		return Platform{}, "", fmt.Errorf("fetch manifest: %w", wrapRegistryError(err))
+		return Platform{}, "", fmt.Errorf("fetch manifest: %w", ClassifyRegistryError(err))
 	}
 
 	var img gcr.Image
@@ -153,17 +154,17 @@ func (c *ociClient) inspectDigestPlatform(ctx context.Context, imageRef string, 
 		img, err = desc.Image()
 	}
 	if err != nil {
-		return Platform{}, "", fmt.Errorf("resolve image for platform: %w", wrapRegistryError(err))
+		return Platform{}, "", fmt.Errorf("resolve image for platform: %w", ClassifyRegistryError(err))
 	}
 
 	configFile, err := img.ConfigFile()
 	if err != nil {
-		return Platform{}, "", fmt.Errorf("get image config: %w", wrapRegistryError(err))
+		return Platform{}, "", fmt.Errorf("get image config: %w", ClassifyRegistryError(err))
 	}
 
 	resolvedDigest, err := img.Digest()
 	if err != nil {
-		return Platform{}, "", fmt.Errorf("get image digest: %w", wrapRegistryError(err))
+		return Platform{}, "", fmt.Errorf("get image digest: %w", ClassifyRegistryError(err))
 	}
 
 	return Platform{
@@ -175,8 +176,33 @@ func (c *ociClient) inspectDigestPlatform(ctx context.Context, imageRef string, 
 
 // pullResult contains the metadata and digest from pulling an image
 type pullResult struct {
-	Metadata *containerMetadata
-	Digest   string // sha256:abc123...
+	Metadata        *containerMetadata
+	Digest          string // sha256:abc123...
+	CacheHit        bool
+	LayerCount      int
+	CompressedBytes int64
+	Phases          []imageBuildPhaseMeasurement
+}
+
+type imageBuildPhaseMeasurement struct {
+	Phase    string
+	Duration time.Duration
+	Status   string
+}
+
+func (r *pullResult) measure(phase string, operation func() error) error {
+	start := time.Now()
+	err := operation()
+	status := "success"
+	if err != nil {
+		status = "failed"
+	}
+	r.Phases = append(r.Phases, imageBuildPhaseMeasurement{
+		Phase:    phase,
+		Duration: time.Since(start),
+		Status:   status,
+	})
+	return err
 }
 
 func (c *ociClient) pullAndExport(ctx context.Context, imageRef, digest, exportDir string) (*pullResult, error) {
@@ -188,31 +214,50 @@ func (c *ociClient) pullAndExportWithPlatform(ctx context.Context, imageRef, dig
 	// The cacheDir itself is the OCI layout root with shared blobs/sha256/ directory
 	// The digest is ALWAYS known at this point (from inspectManifest or digest reference)
 	layoutTag := digestToLayoutTag(digest)
+	result := &pullResult{Digest: digest}
 
 	// Check if this digest is already cached
-	if !c.existsInLayout(layoutTag) {
+	cacheLookupStart := time.Now()
+	result.CacheHit = c.existsInLayout(layoutTag)
+	result.Phases = append(result.Phases, imageBuildPhaseMeasurement{
+		Phase:    "oci_cache_lookup",
+		Duration: time.Since(cacheLookupStart),
+		Status:   "success",
+	})
+	if !result.CacheHit {
 		// Not cached, pull it using digest-based tag
-		if err := c.pullToOCILayoutWithPlatform(ctx, imageRef, layoutTag, platform); err != nil {
-			return nil, fmt.Errorf("pull to oci layout: %w", err)
+		if err := result.measure("registry_pull", func() error {
+			return c.pullToOCILayoutWithPlatform(ctx, imageRef, layoutTag, platform)
+		}); err != nil {
+			return result, fmt.Errorf("pull to oci layout: %w", err)
 		}
 	}
 	// If cached, we skip the pull entirely
 
 	// Extract metadata (from cache or freshly pulled)
-	meta, err := c.extractOCIMetadata(layoutTag)
+	var meta *containerMetadata
+	var layerCount int
+	var compressedBytes int64
+	err := result.measure("metadata_extract", func() error {
+		var err error
+		meta, layerCount, compressedBytes, err = c.extractOCIImageDetails(layoutTag)
+		return err
+	})
 	if err != nil {
-		return nil, fmt.Errorf("extract metadata: %w", err)
+		return result, fmt.Errorf("extract metadata: %w", err)
 	}
+	result.Metadata = meta
+	result.LayerCount = layerCount
+	result.CompressedBytes = compressedBytes
 
 	// Unpack layers to the export directory
-	if err := c.unpackLayers(ctx, layoutTag, exportDir); err != nil {
-		return nil, fmt.Errorf("unpack layers: %w", err)
+	if err := result.measure("layer_unpack", func() error {
+		return c.unpackLayers(ctx, layoutTag, exportDir)
+	}); err != nil {
+		return result, fmt.Errorf("unpack layers: %w", err)
 	}
 
-	return &pullResult{
-		Metadata: meta,
-		Digest:   digest,
-	}, nil
+	return result, nil
 }
 
 func (c *ociClient) pullToOCILayout(ctx context.Context, imageRef, layoutTag string) error {
@@ -234,7 +279,7 @@ func (c *ociClient) pullToOCILayoutWithPlatform(ctx context.Context, imageRef, l
 		remote.WithPlatform(platform))
 	if err != nil {
 		// Rate limits fail here immediately (429 is not retried by default)
-		return fmt.Errorf("fetch image manifest: %w", wrapRegistryError(err))
+		return fmt.Errorf("fetch image manifest: %w", ClassifyRegistryError(err))
 	}
 
 	// Open or create OCI layout directory
@@ -317,22 +362,36 @@ func imageByAnnotation(path layout.Path, layoutTag string) (gcr.Image, error) {
 // extractOCIMetadata reads metadata from OCI layout config.json
 // Uses go-containerregistry which handles both Docker v2 and OCI v1 manifests.
 func (c *ociClient) extractOCIMetadata(layoutTag string) (*containerMetadata, error) {
+	meta, _, _, err := c.extractOCIImageDetails(layoutTag)
+	return meta, err
+}
+
+func (c *ociClient) extractOCIImageDetails(layoutTag string) (*containerMetadata, int, int64, error) {
 	// Open OCI layout using go-containerregistry (handles Docker v2 and OCI v1)
 	path, err := layout.FromPath(c.cacheDir)
 	if err != nil {
-		return nil, fmt.Errorf("open oci layout: %w", err)
+		return nil, 0, 0, fmt.Errorf("open oci layout: %w", err)
 	}
 
 	// Get the image by annotation tag from the layout
 	img, err := imageByAnnotation(path, layoutTag)
 	if err != nil {
-		return nil, fmt.Errorf("find image by tag %s: %w", layoutTag, err)
+		return nil, 0, 0, fmt.Errorf("find image by tag %s: %w", layoutTag, err)
 	}
 
 	// Get config file (go-containerregistry handles manifest format automatically)
 	configFile, err := img.ConfigFile()
 	if err != nil {
-		return nil, fmt.Errorf("get config file: %w", err)
+		return nil, 0, 0, fmt.Errorf("get config file: %w", err)
+	}
+
+	manifest, err := img.Manifest()
+	if err != nil {
+		return nil, 0, 0, fmt.Errorf("get manifest: %w", err)
+	}
+	var compressedBytes int64
+	for _, layer := range manifest.Layers {
+		compressedBytes += layer.Size
 	}
 
 	// Extract metadata from config. OS/Architecture/Variant come straight from
@@ -365,7 +424,7 @@ func (c *ociClient) extractOCIMetadata(layoutTag string) (*containerMetadata, er
 		meta.Labels[key] = value
 	}
 
-	return meta, nil
+	return meta, len(manifest.Layers), compressedBytes, nil
 }
 
 // unpackLayers unpacks all OCI layers to a target directory using umoci

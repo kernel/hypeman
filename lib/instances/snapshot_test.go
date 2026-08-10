@@ -244,15 +244,12 @@ func TestRestoreSnapshotRunningMissingImageReturnsNotFoundFast(t *testing.T) {
 	// at a different name so GetImage(sourceMeta.Image) returns ErrNotFound.
 	mgr.imageManager = readyFixtureImageManager{name: "docker.io/library/some-other-image:latest"}
 
-	start := time.Now()
-	_, err = mgr.RestoreSnapshot(ctx, sourceID, snapshotID, RestoreSnapshotRequest{
-		TargetState: StateRunning,
+	assertFailsFastNotFound(t, "restore-from-snapshot should fail fast, not hang in the shim", func() error {
+		_, err := mgr.RestoreSnapshot(ctx, sourceID, snapshotID, RestoreSnapshotRequest{
+			TargetState: StateRunning,
+		})
+		return err
 	})
-	elapsed := time.Since(start)
-
-	require.Error(t, err)
-	require.ErrorIs(t, err, images.ErrNotFound)
-	require.Less(t, elapsed, 30*time.Second, "restore-from-snapshot should fail fast, not hang in the shim")
 }
 
 func TestCreateStandbySnapshotCancelsSourceInstanceCompressionJob(t *testing.T) {

@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
-	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/vmm"
 	"github.com/stretchr/testify/require"
 )
@@ -48,12 +47,9 @@ func TestRestoreInstanceMissingImageReturnsNotFoundFast(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	start := time.Now()
-	_, err := mgr.restoreInstance(ctx, id)
-	elapsed := time.Since(start)
-
-	require.Error(t, err)
-	require.ErrorIs(t, err, images.ErrNotFound)
 	// The pre-check short-circuits before the ~60s shim retry loop.
-	require.Less(t, elapsed, 30*time.Second, "restore should fail fast, not hang in the shim")
+	assertFailsFastNotFound(t, "restore should fail fast, not hang in the shim", func() error {
+		_, err := mgr.restoreInstance(ctx, id)
+		return err
+	})
 }
