@@ -168,6 +168,30 @@ jobs:
       - name: Cleanup
         if: always()
         run: |
+          set -euo pipefail
+
+          run_prefix="ci-${{ github.run_id }}-${{ github.run_attempt }}"
+          guest_pids=()
+          mapfile -t vmm_pids < <(pgrep -x 'cloud-hyperviso|firecracker|qemu-system-.*' || true)
+          for pid in "${vmm_pids[@]}"; do
+            proc="/proc/$pid"
+            cmdline="$(cat "$proc/cmdline" 2>/dev/null | tr '\0' ' ' || true)"
+            if [[ "$cmdline" == *"/ci/"* ]] && sudo grep -zFqx "HYPEMAN_UFFD_SYSTEMD_INSTANCE_PREFIX=$run_prefix" "$proc/environ" 2>/dev/null; then
+              guest_pids+=("$pid")
+            fi
+          done
+
+          if (( ${#guest_pids[@]} > 0 )); then
+            echo "Stopping leftover test VMs: ${guest_pids[*]}"
+            sudo kill -TERM "${guest_pids[@]}" 2>/dev/null || true
+            sleep 2
+            for pid in "${guest_pids[@]}"; do
+              if sudo kill -0 "$pid" 2>/dev/null; then
+                sudo kill -KILL "$pid" 2>/dev/null || true
+              fi
+            done
+          fi
+
           units="$(systemctl list-units --all --full --plain 'hypeman-uffd@ci-${{ github.run_id }}-${{ github.run_attempt }}-*.service' --no-legend | awk '{print $1}' || true)"
           if [ -n "$units" ]; then
             echo "$units" | xargs -r sudo systemctl stop || true
