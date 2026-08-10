@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/paths"
+	"github.com/kernel/hypeman/lib/queue"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/attribute"
 	otelmetric "go.opentelemetry.io/otel/sdk/metric"
@@ -17,7 +18,7 @@ func TestImageBuildPhaseMetrics(t *testing.T) {
 	provider := otelmetric.NewMeterProvider(otelmetric.WithReader(reader))
 	m := &manager{
 		paths: paths.New(t.TempDir()),
-		queue: NewBuildQueue(1),
+		queue: queue.New(1),
 	}
 
 	metrics, err := newMetrics(provider.Meter("test"), m)
