@@ -77,7 +77,7 @@ func TestQEMUStandbyRestoreCompressionScenarios(t *testing.T) {
 		},
 		requirePrereqs: requireQEMUUsable,
 		waitHypervisorUp: func(ctx context.Context, inst *Instance) error {
-			return waitForQEMUReady(ctx, inst.SocketPath, 10*time.Second)
+			return waitForQEMUReady(ctx, inst.SocketPath, inst.HypervisorType, 10*time.Second)
 		},
 	})
 }

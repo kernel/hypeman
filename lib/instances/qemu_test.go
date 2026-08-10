@@ -116,12 +116,12 @@ func requireQEMUAvailable(t *testing.T) {
 	}
 }
 
-// waitForQEMUReady polls QEMU status via QMP until it's running or times out
-func waitForQEMUReady(ctx context.Context, socketPath string, timeout time.Duration) error {
+// waitForQEMUReady polls QEMU status via QMP until it's running or times out.
+func waitForQEMUReady(ctx context.Context, socketPath string, hypervisorType hypervisor.Type, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 
 	for time.Now().Before(deadline) {
-		client, err := qemu.New(socketPath)
+		client, err := qemu.NewForType(socketPath, hypervisorType)
 		if err != nil {
 			time.Sleep(100 * time.Millisecond)
 			continue
@@ -261,7 +261,7 @@ func TestQEMUMicroVMEndToEnd(t *testing.T) {
 
 	inst, err = waitForInstanceState(ctx, manager, inst.Id, StateRunning, integrationTestTimeout(30*time.Second))
 	require.NoError(t, err)
-	require.NoError(t, waitForQEMUReady(ctx, inst.SocketPath, integrationTestTimeout(30*time.Second)))
+	require.NoError(t, waitForQEMUReady(ctx, inst.SocketPath, inst.HypervisorType, integrationTestTimeout(30*time.Second)))
 	assertHostCanReachNginx(t, inst.IP, 80, 30*time.Second)
 
 	config, err := qemuConfigMachineType(p.InstanceDir(inst.Id))
@@ -484,7 +484,7 @@ func TestQEMUBasicEndToEnd(t *testing.T) {
 	assert.FileExists(t, p.InstanceConfigDisk(inst.Id))
 
 	// Wait for VM to be fully running
-	err = waitForQEMUReady(ctx, inst.SocketPath, integrationTestTimeout(30*time.Second))
+	err = waitForQEMUReady(ctx, inst.SocketPath, inst.HypervisorType, integrationTestTimeout(30*time.Second))
 	require.NoError(t, err, "QEMU VM should reach running state")
 	inst, err = waitForInstanceState(ctx, manager, inst.Id, StateRunning, integrationTestTimeout(20*time.Second))
 	require.NoError(t, err, "instance should reach Running state")

@@ -102,7 +102,7 @@ func runQEMUStandbyAndRestore(t *testing.T, hypervisorType hypervisor.Type, inst
 	t.Logf("Instance created: %s (hypervisor: %s)", inst.Id, inst.HypervisorType)
 
 	// Wait for VM to be fully running before standby
-	err = waitForQEMUReady(ctx, inst.SocketPath, integrationTestTimeout(30*time.Second))
+	err = waitForQEMUReady(ctx, inst.SocketPath, hypervisorType, integrationTestTimeout(30*time.Second))
 	require.NoError(t, err, "QEMU VM should reach running state")
 	assert.Equal(t, phasetracking.PhaseRunning, inst.Phases.Current, "fresh instance should be in running phase")
 
@@ -143,7 +143,7 @@ func runQEMUStandbyAndRestore(t *testing.T, hypervisorType hypervisor.Type, inst
 	t.Log("Instance restored and running")
 
 	// Wait for VM to be running again
-	err = waitForQEMUReady(ctx, inst.SocketPath, integrationTestTimeout(30*time.Second))
+	err = waitForQEMUReady(ctx, inst.SocketPath, hypervisorType, integrationTestTimeout(30*time.Second))
 	require.NoError(t, err, "QEMU VM should reach running state after restore")
 	assert.Equal(t, phasetracking.PhaseRunning, inst.Phases.Current, "restored instance should be in running phase")
 	assert.Greater(t, inst.Phases.Cumulative[phasetracking.PhaseStandby], int64(0), "standby stint should be accrued after restore")
@@ -230,7 +230,7 @@ func runQEMUForkFromRunningNetwork(t *testing.T, hypervisorType hypervisor.Type,
 	// VM is still legitimately completing boot marker hydration.
 	source, err = waitForInstanceState(ctx, manager, sourceID, StateRunning, 45*time.Second)
 	require.NoError(t, err)
-	require.NoError(t, waitForQEMUReady(ctx, source.SocketPath, integrationTestTimeout(30*time.Second)))
+	require.NoError(t, waitForQEMUReady(ctx, source.SocketPath, hypervisorType, integrationTestTimeout(30*time.Second)))
 
 	assert.NotEmpty(t, source.IP)
 	assert.NotEmpty(t, source.MAC)
@@ -270,7 +270,7 @@ func runQEMUForkFromRunningNetwork(t *testing.T, hypervisorType hypervisor.Type,
 	require.NoError(t, err)
 	require.Equal(t, StateRunning, forked.State)
 	assert.Equal(t, hypervisorType, forked.HypervisorType)
-	require.NoError(t, waitForQEMUReady(ctx, forked.SocketPath, integrationTestTimeout(30*time.Second)))
+	require.NoError(t, waitForQEMUReady(ctx, forked.SocketPath, hypervisorType, integrationTestTimeout(30*time.Second)))
 
 	assert.NotEmpty(t, forked.IP)
 	assert.NotEmpty(t, forked.MAC)
