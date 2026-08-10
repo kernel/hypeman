@@ -33,11 +33,12 @@ func New(maxConcurrent int) *Queue {
 
 // Enqueue adds a job keyed by key. Returns the queue position: 0 if it
 // started immediately, >0 if queued behind other jobs. If the key is already
-// active or pending, returns its current position without re-enqueueing.
-// An optional completion hook runs after the key leaves the active set, so a
-// caller's bookkeeping for the key is torn down only once the queue is done
-// with it.
-func (q *Queue) Enqueue(key string, startFn func(), done ...func()) int {
+// active or pending, Enqueue dedups and returns its current position without
+// re-enqueueing. A completion hook may be provided; when non-nil it runs
+// after the key leaves the active set (so a caller's bookkeeping for the key
+// is torn down only once the queue is done with it), but only when this call
+// actually started the job — a dedup'd enqueue does not run it.
+func (q *Queue) Enqueue(key string, startFn func(), done func()) int {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
@@ -53,8 +54,8 @@ func (q *Queue) Enqueue(key string, startFn func(), done ...func()) int {
 	wrappedFn := func() {
 		// complete runs first (last-registered defer runs first), so done
 		// only fires after the key has left the active set.
-		if len(done) == 1 && done[0] != nil {
-			defer done[0]()
+		if done != nil {
+			defer done()
 		}
 		defer q.complete(key)
 		startFn()
@@ -62,6 +63,8 @@ func (q *Queue) Enqueue(key string, startFn func(), done ...func()) int {
 
 	if len(q.active) < q.maxConcurrent {
 		q.active[key] = true
+		// Safe to launch under the lock: wrappedFn blocks on complete's lock
+		// until Enqueue returns, so no key can start before its slot is held.
 		go wrappedFn()
 		return 0
 	}

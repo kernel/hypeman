@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -82,9 +83,11 @@ func (m *manager) CreatePush(ctx context.Context, req PushRequest) (*Push, error
 		return nil, fmt.Errorf("%w: %s is %s", ErrImageNotReady, img.Name, img.Status)
 	}
 	// A ready image must carry a digest; without one the dedup key below
-	// would collide across unrelated images.
+	// would collide across unrelated images. This is a corrupted-record
+	// state rather than "not ready", so it gets a distinct (non-wrapped)
+	// error.
 	if img.Digest == "" {
-		return nil, fmt.Errorf("%w: image %s has no digest", ErrImageNotReady, img.Name)
+		return nil, fmt.Errorf("image %s is ready but has no digest", img.Name)
 	}
 
 	// Validate the target before persisting anything so typos fail fast.
@@ -102,7 +105,7 @@ func (m *manager) CreatePush(ctx context.Context, req PushRequest) (*Push, error
 	// Borrowed credentials live only in this closure: the job provider is
 	// built per push and never touches disk.
 	provider := m.provider
-	if req.Credentials != nil {
+	if credsPresent(req.Credentials) {
 		provider = &registrypush.StaticProvider{Config: *req.Credentials}
 	}
 
@@ -119,7 +122,7 @@ func (m *manager) CreatePush(ctx context.Context, req PushRequest) (*Push, error
 		// silently inherit another caller's login). Both silently merge under
 		// the wrong auth otherwise; surface the conflict instead so the caller
 		// can retry once the in-flight job completes or match its credentials.
-		hadCreds := req.Credentials != nil
+		hadCreds := credsPresent(req.Credentials)
 		if existing.hadCredentials != hadCreds {
 			m.mu.Unlock()
 			return nil, fmt.Errorf("%w: a push of %s to %s is already in flight with different credentials; retry once it completes or match its credentials", ErrCredentialConflict, img.Digest, dstRef.String())
@@ -136,7 +139,7 @@ func (m *manager) CreatePush(ctx context.Context, req PushRequest) (*Push, error
 		Digest:         img.Digest,
 		Target:         dstRef.String(),
 		Insecure:       req.Insecure,
-		HadCredentials: req.Credentials != nil,
+		HadCredentials: credsPresent(req.Credentials),
 		CreatedAt:      time.Now(),
 	}
 	if err := writeMetadata(m.paths, meta); err != nil {
@@ -347,6 +350,7 @@ func (m *manager) InProgressDigests() []string {
 		seen[job.digest] = struct{}{}
 		digests = append(digests, job.digest)
 	}
+	sort.Strings(digests)
 	return digests
 }
 

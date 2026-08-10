@@ -36,8 +36,8 @@ func TestConcurrencyLimit(t *testing.T) {
 		}
 	}
 
-	posA := q.Enqueue("a", startFn(true))
-	posB := q.Enqueue("b", startFn(false))
+	posA := q.Enqueue("a", startFn(true), nil)
+	posB := q.Enqueue("b", startFn(false), nil)
 	if posA != 0 {
 		t.Errorf("posA = %d, want 0 (started immediately)", posA)
 	}
@@ -79,12 +79,12 @@ func TestDedupesByKey(t *testing.T) {
 		started <- struct{}{}
 		atomic.AddInt64(&ran, 1)
 		<-release
-	})
+	}, nil)
 	<-started
 
 	// Duplicate enqueues of an active key must not start another job.
-	q.Enqueue("same", func() { atomic.AddInt64(&ran, 1) })
-	q.Enqueue("same", func() { atomic.AddInt64(&ran, 1) })
+	q.Enqueue("same", func() { atomic.AddInt64(&ran, 1) }, nil)
+	q.Enqueue("same", func() { atomic.AddInt64(&ran, 1) }, nil)
 	if pos := q.GetPosition("same"); pos != nil {
 		t.Errorf("GetPosition(same) = %v, want nil (active)", pos)
 	}
@@ -114,7 +114,7 @@ func TestDoneRunsAfterKeyReleased(t *testing.T) {
 	})
 	// "b" occupies the freed slot when "a" completes, so if the key "a" were
 	// still tracked at done time the queue would report length 2 (a + b).
-	q.Enqueue("b", func() {})
+	q.Enqueue("b", func() {}, nil)
 
 	close(release)
 	select {

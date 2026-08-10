@@ -268,7 +268,7 @@ func (m *manager) createAndQueueImage(ref *ResolvedRef, req CreateImageRequest, 
 	// Enqueue the build using digest as the queue key for deduplication
 	queuePos := m.queue.Enqueue(ref.Digest(), func() {
 		m.buildImage(context.Background(), ref)
-	})
+	}, nil)
 
 	img := meta.toImage()
 	if queuePos > 0 {
@@ -486,7 +486,7 @@ func (m *manager) RecoverInterruptedBuilds() {
 				ref := NewResolvedRef(normalized, metaCopy.Digest)
 				m.queue.Enqueue(metaCopy.Digest, func() {
 					m.buildImage(context.Background(), ref)
-				})
+				}, nil)
 			}
 		}
 	}

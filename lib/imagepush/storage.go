@@ -57,8 +57,25 @@ func writeMetadata(p *paths.Paths, meta *pushMetadata) error {
 	}
 
 	tempPath := p.PushMetadata(meta.ID) + ".tmp"
-	if err := os.WriteFile(tempPath, data, 0644); err != nil {
+	file, err := os.OpenFile(tempPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+	if err != nil {
+		return fmt.Errorf("create temp metadata: %w", err)
+	}
+	if _, err := file.Write(data); err != nil {
+		file.Close()
+		os.Remove(tempPath)
 		return fmt.Errorf("write temp metadata: %w", err)
+	}
+	// Sync before rename so a crash cannot leave an empty/partial final file
+	// in place of a durably-written one.
+	if err := file.Sync(); err != nil {
+		file.Close()
+		os.Remove(tempPath)
+		return fmt.Errorf("sync temp metadata: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		os.Remove(tempPath)
+		return fmt.Errorf("close temp metadata: %w", err)
 	}
 
 	finalPath := p.PushMetadata(meta.ID)

@@ -52,6 +52,15 @@ type PushRequest struct {
 	Credentials *authn.AuthConfig
 }
 
+// credsPresent reports whether a credential config carries any credential
+// material; an empty non-nil config is treated as anonymous.
+func credsPresent(c *authn.AuthConfig) bool {
+	if c == nil {
+		return false
+	}
+	return c.Username != "" || c.Password != "" || c.Auth != "" || c.IdentityToken != "" || c.RegistryToken != ""
+}
+
 // Push is the state of one push job.
 type Push struct {
 	ID            string

@@ -296,6 +296,14 @@ func TestCreatePushQueuesBehindConcurrencyLimit(t *testing.T) {
 	if second.QueuePosition == nil || *second.QueuePosition != 1 {
 		t.Errorf("second queue position = %v, want 1", second.QueuePosition)
 	}
+	// The manager read surface reports the same pending position.
+	got, err := mgr.GetPush(context.Background(), second.ID)
+	if err != nil {
+		t.Fatalf("GetPush pending: %v", err)
+	}
+	if got.QueuePosition == nil || *got.QueuePosition != 1 {
+		t.Errorf("GetPush pending queue position = %v, want 1", got.QueuePosition)
+	}
 
 	close(gate)
 	if err := mgr.WaitForPush(context.Background(), first.ID); err != nil {
@@ -582,6 +590,10 @@ func TestRecoveryDedupesSameKey(t *testing.T) {
 	if got.Error == nil || !strings.Contains(*got.Error, "superseded") {
 		t.Errorf("newer error = %v, want superseded explanation", got.Error)
 	}
+	// WaitForPush on the superseded job surfaces the failure rather than hanging.
+	if err := mgr.WaitForPush(context.Background(), "newer"); err == nil {
+		t.Error("WaitForPush on superseded job should fail")
+	}
 }
 
 func TestSequentialSameKeyPushesAllComplete(t *testing.T) {
@@ -753,6 +765,44 @@ func TestCreatePushMissingBlobs(t *testing.T) {
 	}
 	// Depending on timing the failure is observed via the live event (typed)
 	// or via persisted metadata (string), so accept both forms.
+	if !errors.Is(err, ocicache.ErrNotFound) && !strings.Contains(err.Error(), ocicache.ErrNotFound.Error()) {
+		t.Errorf("err = %v, want ocicache.ErrNotFound", err)
+	}
+}
+
+// A push interrupted before a restart whose blobs were reclaimed by GC in the
+// meantime fails the same way on recovery instead of hanging or wedging the slot.
+func TestRecoveryFailsWhenBlobsReclaimed(t *testing.T) {
+	p, digest := cacheFixture(t)
+	host := openRegistry(t)
+
+	meta := &pushMetadata{
+		ID:        "recovered-missing-blobs",
+		Status:    StatusPushing,
+		Image:     "myapp:v1",
+		Digest:    digest,
+		Target:    host + "/export/recovered:v1",
+		Insecure:  true,
+		CreatedAt: time.Now(),
+	}
+	writePushes(t, p, meta)
+	if err := os.RemoveAll(p.OCICacheBlobDir()); err != nil {
+		t.Fatalf("remove blobs: %v", err)
+	}
+
+	mgr, err := NewManager(p, &fakeResolver{images: map[string]*images.Image{
+		"myapp:v1": readyImage("myapp:v1", digest),
+	}}, nil, 1)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	err = mgr.WaitForPush(ctx, "recovered-missing-blobs")
+	if err == nil {
+		t.Fatal("WaitForPush should fail when cache blobs were reclaimed")
+	}
 	if !errors.Is(err, ocicache.ErrNotFound) && !strings.Contains(err.Error(), ocicache.ErrNotFound.Error()) {
 		t.Errorf("err = %v, want ocicache.ErrNotFound", err)
 	}
