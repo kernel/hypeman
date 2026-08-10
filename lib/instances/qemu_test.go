@@ -336,9 +336,15 @@ func expectedQEMUMachineType(t *testing.T, hypervisorType hypervisor.Type) qemu.
 	if hypervisorType == hypervisor.TypeQEMUMicroVM {
 		return qemu.MachineTypeMicroVM
 	}
-	machineType, err := qemu.ResolveMachineType("")
-	require.NoError(t, err)
-	return machineType
+	switch runtime.GOARCH {
+	case "amd64":
+		return qemu.MachineTypeQ35
+	case "arm64":
+		return qemu.MachineTypeVirt
+	default:
+		t.Fatalf("unsupported QEMU architecture %s", runtime.GOARCH)
+		return ""
+	}
 }
 
 // TestQEMUBasicEndToEnd tests the complete instance lifecycle with QEMU.

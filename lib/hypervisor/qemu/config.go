@@ -12,7 +12,7 @@ import (
 // BuildArgs converts hypervisor.VMConfig to command-line arguments for standard
 // QEMU. Backend starters use buildArgs with their private machine profile.
 func BuildArgs(cfg hypervisor.VMConfig) []string {
-	machine, _ := ResolveMachineType("")
+	machine, _ := standardMachineType()
 	return buildArgs(cfg, machine)
 }
 

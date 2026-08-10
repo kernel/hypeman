@@ -19,31 +19,46 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestQEMUBootComparisonReport is an opt-in, non-gating developer benchmark.
-// Run scripts/benchmark-qemu-machine-types.sh to compare q35 and microvm.
-func TestQEMUBootComparisonReport(t *testing.T) {
-	if os.Getenv("HYPEMAN_QEMU_BOOT_BENCH") != "1" {
-		t.Skip("set HYPEMAN_QEMU_BOOT_BENCH=1 to run the QEMU boot comparison")
+// TestHypervisorBootComparisonReport is an opt-in, non-gating developer benchmark.
+// The scripts under scripts/ select equivalent backend pairs to compare.
+func TestHypervisorBootComparisonReport(t *testing.T) {
+	if os.Getenv("HYPEMAN_HYPERVISOR_BOOT_BENCH") != "1" {
+		t.Skip("set HYPEMAN_HYPERVISOR_BOOT_BENCH=1 to run the hypervisor boot comparison")
 	}
 	requireQEMUUsable(t)
 	requireMicroVMAvailable(t)
 	acquireHeavyIO(t)
 
 	samples := 5
-	if raw := os.Getenv("HYPEMAN_QEMU_BOOT_BENCH_SAMPLES"); raw != "" {
+	if raw := os.Getenv("HYPEMAN_HYPERVISOR_BOOT_BENCH_SAMPLES"); raw != "" {
 		var err error
 		samples, err = strconv.Atoi(raw)
 		require.NoError(t, err)
 		require.Greater(t, samples, 0)
 	}
 
-	for _, hypervisorType := range []hypervisor.Type{hypervisor.TypeQEMU, hypervisor.TypeQEMUMicroVM} {
-		durations, rss := runQEMUBootSamples(t, hypervisorType, samples)
-		t.Logf("qemu boot report hypervisor=%s samples=%d started_to_program_p50=%s started_to_program_p95=%s rss_p50=%dB rss_p95=%dB", hypervisorType, samples, percentileDuration(durations, 50), percentileDuration(durations, 95), percentileInt64(rss, 50), percentileInt64(rss, 95))
+	hypervisorTypes := []hypervisor.Type{hypervisor.TypeQEMU, hypervisor.TypeQEMUMicroVM}
+	if raw := os.Getenv("HYPEMAN_HYPERVISOR_BOOT_BENCH_TYPES"); raw != "" {
+		hypervisorTypes = nil
+		for _, value := range strings.Split(raw, ",") {
+			hypervisorType := hypervisor.Type(strings.TrimSpace(value))
+			switch hypervisorType {
+			case hypervisor.TypeQEMU, hypervisor.TypeQEMUMicroVM, hypervisor.TypeFirecracker:
+				hypervisorTypes = append(hypervisorTypes, hypervisorType)
+			default:
+				t.Fatalf("unsupported benchmark hypervisor %q", value)
+			}
+		}
+		require.NotEmpty(t, hypervisorTypes)
+	}
+
+	for _, hypervisorType := range hypervisorTypes {
+		durations, rss := runHypervisorBootSamples(t, hypervisorType, samples)
+		t.Logf("hypervisor boot report hypervisor=%s samples=%d started_to_program_p50=%s started_to_program_p95=%s rss_p50=%dB rss_p95=%dB", hypervisorType, samples, percentileDuration(durations, 50), percentileDuration(durations, 95), percentileInt64(rss, 50), percentileInt64(rss, 95))
 	}
 }
 
-func runQEMUBootSamples(t *testing.T, hypervisorType hypervisor.Type, samples int) ([]time.Duration, []int64) {
+func runHypervisorBootSamples(t *testing.T, hypervisorType hypervisor.Type, samples int) ([]time.Duration, []int64) {
 	t.Helper()
 	manager, tmpDir := setupTestManagerForQEMU(t)
 	ctx := context.Background()

@@ -19,7 +19,7 @@ func TestBuildArgs_Basic(t *testing.T) {
 	args := BuildArgs(cfg)
 
 	// Check machine type (arch-dependent)
-	machine, _ := ResolveMachineType("")
+	machine, _ := standardMachineType()
 	assert.Contains(t, args, "-machine")
 	assert.Contains(t, args, string(machine)+",accel=kvm")
 

@@ -18,7 +18,7 @@ func TestPrepareFork_NoSnapshotPathIsNoOp(t *testing.T) {
 }
 
 func TestPrepareFork_RewritesSnapshotConfig(t *testing.T) {
-	if _, err := ResolveMachineType(MachineTypeMicroVM); err != nil {
+	if _, err := microVMMachineType(); err != nil {
 		t.Skipf("microvm is unavailable on this platform: %v", err)
 	}
 	starter := NewMicroVMStarter()

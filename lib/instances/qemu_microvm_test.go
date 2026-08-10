@@ -58,7 +58,7 @@ func TestValidateQEMUMicroVMMetadata(t *testing.T) {
 
 func requireQEMUMicroVMValidationPlatform(t *testing.T) {
 	t.Helper()
-	if _, err := qemu.ResolveMachineType(qemu.MachineTypeMicroVM); err != nil {
+	if err := qemu.ValidateMicroVMConfig(hypervisor.VMConfig{}); err != nil {
 		t.Skipf("microvm is unavailable on this platform: %v", err)
 	}
 }

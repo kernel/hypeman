@@ -28,7 +28,13 @@ func TestResolveMachineTypeForPlatform(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := resolveMachineTypeForPlatform(tt.requested, tt.goos, tt.arch)
+			var got MachineType
+			var err error
+			if tt.requested == "" {
+				got, err = standardMachineTypeForPlatform(tt.goos, tt.arch)
+			} else {
+				got, err = resolveMachineTypeForPlatform(tt.requested, tt.goos, tt.arch)
+			}
 			if tt.wantErr {
 				require.Error(t, err)
 				return
@@ -44,11 +50,11 @@ func TestStarterSelectsAndValidatesPrivateMachineType(t *testing.T) {
 
 	standard, err := machineTypeForHypervisor(hypervisor.TypeQEMU)
 	require.NoError(t, err)
-	expectedStandard, err := ResolveMachineType("")
+	expectedStandard, err := standardMachineType()
 	require.NoError(t, err)
 	assert.Equal(t, expectedStandard, standard)
 
-	if _, err := ResolveMachineType(MachineTypeMicroVM); err != nil {
+	if _, err := microVMMachineType(); err != nil {
 		return
 	}
 	microvm, err := machineTypeForHypervisor(hypervisor.TypeQEMUMicroVM)
@@ -72,7 +78,7 @@ func TestMicroVMCapabilitiesExcludePCIPassthrough(t *testing.T) {
 
 func TestValidateConfigMicroVM(t *testing.T) {
 	t.Parallel()
-	if _, err := ResolveMachineType(MachineTypeMicroVM); err != nil {
+	if _, err := microVMMachineType(); err != nil {
 		t.Skipf("microvm is unavailable on this platform: %v", err)
 	}
 	base := hypervisor.VMConfig{Disks: make([]hypervisor.DiskConfig, 6), Networks: []hypervisor.NetworkConfig{{}}, VsockCID: 3}
