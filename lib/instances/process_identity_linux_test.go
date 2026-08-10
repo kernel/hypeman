@@ -122,6 +122,16 @@ func TestHypervisorProcessExistsTreatsUnresolvedSocketAsAlive(t *testing.T) {
 	assert.True(t, HypervisorProcessExists(os.Getpid(), filepath.Join(t.TempDir(), "missing.sock")))
 }
 
+func TestHypervisorProcessIdentityExistsUsesStartTime(t *testing.T) {
+	t.Parallel()
+
+	startTime := processStartTime(os.Getpid())
+	require.NotZero(t, startTime)
+	socketPath := filepath.Join(t.TempDir(), "missing.sock")
+	assert.True(t, HypervisorProcessIdentityExists(os.Getpid(), startTime, socketPath))
+	assert.False(t, HypervisorProcessIdentityExists(os.Getpid(), startTime+1, socketPath))
+}
+
 func TestHypervisorProcessExistsWithReboundSocketPathHelper(t *testing.T) {
 	if os.Getenv("HYPERVISOR_SOCKET_HELPER") != "1" {
 		return
