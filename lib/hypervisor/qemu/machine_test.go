@@ -71,9 +71,9 @@ func TestStarterSelectsAndValidatesPrivateMachineType(t *testing.T) {
 func TestMicroVMCapabilitiesExcludePCIPassthrough(t *testing.T) {
 	t.Parallel()
 	assert.True(t, capabilities(hypervisor.TypeQEMU).SupportsGPUPassthrough)
-	assert.False(t, capabilities(hypervisor.TypeQEMU).RequiresExactSnapshotVersion)
+	assert.False(t, capabilities(hypervisor.TypeQEMU).RequiresHostSnapshotVersion)
 	assert.False(t, capabilities(hypervisor.TypeQEMUMicroVM).SupportsGPUPassthrough)
-	assert.True(t, capabilities(hypervisor.TypeQEMUMicroVM).RequiresExactSnapshotVersion)
+	assert.True(t, capabilities(hypervisor.TypeQEMUMicroVM).RequiresHostSnapshotVersion)
 }
 
 func TestValidateConfigMicroVM(t *testing.T) {

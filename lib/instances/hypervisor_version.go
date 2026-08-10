@@ -14,7 +14,7 @@ func (m *manager) resolveCreateHypervisorVersion(
 	hvType hypervisor.Type,
 	requested string,
 ) (string, error) {
-	if requiresExactSnapshotVersion(hvType) {
+	if requiresHostSnapshotVersion(hvType) {
 		detected, err := starter.GetVersion(m.paths)
 		if err != nil {
 			return "", fmt.Errorf("get version for hypervisor %s: %w", hvType, err)
@@ -40,7 +40,7 @@ func (m *manager) resolveCreateHypervisorVersion(
 	return version, nil
 }
 
-func requiresExactSnapshotVersion(hvType hypervisor.Type) bool {
+func requiresHostSnapshotVersion(hvType hypervisor.Type) bool {
 	capabilities, ok := hypervisor.CapabilitiesForType(hvType)
-	return ok && capabilities.RequiresExactSnapshotVersion
+	return ok && capabilities.RequiresHostSnapshotVersion
 }

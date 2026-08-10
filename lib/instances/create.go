@@ -750,7 +750,7 @@ func (m *manager) startAndBootVM(
 
 	// Version-locked snapshot backends must refresh metadata on every cold
 	// start so host upgrades do not leave the reported version stale.
-	if requiresExactSnapshotVersion(stored.HypervisorType) {
+	if requiresHostSnapshotVersion(stored.HypervisorType) {
 		detectedVersion, err := starter.GetVersion(m.paths)
 		if err != nil {
 			return fmt.Errorf("get version for hypervisor %s start: %w", stored.HypervisorType, err)

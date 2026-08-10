@@ -254,17 +254,18 @@ type Capabilities struct {
 	// on-disk base across restore/standby cycles.
 	SupportsSnapshotBaseReuse bool
 
-	// RequiresExactSnapshotVersion means a memory snapshot must be restored by
-	// the same version that wrote it, and the backend cannot launch a historical
-	// binary selected from instance metadata. Generic lifecycle code therefore
-	// records the currently installed version on every cold start and treats a
-	// failure to detect it as fatal.
+	// RequiresHostSnapshotVersion means memory snapshots are tied to the
+	// currently installed host binary; the backend cannot launch a historical
+	// version selected from instance metadata. Generic lifecycle code therefore
+	// records the installed version on every cold start and treats a failure to
+	// detect it as fatal.
 	//
 	// For example, qemu-microvm uses the host's qemu-system binary. A standby
 	// snapshot written by QEMU 8.2 cannot be restored after the host upgrades to
-	// QEMU 9.0. Cloud Hypervisor and Firecracker leave this false because Hypeman
-	// can launch their managed binary version recorded in instance metadata.
-	RequiresExactSnapshotVersion bool
+	// QEMU 9.0. Firecracker snapshots are also version-sensitive, but Firecracker
+	// leaves this false because Hypeman can launch the managed binary version
+	// recorded in instance metadata; Cloud Hypervisor is managed the same way.
+	RequiresHostSnapshotVersion bool
 
 	// SupportsConcurrentForkPrepare indicates stopped/standby forks can prepare
 	// separate target snapshots concurrently from the same source.
