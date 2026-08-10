@@ -318,6 +318,7 @@ func (m *manager) createInstance(
 		log.InfoContext(ctx, "creating vGPU", "instance_id", id, "profile", req.GPU.Profile)
 		gpuDevice, err = m.createVGPUDevice(ctx, req.GPU.Profile, id)
 		if err != nil {
+			retainedVGPU = retainedVGPUFromCreateError(id, m.nowUTC(), err)
 			log.ErrorContext(ctx, "failed to create vGPU", "profile", req.GPU.Profile, "error", err)
 			return nil, wrapCreateVGPUErr(req.GPU.Profile, err)
 		}
