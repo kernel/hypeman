@@ -8,16 +8,8 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/devices"
-	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/logger"
 )
-
-func validateVGPUHypervisor(hvType hypervisor.Type) error {
-	if hvType != hypervisor.TypeQEMU {
-		return fmt.Errorf("vGPU is only supported with qemu, got %s", hvType)
-	}
-	return nil
-}
 
 // VGPUAssignmentStartupGracePeriod bounds how long an assignment without a
 // persisted hypervisor PID is treated as potentially live.
