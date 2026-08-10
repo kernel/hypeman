@@ -105,6 +105,8 @@ func traceSubsystemForType(hvType Type) string {
 		return "hypeman/hypervisor/firecracker"
 	case TypeQEMU:
 		return "hypeman/hypervisor/qemu"
+	case TypeQEMUMicroVM:
+		return "hypeman/hypervisor/qemu-microvm"
 	case TypeVZ:
 		return "hypeman/hypervisor/vz"
 	default:
@@ -279,6 +281,14 @@ func (s *tracingVMStarter) GetBinaryPath(p *paths.Paths, version string) (string
 
 func (s *tracingVMStarter) GetVersion(p *paths.Paths) (string, error) {
 	return s.next.GetVersion(p)
+}
+
+func (s *tracingVMStarter) ResolveVersion(p *paths.Paths, requested string) (string, error) {
+	return s.next.ResolveVersion(p, requested)
+}
+
+func (s *tracingVMStarter) ValidateConfig(config VMConfig) error {
+	return s.next.ValidateConfig(config)
 }
 
 func (s *tracingVMStarter) StartVM(ctx context.Context, p *paths.Paths, version string, socketPath string, config VMConfig) (pid int, hv Hypervisor, err error) {

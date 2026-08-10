@@ -19,8 +19,9 @@ func TestBuildArgs_Basic(t *testing.T) {
 	args := BuildArgs(cfg)
 
 	// Check machine type (arch-dependent)
+	machine := standardMachineType()
 	assert.Contains(t, args, "-machine")
-	assert.Contains(t, args, machineType())
+	assert.Contains(t, args, string(machine)+",accel=kvm")
 
 	// Check CPU
 	assert.Contains(t, args, "-cpu")
@@ -160,6 +161,30 @@ func TestBuildArgs_NoSerialLog(t *testing.T) {
 
 	assert.Contains(t, args, "-serial")
 	assert.Contains(t, args, "stdio")
+}
+
+func TestBuildArgs_MicroVM(t *testing.T) {
+	cfg := hypervisor.VMConfig{
+		VCPUs:         1,
+		MemoryBytes:   512 * 1024 * 1024,
+		Disks:         []hypervisor.DiskConfig{{Path: "/rootfs"}},
+		Networks:      []hypervisor.NetworkConfig{{TAPDevice: "tap0", MAC: "02:00:00:ab:cd:ef"}},
+		VsockCID:      123,
+		SerialLogPath: "/var/log/app.log",
+		GuestMemory:   hypervisor.GuestMemoryConfig{EnableBalloon: true},
+	}
+
+	args := buildArgs(cfg, MachineTypeMicroVM)
+	assert.Contains(t, args, "microvm,accel=kvm")
+	assert.Contains(t, args, "-no-user-config")
+	assert.Contains(t, args, "virtio-blk-device,drive=drive0")
+	assert.Contains(t, args, "virtio-net-device,netdev=net0,mac=02:00:00:ab:cd:ef")
+	assert.Contains(t, args, "vhost-vsock-device,guest-cid=123")
+	assert.Contains(t, args, "virtio-balloon-device")
+	assert.Contains(t, args, "chardev:serial0")
+	for _, arg := range args {
+		assert.NotContains(t, arg, "-pci", "microvm cannot use PCI transport")
+	}
 }
 
 func TestBuildArgs_GuestMemoryBalloon(t *testing.T) {

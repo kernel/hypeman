@@ -18,6 +18,7 @@ func init() {
 	platformStarters[hypervisor.TypeCloudHypervisor] = cloudhypervisor.NewStarter()
 	platformStarters[hypervisor.TypeFirecracker] = firecracker.NewStarter()
 	platformStarters[hypervisor.TypeQEMU] = qemu.NewStarter()
+	platformStarters[hypervisor.TypeQEMUMicroVM] = qemu.NewMicroVMStarter()
 }
 
 // TODO(uffd-orphan-guard): defensively terminate UFFD guests whose pager is lost.

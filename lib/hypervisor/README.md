@@ -13,12 +13,12 @@ Hypeman originally supported only Cloud Hypervisor. This abstraction layer allow
 
 ## Implementations
 
-| Hypervisor | Platform | Process Model | Control Interface |
-|------------|----------|---------------|-------------------|
-| Cloud Hypervisor | Linux | External process | HTTP API over Unix socket |
-| Firecracker | Linux | External process | HTTP API over Unix socket |
-| QEMU | Linux | External process | QMP over Unix socket |
-| vz | macOS | Subprocess (vz-shim) | HTTP API over Unix socket |
+| Hypervisor | Platform | Process Model | Control Interface | Constraints |
+|------------|----------|---------------|-------------------|-------------|
+| Cloud Hypervisor | Linux | External process | HTTP API over Unix socket | — |
+| Firecracker | Linux | External process | HTTP API over Unix socket | — |
+| QEMU | Linux | External process | QMP over Unix socket | `qemu` uses q35/virt; `qemu-microvm` uses the amd64 microvm board without PCI/hotplug support |
+| vz | macOS | Subprocess (vz-shim) | HTTP API over Unix socket | — |
 
 ## How It Works
 

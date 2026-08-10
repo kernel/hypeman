@@ -73,6 +73,8 @@ func NewStarter() *Starter {
 // Verify Starter implements the interface
 var _ hypervisor.VMStarter = (*Starter)(nil)
 
+func (s *Starter) ValidateConfig(hypervisor.VMConfig) error { return nil }
+
 // SocketName returns the socket filename for Cloud Hypervisor.
 func (s *Starter) SocketName() string {
 	return "ch.sock"
@@ -92,6 +94,16 @@ func (s *Starter) GetBinaryPath(p *paths.Paths, version string) (string, error) 
 // use the version stored in their metadata.
 func (s *Starter) GetVersion(p *paths.Paths) (string, error) {
 	return string(GetDefaultVersion()), nil
+}
+
+func (s *Starter) ResolveVersion(p *paths.Paths, requested string) (string, error) {
+	if requested == "" {
+		return s.GetVersion(p)
+	}
+	if _, err := s.GetBinaryPath(p, requested); err != nil {
+		return "", err
+	}
+	return requested, nil
 }
 
 // StartVM launches Cloud Hypervisor, configures the VM, and boots it.

@@ -311,6 +311,7 @@ func installOneShotFirecrackerStarter(t *testing.T, mgr *manager) {
 
 type oneShotFirecrackerTestStarter struct{}
 
+func (oneShotFirecrackerTestStarter) ValidateConfig(hypervisor.VMConfig) error { return nil }
 func (oneShotFirecrackerTestStarter) SocketName() string {
 	return "firecracker.sock"
 }
@@ -320,6 +321,10 @@ func (oneShotFirecrackerTestStarter) GetBinaryPath(*paths.Paths, string) (string
 }
 
 func (oneShotFirecrackerTestStarter) GetVersion(*paths.Paths) (string, error) {
+	return "test", nil
+}
+
+func (oneShotFirecrackerTestStarter) ResolveVersion(*paths.Paths, string) (string, error) {
 	return "test", nil
 }
 

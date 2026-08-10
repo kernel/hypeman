@@ -112,6 +112,10 @@ hypeman pull nginx:alpine
 # Boot a new VM (auto-pulls image if needed)
 hypeman run --name my-app nginx:alpine
 
+# On Linux amd64, use QEMU's minimal microvm backend.
+# It cannot use PCI devices or hotplug memory.
+hypeman run --hypervisor qemu-microvm --name my-microvm nginx:alpine
+
 # List running VMs
 hypeman ps
 

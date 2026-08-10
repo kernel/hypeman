@@ -59,6 +59,8 @@ func WithUFFDClient(client UFFDClient) StarterOption {
 
 var _ hypervisor.VMStarter = (*Starter)(nil)
 
+func (s *Starter) ValidateConfig(hypervisor.VMConfig) error { return nil }
+
 func (s *Starter) SocketName() string {
 	return "fc.sock"
 }
@@ -76,6 +78,16 @@ func (s *Starter) GetVersion(p *paths.Paths) (string, error) {
 		return version, nil
 	}
 	return string(defaultVersion), nil
+}
+
+func (s *Starter) ResolveVersion(p *paths.Paths, requested string) (string, error) {
+	if requested == "" {
+		return s.GetVersion(p)
+	}
+	if _, err := s.GetBinaryPath(p, requested); err != nil {
+		return "", err
+	}
+	return requested, nil
 }
 
 func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, socketPath string, config hypervisor.VMConfig) (int, hypervisor.Hypervisor, error) {
