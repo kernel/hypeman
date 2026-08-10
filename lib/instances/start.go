@@ -48,6 +48,11 @@ func (m *manager) startInstance(
 		return nil, fmt.Errorf("%w: cannot start from state %s, must be Stopped", ErrInvalidState, inst.State)
 	}
 
+	if stored.GPUProfile != "" {
+		if err := validateVGPUHypervisor(stored.HypervisorType); err != nil {
+			return nil, fmt.Errorf("%w: %w", ErrInvalidState, err)
+		}
+	}
 	// Release any assignment retained by an earlier failed release and
 	// persist the cleared fields immediately, so a failure later in start
 	// cannot leave on-disk metadata pointing at a device that is already
@@ -63,6 +68,10 @@ func (m *manager) startInstance(
 		}
 	}
 
+	// Do not persist the previous VMM's identity with a new vGPU assignment.
+	stored.HypervisorPID = nil
+	stored.HypervisorStartTime = 0
+	stored.HypervisorBootID = ""
 	rollbackMeta := *meta
 
 	// 2a. Clear stale exit info from previous run and apply command overrides

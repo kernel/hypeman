@@ -395,7 +395,7 @@ func (s vgpuReconcileManagerStub) ListInstancesForReconcile(context.Context) ([]
 	return s.list, nil
 }
 
-func TestLiveInstanceVGPUDevicePathsBoundsProtectionWithoutPID(t *testing.T) {
+func TestLiveInstanceVGPUDevicePathsBoundsStartupProtection(t *testing.T) {
 	dead := exec.Command("true")
 	require.NoError(t, dead.Run())
 	deadPID := dead.Process.Pid
@@ -407,6 +407,7 @@ func TestLiveInstanceVGPUDevicePathsBoundsProtectionWithoutPID(t *testing.T) {
 		{StoredMetadata: instances.StoredMetadata{Id: "orphaned", GPUDevicePath: "/sys/bus/pci/devices/0000:82:00.5", GPUAssignedAt: &stale}},
 		{StoredMetadata: instances.StoredMetadata{Id: "legacy", GPUDevicePath: "/sys/bus/pci/devices/0000:82:00.6"}},
 		{StoredMetadata: instances.StoredMetadata{Id: "dead", GPUDevicePath: "/sys/bus/pci/devices/0000:82:00.7", HypervisorPID: &deadPID}},
+		{StoredMetadata: instances.StoredMetadata{Id: "stale-pid-booting", GPUDevicePath: "/sys/bus/pci/devices/0000:82:00.8", HypervisorPID: &deadPID, GPUAssignedAt: &recent}},
 	}}
 
 	protected, retryAfter, err := liveInstanceVGPUDevicePaths(context.Background(), manager)
@@ -417,4 +418,5 @@ func TestLiveInstanceVGPUDevicePathsBoundsProtectionWithoutPID(t *testing.T) {
 	assert.NotContains(t, protected, "/sys/bus/pci/devices/0000:82:00.5")
 	assert.NotContains(t, protected, "/sys/bus/pci/devices/0000:82:00.6")
 	assert.NotContains(t, protected, "/sys/bus/pci/devices/0000:82:00.7")
+	assert.Contains(t, protected, "/sys/bus/pci/devices/0000:82:00.8")
 }

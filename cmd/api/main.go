@@ -196,10 +196,7 @@ func liveInstanceVGPUDevicePaths(ctx context.Context, instanceManager instances.
 		if inst.GPUDevicePath == "" {
 			continue
 		}
-		if inst.HypervisorPID != nil {
-			if !instances.HypervisorProcessIdentityExists(*inst.HypervisorPID, inst.HypervisorStartTime, inst.HypervisorBootID, inst.SocketPath) {
-				continue
-			}
+		if inst.HypervisorPID != nil && instances.HypervisorProcessIdentityExists(*inst.HypervisorPID, inst.HypervisorStartTime, inst.HypervisorBootID, inst.SocketPath) {
 			protected[inst.GPUDevicePath] = struct{}{}
 			continue
 		}

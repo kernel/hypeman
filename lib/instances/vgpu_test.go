@@ -190,9 +190,16 @@ func TestStartRollbackRetainsVGPUAssignmentAfterFailedDestroy(t *testing.T) {
 	m, id := newStartRollbackVGPUManager(t, func(context.Context, devices.VGPUAssignment) error {
 		return errors.New("destroy failed")
 	})
+	meta, err := m.loadMetadata(id)
+	require.NoError(t, err)
+	stalePID := os.Getpid()
+	meta.HypervisorPID = &stalePID
+	meta.HypervisorStartTime = 1
+	meta.HypervisorBootID = "previous-boot"
+	require.NoError(t, m.saveMetadata(meta))
 
 	t.Setenv("TMPDIR", filepath.Join(t.TempDir(), "missing"))
-	_, err := m.startInstance(context.Background(), id, StartInstanceRequest{Entrypoint: []string{"new-entrypoint"}})
+	_, err = m.startInstance(context.Background(), id, StartInstanceRequest{Entrypoint: []string{"new-entrypoint"}})
 	require.Error(t, err)
 
 	stored, err := m.loadMetadata(id)
@@ -200,6 +207,9 @@ func TestStartRollbackRetainsVGPUAssignmentAfterFailedDestroy(t *testing.T) {
 	assert.Equal(t, devices.VGPUFrameworkVendorVFIO, stored.GPUFramework)
 	assert.Equal(t, "/sys/bus/pci/devices/0000:82:00.4", stored.GPUDevicePath)
 	assert.NotNil(t, stored.GPUAssignedAt)
+	assert.Nil(t, stored.HypervisorPID)
+	assert.Zero(t, stored.HypervisorStartTime)
+	assert.Empty(t, stored.HypervisorBootID)
 	assert.Empty(t, stored.Entrypoint)
 }
 
