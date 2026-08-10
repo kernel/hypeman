@@ -428,21 +428,33 @@ func TestRollbackVendorVFIOCreate(t *testing.T) {
 	t.Parallel()
 
 	verifyErr := errors.New("verification failed")
+	device := VGPUDevice{
+		Framework: VGPUFrameworkVendorVFIO,
+		VFAddress: "0000:82:00.4",
+		SysfsPath: "/sys/bus/pci/devices/0000:82:00.4",
+	}
 	t.Run("preserves verification error", func(t *testing.T) {
 		currentTypePath := filepath.Join(t.TempDir(), "current_vgpu_type")
 		require.NoError(t, os.WriteFile(currentTypePath, []byte("1148"), 0644))
+		sysfs := vendorVFIOSysfs{owners: make(map[string]string)}
 
-		err := rollbackVendorVFIOCreate(currentTypePath, "0000:82:00.4", verifyErr)
+		err := sysfs.rollbackCreate(currentTypePath, device.VFAddress, "instance-1", device, verifyErr)
 		require.ErrorIs(t, err, verifyErr)
 		assertFileValue(t, currentTypePath, "0")
+		assert.Empty(t, sysfs.owners)
 	})
 
-	t.Run("surfaces rollback error", func(t *testing.T) {
+	t.Run("retains assignment when rollback fails", func(t *testing.T) {
 		currentTypePath := filepath.Join(t.TempDir(), "missing", "current_vgpu_type")
+		sysfs := vendorVFIOSysfs{owners: make(map[string]string)}
 
-		err := rollbackVendorVFIOCreate(currentTypePath, "0000:82:00.4", verifyErr)
+		err := sysfs.rollbackCreate(currentTypePath, device.VFAddress, "instance-1", device, verifyErr)
 		require.ErrorIs(t, err, verifyErr)
 		assert.ErrorContains(t, err, "roll back vGPU on VF 0000:82:00.4")
+		var pending *VGPUCreateCleanupPendingError
+		require.ErrorAs(t, err, &pending)
+		assert.Equal(t, device, pending.Device)
+		assert.Equal(t, "instance-1", sysfs.owners[device.VFAddress])
 	})
 }
 

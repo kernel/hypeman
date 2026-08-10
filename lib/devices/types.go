@@ -100,6 +100,16 @@ type VGPUDevice struct {
 	MdevUUID    string
 }
 
+// VGPUCreateCleanupPendingError reports a failed create whose assignment could
+// not be rolled back. Device identifies the assignment that still needs release.
+type VGPUCreateCleanupPendingError struct {
+	Device VGPUDevice
+	Err    error
+}
+
+func (e *VGPUCreateCleanupPendingError) Error() string { return e.Err.Error() }
+func (e *VGPUCreateCleanupPendingError) Unwrap() error { return e.Err }
+
 // MdevDevice represents an active mediated device (vGPU instance)
 type MdevDevice struct {
 	UUID        string `json:"uuid"`         // e.g., "aa618089-8b16-4d01-a136-25a0f3c73123"
