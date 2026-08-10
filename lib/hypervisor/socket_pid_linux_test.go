@@ -87,6 +87,30 @@ func TestResolveProcessPIDToleratesExitedProcess(t *testing.T) {
 	require.Equal(t, 200, pid)
 }
 
+func TestResolveProcessPIDForOwnerPrefersExpectedProcess(t *testing.T) {
+	oldProcDir := procDir
+	procDir = t.TempDir()
+	t.Cleanup(func() { procDir = oldProcDir })
+
+	socketPath := "/tmp/test.sock"
+	require.NoError(t, os.MkdirAll(filepath.Join(procDir, "net"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(procDir, "net", "unix"), []byte("00000000: 00000002 00000000 00010000 0001 01 12345 "+socketPath+"\n"), 0o644))
+	for _, pid := range []string{"100", "101"} {
+		fdDir := filepath.Join(procDir, pid, "fd")
+		require.NoError(t, os.MkdirAll(fdDir, 0o755))
+		require.NoError(t, os.Symlink("socket:[12345]", filepath.Join(fdDir, "3")))
+	}
+
+	_, confirmed, err := ResolveProcessPID(socketPath)
+	require.ErrorContains(t, err, "multiple owning processes found")
+	require.False(t, confirmed)
+
+	pid, confirmed, err := ResolveProcessPIDForOwner(socketPath, 101)
+	require.NoError(t, err)
+	require.True(t, confirmed)
+	require.Equal(t, 101, pid)
+}
+
 func TestResolveProcessPIDReportsNoOwnerAfterExitedProcesses(t *testing.T) {
 	oldProcDir := procDir
 	procDir = t.TempDir()
@@ -156,7 +180,7 @@ func TestResolveProcessPIDDuringProcessChurn(t *testing.T) {
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		pid, confirmed, err := ResolveProcessPID(socketPath)
+		pid, confirmed, err := ResolveProcessPIDForOwner(socketPath, os.Getpid())
 		require.NoError(t, err)
 		require.True(t, confirmed)
 		require.Equal(t, os.Getpid(), pid)
