@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -235,6 +236,40 @@ func TestKillHypervisorSparesReusedPIDAndKillsSocketOwner(t *testing.T) {
 	assert.True(t, WaitForProcessExit(owner.Process.Pid, 5*time.Second), "socket owner should be killed")
 	_, statErr := os.Stat(socketPath)
 	assert.True(t, os.IsNotExist(statErr), "instance socket should be removed")
+}
+
+func TestGracefulShutdownWaitsForSocketOwnerInsteadOfExitedStoredPID(t *testing.T) {
+	socketPath := filepath.Join(t.TempDir(), "test.sock")
+	owner := exec.Command(os.Args[0], "-test.run=^TestHypervisorProcessExistsWithReboundSocketPathHelper$")
+	owner.Env = append(os.Environ(), "HYPERVISOR_SOCKET_HELPER=1", "HYPERVISOR_SOCKET_PATH="+socketPath)
+	stdin, err := owner.StdinPipe()
+	require.NoError(t, err)
+	stdout, err := owner.StdoutPipe()
+	require.NoError(t, err)
+	require.NoError(t, owner.Start())
+	t.Cleanup(func() {
+		_ = stdin.Close()
+		_ = owner.Process.Kill()
+		_ = owner.Wait()
+	})
+	_, err = bufio.NewReader(stdout).ReadString('\n')
+	require.NoError(t, err)
+
+	stale := exec.Command("true")
+	require.NoError(t, stale.Run())
+	stalePID := stale.Process.Pid
+	inst := &Instance{StoredMetadata: StoredMetadata{
+		Id:             "graceful-stale-pid",
+		HypervisorType: hypervisor.TypeCloudHypervisor,
+		HypervisorPID:  &stalePID,
+		SocketPath:     socketPath,
+		VsockSocket:    filepath.Join(t.TempDir(), "missing-vsock.sock"),
+	}}
+
+	m := &manager{}
+	assert.False(t, m.tryGracefulGuestShutdown(context.Background(), inst, 1),
+		"stop and delete must fall back to the hardened kill path while the socket owner is alive")
+	assert.True(t, ProcessExists(owner.Process.Pid))
 }
 
 func TestForceKillHypervisorProcessFailsOnUnconfirmedOwnership(t *testing.T) {

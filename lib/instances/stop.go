@@ -70,23 +70,30 @@ func (m *manager) tryGracefulGuestShutdown(ctx context.Context, inst *Instance, 
 		shutdownSent = true
 	}
 
-	// Wait for the hypervisor process to exit (init calls reboot(POWER_OFF))
-	if inst.HypervisorPID != nil {
-		waitTimeout := time.Duration(stopTimeout) * time.Second
-		if !shutdownSent && waitTimeout > shutdownFailureFallbackWait {
-			// If we couldn't signal the guest, don't burn the full graceful timeout.
-			waitTimeout = shutdownFailureFallbackWait
-		}
-
-		if WaitForProcessExit(*inst.HypervisorPID, waitTimeout) {
-			log.DebugContext(ctx, "VM shut down gracefully", "instance_id", inst.Id)
-			return true
-		}
-
-		log.WarnContext(ctx, "graceful shutdown timed out, falling back to hypervisor shutdown", "instance_id", inst.Id)
+	// Wait for the process that currently owns the hypervisor socket. The
+	// persisted PID may be stale or reused, so trusting it here could skip the
+	// fail-closed kill path while the actual VMM is still running.
+	pid, err := resolveLiveHypervisorPID(inst.HypervisorPID, inst.HypervisorStartTime, inst.HypervisorBootID, inst.SocketPath)
+	if err != nil {
+		log.WarnContext(ctx, "could not confirm hypervisor ownership after graceful shutdown", "instance_id", inst.Id, "error", err)
 		return false
 	}
+	if pid == 0 {
+		return true
+	}
 
+	waitTimeout := time.Duration(stopTimeout) * time.Second
+	if !shutdownSent && waitTimeout > shutdownFailureFallbackWait {
+		// If we couldn't signal the guest, don't burn the full graceful timeout.
+		waitTimeout = shutdownFailureFallbackWait
+	}
+
+	if WaitForProcessExit(pid, waitTimeout) {
+		log.DebugContext(ctx, "VM shut down gracefully", "instance_id", inst.Id)
+		return true
+	}
+
+	log.WarnContext(ctx, "graceful shutdown timed out, falling back to hypervisor shutdown", "instance_id", inst.Id)
 	return false
 }
 
