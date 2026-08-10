@@ -98,7 +98,7 @@ func (m *manager) forceKillHypervisorProcess(ctx context.Context, inst *Instance
 	if inst.HypervisorPID == nil && inst.SocketPath == "" {
 		return nil
 	}
-	pid, err := resolveLiveHypervisorPID(inst.HypervisorPID, inst.HypervisorStartTime, inst.SocketPath)
+	pid, err := resolveLiveHypervisorPID(inst.HypervisorPID, inst.HypervisorStartTime, inst.HypervisorBootID, inst.SocketPath)
 	if err != nil {
 		return err
 	}
@@ -291,6 +291,7 @@ func (m *manager) stopInstance(
 	stored.StoppedAt = &now
 	stored.HypervisorPID = nil
 	stored.HypervisorStartTime = 0
+	stored.HypervisorBootID = ""
 	// Boot markers are per-boot-run and must not carry across stop/restore/start.
 	stored.ProgramStartedAt = nil
 	stored.GuestAgentReadyAt = nil
