@@ -103,6 +103,11 @@ func (m *manager) createInstance(
 	if hvType == "" {
 		hvType = m.defaultHypervisor
 	}
+	if req.GPU != nil && req.GPU.Profile != "" {
+		if err := validateVGPUHypervisor(hvType); err != nil {
+			return nil, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
+		}
+	}
 	starter, starterErr := m.getVMStarter(hvType)
 	if starterErr == nil {
 		if err := m.validateCreateVMConfig(starter, req, hvType); err != nil {

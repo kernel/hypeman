@@ -125,16 +125,10 @@ func ToVMConfig(cfg hypervisor.VMConfig) vmm.VmConfig {
 	}
 
 	// Device passthrough configuration
-	devicePaths := make([]string, 0, len(cfg.PCIDevices)+1)
-	devicePaths = append(devicePaths, cfg.PCIDevices...)
-	if cfg.VGPUDevicePath != "" {
-		devicePaths = append(devicePaths, cfg.VGPUDevicePath)
-	}
-
 	var devices *[]vmm.DeviceConfig
-	if len(devicePaths) > 0 {
-		deviceConfigs := make([]vmm.DeviceConfig, 0, len(devicePaths))
-		for _, path := range devicePaths {
+	if len(cfg.PCIDevices) > 0 {
+		deviceConfigs := make([]vmm.DeviceConfig, 0, len(cfg.PCIDevices))
+		for _, path := range cfg.PCIDevices {
 			deviceConfigs = append(deviceConfigs, vmm.DeviceConfig{
 				Path: path,
 			})
