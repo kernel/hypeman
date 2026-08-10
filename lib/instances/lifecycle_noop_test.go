@@ -218,6 +218,7 @@ func TestStartPersistsStaleVGPUReleaseImmediately(t *testing.T) {
 	meta, err := m.loadMetadata(id)
 	require.NoError(t, err)
 	meta.GPUProfile = "NVIDIA L40S-2Q"
+	meta.HypervisorType = hypervisor.TypeQEMU
 	meta.GPUFramework = devices.VGPUFrameworkNone
 	meta.GPUDevicePath = "/sys/bus/pci/devices/0000:82:00.4"
 	require.NoError(t, m.saveMetadata(meta))
