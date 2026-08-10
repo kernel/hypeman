@@ -203,7 +203,7 @@ func newMonitoringMetrics(meter metric.Meter, mgr *Manager) error {
 
 	gpuProfileSlots, err := meter.Int64ObservableGauge(
 		"hypeman_resources_gpu_profile_slots",
-		metric.WithDescription("Virtual functions able to create each vGPU profile (best-effort snapshot)"),
+		metric.WithDescription("Estimated concurrently creatable instances per vGPU profile (best-effort snapshot)"),
 	)
 	if err != nil {
 		return err
