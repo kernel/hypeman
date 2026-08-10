@@ -1,12 +1,17 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/docker/go-units"
 	"github.com/stretchr/testify/assert"
@@ -252,4 +257,143 @@ func TestReconcileBuildkitVersionStamp_VersionError(t *testing.T) {
 	})
 
 	require.ErrorContains(t, err, "buildkitd broken")
+}
+
+// resetSecretsState isolates the package-level secrets coordination state for
+// a test. Tests using it must not run in parallel.
+func resetSecretsState(t *testing.T) {
+	t.Helper()
+
+	origDir, origTimeout := secretsDir, secretsTimeout
+	secretsDir = t.TempDir()
+	secretsErrLock.Lock()
+	secretsErr = nil
+	secretsErrLock.Unlock()
+	secretsReady = make(chan struct{})
+	secretsOnce = sync.Once{}
+
+	t.Cleanup(func() {
+		secretsDir, secretsTimeout = origDir, origTimeout
+		secretsErrLock.Lock()
+		secretsErr = nil
+		secretsErrLock.Unlock()
+		secretsReady = make(chan struct{})
+		secretsOnce = sync.Once{}
+	})
+}
+
+// setTestBuildConfig installs a build config for handleSecretsRequest.
+func setTestBuildConfig(t *testing.T, cfg *BuildConfig) {
+	t.Helper()
+	buildConfigLock.Lock()
+	buildConfig = cfg
+	buildConfigLock.Unlock()
+	t.Cleanup(func() {
+		buildConfigLock.Lock()
+		buildConfig = nil
+		buildConfigLock.Unlock()
+	})
+}
+
+// doSecretsExchange runs handleSecretsRequest against a simulated host that
+// answers the get_secrets request with hostResp.
+func doSecretsExchange(t *testing.T, cfg *BuildConfig, hostResp VsockMessage) error {
+	t.Helper()
+	setTestBuildConfig(t, cfg)
+
+	agentConn, hostConn := net.Pipe()
+	defer agentConn.Close()
+	defer hostConn.Close()
+
+	go func() {
+		decoder := json.NewDecoder(hostConn)
+		encoder := json.NewEncoder(hostConn)
+		var req VsockMessage
+		if err := decoder.Decode(&req); err != nil {
+			return
+		}
+		encoder.Encode(hostResp)
+	}()
+
+	return handleSecretsRequest(json.NewEncoder(agentConn), json.NewDecoder(agentConn))
+}
+
+func TestHandleSecretsRequest_HostError(t *testing.T) {
+	resetSecretsState(t)
+
+	err := doSecretsExchange(t,
+		&BuildConfig{Secrets: []SecretRef{{ID: "npm_token"}}},
+		VsockMessage{Type: "secrets_response", Error: "secret not found: npm_token"})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "secret not found: npm_token")
+}
+
+func TestHandleSecretsRequest_MissingSecret(t *testing.T) {
+	resetSecretsState(t)
+
+	err := doSecretsExchange(t,
+		&BuildConfig{Secrets: []SecretRef{{ID: "a"}, {ID: "b"}}},
+		VsockMessage{Type: "secrets_response", Secrets: map[string]string{"a": "1"}})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "did not provide")
+	assert.Contains(t, err.Error(), "b")
+}
+
+func TestHandleSecretsRequest_Success(t *testing.T) {
+	resetSecretsState(t)
+
+	err := doSecretsExchange(t,
+		&BuildConfig{Secrets: []SecretRef{{ID: "a"}, {ID: "b"}}},
+		VsockMessage{Type: "secrets_response", Secrets: map[string]string{"a": "1", "b": "2"}})
+
+	require.NoError(t, err)
+	for id, want := range map[string]string{"a": "1", "b": "2"} {
+		got, err := os.ReadFile(filepath.Join(secretsDir, id))
+		require.NoError(t, err)
+		assert.Equal(t, want, string(got))
+	}
+}
+
+func TestWaitForSecrets_NoneConfigured(t *testing.T) {
+	resetSecretsState(t)
+	assert.NoError(t, waitForSecrets(context.Background(), nil))
+}
+
+func TestWaitForSecrets_TimeoutIsFatal(t *testing.T) {
+	resetSecretsState(t)
+	secretsTimeout = 20 * time.Millisecond
+
+	err := waitForSecrets(context.Background(), []SecretRef{{ID: "a"}})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "timed out")
+}
+
+func TestWaitForSecrets_HostErrorIsFatal(t *testing.T) {
+	resetSecretsState(t)
+
+	setSecretsErr(errors.New("secret not found: a"))
+	secretsOnce.Do(func() { close(secretsReady) })
+
+	err := waitForSecrets(context.Background(), []SecretRef{{ID: "a"}})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "secret not found: a")
+}
+
+func TestWaitForSecrets_MissingFileIsFatal(t *testing.T) {
+	resetSecretsState(t)
+	secretsOnce.Do(func() { close(secretsReady) })
+
+	err := waitForSecrets(context.Background(), []SecretRef{{ID: "a"}})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `required secret "a"`)
+}
+
+func TestWaitForSecrets_Success(t *testing.T) {
+	resetSecretsState(t)
+	require.NoError(t, os.WriteFile(filepath.Join(secretsDir, "a"), []byte("v"), 0600))
+	secretsOnce.Do(func() { close(secretsReady) })
+
+	assert.NoError(t, waitForSecrets(context.Background(), []SecretRef{{ID: "a"}}))
 }

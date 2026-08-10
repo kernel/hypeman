@@ -4241,7 +4241,9 @@ paths:
                 source:
                   type: string
                   format: binary
-                  description: Source tarball (tar.gz) containing application code and optionally a Dockerfile
+                  description: |
+                    Source tarball (tar.gz) containing application code and optionally a Dockerfile.
+                    Maximum size is 512 MiB; other form fields are limited to 1 MiB each.
                 dockerfile:
                   type: string
                   description: Dockerfile content. Required if not included in the source tarball.

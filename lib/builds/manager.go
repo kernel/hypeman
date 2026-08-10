@@ -5,7 +5,9 @@ import (
 	"context"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"os"
@@ -35,6 +37,12 @@ const (
 	releaseBuildMaxAttempts   = 5
 	releaseBuildRetryDelay    = time.Second
 	builderImageRetryInterval = 5 * time.Second
+
+	// buildAgentDialMaxAttempts bounds how often waitForResult dials the
+	// builder agent while the VM boots; buildAgentDialRetryInterval spaces
+	// the attempts.
+	buildAgentDialMaxAttempts   = 30
+	buildAgentDialRetryInterval = 2 * time.Second
 )
 
 //go:embed images/generic/Dockerfile
@@ -45,6 +53,10 @@ type Manager interface {
 	// Start starts the build manager's background services (vsock handler, etc.)
 	// This should be called once when the API server starts.
 	Start(ctx context.Context) error
+
+	// Shutdown cancels in-flight builds and waits for their goroutines to
+	// return. Pending builds are left queued for recovery on the next start.
+	Shutdown(ctx context.Context) error
 
 	// CreateBuild starts a new build job
 	CreateBuild(ctx context.Context, req CreateBuildRequest, sourceData []byte) (*Build, error)
@@ -228,6 +240,12 @@ func (m *manager) Start(ctx context.Context) error {
 
 func (m *manager) ReadyForBuilds() bool {
 	return m.builderReady.Load()
+}
+
+// Shutdown cancels in-flight builds and waits for their goroutines to return.
+// Pending builds stay queued on disk and are recovered on the next start.
+func (m *manager) Shutdown(ctx context.Context) error {
+	return m.queue.Shutdown(ctx)
 }
 
 // ensureBuilderImage ensures the builder image is available in the image store.
@@ -614,8 +632,13 @@ func (m *manager) CreateBuild(ctx context.Context, req CreateBuildRequest, sourc
 	// Enqueue the build. Builds sharing a builder are serialized by builder
 	// ID so a waiting same-builder build stays pending instead of holding a
 	// global concurrency slot while blocked on the builder's disk.
-	queuePos := m.queue.EnqueueSerial(id, req, req.BuilderID, func() {
-		m.runBuild(context.Background(), id, req, policy)
+	//
+	// The build must outlive the request: WithoutCancel detaches request
+	// cancellation while preserving context values (trace context, logger).
+	// The queue cancels the run only on service shutdown.
+	runCtx := context.WithoutCancel(ctx)
+	queuePos := m.queue.EnqueueSerial(runCtx, id, req, req.BuilderID, func(ctx context.Context) {
+		m.runBuild(ctx, id, req, policy)
 	})
 
 	build := meta.toBuild()
@@ -657,7 +680,7 @@ func (m *manager) BuilderHasBuilds(builderID string) bool {
 	if m.pendingRecovered.Load() {
 		return false
 	}
-	pending, err := listPendingBuilds(m.paths)
+	pending, err := listPendingBuilds(m.paths, m.logger)
 	if err != nil {
 		// Fail closed: blocking a delete is recoverable, deleting a
 		// builder out from under a pending build is not.
@@ -825,13 +848,8 @@ func (m *manager) executeBuild(ctx context.Context, id string, req CreateBuildRe
 	defer sourceFile.Close()
 
 	// Create volume with source (using the volume manager's archive import)
-	_, err = m.volumeManager.CreateVolumeFromArchive(ctx, volumes.CreateVolumeFromArchiveRequest{
-		Id:     &sourceVolID,
-		Name:   sourceVolID,
-		SizeGb: 10, // 10GB should be enough for most source bundles
-	}, sourceFile)
-	if err != nil {
-		return nil, fmt.Errorf("create source volume: %w", err)
+	if err := m.createBuildSourceVolume(ctx, id, sourceVolID, sourceFile); err != nil {
+		return nil, err
 	}
 	defer m.volumeManager.DeleteVolume(context.Background(), sourceVolID)
 
@@ -844,25 +862,8 @@ func (m *manager) executeBuild(ctx context.Context, id string, req CreateBuildRe
 	defer os.Remove(configVolPath) // Clean up the config disk file
 
 	// Register the config volume with the volume manager
-	_, err = m.volumeManager.CreateVolume(ctx, volumes.CreateVolumeRequest{
-		Id:     &configVolID,
-		Name:   configVolID,
-		SizeGb: 1,
-	})
-	if err != nil {
-		// If volume creation fails, try to use the disk file directly
-		// by copying it to the expected location
-		volPath := m.paths.VolumeData(configVolID)
-		if copyErr := copyFile(configVolPath, volPath); copyErr != nil {
-			return nil, fmt.Errorf("setup config volume: %w", copyErr)
-		}
-	} else {
-		// Copy our config disk over the empty volume
-		volPath := m.paths.VolumeData(configVolID)
-		if err := copyFile(configVolPath, volPath); err != nil {
-			m.volumeManager.DeleteVolume(context.Background(), configVolID)
-			return nil, fmt.Errorf("write config to volume: %w", err)
-		}
+	if err := m.registerBuildConfigVolume(ctx, id, configVolID, configVolPath); err != nil {
+		return nil, err
 	}
 	defer m.volumeManager.DeleteVolume(context.Background(), configVolID)
 
@@ -957,20 +958,128 @@ func (m *manager) executeBuild(ctx context.Context, id string, req CreateBuildRe
 	return result, nil
 }
 
+// missingSecretsError returns an error naming any requested secret IDs that
+// the provider did not return a value for.
+func missingSecretsError(secretIDs []string, secrets map[string]string) error {
+	var missing []string
+	for _, id := range secretIDs {
+		if _, ok := secrets[id]; !ok {
+			missing = append(missing, id)
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("%w: %s", ErrSecretNotFound, strings.Join(missing, ", "))
+	}
+	return nil
+}
+
+// createBuildSourceVolume creates the source volume for a build. Build volume
+// names are deterministic (build-source-<id>), so a re-run of the same build
+// after a crash (e.g. via RecoverPendingBuilds) can hit a leftover volume from
+// the interrupted attempt. Tolerate that case: remove the leftover and retry
+// the create once. CreateVolumeFromArchive reports ErrAlreadyExists before
+// consuming the archive reader, so the retry can reuse source.
+func (m *manager) createBuildSourceVolume(ctx context.Context, buildID, volID string, source io.Reader) error {
+	req := volumes.CreateVolumeFromArchiveRequest{
+		Id:     &volID,
+		Name:   volID,
+		SizeGb: 10, // 10GB should be enough for most source bundles
+	}
+	_, err := m.volumeManager.CreateVolumeFromArchive(ctx, req, source)
+	if errors.Is(err, volumes.ErrAlreadyExists) {
+		m.logger.Info("removing leftover source volume from interrupted build attempt", "build_id", buildID, "volume", volID)
+		if delErr := m.deleteLeftoverBuildVolume(ctx, buildID, volID); delErr != nil {
+			return fmt.Errorf("remove leftover source volume: %w", delErr)
+		}
+		_, err = m.volumeManager.CreateVolumeFromArchive(ctx, req, source)
+	}
+	if err != nil {
+		return fmt.Errorf("create source volume: %w", err)
+	}
+	return nil
+}
+
+// registerBuildConfigVolume registers the config disk as a volume and copies
+// the config data onto it. Like the source volume, the config volume has a
+// deterministic name (build-config-<id>), so a re-run of the same build after
+// a crash can hit a leftover from the interrupted attempt; remove it and
+// retry the create once rather than silently copying over the stale volume.
+func (m *manager) registerBuildConfigVolume(ctx context.Context, buildID, volID, configDiskPath string) error {
+	req := volumes.CreateVolumeRequest{
+		Id:     &volID,
+		Name:   volID,
+		SizeGb: 1,
+	}
+	_, err := m.volumeManager.CreateVolume(ctx, req)
+	if errors.Is(err, volumes.ErrAlreadyExists) {
+		m.logger.Info("removing leftover config volume from interrupted build attempt", "build_id", buildID, "volume", volID)
+		if delErr := m.deleteLeftoverBuildVolume(ctx, buildID, volID); delErr != nil {
+			return fmt.Errorf("remove leftover config volume: %w", delErr)
+		}
+		if _, err = m.volumeManager.CreateVolume(ctx, req); err != nil {
+			// A failed recreate must surface as-is; falling through to the
+			// copy-over fallback would mask it and could write the config
+			// onto an unmanaged disk file.
+			return fmt.Errorf("create config volume: %w", err)
+		}
+	} else if err != nil {
+		// If volume creation fails, try to use the disk file directly
+		// by copying it to the expected location
+		volPath := m.paths.VolumeData(volID)
+		if copyErr := copyFile(configDiskPath, volPath); copyErr != nil {
+			return fmt.Errorf("setup config volume: %w", copyErr)
+		}
+		return nil
+	}
+	// Copy our config disk over the empty volume
+	volPath := m.paths.VolumeData(volID)
+	if err := copyFile(configDiskPath, volPath); err != nil {
+		m.volumeManager.DeleteVolume(context.Background(), volID)
+		return fmt.Errorf("write config to volume: %w", err)
+	}
+	return nil
+}
+
+// deleteLeftoverBuildVolume removes a build volume left behind by an
+// interrupted prior attempt of the same build. If the volume is still
+// attached, it is almost certainly attached to the interrupted attempt's
+// stale builder instance (builder-<id>); delete that instance (which detaches
+// its volumes) and retry the volume delete. A volume attached to an unknown
+// instance is never force-deleted; an error is returned instead.
+func (m *manager) deleteLeftoverBuildVolume(ctx context.Context, buildID, volID string) error {
+	err := m.volumeManager.DeleteVolume(ctx, volID)
+	if !errors.Is(err, volumes.ErrInUse) {
+		return err
+	}
+
+	builderName := fmt.Sprintf("builder-%s", buildID)
+	inst, getErr := m.instanceManager.GetInstance(ctx, builderName)
+	if getErr != nil {
+		if errors.Is(getErr, instances.ErrNotFound) {
+			return fmt.Errorf("volume %s is in use but stale builder instance %q was not found; refusing to force-delete a volume attached to an unknown instance", volID, builderName)
+		}
+		return fmt.Errorf("look up stale builder instance %q: %w", builderName, getErr)
+	}
+
+	m.logger.Info("deleting stale builder instance from interrupted build attempt", "build_id", buildID, "instance", inst.Id, "volume", volID)
+	if delErr := m.instanceManager.DeleteInstance(ctx, inst.Id); delErr != nil {
+		return fmt.Errorf("delete stale builder instance %s: %w", inst.Id, delErr)
+	}
+	return m.volumeManager.DeleteVolume(ctx, volID)
+}
+
 // waitForResult waits for the build result from the builder agent via vsock
 func (m *manager) waitForResult(ctx context.Context, buildID string, inst *instances.Instance) (*BuildResult, error) {
-	// Wait a bit for the VM to start and the builder agent to listen on vsock
-	time.Sleep(3 * time.Second)
-
-	// Try to connect to the builder agent with retries
+	// Connect to the builder agent with retries: the agent only starts
+	// listening once the VM has booted, so early dial attempts are expected
+	// to fail. The retry interval bounds the wait between attempts, so no
+	// fixed startup sleep is needed.
 	var conn net.Conn
 	var err error
 
-	for attempt := 0; attempt < 30; attempt++ {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		default:
+	for attempt := 0; attempt < buildAgentDialMaxAttempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
 
 		dialer, dialerErr := m.instanceManager.GetVsockDialer(ctx, inst.Id)
@@ -988,7 +1097,6 @@ func (m *manager) waitForResult(ctx context.Context, buildID string, inst *insta
 		}
 
 		m.logger.Debug("waiting for builder agent", "attempt", attempt+1, "error", err)
-		time.Sleep(2 * time.Second)
 
 		// Check if instance is still running
 		current, checkErr := m.instanceManager.GetInstance(ctx, inst.Id)
@@ -1000,6 +1108,12 @@ func (m *manager) waitForResult(ctx context.Context, buildID string, inst *insta
 				Success: false,
 				Error:   "builder instance stopped unexpectedly",
 			}, nil
+		}
+
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(buildAgentDialRetryInterval):
 		}
 	}
 
@@ -1055,11 +1169,21 @@ func (m *manager) waitForResult(ctx context.Context, buildID string, inst *insta
 			// Agent is requesting secrets
 			m.logger.Debug("agent requesting secrets", "instance", inst.Id, "secret_ids", dr.response.SecretIDs)
 
-			// Fetch secrets from provider
+			// Fetch secrets from provider. Secrets are required for the builds
+			// that declare them: report failures (and missing values) to the
+			// agent instead of letting it build with empty secrets and fail
+			// later with a confusing error. The agent fails the build on an
+			// error response and still reports a build_result.
 			secrets, err := m.secretProvider.GetSecrets(ctx, dr.response.SecretIDs)
+			if err == nil {
+				err = missingSecretsError(dr.response.SecretIDs, secrets)
+			}
 			if err != nil {
 				m.logger.Error("failed to fetch secrets", "error", err)
-				secrets = make(map[string]string)
+				if encErr := encoder.Encode(VsockMessage{Type: "secrets_response", Error: err.Error()}); encErr != nil {
+					return nil, fmt.Errorf("send secrets error response: %w", encErr)
+				}
+				continue
 			}
 
 			// Send secrets response
@@ -1229,7 +1353,7 @@ func (m *manager) GetBuild(ctx context.Context, id string) (*Build, error) {
 
 // ListBuilds returns all builds
 func (m *manager) ListBuilds(ctx context.Context) ([]*Build, error) {
-	metas, err := listAllBuilds(m.paths)
+	metas, err := listAllBuilds(m.paths, m.logger)
 	if err != nil {
 		return nil, err
 	}
@@ -1460,7 +1584,7 @@ func (m *manager) StreamBuildEvents(ctx context.Context, id string, follow bool)
 
 // RecoverPendingBuilds recovers builds that were interrupted on restart
 func (m *manager) RecoverPendingBuilds() {
-	pending, err := listPendingBuilds(m.paths)
+	pending, err := listPendingBuilds(m.paths, m.logger)
 	if err != nil {
 		m.logger.Error("list pending builds for recovery", "error", err)
 		return
@@ -1483,12 +1607,12 @@ func (m *manager) RecoverPendingBuilds() {
 				continue
 			}
 
-			m.queue.EnqueueSerial(meta.ID, *meta.Request, meta.Request.BuilderID, func() {
+			m.queue.EnqueueSerial(context.Background(), meta.ID, *meta.Request, meta.Request.BuilderID, func(ctx context.Context) {
 				policy := DefaultBuildPolicy()
 				if meta.Request.BuildPolicy != nil {
 					policy = *meta.Request.BuildPolicy
 				}
-				m.runBuild(context.Background(), meta.ID, *meta.Request, &policy)
+				m.runBuild(ctx, meta.ID, *meta.Request, &policy)
 			})
 		}
 	}

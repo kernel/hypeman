@@ -695,6 +695,15 @@ func run() error {
 			logger.Info("ingress manager shutdown complete")
 		}
 
+		// Cancel in-flight builds and wait for their goroutines to return.
+		// Builds still pending stay queued on disk and recover on next start.
+		if err := app.BuildManager.Shutdown(shutdownCtx); err != nil {
+			logger.Error("failed to shutdown build manager", "error", err)
+			// Don't return error - continue with shutdown
+		} else {
+			logger.Info("build manager shutdown complete")
+		}
+
 		return errors.Join(shutdownErrs...)
 	})
 

@@ -3,6 +3,7 @@ package builds
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"sort"
 	"time"
@@ -98,8 +99,11 @@ func readMetadata(p *paths.Paths, id string) (*buildMetadata, error) {
 	return &meta, nil
 }
 
-// listAllBuilds returns all builds sorted by creation time (newest first)
-func listAllBuilds(p *paths.Paths) ([]*buildMetadata, error) {
+// listAllBuilds returns all builds sorted by creation time (newest first).
+// Entries whose metadata cannot be read or parsed are corrupt: they are
+// logged and skipped so valid builds are still returned, but the corruption
+// is never silently hidden.
+func listAllBuilds(p *paths.Paths, logger *slog.Logger) ([]*buildMetadata, error) {
 	buildsDir := p.BuildsDir()
 
 	entries, err := os.ReadDir(buildsDir)
@@ -118,7 +122,8 @@ func listAllBuilds(p *paths.Paths) ([]*buildMetadata, error) {
 
 		meta, err := readMetadata(p, entry.Name())
 		if err != nil {
-			continue // Skip invalid entries
+			logger.Warn("skipping corrupt build metadata", "id", entry.Name(), "error", err)
+			continue
 		}
 		metas = append(metas, meta)
 	}
@@ -133,8 +138,8 @@ func listAllBuilds(p *paths.Paths) ([]*buildMetadata, error) {
 
 // listPendingBuilds returns builds that need to be recovered on startup
 // Returns builds with status queued/building, sorted by created_at (oldest first for FIFO)
-func listPendingBuilds(p *paths.Paths) ([]*buildMetadata, error) {
-	all, err := listAllBuilds(p)
+func listPendingBuilds(p *paths.Paths, logger *slog.Logger) ([]*buildMetadata, error) {
+	all, err := listAllBuilds(p, logger)
 	if err != nil {
 		return nil, err
 	}

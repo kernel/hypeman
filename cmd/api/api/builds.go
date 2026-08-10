@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"strconv"
 
@@ -16,6 +17,28 @@ import (
 	"github.com/kernel/hypeman/lib/oapi"
 	"github.com/kernel/hypeman/lib/tags"
 )
+
+var (
+	// maxBuildSourceSize bounds the source tarball accepted by POST /builds.
+	// A var so tests can exercise the limit without large uploads.
+	maxBuildSourceSize int64 = 512 << 20 // 512 MiB
+	// maxBuildFormFieldSize bounds each small non-source multipart field
+	// (dockerfile, secrets, tags, and friends).
+	maxBuildFormFieldSize int64 = 1 << 20 // 1 MiB
+)
+
+// readLimitedPart reads a multipart part fully, erroring when its contents
+// exceed limit bytes.
+func readLimitedPart(part *multipart.Part, limit int64) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(part, limit+1))
+	if err != nil {
+		return nil, fmt.Errorf("failed to read %s field", part.FormName())
+	}
+	if int64(len(data)) > limit {
+		return nil, fmt.Errorf("%s exceeds the maximum size of %d bytes", part.FormName(), limit)
+	}
+	return data, nil
+}
 
 // ListBuilds returns all builds
 func (s *ApiService) ListBuilds(ctx context.Context, request oapi.ListBuildsRequestObject) (oapi.ListBuildsResponseObject, error) {
@@ -65,92 +88,48 @@ func (s *ApiService) CreateBuild(ctx context.Context, request oapi.CreateBuildRe
 			}, nil
 		}
 
-		switch part.FormName() {
+		name := part.FormName()
+		limit := maxBuildFormFieldSize
+		if name == "source" {
+			limit = maxBuildSourceSize
+		}
+		data, err := readLimitedPart(part, limit)
+		part.Close()
+		if err != nil {
+			code := "invalid_request"
+			if name == "source" {
+				code = "invalid_source"
+			}
+			return oapi.CreateBuild400JSONResponse{
+				Code:    code,
+				Message: err.Error(),
+			}, nil
+		}
+
+		switch name {
 		case "source":
-			sourceData, err = io.ReadAll(part)
-			if err != nil {
-				return oapi.CreateBuild400JSONResponse{
-					Code:    "invalid_source",
-					Message: "failed to read source data",
-				}, nil
-			}
+			sourceData = data
 		case "base_image_digest":
-			data, err := io.ReadAll(part)
-			if err != nil {
-				return oapi.CreateBuild400JSONResponse{
-					Code:    "invalid_request",
-					Message: "failed to read base_image_digest field",
-				}, nil
-			}
 			baseImageDigest = string(data)
 		case "builder_id":
-			data, err := io.ReadAll(part)
-			if err != nil {
-				return oapi.CreateBuild400JSONResponse{
-					Code:    "invalid_request",
-					Message: "failed to read builder_id field",
-				}, nil
-			}
 			builderID = string(data)
 		case "cache_scope":
-			data, err := io.ReadAll(part)
-			if err != nil {
-				return oapi.CreateBuild400JSONResponse{
-					Code:    "invalid_request",
-					Message: "failed to read cache_scope field",
-				}, nil
-			}
 			cacheScope = string(data)
 		case "dockerfile":
-			data, err := io.ReadAll(part)
-			if err != nil {
-				return oapi.CreateBuild400JSONResponse{
-					Code:    "invalid_request",
-					Message: "failed to read dockerfile field",
-				}, nil
-			}
 			dockerfile = string(data)
 		case "timeout_seconds":
-			data, err := io.ReadAll(part)
-			if err != nil {
-				return oapi.CreateBuild400JSONResponse{
-					Code:    "invalid_request",
-					Message: "failed to read timeout_seconds field",
-				}, nil
-			}
 			if v, err := strconv.Atoi(string(data)); err == nil {
 				timeoutSeconds = v
 			}
 		case "memory_mb":
-			data, err := io.ReadAll(part)
-			if err != nil {
-				return oapi.CreateBuild400JSONResponse{
-					Code:    "invalid_request",
-					Message: "failed to read memory_mb field",
-				}, nil
-			}
 			if v, err := strconv.Atoi(string(data)); err == nil {
 				memoryMB = v
 			}
 		case "cpus":
-			data, err := io.ReadAll(part)
-			if err != nil {
-				return oapi.CreateBuild400JSONResponse{
-					Code:    "invalid_request",
-					Message: "failed to read cpus field",
-				}, nil
-			}
 			if v, err := strconv.Atoi(string(data)); err == nil {
 				cpus = v
 			}
 		case "secrets":
-			data, err := io.ReadAll(part)
-			if err != nil {
-				return oapi.CreateBuild400JSONResponse{
-					Code:    "invalid_request",
-					Message: "failed to read secrets field",
-				}, nil
-			}
 			if err := json.Unmarshal(data, &secrets); err != nil {
 				return oapi.CreateBuild400JSONResponse{
 					Code:    "invalid_request",
@@ -158,40 +137,12 @@ func (s *ApiService) CreateBuild(ctx context.Context, request oapi.CreateBuildRe
 				}, nil
 			}
 		case "is_admin_build":
-			data, err := io.ReadAll(part)
-			if err != nil {
-				return oapi.CreateBuild400JSONResponse{
-					Code:    "invalid_request",
-					Message: "failed to read is_admin_build field",
-				}, nil
-			}
 			isAdminBuild = string(data) == "true" || string(data) == "1"
 		case "global_cache_key":
-			data, err := io.ReadAll(part)
-			if err != nil {
-				return oapi.CreateBuild400JSONResponse{
-					Code:    "invalid_request",
-					Message: "failed to read global_cache_key field",
-				}, nil
-			}
 			globalCacheKey = string(data)
 		case "image_name":
-			data, err := io.ReadAll(part)
-			if err != nil {
-				return oapi.CreateBuild400JSONResponse{
-					Code:    "invalid_request",
-					Message: "failed to read image_name field",
-				}, nil
-			}
 			imageName = string(data)
 		case "tags":
-			data, err := io.ReadAll(part)
-			if err != nil {
-				return oapi.CreateBuild400JSONResponse{
-					Code:    "invalid_request",
-					Message: "failed to read tags field",
-				}, nil
-			}
 			parsed, err := parseTagsJSON(string(data))
 			if err != nil {
 				return oapi.CreateBuild400JSONResponse{
@@ -201,7 +152,6 @@ func (s *ApiService) CreateBuild(ctx context.Context, request oapi.CreateBuildRe
 			}
 			resourceTags = parsed
 		}
-		part.Close()
 	}
 
 	if len(sourceData) == 0 {
@@ -209,6 +159,17 @@ func (s *ApiService) CreateBuild(ctx context.Context, request oapi.CreateBuildRe
 			Code:    "invalid_request",
 			Message: "source is required",
 		}, nil
+	}
+
+	// Reject malformed secret IDs at the boundary so a bad reference fails
+	// the request instead of the build.
+	for _, secret := range secrets {
+		if err := builds.ValidateSecretID(secret.ID); err != nil {
+			return oapi.CreateBuild400JSONResponse{
+				Code:    "invalid_request",
+				Message: err.Error(),
+			}, nil
+		}
 	}
 
 	// Validate image_name early so the user gets a fast 400 instead of

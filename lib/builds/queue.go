@@ -1,6 +1,13 @@
 package builds
 
-import "sync"
+import (
+	"context"
+	"sync"
+)
+
+// StartFunc executes a queued build. The context carries the enqueue-time
+// values (e.g. trace context) and is cancelled when the queue shuts down.
+type StartFunc func(ctx context.Context)
 
 // QueuedBuild represents a build waiting to be executed
 type QueuedBuild struct {
@@ -11,7 +18,11 @@ type QueuedBuild struct {
 	// once no active build holds the same key, so it never occupies a
 	// concurrency slot while waiting on another build of its group.
 	SerialKey string
-	StartFn   func()
+	StartFn   StartFunc
+	// ctx carries the enqueue-time context values into the run; cancel
+	// releases it and aborts the run on shutdown.
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 // BuildQueue manages concurrent builds with a configurable limit.
@@ -29,8 +40,11 @@ type QueuedBuild struct {
 type BuildQueue struct {
 	maxConcurrent    int
 	active           map[string]bool
-	activeSerialKeys map[string]string // build ID -> serial key
+	activeSerialKeys map[string]string             // build ID -> serial key
+	activeCancels    map[string]context.CancelFunc // build ID -> run cancel
 	pending          []QueuedBuild
+	wg               sync.WaitGroup // tracks active build goroutines
+	shutdown         bool
 	mu               sync.Mutex
 }
 
@@ -43,6 +57,7 @@ func NewBuildQueue(maxConcurrent int) *BuildQueue {
 		maxConcurrent:    maxConcurrent,
 		active:           make(map[string]bool),
 		activeSerialKeys: make(map[string]string),
+		activeCancels:    make(map[string]context.CancelFunc),
 		pending:          make([]QueuedBuild, 0),
 	}
 }
@@ -50,14 +65,19 @@ func NewBuildQueue(maxConcurrent int) *BuildQueue {
 // Enqueue adds a build to the queue. Returns queue position (0 if started
 // immediately, >0 if queued among pending builds that can currently start).
 // If the build is already building or queued, returns its current position without re-enqueueing.
-func (q *BuildQueue) Enqueue(buildID string, req CreateBuildRequest, startFn func()) int {
-	return q.EnqueueSerial(buildID, req, "", startFn)
+//
+// The ctx supplies values (trace context, logger) to the run and bounds its
+// lifetime together with Shutdown: the run is cancelled when ctx is
+// cancelled or the queue shuts down. Callers that want the build to survive
+// request cancellation should pass context.WithoutCancel(ctx).
+func (q *BuildQueue) Enqueue(ctx context.Context, buildID string, req CreateBuildRequest, startFn StartFunc) int {
+	return q.EnqueueSerial(ctx, buildID, req, "", startFn)
 }
 
 // EnqueueSerial is Enqueue with a serial key: builds sharing a non-empty key
 // are serialized so a waiting build stays pending instead of occupying a
 // concurrency slot while blocked on another build of its group.
-func (q *BuildQueue) EnqueueSerial(buildID string, req CreateBuildRequest, serialKey string, startFn func()) int {
+func (q *BuildQueue) EnqueueSerial(ctx context.Context, buildID string, req CreateBuildRequest, serialKey string, startFn StartFunc) int {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
@@ -73,17 +93,14 @@ func (q *BuildQueue) EnqueueSerial(buildID string, req CreateBuildRequest, seria
 		}
 	}
 
-	// Wrap the function to auto-complete
-	wrappedFn := func() {
-		defer q.MarkComplete(buildID)
-		startFn()
-	}
-
+	runCtx, cancel := context.WithCancel(ctx)
 	build := QueuedBuild{
 		BuildID:   buildID,
 		Request:   req,
 		SerialKey: serialKey,
-		StartFn:   wrappedFn,
+		StartFn:   startFn,
+		ctx:       runCtx,
+		cancel:    cancel,
 	}
 
 	// Start immediately if under concurrency limit and the serial key is free
@@ -92,13 +109,17 @@ func (q *BuildQueue) EnqueueSerial(buildID string, req CreateBuildRequest, seria
 		return 0
 	}
 
-	// Otherwise queue it
+	// Otherwise queue it. After Shutdown the build stays pending and never
+	// starts; its on-disk metadata lets startup recovery re-enqueue it.
 	q.pending = append(q.pending, build)
 	return *q.pendingPositionLocked(buildID)
 }
 
 // canStartLocked reports whether a build with the given serial key may start.
 func (q *BuildQueue) canStartLocked(serialKey string) bool {
+	if q.shutdown {
+		return false
+	}
 	if len(q.active) >= q.maxConcurrent {
 		return false
 	}
@@ -111,7 +132,14 @@ func (q *BuildQueue) startLocked(build QueuedBuild) {
 	if build.SerialKey != "" {
 		q.activeSerialKeys[build.BuildID] = build.SerialKey
 	}
-	go build.StartFn()
+	q.activeCancels[build.BuildID] = build.cancel
+	q.wg.Add(1)
+	go func() {
+		defer q.wg.Done()
+		defer build.cancel()
+		defer q.MarkComplete(build.BuildID)
+		build.StartFn(build.ctx)
+	}()
 }
 
 // MarkComplete marks a build as complete and starts pending builds while
@@ -123,6 +151,7 @@ func (q *BuildQueue) MarkComplete(buildID string) {
 
 	delete(q.active, buildID)
 	delete(q.activeSerialKeys, buildID)
+	delete(q.activeCancels, buildID)
 	q.startPendingLocked()
 }
 
@@ -139,7 +168,7 @@ func (q *BuildQueue) ReleaseSerialKey(buildID string) {
 
 	key, held := q.activeSerialKeys[buildID]
 	delete(q.activeSerialKeys, buildID)
-	if held {
+	if held && !q.shutdown {
 		for i, build := range q.pending {
 			if build.SerialKey == key {
 				q.pending = append(q.pending[:i], q.pending[i+1:]...)
@@ -154,6 +183,9 @@ func (q *BuildQueue) ReleaseSerialKey(buildID string) {
 // startPendingLocked starts pending builds while capacity and serial keys
 // allow.
 func (q *BuildQueue) startPendingLocked() {
+	if q.shutdown {
+		return
+	}
 	for len(q.active) < q.maxConcurrent {
 		idx := -1
 		for i, build := range q.pending {
@@ -226,11 +258,49 @@ func (q *BuildQueue) Cancel(buildID string) bool {
 	for i, build := range q.pending {
 		if build.BuildID == buildID {
 			q.pending = append(q.pending[:i], q.pending[i+1:]...)
+			build.cancel()
 			return true
 		}
 	}
 
 	return false
+}
+
+// Shutdown stops scheduling new work, cancels every active build's run
+// context, and waits for their goroutines to return. Pending builds are left
+// unstarted; their persisted metadata lets startup recovery re-enqueue them
+// on the next boot. Returns ctx.Err() if the wait outlives ctx.
+func (q *BuildQueue) Shutdown(ctx context.Context) error {
+	q.mu.Lock()
+	if q.shutdown {
+		q.mu.Unlock()
+		return nil
+	}
+	q.shutdown = true
+	for _, build := range q.pending {
+		build.cancel()
+	}
+	cancels := make([]context.CancelFunc, 0, len(q.activeCancels))
+	for _, cancel := range q.activeCancels {
+		cancels = append(cancels, cancel)
+	}
+	q.mu.Unlock()
+
+	for _, cancel := range cancels {
+		cancel()
+	}
+
+	done := make(chan struct{})
+	go func() {
+		q.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // IsActive returns true if the build is actively running

@@ -8,6 +8,19 @@ import (
 	"strings"
 )
 
+// ValidateSecretID rejects secret IDs that are empty or could escape the
+// secrets directory (path traversal). It is enforced both at the API
+// boundary and by the file-based secret provider.
+func ValidateSecretID(id string) error {
+	if id == "" {
+		return fmt.Errorf("%w: must not be empty", ErrInvalidSecretID)
+	}
+	if strings.Contains(id, "/") || strings.Contains(id, "\\") || id == ".." || id == "." {
+		return fmt.Errorf("%w: %q must not contain path separators", ErrInvalidSecretID, id)
+	}
+	return nil
+}
+
 // FileSecretProvider reads secrets from files in a directory.
 // Each secret is stored as a file named by its ID, with the secret value as the file content.
 // Example: /etc/hypeman/secrets/npm_token contains the npm token value.
@@ -24,15 +37,15 @@ func NewFileSecretProvider(secretsDir string) *FileSecretProvider {
 }
 
 // GetSecrets returns the values for the given secret IDs by reading files from the secrets directory.
-// Missing secrets are silently skipped (not an error).
-// Returns an error only if a secret file exists but cannot be read.
+// Requested secrets are required: an invalid ID or a missing secret file is an
+// error, so a build never proceeds with silently empty secrets.
 func (p *FileSecretProvider) GetSecrets(ctx context.Context, secretIDs []string) (map[string]string, error) {
 	result := make(map[string]string)
 
 	for _, id := range secretIDs {
 		// Validate secret ID to prevent path traversal
-		if strings.Contains(id, "/") || strings.Contains(id, "\\") || id == ".." || id == "." {
-			continue // Skip invalid IDs
+		if err := ValidateSecretID(id); err != nil {
+			return nil, err
 		}
 
 		path := filepath.Join(p.secretsDir, id)
@@ -47,8 +60,7 @@ func (p *FileSecretProvider) GetSecrets(ctx context.Context, secretIDs []string)
 		data, err := os.ReadFile(path)
 		if err != nil {
 			if os.IsNotExist(err) {
-				// Secret doesn't exist - skip it (not an error)
-				continue
+				return nil, fmt.Errorf("%w: %s", ErrSecretNotFound, id)
 			}
 			return nil, fmt.Errorf("read secret %s: %w", id, err)
 		}

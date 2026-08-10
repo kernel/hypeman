@@ -669,7 +669,7 @@ func TestCancelBuild_QueuedBuild(t *testing.T) {
 	started := make(chan struct{})
 
 	// Add a blocking build to fill the single slot
-	queue.Enqueue("build-1", CreateBuildRequest{}, func() {
+	queue.Enqueue(context.Background(), "build-1", CreateBuildRequest{}, func(context.Context) {
 		started <- struct{}{}
 		select {} // Block forever
 	})
@@ -678,7 +678,7 @@ func TestCancelBuild_QueuedBuild(t *testing.T) {
 	<-started
 
 	// Add a second build - this one should be queued
-	queue.Enqueue("build-2", CreateBuildRequest{}, func() {})
+	queue.Enqueue(context.Background(), "build-2", CreateBuildRequest{}, func(context.Context) {})
 
 	// Verify it's pending
 	assert.Equal(t, 1, queue.PendingCount())
@@ -689,6 +689,147 @@ func TestCancelBuild_QueuedBuild(t *testing.T) {
 
 	// Verify it's removed from pending
 	assert.Equal(t, 0, queue.PendingCount())
+}
+
+// TestManagerShutdown_InFlightBuild verifies the build run detaches from
+// request cancellation while keeping request context values, and that
+// manager shutdown cancels the run and waits for its goroutine.
+func TestManagerShutdown_InFlightBuild(t *testing.T) {
+	mgr, instanceMgr, _, tempDir := setupTestManager(t)
+	defer os.RemoveAll(tempDir)
+
+	type ctxKey struct{}
+	reqCtx, reqCancel := context.WithCancel(context.WithValue(context.Background(), ctxKey{}, "trace-abc"))
+
+	// The instance create hook observes the context values propagated into
+	// the detached build run.
+	values := make(chan any, 1)
+	instanceMgr.createFunc = func(ctx context.Context, req instances.CreateInstanceRequest) (*instances.Instance, error) {
+		values <- ctx.Value(ctxKey{})
+		inst := &instances.Instance{
+			StoredMetadata: instances.StoredMetadata{Id: "inst-" + req.Name, Name: req.Name},
+			State:          instances.StateRunning,
+		}
+		instanceMgr.instances[inst.Id] = inst
+		return inst, nil
+	}
+	dialAttempted := make(chan struct{})
+	var dialOnce sync.Once
+	instanceMgr.vsockDialerFunc = func(ctx context.Context, instanceID string) (hypervisor.VsockDialer, error) {
+		dialOnce.Do(func() { close(dialAttempted) })
+		return nil, fmt.Errorf("vsock dialer unavailable in test")
+	}
+
+	build, err := mgr.CreateBuild(reqCtx, CreateBuildRequest{}, []byte("source"))
+	require.NoError(t, err)
+
+	// Cancelling the request context must not stop the build
+	// (context.WithoutCancel), but its values must still propagate.
+	reqCancel()
+	select {
+	case v := <-values:
+		assert.Equal(t, "trace-abc", v)
+	case <-time.After(10 * time.Second):
+		t.Fatal("build did not reach instance creation")
+	}
+	select {
+	case <-dialAttempted:
+	case <-time.After(10 * time.Second):
+		t.Fatal("build did not reach the vsock dial loop; request cancellation may have leaked into the run")
+	}
+
+	running, err := mgr.GetBuild(context.Background(), build.ID)
+	require.NoError(t, err)
+	assert.Equal(t, StatusBuilding, running.Status, "request cancellation must not stop the build")
+
+	// Shutdown cancels the run and waits for the goroutine to exit.
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	start := time.Now()
+	require.NoError(t, mgr.Shutdown(shutdownCtx))
+	assert.Less(t, time.Since(start), 5*time.Second, "shutdown should cancel the build promptly")
+
+	finished, err := mgr.GetBuild(context.Background(), build.ID)
+	require.NoError(t, err)
+	assert.Equal(t, StatusFailed, finished.Status)
+}
+
+// TestCancelBuild_BuildingBuild verifies cancelling a running build deletes
+// its builder instance and marks it cancelled, and that the duplicate
+// instance delete from executeBuild's deferred cleanup is tolerated.
+func TestCancelBuild_BuildingBuild(t *testing.T) {
+	mgr, instanceMgr, _, tempDir := setupTestManager(t)
+	defer os.RemoveAll(tempDir)
+
+	instID := "inst-builder-build-1"
+	instanceMgr.instances[instID] = &instances.Instance{
+		StoredMetadata: instances.StoredMetadata{Id: instID, Name: "builder-build-1"},
+		State:          instances.StateRunning,
+	}
+	meta := &buildMetadata{
+		ID:              "build-1",
+		Status:          StatusBuilding,
+		CreatedAt:       time.Now(),
+		BuilderInstance: &instID,
+	}
+	require.NoError(t, writeMetadata(mgr.paths, meta))
+
+	require.NoError(t, mgr.CancelBuild(context.Background(), "build-1"))
+
+	got, err := mgr.GetBuild(context.Background(), "build-1")
+	require.NoError(t, err)
+	assert.Equal(t, StatusCancelled, got.Status)
+	assert.Equal(t, 1, instanceMgr.deleteCallCount)
+
+	// executeBuild's deferred cleanup deletes the same instance once the
+	// build goroutine unwinds; the duplicate delete must be tolerated.
+	mgr.instanceManager.DeleteInstance(context.Background(), instID)
+	assert.Equal(t, 2, instanceMgr.deleteCallCount)
+}
+
+// TestCancelBuild_QueuedButAlreadyPickedUp pins the ErrBuildInProgress
+// semantics: a build read as queued but already picked up by the queue
+// reports the race rather than a success or a confusing error.
+func TestCancelBuild_QueuedButAlreadyPickedUp(t *testing.T) {
+	mgr, _, _, tempDir := setupTestManager(t)
+	defer os.RemoveAll(tempDir)
+
+	meta := &buildMetadata{
+		ID:        "build-1",
+		Status:    StatusQueued,
+		CreatedAt: time.Now(),
+	}
+	require.NoError(t, writeMetadata(mgr.paths, meta))
+
+	// The build is not in the pending queue (it was already picked up), so
+	// the queue cancel misses and the sentinel reports the race.
+	err := mgr.CancelBuild(context.Background(), "build-1")
+	assert.ErrorIs(t, err, ErrBuildInProgress)
+}
+
+// TestUpdateBuildComplete_PreservesTerminalStatus pins the cancellation
+// terminal-state protection: a cancelled build whose runBuild goroutine
+// later fails must keep its cancelled status.
+func TestUpdateBuildComplete_PreservesTerminalStatus(t *testing.T) {
+	mgr, _, _, tempDir := setupTestManager(t)
+	defer os.RemoveAll(tempDir)
+
+	meta := &buildMetadata{
+		ID:        "build-1",
+		Status:    StatusCancelled,
+		CreatedAt: time.Now(),
+	}
+	require.NoError(t, writeMetadata(mgr.paths, meta))
+
+	errMsg := "wait for result: context canceled"
+	duration := int64(42)
+	mgr.updateBuildComplete("build-1", StatusFailed, nil, &errMsg, nil, &duration)
+
+	got, err := readMetadata(mgr.paths, "build-1")
+	require.NoError(t, err)
+	assert.Equal(t, StatusCancelled, got.Status)
+	assert.Nil(t, got.Error)
+	assert.Nil(t, got.CompletedAt)
 }
 
 func TestCancelBuild_NotFound(t *testing.T) {
@@ -806,7 +947,7 @@ func TestBuildQueue_ConcurrencyLimit(t *testing.T) {
 	// Enqueue 5 builds with blocking start functions
 	for i := 0; i < 5; i++ {
 		id := string(rune('A' + i))
-		queue.Enqueue(id, CreateBuildRequest{}, func() {
+		queue.Enqueue(context.Background(), id, CreateBuildRequest{}, func(context.Context) {
 			started <- id
 			// Block until test completes - simulates long-running build
 			select {}
@@ -1161,6 +1302,219 @@ eventLoop:
 			t.Fatal("timeout waiting for channel to close after cancel")
 		}
 	}
+}
+
+// TestExecuteBuild_SourceVolumeAlreadyExists verifies that a leftover source
+// volume from an interrupted prior attempt of the same build is deleted and
+// recreated, allowing the re-run to proceed past source volume creation.
+func TestExecuteBuild_SourceVolumeAlreadyExists(t *testing.T) {
+	mgr, instanceMgr, volumeMgr, tempDir := setupTestManager(t)
+	defer os.RemoveAll(tempDir)
+
+	buildID := "build-crash-src"
+	req := CreateBuildRequest{Dockerfile: "FROM alpine"}
+	prepareBuildOnDisk(t, mgr, buildID, req)
+
+	var archiveCalls int
+	var deleted []string
+	volumeMgr.createFromArchiveFunc = func(ctx context.Context, req volumes.CreateVolumeFromArchiveRequest, archive io.Reader) (*volumes.Volume, error) {
+		archiveCalls++
+		if archiveCalls == 1 {
+			// Leftover from the interrupted prior attempt
+			return nil, volumes.ErrAlreadyExists
+		}
+		vol := &volumes.Volume{Id: *req.Id, Name: req.Name}
+		volumeMgr.volumes[vol.Id] = vol
+		return vol, nil
+	}
+	volumeMgr.deleteFunc = func(ctx context.Context, id string) error {
+		deleted = append(deleted, id)
+		delete(volumeMgr.volumes, id)
+		return nil
+	}
+	// Short-circuit once volume setup is done so the test doesn't enter the
+	// vsock wait loop.
+	instanceMgr.createFunc = func(ctx context.Context, req instances.CreateInstanceRequest) (*instances.Instance, error) {
+		return nil, fmt.Errorf("stop after volume setup")
+	}
+
+	policy := DefaultBuildPolicy()
+	_, err := mgr.executeBuild(context.Background(), buildID, req, &policy)
+
+	// The build must get past source volume creation (it may fail later).
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "create source volume")
+	assert.Equal(t, 2, archiveCalls, "expected delete + retry of source volume creation")
+	require.NotEmpty(t, deleted)
+	assert.Equal(t, "build-source-"+buildID, deleted[0])
+}
+
+// TestExecuteBuild_SourceVolumeInUse_StaleBuilder verifies that when the
+// leftover source volume is still attached to the interrupted attempt's stale
+// builder instance, the builder is deleted (detaching the volume) before the
+// volume is deleted and recreated.
+func TestExecuteBuild_SourceVolumeInUse_StaleBuilder(t *testing.T) {
+	mgr, instanceMgr, volumeMgr, tempDir := setupTestManager(t)
+	defer os.RemoveAll(tempDir)
+
+	buildID := "build-crash-inuse"
+	req := CreateBuildRequest{Dockerfile: "FROM alpine"}
+	prepareBuildOnDisk(t, mgr, buildID, req)
+
+	// Seed the stale builder instance from the interrupted attempt
+	builderName := "builder-" + buildID
+	instanceMgr.instances[builderName] = &instances.Instance{
+		StoredMetadata: instances.StoredMetadata{Id: builderName, Name: builderName},
+		State:          instances.StateRunning,
+	}
+
+	var archiveCalls int
+	var deleteCalls int
+	volumeMgr.createFromArchiveFunc = func(ctx context.Context, req volumes.CreateVolumeFromArchiveRequest, archive io.Reader) (*volumes.Volume, error) {
+		archiveCalls++
+		if archiveCalls == 1 {
+			return nil, volumes.ErrAlreadyExists
+		}
+		vol := &volumes.Volume{Id: *req.Id, Name: req.Name}
+		volumeMgr.volumes[vol.Id] = vol
+		return vol, nil
+	}
+	volumeMgr.deleteFunc = func(ctx context.Context, id string) error {
+		deleteCalls++
+		if deleteCalls == 1 {
+			// Still attached to the stale builder
+			return volumes.ErrInUse
+		}
+		delete(volumeMgr.volumes, id)
+		return nil
+	}
+	// Short-circuit once volume setup is done so the test doesn't enter the
+	// vsock wait loop.
+	instanceMgr.createFunc = func(ctx context.Context, req instances.CreateInstanceRequest) (*instances.Instance, error) {
+		return nil, fmt.Errorf("stop after volume setup")
+	}
+
+	policy := DefaultBuildPolicy()
+	_, err := mgr.executeBuild(context.Background(), buildID, req, &policy)
+
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "create source volume")
+	assert.Equal(t, 2, archiveCalls, "expected delete + retry of source volume creation")
+	assert.Equal(t, 1, instanceMgr.deleteCallCount, "expected stale builder instance to be deleted")
+	_, getErr := instanceMgr.GetInstance(context.Background(), builderName)
+	assert.ErrorIs(t, getErr, instances.ErrNotFound, "stale builder instance should be gone")
+}
+
+// TestExecuteBuild_SourceVolumeInUse_NoStaleBuilder verifies that when the
+// leftover source volume is in use but the interrupted attempt's builder
+// instance is gone, the build fails with a clear error and nothing is
+// force-deleted.
+func TestExecuteBuild_SourceVolumeInUse_NoStaleBuilder(t *testing.T) {
+	mgr, instanceMgr, volumeMgr, tempDir := setupTestManager(t)
+	defer os.RemoveAll(tempDir)
+
+	buildID := "build-crash-orphan"
+	req := CreateBuildRequest{Dockerfile: "FROM alpine"}
+	prepareBuildOnDisk(t, mgr, buildID, req)
+
+	var archiveCalls int
+	volumeMgr.createFromArchiveFunc = func(ctx context.Context, req volumes.CreateVolumeFromArchiveRequest, archive io.Reader) (*volumes.Volume, error) {
+		archiveCalls++
+		return nil, volumes.ErrAlreadyExists
+	}
+	volumeMgr.deleteFunc = func(ctx context.Context, id string) error {
+		return volumes.ErrInUse
+	}
+
+	policy := DefaultBuildPolicy()
+	_, err := mgr.executeBuild(context.Background(), buildID, req, &policy)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "refusing to force-delete")
+	assert.Equal(t, 1, archiveCalls, "create must not be retried when the leftover cannot be removed")
+	assert.Equal(t, 0, instanceMgr.deleteCallCount, "no instance should be deleted")
+}
+
+// TestRegisterBuildConfigVolume_AlreadyExists verifies that a leftover config
+// volume from an interrupted prior attempt of the same build is explicitly
+// deleted and recreated rather than silently masked by the copy-over fallback.
+func TestRegisterBuildConfigVolume_AlreadyExists(t *testing.T) {
+	mgr, _, volumeMgr, tempDir := setupTestManager(t)
+	defer os.RemoveAll(tempDir)
+
+	buildID := "build-crash-config"
+	configVolID := "build-config-" + buildID
+
+	// Dummy config disk to copy over the recreated volume
+	configData := []byte("fake-ext4-config-disk")
+	configDiskPath := filepath.Join(tempDir, "config.ext4")
+	require.NoError(t, os.WriteFile(configDiskPath, configData, 0644))
+
+	var createCalls int
+	var deleted []string
+	volumeMgr.createFunc = func(ctx context.Context, req volumes.CreateVolumeRequest) (*volumes.Volume, error) {
+		createCalls++
+		if createCalls == 1 {
+			// Leftover from the interrupted prior attempt
+			return nil, volumes.ErrAlreadyExists
+		}
+		vol := &volumes.Volume{Id: *req.Id, Name: req.Name}
+		volumeMgr.volumes[vol.Id] = vol
+		return vol, nil
+	}
+	volumeMgr.deleteFunc = func(ctx context.Context, id string) error {
+		deleted = append(deleted, id)
+		delete(volumeMgr.volumes, id)
+		return nil
+	}
+
+	err := mgr.registerBuildConfigVolume(context.Background(), buildID, configVolID, configDiskPath)
+
+	require.NoError(t, err)
+	assert.Equal(t, 2, createCalls, "expected delete + retry of config volume creation")
+	assert.Equal(t, []string{configVolID}, deleted)
+	assert.Contains(t, volumeMgr.volumes, configVolID, "config volume should be recreated")
+	// The config data must have been copied onto the recreated volume
+	copied, readErr := os.ReadFile(mgr.paths.VolumeData(configVolID))
+	require.NoError(t, readErr)
+	assert.Equal(t, configData, copied)
+}
+
+// TestRegisterBuildConfigVolume_RecreateFailure verifies that when recreating
+// a deleted leftover config volume fails, the recreate error is surfaced
+// rather than silently masked by the copy-over fallback.
+func TestRegisterBuildConfigVolume_RecreateFailure(t *testing.T) {
+	mgr, _, volumeMgr, tempDir := setupTestManager(t)
+	defer os.RemoveAll(tempDir)
+
+	buildID := "build-crash-config-fail"
+	configVolID := "build-config-" + buildID
+
+	configDiskPath := filepath.Join(tempDir, "config.ext4")
+	require.NoError(t, os.WriteFile(configDiskPath, []byte("fake-ext4-config-disk"), 0644))
+
+	var createCalls int
+	recreateErr := fmt.Errorf("recreate failed")
+	volumeMgr.createFunc = func(ctx context.Context, req volumes.CreateVolumeRequest) (*volumes.Volume, error) {
+		createCalls++
+		if createCalls == 1 {
+			return nil, volumes.ErrAlreadyExists
+		}
+		return nil, recreateErr
+	}
+	volumeMgr.deleteFunc = func(ctx context.Context, id string) error {
+		delete(volumeMgr.volumes, id)
+		return nil
+	}
+
+	err := mgr.registerBuildConfigVolume(context.Background(), buildID, configVolID, configDiskPath)
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, recreateErr)
+	assert.Contains(t, err.Error(), "create config volume")
+	assert.Equal(t, 2, createCalls, "expected delete + retry of config volume creation")
+	_, statErr := os.Stat(mgr.paths.VolumeData(configVolID))
+	assert.ErrorIs(t, statErr, os.ErrNotExist, "config volume data must not be copied when recreate fails")
 }
 
 func TestExtractInternalBaseImageRepos(t *testing.T) {
