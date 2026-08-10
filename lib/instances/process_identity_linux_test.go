@@ -18,6 +18,25 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestResolveLiveHypervisorPIDWithoutStoredPID(t *testing.T) {
+	t.Run("missing socket", func(t *testing.T) {
+		pid, err := resolveLiveHypervisorPID(nil, filepath.Join(t.TempDir(), "missing.sock"))
+		require.NoError(t, err)
+		assert.Zero(t, pid)
+	})
+
+	t.Run("live owner", func(t *testing.T) {
+		socketPath := filepath.Join(t.TempDir(), "test.sock")
+		listener, err := net.Listen("unix", socketPath)
+		require.NoError(t, err)
+		defer listener.Close()
+
+		pid, err := resolveLiveHypervisorPID(nil, socketPath)
+		require.NoError(t, err)
+		assert.Equal(t, os.Getpid(), pid)
+	})
+}
+
 func TestHypervisorProcessExistsTreatsUnresolvedSocketAsAlive(t *testing.T) {
 	t.Parallel()
 
