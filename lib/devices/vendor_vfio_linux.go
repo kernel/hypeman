@@ -81,37 +81,22 @@ func (s vendorVFIOSysfs) discoverVFs() ([]VirtualFunction, error) {
 	return vfs, nil
 }
 
-// listProfiles reports a conservative estimate of how many instances of each
-// profile are concurrently creatable. Free VFs on the same GPU share its
-// framebuffer, so counting every advertising VF overreports capacity: one 48Q
-// assignment can revoke the type from all sibling VFs. Each GPU instead
-// contributes min(free VFs advertising the type, remaining framebuffer /
-// profile framebuffer), where the largest profile still creatable on the GPU
-// is a lower bound on its remaining framebuffer.
+// listProfiles counts each free VF advertising a type as one creatable
+// instance, matching the driver-reported units that mdev sums through
+// available_instances. This is a best-effort snapshot because creating on one
+// VF may revoke the type from siblings that share its GPU framebuffer.
 func (s vendorVFIOSysfs) listProfiles(vfs []VirtualFunction) ([]GPUProfile, error) {
 	profilesByType := make(map[string]profileMetadata)
-	freeVFsByGPU := make(map[string]map[string]int)
-	remainingFBByGPU := make(map[string]int)
+	creatableVFs := make(map[string]int)
 	for _, vf := range vfs {
 		creatable, err := s.readCreatableProfiles(vf.PCIAddress)
 		if err != nil {
 			return nil, err
 		}
-		gpu := vf.ParentGPU
-		if gpu == "" {
-			gpu = vf.PCIAddress
-		}
 		for _, profile := range creatable {
 			profilesByType[profile.TypeName] = profile
-			if vf.Allocated {
-				continue
-			}
-			if freeVFsByGPU[gpu] == nil {
-				freeVFsByGPU[gpu] = make(map[string]int)
-			}
-			freeVFsByGPU[gpu][profile.TypeName]++
-			if profile.FramebufferMB > remainingFBByGPU[gpu] {
-				remainingFBByGPU[gpu] = profile.FramebufferMB
+			if !vf.Allocated {
+				creatableVFs[profile.TypeName]++
 			}
 		}
 	}
@@ -124,33 +109,13 @@ func (s vendorVFIOSysfs) listProfiles(vfs []VirtualFunction) ([]GPUProfile, erro
 
 	profiles := make([]GPUProfile, 0, len(metadata))
 	for _, profile := range metadata {
-		available := 0
-		for gpu, freeVFs := range freeVFsByGPU {
-			available += gpuProfileCapacity(freeVFs[profile.TypeName], remainingFBByGPU[gpu], profile.FramebufferMB)
-		}
 		profiles = append(profiles, GPUProfile{
 			Name:          profile.Name,
 			FramebufferMB: profile.FramebufferMB,
-			Available:     available,
+			Available:     creatableVFs[profile.TypeName],
 		})
 	}
 	return profiles, nil
-}
-
-// gpuProfileCapacity estimates how many instances of a profile one GPU can
-// still create concurrently. When a profile's framebuffer is unknown (0), the
-// free VF count is the only signal available.
-func gpuProfileCapacity(freeVFs, remainingFB, profileFB int) int {
-	if freeVFs == 0 {
-		return 0
-	}
-	if profileFB <= 0 || remainingFB <= 0 {
-		return freeVFs
-	}
-	if byFB := remainingFB / profileFB; byFB < freeVFs {
-		return byFB
-	}
-	return freeVFs
 }
 
 func (s vendorVFIOSysfs) create(ctx context.Context, profileName, instanceID string) (*VGPUDevice, error) {
