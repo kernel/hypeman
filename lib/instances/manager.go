@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -737,9 +738,25 @@ func (m *manager) DefaultHypervisor() hypervisor.Type {
 	return m.defaultHypervisor
 }
 
-// ListInstancesForReconcile returns every instance or an invalid metadata error.
+// ListInstancesForReconcile returns every instance's stored metadata or an
+// invalid metadata error. It does not derive state: reconcile protection only
+// needs raw metadata fields, and hydration would query the hypervisor of
+// every instance on the host before the API serves.
 func (m *manager) ListInstancesForReconcile(ctx context.Context) ([]Instance, error) {
-	return m.loadInstances(ctx, false)
+	files, err := m.listMetadataFilesWithStatErrors(true)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]Instance, 0, len(files))
+	for _, file := range files {
+		id := filepath.Base(filepath.Dir(file))
+		meta, err := m.loadMetadata(id)
+		if err != nil {
+			return nil, fmt.Errorf("load metadata for instance %s: %w", id, err)
+		}
+		result = append(result, Instance{StoredMetadata: meta.StoredMetadata})
+	}
+	return result, nil
 }
 
 // ListInstances returns instances, optionally filtered by the given criteria.
