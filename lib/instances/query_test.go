@@ -34,6 +34,12 @@ func TestListInstancesForReconcileFailsOnInvalidMetadata(t *testing.T) {
 	_, err = m.ListInstancesForReconcile(context.Background())
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "load metadata for instance invalid")
+
+	require.NoError(t, os.Remove(m.paths.InstanceMetadata("invalid")))
+	listed, err = m.ListInstancesForReconcile(context.Background())
+	require.NoError(t, err)
+	require.Len(t, listed, 1)
+	assert.Equal(t, "valid", listed[0].Id)
 }
 
 func TestParseExitSentinelLine(t *testing.T) {
