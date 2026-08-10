@@ -213,6 +213,13 @@ func TestForceKillHypervisorProcessFailsOnUnconfirmedOwnership(t *testing.T) {
 	assert.NoError(t, syscall.Kill(pid, 0), "process with unconfirmed socket ownership must not be killed")
 }
 
+func TestSendSIGKILLIgnoresExitedProcess(t *testing.T) {
+	process := exec.Command("true")
+	require.NoError(t, process.Run())
+
+	require.NoError(t, sendSIGKILL(process.Process.Pid))
+}
+
 func TestRefreshHypervisorPIDPrefersSocketOwnerOverLiveStoredPID(t *testing.T) {
 	socketPath := filepath.Join(t.TempDir(), "test.sock")
 	owner := exec.Command(os.Args[0], "-test.run=^TestHypervisorProcessExistsWithReboundSocketPathHelper$")
@@ -242,6 +249,20 @@ func TestRefreshHypervisorPIDPrefersSocketOwnerOverLiveStoredPID(t *testing.T) {
 	refreshHypervisorPID(&stored, StateRunning)
 	require.NotNil(t, stored.HypervisorPID)
 	assert.Equal(t, owner.Process.Pid, *stored.HypervisorPID)
+}
+
+func TestRefreshHypervisorPIDBackfillsStartTime(t *testing.T) {
+	socketPath := filepath.Join(t.TempDir(), "test.sock")
+	listener, err := net.Listen("unix", socketPath)
+	require.NoError(t, err)
+	defer listener.Close()
+
+	pid := os.Getpid()
+	stored := StoredMetadata{HypervisorPID: &pid, SocketPath: socketPath}
+	refreshHypervisorPID(&stored, StateRunning)
+
+	require.NotZero(t, stored.HypervisorStartTime)
+	assert.Equal(t, processStartTime(pid), stored.HypervisorStartTime)
 }
 
 func TestKillHypervisorSurvivesConcurrentReaper(t *testing.T) {
