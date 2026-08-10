@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/paths"
+	"github.com/kernel/hypeman/lib/queue"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -45,7 +46,7 @@ func TestRecoverInterruptedBuildsCapturedFixtureMarksBuildFailed(t *testing.T) {
 	m := &manager{
 		paths:            p,
 		ociClient:        client,
-		queue:            NewBuildQueue(1),
+		queue:            queue.New(1),
 		readySubscribers: make(map[string][]chan StatusEvent),
 	}
 

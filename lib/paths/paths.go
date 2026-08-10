@@ -407,6 +407,23 @@ func (p *Paths) BuildMetadata(id string) string {
 	return filepath.Join(p.BuildDir(id), "metadata.json")
 }
 
+// Push path methods
+
+// PushesDir returns the root pushes directory.
+func (p *Paths) PushesDir() string {
+	return filepath.Join(p.dataDir, "pushes")
+}
+
+// PushDir returns the directory for a specific push.
+func (p *Paths) PushDir(id string) string {
+	return filepath.Join(p.PushesDir(), id)
+}
+
+// PushMetadata returns the path to push metadata.json.
+func (p *Paths) PushMetadata(id string) string {
+	return filepath.Join(p.PushDir(id), "metadata.json")
+}
+
 // BuildLogs returns the path to build logs directory.
 func (p *Paths) BuildLogs(id string) string {
 	return filepath.Join(p.BuildDir(id), "logs")
