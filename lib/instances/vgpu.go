@@ -2,7 +2,6 @@ package instances
 
 import (
 	"context"
-	"fmt"
 	"path/filepath"
 
 	"github.com/kernel/hypeman/lib/devices"
