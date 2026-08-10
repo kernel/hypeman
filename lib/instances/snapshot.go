@@ -520,12 +520,12 @@ func (m *manager) replaceInstanceWithSnapshotPayload(snapshotID, instanceID stri
 }
 
 func (m *manager) prepareSnapshotTarget(ctx context.Context, source StoredMetadata, target hypervisor.Type) (hypervisor.VMStarter, string, error) {
-	if err := m.validateQEMUMicroVMMetadata(source, target); err != nil {
-		return nil, "", err
-	}
 	starter, err := m.getVMStarter(target)
 	if err != nil {
 		return nil, "", fmt.Errorf("get vm starter: %w", err)
+	}
+	if err := m.validateStoredVMConfig(starter, source, target); err != nil {
+		return nil, "", err
 	}
 
 	version := source.HypervisorVersion

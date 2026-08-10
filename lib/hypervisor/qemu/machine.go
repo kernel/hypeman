@@ -72,14 +72,12 @@ func resolveMachineTypeForPlatform(requested MachineType, goos, goarch string) (
 	return "", fmt.Errorf("machine type %q is not supported on %s/%s", requested, goos, goarch)
 }
 
-// ValidateConfig validates restrictions for standard QEMU on this host.
-func ValidateConfig(cfg hypervisor.VMConfig) error {
-	return validateConfig(cfg, standardMachineType())
-}
+var _ hypervisor.VMConfigValidator = (*Starter)(nil)
 
-// ValidateMicroVMConfig validates restrictions for QEMU's microvm profile.
-func ValidateMicroVMConfig(cfg hypervisor.VMConfig) error {
-	machine, err := microVMMachineType()
+// ValidateConfig validates a generic VM plan against this starter's private
+// QEMU machine profile without performing side effects.
+func (s *Starter) ValidateConfig(cfg hypervisor.VMConfig) error {
+	machine, err := machineTypeForHypervisor(s.hypervisorType)
 	if err != nil {
 		return err
 	}

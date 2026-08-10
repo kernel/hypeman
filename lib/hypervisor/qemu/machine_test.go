@@ -79,7 +79,7 @@ func TestValidateConfigMicroVM(t *testing.T) {
 		t.Skipf("microvm is unavailable on this platform: %v", err)
 	}
 	base := hypervisor.VMConfig{Disks: make([]hypervisor.DiskConfig, 6), Networks: []hypervisor.NetworkConfig{{}}, VsockCID: 3}
-	require.NoError(t, ValidateMicroVMConfig(base), "six disks, network, and vsock consume all eight slots")
+	require.NoError(t, NewMicroVMStarter().ValidateConfig(base), "six disks, network, and vsock consume all eight slots")
 
 	for _, tc := range []struct {
 		name   string
@@ -92,7 +92,7 @@ func TestValidateConfigMicroVM(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := base
 			tc.mutate(&cfg)
-			assert.Error(t, ValidateMicroVMConfig(cfg))
+			assert.Error(t, NewMicroVMStarter().ValidateConfig(cfg))
 		})
 	}
 }

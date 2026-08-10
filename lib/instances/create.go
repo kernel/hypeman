@@ -103,7 +103,11 @@ func (m *manager) createInstance(
 	if hvType == "" {
 		hvType = m.defaultHypervisor
 	}
-	if err := m.validateQEMUMicroVMCreate(req, hvType); err != nil {
+	starter, err := m.getVMStarter(hvType)
+	if err != nil {
+		return nil, fmt.Errorf("get vm starter for %s: %w", hvType, err)
+	}
+	if err := m.validateCreateVMConfig(starter, req, hvType); err != nil {
 		return nil, err
 	}
 
@@ -235,12 +239,6 @@ func (m *manager) createInstance(
 	log = log.With("hypervisor", string(hvType))
 	ctx = logger.AddToContext(ctx, log)
 	ctx = enrichInstancesTrace(ctx, attribute.String("hypervisor", string(hvType)))
-
-	starter, err := m.getVMStarter(hvType)
-	if err != nil {
-		log.ErrorContext(ctx, "failed to get vm starter", "error", err)
-		return nil, fmt.Errorf("get vm starter for %s: %w", hvType, err)
-	}
 
 	hvVersion, err := m.resolveCreateHypervisorVersion(ctx, starter, hvType, req.HypervisorVersion)
 	if err != nil {

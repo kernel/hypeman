@@ -62,6 +62,13 @@ type fakeStarter struct {
 	returned Hypervisor
 }
 
+type fakeValidatingStarter struct {
+	fakeStarter
+	err error
+}
+
+func (s fakeValidatingStarter) ValidateConfig(VMConfig) error { return s.err }
+
 func (s fakeStarter) SocketName() string { return "fake.sock" }
 func (s fakeStarter) GetBinaryPath(*paths.Paths, string) (string, error) {
 	return "", nil
@@ -75,6 +82,21 @@ func (s fakeStarter) RestoreVM(context.Context, *paths.Paths, string, string, st
 }
 func (s fakeStarter) PrepareFork(context.Context, ForkPrepareRequest) (ForkPrepareResult, error) {
 	return ForkPrepareResult{}, nil
+}
+
+func TestTraceSubsystemSeparatesQEMUBackends(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, "hypeman/hypervisor/qemu", traceSubsystemForType(TypeQEMU))
+	assert.Equal(t, "hypeman/hypervisor/qemu-microvm", traceSubsystemForType(TypeQEMUMicroVM))
+}
+
+func TestWrapVMStarterPreservesConfigValidation(t *testing.T) {
+	t.Parallel()
+	want := errors.New("invalid backend config")
+	starter := WrapVMStarter(TypeQEMUMicroVM, fakeValidatingStarter{err: want})
+	validator, ok := starter.(VMConfigValidator)
+	require.True(t, ok)
+	assert.ErrorIs(t, validator.ValidateConfig(VMConfig{}), want)
 }
 
 func TestWrapHypervisorCreatesChildSpan(t *testing.T) {

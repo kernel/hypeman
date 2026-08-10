@@ -91,6 +91,13 @@ func CapabilitiesForType(t Type) (Capabilities, bool) {
 	return caps, ok
 }
 
+// VMConfigValidator is implemented by starters with backend-specific VM
+// configuration constraints. Managers can use it for side-effect-free preflight
+// validation; starters must still validate the final config at launch/restore.
+type VMConfigValidator interface {
+	ValidateConfig(VMConfig) error
+}
+
 // VMStarter handles the full VM startup sequence.
 // Each hypervisor implements its own startup flow:
 // - Cloud Hypervisor: starts process, configures via HTTP API, boots via HTTP API
