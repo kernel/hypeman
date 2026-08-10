@@ -218,7 +218,7 @@ func TestVGPUAssignmentClaimedByLiveInstanceNormalizesLegacyMdevPath(t *testing.
 	assert.True(t, claimed)
 }
 
-func TestVGPUAssignmentClaimedByLiveInstanceProtectsNilPIDClaim(t *testing.T) {
+func TestVGPUAssignmentClaimedByLiveInstanceErrorsOnNilPIDClaim(t *testing.T) {
 	t.Parallel()
 
 	m := &manager{paths: paths.New(t.TempDir())}
@@ -229,9 +229,9 @@ func TestVGPUAssignmentClaimedByLiveInstanceProtectsNilPIDClaim(t *testing.T) {
 		GPUDevicePath: "/sys/bus/pci/devices/0000:82:00.4",
 	}}))
 
-	claimed, err := m.vgpuAssignmentClaimedByLiveInstance(context.Background(), "other-instance", "/sys/bus/pci/devices/0000:82:00.4")
-	require.NoError(t, err)
-	assert.True(t, claimed, "a matching claim without a persisted PID must be treated as live: the PID is only persisted after the claimant boots")
+	_, err := m.vgpuAssignmentClaimedByLiveInstance(context.Background(), "other-instance", "/sys/bus/pci/devices/0000:82:00.4")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "booting-claimant")
 }
 
 func TestVGPUAssignmentClaimedByLiveInstanceIgnoresDeadClaim(t *testing.T) {
@@ -271,6 +271,36 @@ func TestReleaseStoredVGPUSkipsClaimScanForMdev(t *testing.T) {
 	require.NoError(t, m.releaseStoredVGPU(context.Background(), stored),
 		"an unreadable metadata file must not block mdev releases")
 	assert.Empty(t, stored.GPUDevicePath)
+}
+
+func TestReleaseStoredVGPURetainsRequesterOnAmbiguousClaim(t *testing.T) {
+	t.Parallel()
+
+	const devicePath = "/sys/bus/pci/devices/0000:82:00.4"
+	m := &manager{
+		paths: paths.New(t.TempDir()),
+		destroyVGPU: func(context.Context, devices.VGPUAssignment) error {
+			t.Fatal("destroyVGPU must not be called for an ambiguous claim")
+			return nil
+		},
+	}
+	require.NoError(t, m.ensureDirectories("ambiguous-claimant"))
+	require.NoError(t, m.saveMetadata(&metadata{StoredMetadata: StoredMetadata{
+		Id:            "ambiguous-claimant",
+		GPUFramework:  devices.VGPUFrameworkVendorVFIO,
+		GPUDevicePath: devicePath,
+	}}))
+
+	stored := &StoredMetadata{
+		Id:            "requester",
+		GPUFramework:  devices.VGPUFrameworkVendorVFIO,
+		GPUDevicePath: devicePath,
+	}
+	err := m.releaseStoredVGPU(context.Background(), stored)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ambiguous-claimant")
+	assert.Equal(t, devices.VGPUFrameworkVendorVFIO, stored.GPUFramework)
+	assert.Equal(t, devicePath, stored.GPUDevicePath)
 }
 
 func TestStoredVGPUDevicePath(t *testing.T) {

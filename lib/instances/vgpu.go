@@ -90,13 +90,13 @@ func (m *manager) releaseStoredVGPU(ctx context.Context, stored *StoredMetadata)
 	return nil
 }
 
-// vgpuAssignmentClaimedByLiveInstance reports whether another instance's
+// vgpuAssignmentClaimedByLiveInstance reports whether another live instance's
 // stored metadata claims devicePath. It reads raw metadata instead of
 // hydrating full instances: the scan runs on every vendor VFIO release, and
 // deriving state would query the hypervisor of every instance on the host.
-// It fails closed: unreadable metadata is an error, and a matching claim
-// without a persisted PID counts as live because the PID is only persisted
-// after the claimant's hypervisor starts.
+// A confirmed live claimant returns true. Unreadable metadata, a missing PID,
+// or unverifiable process ownership returns an error so the requester retains
+// its assignment for a later retry.
 func (m *manager) vgpuAssignmentClaimedByLiveInstance(ctx context.Context, excludeID, devicePath string) (bool, error) {
 	files, err := m.listMetadataFilesWithStatErrors(true)
 	if err != nil {
@@ -116,10 +116,13 @@ func (m *manager) vgpuAssignmentClaimedByLiveInstance(ctx context.Context, exclu
 			continue
 		}
 		if stored.HypervisorPID == nil {
-			return true, nil
+			return false, fmt.Errorf("cannot confirm liveness of vGPU claimant %s on %s: no persisted hypervisor PID", id, devicePath)
 		}
 		pid, err := resolveLiveHypervisorPID(stored.HypervisorPID, stored.HypervisorStartTime, stored.SocketPath)
-		if err != nil || pid > 0 {
+		if err != nil {
+			return false, fmt.Errorf("cannot confirm liveness of vGPU claimant %s on %s: %w", id, devicePath, err)
+		}
+		if pid > 0 {
 			return true, nil
 		}
 	}
