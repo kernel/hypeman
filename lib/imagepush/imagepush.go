@@ -8,11 +8,13 @@
 package imagepush
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
-	"strings"
+	"fmt"
 	"time"
 
 	"github.com/google/go-containerregistry/pkg/authn"
@@ -24,6 +26,11 @@ const (
 	StatusPushing = "pushing"
 	StatusPushed  = "pushed"
 	StatusFailed  = "failed"
+
+	// pushTimeout bounds a single registry export so a wedged registry cannot
+	// pin a queue slot forever; with a bounded concurrency pool one hung push
+	// would otherwise block every later push.
+	pushTimeout = 30 * time.Minute
 )
 
 var (
@@ -71,7 +78,22 @@ func credFingerprint(c *authn.AuthConfig) string {
 	if !credsPresent(c) {
 		return ""
 	}
-	sum := sha256.Sum256([]byte(strings.Join([]string{c.Username, c.Password, c.Auth, c.IdentityToken, c.RegistryToken}, "\x00")))
+	// Normalize the precomputed base64 "user:pass" Auth shorthand into its
+	// username/password parts so the same login supplied either way hashes
+	// identically (AuthConfig.UnmarshalJSON already expands it, but a config
+	// built in code may not have gone through JSON).
+	username, password := c.Username, c.Password
+	if c.Auth != "" {
+		if decoded, err := base64.StdEncoding.DecodeString(c.Auth); err == nil {
+			if i := bytes.IndexByte(decoded, ':'); i >= 0 {
+				username, password = string(decoded[:i]), string(decoded[i+1:])
+			}
+		}
+	}
+	// IdentityToken and RegistryToken are distinct auth modes (token/registry-
+	// scoped) and are kept as-is; they can carry a different identity than the
+	// basic-auth pair.
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%s\x00%s\x00%s", username, password, c.IdentityToken, c.RegistryToken)))
 	return hex.EncodeToString(sum[:])
 }
 
@@ -95,12 +117,6 @@ type ImageResolver interface {
 	GetImage(ctx context.Context, name string) (*images.Image, error)
 }
 
-// StatusEvent represents a terminal status change for push notifications.
-type StatusEvent struct {
-	Status string
-	Err    error
-}
-
 // Manager orchestrates push jobs.
 type Manager interface {
 	// CreatePush validates the request, persists a queued job, and enqueues it.
@@ -113,13 +129,8 @@ type Manager interface {
 	GetPush(ctx context.Context, id string) (*Push, error)
 	// ListPushes returns all pushes, newest first.
 	ListPushes(ctx context.Context) ([]Push, error)
-	// WaitForPush blocks until the push reaches a terminal state (pushed or
-	// failed) or the context is cancelled.
-	WaitForPush(ctx context.Context, id string) error
-	// InProgressDigests returns the manifest digests of queued and pushing
-	// jobs so the OCI cache GC can keep their blobs alive mid-push.
-	InProgressDigests() []string
-	// LiveCacheManifestDigests implements ocicachegc.RootsProvider by
-	// delegating to InProgressDigests.
+	// LiveCacheManifestDigests implements ocicachegc.RootsProvider: the
+	// manifest digests of queued and pushing jobs, so the OCI cache GC keeps
+	// their blobs alive mid-push.
 	LiveCacheManifestDigests() []string
 }

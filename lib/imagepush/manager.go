@@ -32,9 +32,6 @@ type manager struct {
 
 	mu       sync.Mutex
 	inflight map[string]inflightPush // key = pushKey(digest, target, insecure)
-
-	subscriberMu sync.RWMutex
-	subscribers  map[string][]chan StatusEvent // keyed by push ID
 }
 
 // NewManager creates a push manager. provider may be nil, in which case
@@ -49,12 +46,11 @@ func NewManager(p *paths.Paths, resolver ImageResolver, provider registrypush.Pr
 	}
 
 	m := &manager{
-		paths:       p,
-		resolver:    resolver,
-		provider:    provider,
-		queue:       queue.New(maxConcurrent),
-		inflight:    make(map[string]inflightPush),
-		subscribers: make(map[string][]chan StatusEvent),
+		paths:    p,
+		resolver: resolver,
+		provider: provider,
+		queue:    queue.New(maxConcurrent),
+		inflight: make(map[string]inflightPush),
 	}
 
 	m.recoverInterruptedPushes()
@@ -114,63 +110,56 @@ func (m *manager) CreatePush(ctx context.Context, req PushRequest) (*Push, error
 	// a concurrent request for the same digest+target cannot slip in between
 	// and create a duplicate job. The write is one small fsync'd file; keeping
 	// it under the lock is what lets the dedup path hand back a durable record,
-	// and it only briefly stalls InProgressDigests — cheap next to the registry
-	// I/O that dominates a push.
+	// and it only briefly stalls the GC live-digest read — cheap next to the
+	// registry I/O that dominates a push.
 	var meta *pushMetadata
-	for {
-		m.mu.Lock()
-		if existing, ok := m.inflight[key]; ok {
-			// Merge only when the in-flight job runs under the same credentials
-			// as the request. The manager never stores credential values, so it
-			// compares fingerprints: a request that borrowed credentials cannot
-			// merge into an anonymous in-flight push (its auth would be silently
-			// dropped), an anonymous request cannot merge into a credentialed one
-			// (it would silently inherit another caller's login), and two
-			// requests that borrowed different logins cannot merge either — one
-			// would run under the other caller's auth, and an instance can serve
-			// more than one principal. Surface the conflict instead so the caller
-			// can retry once the in-flight job completes or match its credentials.
-			if existing.credFingerprint != fingerprint {
-				m.mu.Unlock()
-				return nil, fmt.Errorf("%w: a push of %s to %s is already in flight with different credentials; retry once it completes or match its credentials", ErrCredentialConflict, img.Digest, dstRef.String())
-			}
-			id := existing.id
+	m.mu.Lock()
+	if existing, ok := m.inflight[key]; ok {
+		// Merge only when the in-flight job runs under the same credentials
+		// as the request. The manager never stores credential values, so it
+		// compares fingerprints: a request that borrowed credentials cannot
+		// merge into an anonymous in-flight push (its auth would be silently
+		// dropped), an anonymous request cannot merge into a credentialed one
+		// (it would silently inherit another caller's login), and two
+		// requests that borrowed different logins cannot merge either — one
+		// would run under the other caller's auth, and an instance can serve
+		// more than one principal. Surface the conflict instead so the caller
+		// can retry once the in-flight job completes or match its credentials.
+		if existing.credFingerprint != fingerprint {
 			m.mu.Unlock()
-			push, err := m.GetPush(ctx, id)
-			if errors.Is(err, ErrNotFound) {
-				// The job's terminal record could not be persisted and its
-				// directory was dropped; the queue completion hook releases the
-				// inflight entry moments later. Wait for that entry (not just the
-				// key) to go away, then retry the dedup: a concurrent waiter that
-				// got here first may already have registered a successor, which
-				// this retry merges into instead of surfacing a bare ErrNotFound
-				// from a create call.
-				if err := m.waitForInflightRelease(ctx, key, id); err != nil {
-					return nil, err
-				}
-				continue
-			}
-			return push, err
+			return nil, fmt.Errorf("%w: a push of %s to %s is already in flight with different credentials; retry once it completes or match its credentials", ErrCredentialConflict, img.Digest, dstRef.String())
 		}
-
-		meta = &pushMetadata{
-			ID:             cuid2.Generate(),
-			Status:         StatusQueued,
-			Image:          img.Name,
-			Digest:         img.Digest,
-			Target:         dstRef.String(),
-			Insecure:       req.Insecure,
-			HadCredentials: credsPresent(req.Credentials),
-			CreatedAt:      time.Now(),
-		}
-		if err := writeMetadata(m.paths, meta); err != nil {
-			m.mu.Unlock()
-			return nil, fmt.Errorf("write initial metadata: %w", err)
-		}
-		m.inflight[key] = inflightPush{id: meta.ID, digest: meta.Digest, credFingerprint: fingerprint}
+		id := existing.id
 		m.mu.Unlock()
-		break
+		push, err := m.GetPush(ctx, id)
+		if errors.Is(err, ErrNotFound) {
+			// The job's terminal record could not be persisted and its
+			// directory was dropped, so the in-flight entry points at nothing
+			// readable. This is a rare mid-finalization window; surface a
+			// clear retryable error rather than orchestrating this caller into
+			// a successor job that does not yet exist. A retry once the entry
+			// drops creates a fresh job.
+			return nil, fmt.Errorf("%w: push job %s is being finalized after a record write failure; retry", ErrNotFound, id)
+		}
+		return push, err
 	}
+
+	meta = &pushMetadata{
+		ID:             cuid2.Generate(),
+		Status:         StatusQueued,
+		Image:          img.Name,
+		Digest:         img.Digest,
+		Target:         dstRef.String(),
+		Insecure:       req.Insecure,
+		HadCredentials: credsPresent(req.Credentials),
+		CreatedAt:      time.Now(),
+	}
+	if err := writeMetadata(m.paths, meta); err != nil {
+		m.mu.Unlock()
+		return nil, fmt.Errorf("write initial metadata: %w", err)
+	}
+	m.inflight[key] = inflightPush{id: meta.ID, digest: meta.Digest, credFingerprint: fingerprint}
+	m.mu.Unlock()
 
 	metaCopy := *meta
 	queuePos := m.queue.Enqueue(key, func() {
@@ -185,9 +174,13 @@ func (m *manager) CreatePush(ctx context.Context, req PushRequest) (*Push, error
 }
 
 func (m *manager) executePush(ctx context.Context, meta *pushMetadata, provider registrypush.Provider) {
-	// Contain panics in the job goroutine: record a failed terminal and
-	// notify waiters instead of leaving the job stuck as pushing. The queue
-	// slot is released by its own deferred completion.
+	// Bound each export so a wedged registry cannot pin a queue slot forever.
+	ctx, cancel := context.WithTimeout(ctx, pushTimeout)
+	defer cancel()
+
+	// Contain panics in the job goroutine: record a failed terminal instead
+	// of leaving the job stuck as pushing. The queue slot is released by its
+	// own deferred completion.
 	defer func() {
 		if r := recover(); r != nil {
 			fmt.Fprintf(os.Stderr, "Warning: push %s to %s panicked: %v\n", meta.ID, meta.Target, r)
@@ -196,10 +189,7 @@ func (m *manager) executePush(ctx context.Context, meta *pushMetadata, provider 
 			meta.Status = StatusFailed
 			meta.Error = &errorMsg
 			meta.CompletedAt = &now
-			if err := m.writeTerminal(meta); err != nil {
-				os.RemoveAll(m.paths.PushDir(meta.ID))
-			}
-			m.notify(meta.ID, StatusFailed, fmt.Errorf("push panicked: %v", r))
+			m.persistTerminal(meta)
 		}
 	}()
 
@@ -225,25 +215,21 @@ func (m *manager) executePush(ctx context.Context, meta *pushMetadata, provider 
 	}
 	meta.CompletedAt = &now
 
+	m.persistTerminal(meta)
+}
+
+// persistTerminal writes a terminal status and, if that write fails, drops the
+// record so GetPush/ListPushes do not surface a half-written job. Both the
+// normal completion path and the panic handler use it so they agree on what
+// "couldn't persist" means; the actual push outcome only reaches the log.
+func (m *manager) persistTerminal(meta *pushMetadata) {
 	if err := m.writeTerminal(meta); err != nil {
-		// The outcome cannot be recorded: drop the record and report the job
-		// as failed with the persistence problem, so WaitForPush and GetPush
-		// agree instead of diverging into success-then-not-found. The actual
-		// push outcome goes to the log.
 		fmt.Fprintf(os.Stderr, "Warning: push %s to %s finished as %s but the job record could not be persisted: %v\n", meta.ID, meta.Target, strings.ToLower(meta.Status), err)
 		os.RemoveAll(m.paths.PushDir(meta.ID))
 		persistErr := fmt.Errorf("job record could not be persisted: %w", err)
 		errorMsg := persistErr.Error()
 		meta.Status = StatusFailed
 		meta.Error = &errorMsg
-		m.notify(meta.ID, StatusFailed, persistErr)
-		return
-	}
-
-	if pushErr != nil {
-		m.notify(meta.ID, StatusFailed, pushErr)
-	} else {
-		m.notify(meta.ID, StatusPushed, nil)
 	}
 }
 
@@ -272,30 +258,6 @@ func (m *manager) releaseInflight(key string) func() {
 	}
 }
 
-// waitForInflightRelease blocks until the key's torn-down inflight entry is
-// dropped — or replaced by a successor job a concurrent create registered
-// first, which the caller then merges into by retrying the dedup. Waiting on
-// the entry's id rather than the key's absence is what keeps a second waiter
-// from parking until the successor finishes and then starting a duplicate
-// push. The queue releases the key's active slot before it runs the
-// completion hook, so once the torn-down entry is gone a fresh Enqueue for
-// the key starts immediately. The caller's context bounds the wait.
-func (m *manager) waitForInflightRelease(ctx context.Context, key, tornDownID string) error {
-	for {
-		m.mu.Lock()
-		existing, ok := m.inflight[key]
-		m.mu.Unlock()
-		if !ok || existing.id != tornDownID {
-			return nil
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(5 * time.Millisecond):
-		}
-	}
-}
-
 func (m *manager) GetPush(ctx context.Context, id string) (*Push, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -305,10 +267,7 @@ func (m *manager) GetPush(ctx context.Context, id string) (*Push, error) {
 		return nil, err
 	}
 
-	push := meta.toPush()
-	if meta.Status == StatusQueued {
-		push.QueuePosition = m.queue.GetPosition(pushKey(meta.Digest, meta.Target, meta.Insecure))
-	}
+	push := m.toPushWithPosition(meta)
 	return push, nil
 }
 
@@ -323,68 +282,23 @@ func (m *manager) ListPushes(ctx context.Context) ([]Push, error) {
 
 	pushes := make([]Push, 0, len(metas))
 	for _, meta := range metas {
-		push := meta.toPush()
-		if meta.Status == StatusQueued {
-			push.QueuePosition = m.queue.GetPosition(pushKey(meta.Digest, meta.Target, meta.Insecure))
-		}
-		pushes = append(pushes, *push)
+		pushes = append(pushes, *m.toPushWithPosition(meta))
 	}
 	return pushes, nil
 }
 
-// WaitForPush blocks until the push reaches a terminal state (pushed or
-// failed) or the context is cancelled.
-func (m *manager) WaitForPush(ctx context.Context, id string) error {
-	push, err := m.GetPush(ctx, id)
-	if err != nil {
-		return err
+// toPushWithPosition projects a stored record to its domain form and, for a
+// queued job, enriches it with the live pending-queue position. GetPush and
+// ListPushes share this so the projection cannot drift between them.
+func (m *manager) toPushWithPosition(meta *pushMetadata) *Push {
+	push := meta.toPush()
+	if meta.Status == StatusQueued {
+		push.QueuePosition = m.queue.GetPosition(pushKey(meta.Digest, meta.Target, meta.Insecure))
 	}
-
-	switch push.Status {
-	case StatusPushed:
-		return nil
-	case StatusFailed:
-		return pushError(push)
-	}
-
-	ch := make(chan StatusEvent, 1)
-	m.subscribe(id, ch)
-	defer m.unsubscribe(id, ch)
-
-	// Re-check after subscribing to close the race window.
-	push, err = m.GetPush(ctx, id)
-	if err != nil {
-		return err
-	}
-	switch push.Status {
-	case StatusPushed:
-		return nil
-	case StatusFailed:
-		return pushError(push)
-	}
-
-	select {
-	case event := <-ch:
-		if event.Status == StatusPushed {
-			return nil
-		}
-		if event.Err != nil {
-			return fmt.Errorf("push failed: %w", event.Err)
-		}
-		return fmt.Errorf("push failed")
-	case <-ctx.Done():
-		return ctx.Err()
-	}
+	return push
 }
 
-func pushError(push *Push) error {
-	if push.Error != nil {
-		return fmt.Errorf("push failed: %s", *push.Error)
-	}
-	return fmt.Errorf("push failed")
-}
-
-func (m *manager) InProgressDigests() []string {
+func (m *manager) inProgressDigests() []string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -404,7 +318,7 @@ func (m *manager) InProgressDigests() []string {
 // LiveCacheManifestDigests implements ocicachegc.RootsProvider so in-flight
 // push digests are treated as live alongside the OCI layout index.
 func (m *manager) LiveCacheManifestDigests() []string {
-	return m.InProgressDigests()
+	return m.inProgressDigests()
 }
 
 func (m *manager) recoverInterruptedPushes() {
@@ -460,7 +374,6 @@ func (m *manager) recoverInterruptedPushes() {
 
 // failRecovered marks a recovered job failed. If the status cannot be
 // persisted, the record is removed instead of being left permanently queued.
-// Subscribers are notified so a WaitForPush racing the close does not hang.
 func (m *manager) failRecovered(meta *pushMetadata, reason string) {
 	meta.Status = StatusFailed
 	meta.Error = &reason
@@ -469,41 +382,5 @@ func (m *manager) failRecovered(meta *pushMetadata, reason string) {
 	if err := m.writeTerminal(meta); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: dropping unrecoverable push record %s: %v\n", meta.ID, err)
 		os.RemoveAll(m.paths.PushDir(meta.ID))
-	}
-	m.notify(meta.ID, StatusFailed, errors.New(reason))
-}
-
-func (m *manager) subscribe(id string, ch chan StatusEvent) {
-	m.subscriberMu.Lock()
-	defer m.subscriberMu.Unlock()
-	m.subscribers[id] = append(m.subscribers[id], ch)
-}
-
-func (m *manager) unsubscribe(id string, ch chan StatusEvent) {
-	m.subscriberMu.Lock()
-	defer m.subscriberMu.Unlock()
-
-	subs := m.subscribers[id]
-	for i, sub := range subs {
-		if sub == ch {
-			m.subscribers[id] = append(subs[:i], subs[i+1:]...)
-			break
-		}
-	}
-	if len(m.subscribers[id]) == 0 {
-		delete(m.subscribers, id)
-	}
-}
-
-func (m *manager) notify(id, status string, err error) {
-	m.subscriberMu.RLock()
-	defer m.subscriberMu.RUnlock()
-
-	event := StatusEvent{Status: status, Err: err}
-	for _, ch := range m.subscribers[id] {
-		select {
-		case ch <- event:
-		default:
-		}
 	}
 }

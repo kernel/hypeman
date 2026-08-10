@@ -134,11 +134,9 @@ func pushToOAPI(push imagepush.Push) oapi.Push {
 		CreatedAt:     push.CreatedAt,
 		CompletedAt:   push.CompletedAt,
 	}
-	if push.Layers > 0 {
+	if push.Status == oapi.PushStatus(imagepush.StatusPushed) {
 		layers := push.Layers
 		out.Layers = &layers
-	}
-	if push.Bytes > 0 {
 		bytes := push.Bytes
 		out.Bytes = &bytes
 	}

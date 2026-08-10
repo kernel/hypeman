@@ -45,9 +45,6 @@ func (f *fakePushManager) ListPushes(_ context.Context) ([]imagepush.Push, error
 	return f.pushes, nil
 }
 
-func (f *fakePushManager) WaitForPush(_ context.Context, _ string) error { return nil }
-
-func (f *fakePushManager) InProgressDigests() []string        { return nil }
 func (f *fakePushManager) LiveCacheManifestDigests() []string { return nil }
 
 func TestCreatePush_MapsRequestAndCredentials(t *testing.T) {

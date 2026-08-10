@@ -85,6 +85,15 @@ func writeMetadata(p *paths.Paths, meta *pushMetadata) error {
 		return fmt.Errorf("rename metadata: %w", err)
 	}
 
+	// Sync the directory so the rename itself is durable: the file is fsync'd
+	// and renamed above, but without a directory sync a crash right after the
+	// rename can still lose the directory entry. Best-effort — a directory
+	// sync failure is not worth failing the write over.
+	if dir, err := os.Open(dir); err == nil {
+		_ = dir.Sync()
+		_ = dir.Close()
+	}
+
 	return nil
 }
 
