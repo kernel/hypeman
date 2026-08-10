@@ -233,7 +233,7 @@ func (m *manager) deleteInstanceWithOptions(
 func (m *manager) killHypervisor(ctx context.Context, inst *Instance) error {
 	log := logger.FromContext(ctx)
 
-	pid, err := resolveLiveHypervisorPID(inst.HypervisorPID, inst.HypervisorStartTime, inst.SocketPath)
+	pid, err := resolveLiveHypervisorPID(inst.HypervisorPID, inst.HypervisorStartTime, inst.HypervisorBootID, inst.SocketPath)
 	if err != nil {
 		return err
 	}
