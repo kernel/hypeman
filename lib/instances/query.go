@@ -576,22 +576,29 @@ func refreshHypervisorPID(stored *StoredMetadata, state State) {
 	if !state.RequiresVMM() && state != StateUnknown {
 		return
 	}
-	if pid, err := resolveLiveHypervisorPID(stored.HypervisorPID, stored.SocketPath); err == nil && pid > 0 {
+	if pid, err := resolveLiveHypervisorPID(stored.HypervisorPID, stored.HypervisorStartTime, stored.SocketPath); err == nil && pid > 0 {
+		if stored.HypervisorPID == nil || pid != *stored.HypervisorPID {
+			stored.HypervisorStartTime = processStartTime(pid)
+		}
 		stored.HypervisorPID = &pid
 	}
 }
 
 // resolveLiveHypervisorPID returns the PID of the live hypervisor that owns
-// the instance socket, or 0 when no live hypervisor is found. It returns an
-// error when socket ownership cannot be confirmed: a live process matches the
-// socket path by command line only, or a live stored PID's ownership cannot be
-// verified.
-func resolveLiveHypervisorPID(storedPID *int, socketPath string) (int, error) {
+// the instance socket, or 0 when no live hypervisor is found. A live stored PID
+// whose recorded start time matches is returned without socket confirmation. It
+// returns an error when socket ownership cannot be confirmed: a live process
+// matches the socket path by command line only, or a live stored PID's ownership
+// cannot be verified.
+func resolveLiveHypervisorPID(storedPID *int, storedStartTime uint64, socketPath string) (int, error) {
 	stored := 0
 	if storedPID != nil && ProcessExists(*storedPID) {
 		stored = *storedPID
 	}
 	if runtime.GOOS != "linux" || socketPath == "" {
+		return stored, nil
+	}
+	if stored != 0 && storedStartTime != 0 && processStartTime(stored) == storedStartTime {
 		return stored, nil
 	}
 	resolved, confirmed, err := hypervisor.ResolveProcessPID(socketPath)
@@ -669,6 +676,31 @@ func readLinuxProcessState(pid int) (string, error) {
 		return fields[1], nil
 	}
 	return "", fmt.Errorf("process state missing from %s", statusPath)
+}
+
+// processStartTime returns the start time (field 22 of /proc/<pid>/stat, clock
+// ticks since boot) of pid, or 0 when it cannot be read.
+func processStartTime(pid int) uint64 {
+	if runtime.GOOS != "linux" || pid <= 0 {
+		return 0
+	}
+	data, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "stat"))
+	if err != nil {
+		return 0
+	}
+	closingParen := strings.LastIndexByte(string(data), ')')
+	if closingParen == -1 {
+		return 0
+	}
+	fields := strings.Fields(string(data[closingParen+1:]))
+	if len(fields) <= 19 {
+		return 0
+	}
+	startTime, err := strconv.ParseUint(fields[19], 10, 64)
+	if err != nil {
+		return 0
+	}
+	return startTime
 }
 
 // parseExitSentinel reads the last lines of the serial console log to find the
