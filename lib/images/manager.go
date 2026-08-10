@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -277,18 +278,23 @@ func (m *manager) createAndQueueImage(ref *ResolvedRef, req CreateImageRequest, 
 
 func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef) {
 	buildStart := time.Now()
+	buildStatus := "failed"
 	buildDir := m.paths.SystemBuild(ref.String())
 	tempDir := filepath.Join(buildDir, "rootfs")
+	defer func() {
+		m.recordBuildMetrics(ctx, buildStart, buildStatus)
+	}()
 
 	if err := os.MkdirAll(buildDir, 0755); err != nil {
 		m.updateStatusByDigest(ref, StatusFailed, fmt.Errorf("create build dir: %w", err))
-		m.recordBuildMetrics(ctx, buildStart, "failed")
 		return
 	}
 
 	defer func() {
 		// Clean up build directory after completion
-		os.RemoveAll(buildDir)
+		start := time.Now()
+		err := os.RemoveAll(buildDir)
+		m.recordImageBuildPhase(ctx, ref.Digest(), "cleanup", time.Since(start), phaseStatus(err), "not_applicable")
 	}()
 
 	m.updateStatusByDigest(ref, StatusPulling, nil)
@@ -300,10 +306,10 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef) {
 	// digest is already pulled.
 	pullRef := ref.DigestRef()
 	result, err := m.ociClient.pullAndExport(ctx, pullRef, ref.Digest(), tempDir)
+	m.recordPullResultMetrics(ctx, ref.Digest(), result)
 	if err != nil {
 		m.updateStatusByDigest(ref, StatusFailed, fmt.Errorf("pull and export: %w", err))
 		m.recordPullMetrics(ctx, "failed")
-		m.recordBuildMetrics(ctx, buildStart, "failed")
 		return
 	}
 	m.recordPullMetrics(ctx, "success")
@@ -315,6 +321,7 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef) {
 			if ref.Tag() != "" {
 				createTagSymlink(m.paths, ref.Repository(), ref.Tag(), ref.DigestHex())
 			}
+			buildStatus = "success"
 			return
 		}
 	}
@@ -323,16 +330,29 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef) {
 
 	diskPath := digestPath(m.paths, ref.Repository(), ref.DigestHex())
 	// Use default image format (erofs on Linux, ext4 on Darwin)
+	convertStart := time.Now()
 	diskSize, err := ExportRootfs(tempDir, diskPath, DefaultImageFormat)
+	m.recordImageBuildPhase(ctx, ref.Digest(), "filesystem_export", time.Since(convertStart), phaseStatus(err), "not_applicable")
 	if err != nil {
 		m.updateStatusByDigest(ref, StatusFailed, fmt.Errorf("convert to %s: %w", DefaultImageFormat, err))
 		return
 	}
 
-	// Read current metadata to preserve request info
+	finalizeStart := time.Now()
+	err = m.finalizeImage(ref, result, diskSize)
+	m.recordImageBuildPhase(ctx, ref.Digest(), "finalize", time.Since(finalizeStart), phaseStatus(err), "not_applicable")
+	if err != nil {
+		m.updateStatusByDigest(ref, StatusFailed, err)
+		return
+	}
+
+	buildStatus = "success"
+}
+
+func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, diskSize int64) error {
+	// Read current metadata to preserve request info.
 	meta, err := readMetadata(m.paths, ref.Repository(), ref.DigestHex())
 	if err != nil {
-		// Create new metadata if it doesn't exist
 		meta = &imageMetadata{
 			Name:      ref.String(),
 			Digest:    ref.Digest(),
@@ -340,21 +360,16 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef) {
 		}
 	}
 
-	// The pulled image config is the source of truth for the platform. Record
-	// it rather than the requested value so the boot guard trusts a real
-	// platform (WithPlatform is a no-op for single-manifest images, so a wrong
-	// request would otherwise be silently recorded).
+	// The pulled image config is the source of truth for the platform.
 	var requestedPlatform string
 	if meta.Request != nil {
 		requestedPlatform = meta.Request.Platform
 	}
 	actualPlatform, err := resolveManifestPlatform(result.Metadata, requestedPlatform)
 	if err != nil {
-		m.updateStatusByDigest(ref, StatusFailed, err)
-		return
+		return err
 	}
 
-	// Update with final status
 	meta.Status = StatusReady
 	meta.Error = nil
 	meta.Platform = actualPlatform.String()
@@ -366,25 +381,57 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef) {
 	meta.WorkingDir = result.Metadata.WorkingDir
 
 	if err := writeMetadata(m.paths, ref.Repository(), ref.DigestHex(), meta); err != nil {
-		m.updateStatusByDigest(ref, StatusFailed, fmt.Errorf("write final metadata: %w", err))
-		return
+		return fmt.Errorf("write final metadata: %w", err)
 	}
 
-	// Notify subscribers that image is ready
 	m.notifyReady(ref.DigestHex(), StatusReady, nil)
-
-	// Only create/update tag symlink on successful completion; last-pull-wins
-	// repoints the tag regardless of platform.
 	if ref.Tag() != "" {
 		if err := createTagSymlink(m.paths, ref.Repository(), ref.Tag(), ref.DigestHex()); err != nil {
-			// Log error but don't fail the build
 			fmt.Fprintf(os.Stderr, "Warning: failed to create tag symlink: %v\n", err)
 		}
 	}
-
 	m.refreshDiskUsageTotals()
+	return nil
+}
 
-	m.recordBuildMetrics(ctx, buildStart, "success")
+func phaseStatus(err error) string {
+	if err != nil {
+		return "failed"
+	}
+	return "success"
+}
+
+func (m *manager) recordPullResultMetrics(ctx context.Context, digest string, result *pullResult) {
+	if result == nil {
+		return
+	}
+	cacheStatus := "miss"
+	if result.CacheHit {
+		cacheStatus = "hit"
+	}
+	for _, phase := range result.Phases {
+		m.recordImageBuildPhase(ctx, digest, phase.Phase, phase.Duration, phase.Status, cacheStatus)
+	}
+	if result.Metadata != nil {
+		m.recordOCIImageMetrics(ctx, result.LayerCount, result.CompressedBytes, cacheStatus)
+		slog.InfoContext(ctx, "OCI image inspected",
+			"digest", digest,
+			"cache_status", cacheStatus,
+			"layer_count", result.LayerCount,
+			"compressed_bytes", result.CompressedBytes,
+		)
+	}
+}
+
+func (m *manager) recordImageBuildPhase(ctx context.Context, digest, phase string, duration time.Duration, status, cacheStatus string) {
+	m.recordBuildPhaseMetrics(ctx, phase, duration, status, cacheStatus)
+	slog.InfoContext(ctx, "image build phase completed",
+		"digest", digest,
+		"phase", phase,
+		"status", status,
+		"cache_status", cacheStatus,
+		"duration_seconds", duration.Seconds(),
+	)
 }
 
 func (m *manager) updateStatusByDigest(ref *ResolvedRef, status string, err error) {
