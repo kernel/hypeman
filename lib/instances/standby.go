@@ -231,6 +231,7 @@ func (m *manager) standbyInstance(
 	stored.StoppedAt = &now
 	stored.HypervisorPID = nil
 	stored.HypervisorStartTime = 0
+	stored.HypervisorBootID = ""
 	stored.PendingStandbyCompression = nil
 	clearFirecrackerUFFDRestoreState(stored)
 	if err := m.refreshFirecrackerSnapshotCacheKey(stored, snapshotDir); err != nil {

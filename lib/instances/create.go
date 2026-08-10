@@ -832,9 +832,8 @@ func (m *manager) startAndBootVM(
 	}
 	pid = resolveRuntimeHypervisorPID(log, stored.SocketPath, pid)
 
-	// Store the PID for later cleanup
-	stored.HypervisorPID = &pid
-	stored.HypervisorStartTime = processStartTime(pid)
+	// Store the PID identity for later cleanup.
+	setHypervisorProcessIdentity(stored, pid)
 	log.DebugContext(ctx, "VM started", "instance_id", stored.Id, "pid", pid)
 
 	// Optional: Expand memory to max if hotplug configured
