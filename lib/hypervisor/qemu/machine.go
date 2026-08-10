@@ -20,18 +20,20 @@ const (
 	MachineTypeMicroVM MachineType = "microvm"
 )
 
-func standardMachineType() (MachineType, error) {
-	return standardMachineTypeForPlatform(runtime.GOOS, runtime.GOARCH)
+func standardMachineType() MachineType {
+	return standardMachineTypeForArch(runtime.GOARCH)
 }
 
-func standardMachineTypeForPlatform(goos, goarch string) (MachineType, error) {
+func standardMachineTypeForArch(goarch string) MachineType {
 	switch goarch {
 	case "amd64":
-		return MachineTypeQ35, nil
+		return MachineTypeQ35
 	case "arm64":
-		return MachineTypeVirt, nil
+		return MachineTypeVirt
 	default:
-		return "", fmt.Errorf("unsupported platform %s/%s", goos, goarch)
+		// The API startup check rejects unsupported architectures. Keep this
+		// panic for direct library callers so they cannot silently select a board.
+		panic(fmt.Sprintf("unsupported QEMU architecture %s", goarch))
 	}
 }
 
@@ -42,7 +44,7 @@ func microVMMachineType() (MachineType, error) {
 func machineTypeForHypervisor(hypervisorType hypervisor.Type) (MachineType, error) {
 	switch hypervisorType {
 	case hypervisor.TypeQEMU:
-		return standardMachineType()
+		return standardMachineType(), nil
 	case hypervisor.TypeQEMUMicroVM:
 		return microVMMachineType()
 	default:
@@ -72,11 +74,7 @@ func resolveMachineTypeForPlatform(requested MachineType, goos, goarch string) (
 
 // ValidateConfig validates restrictions for standard QEMU on this host.
 func ValidateConfig(cfg hypervisor.VMConfig) error {
-	machine, err := standardMachineType()
-	if err != nil {
-		return err
-	}
-	return validateConfig(cfg, machine)
+	return validateConfig(cfg, standardMachineType())
 }
 
 // ValidateMicroVMConfig validates restrictions for QEMU's microvm profile.

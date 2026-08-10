@@ -8,6 +8,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestStandardMachineTypeForArch(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, MachineTypeQ35, standardMachineTypeForArch("amd64"))
+	assert.Equal(t, MachineTypeVirt, standardMachineTypeForArch("arm64"))
+	assert.Panics(t, func() { standardMachineTypeForArch("riscv64") })
+}
+
 func TestResolveMachineTypeForPlatform(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -18,23 +25,15 @@ func TestResolveMachineTypeForPlatform(t *testing.T) {
 		want      MachineType
 		wantErr   bool
 	}{
-		{name: "linux amd64 defaults q35", goos: "linux", arch: "amd64", want: MachineTypeQ35},
 		{name: "linux amd64 accepts microvm", requested: MachineTypeMicroVM, goos: "linux", arch: "amd64", want: MachineTypeMicroVM},
 		{name: "darwin amd64 rejects microvm", requested: MachineTypeMicroVM, goos: "darwin", arch: "amd64", wantErr: true},
 		{name: "amd64 rejects virt", requested: MachineTypeVirt, goos: "linux", arch: "amd64", wantErr: true},
-		{name: "arm64 defaults virt", goos: "linux", arch: "arm64", want: MachineTypeVirt},
 		{name: "arm64 rejects microvm", requested: MachineTypeMicroVM, goos: "linux", arch: "arm64", wantErr: true},
 		{name: "arbitrary board rejected", requested: "q35,pcie=on", goos: "linux", arch: "amd64", wantErr: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var got MachineType
-			var err error
-			if tt.requested == "" {
-				got, err = standardMachineTypeForPlatform(tt.goos, tt.arch)
-			} else {
-				got, err = resolveMachineTypeForPlatform(tt.requested, tt.goos, tt.arch)
-			}
+			got, err := resolveMachineTypeForPlatform(tt.requested, tt.goos, tt.arch)
 			if tt.wantErr {
 				require.Error(t, err)
 				return
@@ -50,9 +49,7 @@ func TestStarterSelectsAndValidatesPrivateMachineType(t *testing.T) {
 
 	standard, err := machineTypeForHypervisor(hypervisor.TypeQEMU)
 	require.NoError(t, err)
-	expectedStandard, err := standardMachineType()
-	require.NoError(t, err)
-	assert.Equal(t, expectedStandard, standard)
+	assert.Equal(t, standardMachineType(), standard)
 
 	if _, err := microVMMachineType(); err != nil {
 		return

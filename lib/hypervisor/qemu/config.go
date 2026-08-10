@@ -12,8 +12,7 @@ import (
 // BuildArgs converts hypervisor.VMConfig to command-line arguments for standard
 // QEMU. Backend starters use buildArgs with their private machine profile.
 func BuildArgs(cfg hypervisor.VMConfig) []string {
-	machine, _ := standardMachineType()
-	return buildArgs(cfg, machine)
+	return buildArgs(cfg, standardMachineType())
 }
 
 func buildArgs(cfg hypervisor.VMConfig, machine MachineType) []string {
@@ -38,6 +37,8 @@ func buildArgs(cfg hypervisor.VMConfig, machine MachineType) []string {
 
 	if cfg.GuestMemory.EnableBalloon {
 		balloonOpts := []string{virtioDevice(microvm, "virtio-balloon")}
+		// deflate-on-oom lets the guest reclaim ballooned pages under memory
+		// pressure instead of invoking its OOM killer.
 		if cfg.GuestMemory.DeflateOnOOM {
 			balloonOpts = append(balloonOpts, "deflate-on-oom=on")
 		}
@@ -134,6 +135,10 @@ func buildArgs(cfg hypervisor.VMConfig, machine MachineType) []string {
 	return args
 }
 
+// virtioDevice returns the QEMU device model for a virtio transport. Standard
+// q35/virt guests attach virtio devices over PCI (for example, virtio-blk-pci).
+// The microvm board has no PCI bus, so it uses virtio-mmio models whose QEMU
+// names end in -device (for example, virtio-blk-device).
 func virtioDevice(microvm bool, name string) string {
 	if microvm {
 		return name + "-device"
