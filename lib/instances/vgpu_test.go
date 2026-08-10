@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/hypervisor"
@@ -188,13 +189,68 @@ func TestStartRollbackRetainsVGPUAssignmentAfterFailedDestroy(t *testing.T) {
 	})
 
 	t.Setenv("TMPDIR", filepath.Join(t.TempDir(), "missing"))
-	_, err := m.startInstance(context.Background(), id, StartInstanceRequest{})
+	_, err := m.startInstance(context.Background(), id, StartInstanceRequest{Entrypoint: []string{"new-entrypoint"}})
 	require.Error(t, err)
 
 	stored, err := m.loadMetadata(id)
 	require.NoError(t, err)
 	assert.Equal(t, devices.VGPUFrameworkVendorVFIO, stored.GPUFramework)
 	assert.Equal(t, "/sys/bus/pci/devices/0000:82:00.4", stored.GPUDevicePath)
+	assert.NotNil(t, stored.GPUAssignedAt)
+	assert.Empty(t, stored.Entrypoint)
+}
+
+func TestCleanupStartVGPURestoresMetadataAfterBootFailure(t *testing.T) {
+	m := &manager{
+		paths: paths.New(t.TempDir()),
+		destroyVGPU: func(context.Context, devices.VGPUAssignment) error {
+			return nil
+		},
+	}
+	const id = "failed-start"
+	require.NoError(t, m.ensureDirectories(id))
+
+	previousStart := time.Now().Add(-time.Hour).UTC()
+	previousProgramStart := previousStart.Add(time.Second)
+	exitCode := 1
+	rollbackMeta := metadata{StoredMetadata: StoredMetadata{
+		Id:               id,
+		GPUProfile:       "NVIDIA L40S-2Q",
+		Entrypoint:       []string{"old-entrypoint"},
+		Cmd:              []string{"old-command"},
+		StartedAt:        &previousStart,
+		ProgramStartedAt: &previousProgramStart,
+		ExitCode:         &exitCode,
+		ExitMessage:      "previous exit",
+	}}
+
+	partial := rollbackMeta
+	partial.Entrypoint = []string{"new-entrypoint"}
+	partial.Cmd = []string{"new-command"}
+	partial.StartedAt = ptr(time.Now().UTC())
+	partial.ProgramStartedAt = nil
+	partial.ExitCode = nil
+	partial.ExitMessage = ""
+	assignedAt := time.Now().UTC()
+	device := &devices.VGPUDevice{
+		Framework: devices.VGPUFrameworkVendorVFIO,
+		SysfsPath: "/sys/bus/pci/devices/0000:82:00.4",
+	}
+	setStoredVGPUDevice(&partial.StoredMetadata, device, assignedAt)
+	require.NoError(t, m.saveMetadata(&partial))
+
+	m.cleanupStartVGPU(context.Background(), id, device, assignedAt, rollbackMeta)
+
+	stored, err := m.loadMetadata(id)
+	require.NoError(t, err)
+	assert.Equal(t, rollbackMeta.Entrypoint, stored.Entrypoint)
+	assert.Equal(t, rollbackMeta.Cmd, stored.Cmd)
+	assert.Equal(t, rollbackMeta.StartedAt, stored.StartedAt)
+	assert.Equal(t, rollbackMeta.ProgramStartedAt, stored.ProgramStartedAt)
+	assert.Equal(t, rollbackMeta.ExitCode, stored.ExitCode)
+	assert.Equal(t, rollbackMeta.ExitMessage, stored.ExitMessage)
+	assert.Empty(t, stored.GPUDevicePath)
+	assert.Nil(t, stored.GPUAssignedAt)
 }
 
 func TestVGPUAssignmentClaimedByLiveInstanceFailsOnInvalidMetadata(t *testing.T) {
@@ -341,16 +397,19 @@ func TestReleaseStoredVGPURetainsMetadataOnFailure(t *testing.T) {
 func TestSetAndClearStoredVGPUDevice(t *testing.T) {
 	t.Parallel()
 
+	assignedAt := time.Now().UTC()
 	stored := &StoredMetadata{}
 	setStoredVGPUDevice(stored, &devices.VGPUDevice{
 		Framework: devices.VGPUFrameworkVendorVFIO,
 		SysfsPath: "/sys/bus/pci/devices/0000:82:00.4",
-	})
+	}, assignedAt)
 	assert.Equal(t, devices.VGPUFrameworkVendorVFIO, stored.GPUFramework)
 	assert.Equal(t, "/sys/bus/pci/devices/0000:82:00.4", stored.GPUDevicePath)
+	assert.Equal(t, assignedAt, *stored.GPUAssignedAt)
 
 	clearStoredVGPUDevice(stored)
 	assert.Empty(t, stored.GPUFramework)
 	assert.Empty(t, stored.GPUDevicePath)
 	assert.Empty(t, stored.GPUMdevUUID)
+	assert.Nil(t, stored.GPUAssignedAt)
 }
