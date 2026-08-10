@@ -601,7 +601,14 @@ func resolveLiveHypervisorPID(storedPID *int, storedStartTime uint64, socketPath
 	if stored != 0 && storedStartTime != 0 && processStartTime(stored) == storedStartTime {
 		return stored, nil
 	}
-	resolved, confirmed, err := hypervisor.ResolveProcessPID(socketPath)
+	var resolved int
+	var confirmed bool
+	var err error
+	if stored != 0 && storedStartTime == 0 {
+		resolved, confirmed, err = hypervisor.ResolveProcessPIDForOwner(socketPath, stored)
+	} else {
+		resolved, confirmed, err = hypervisor.ResolveProcessPID(socketPath)
+	}
 	switch {
 	case err == nil && confirmed && ProcessExists(resolved):
 		return resolved, nil
@@ -625,6 +632,23 @@ func resolveLiveHypervisorPID(storedPID *int, storedStartTime uint64, socketPath
 	return 0, fmt.Errorf("cannot confirm ownership of socket %s for stored hypervisor PID %d: process %d matched by command line only", socketPath, stored, resolved)
 }
 
+// HypervisorProcessIdentityExists reports whether pid still identifies the
+// recorded hypervisor process. A matching start time is sufficient while its
+// control socket is still being created.
+func HypervisorProcessIdentityExists(pid int, startTime uint64, socketPath string) bool {
+	if !ProcessExists(pid) {
+		return false
+	}
+	if startTime != 0 {
+		currentStartTime := processStartTime(pid)
+		if currentStartTime == 0 {
+			return true
+		}
+		return currentStartTime == startTime
+	}
+	return HypervisorProcessExists(pid, socketPath)
+}
+
 // HypervisorProcessExists reports whether pid owns the instance's hypervisor socket.
 func HypervisorProcessExists(pid int, socketPath string) bool {
 	if !ProcessExists(pid) {
@@ -633,7 +657,7 @@ func HypervisorProcessExists(pid int, socketPath string) bool {
 	if runtime.GOOS != "linux" || socketPath == "" {
 		return true
 	}
-	resolvedPID, confirmed, err := hypervisor.ResolveProcessPID(socketPath)
+	resolvedPID, confirmed, err := hypervisor.ResolveProcessPIDForOwner(socketPath, pid)
 	if err != nil || !confirmed || resolvedPID == pid {
 		return true
 	}
