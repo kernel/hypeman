@@ -2,10 +2,19 @@ package instances
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 
 	"github.com/kernel/hypeman/lib/devices"
+	"github.com/kernel/hypeman/lib/hypervisor"
 )
+
+func validateVGPUHypervisor(hvType hypervisor.Type) error {
+	if hvType != hypervisor.TypeQEMU {
+		return fmt.Errorf("vGPU is only supported with qemu, got %s", hvType)
+	}
+	return nil
+}
 
 func setStoredVGPUDevice(stored *StoredMetadata, device *devices.VGPUDevice) {
 	stored.GPUFramework = device.Framework
