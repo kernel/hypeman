@@ -168,6 +168,40 @@ jobs:
       - name: Cleanup
         if: always()
         run: |
+          set -euo pipefail
+
+          runner_cgroup="$(awk -F: '$1 == "0" { print $3 }' /proc/self/cgroup)"
+          guest_pids=()
+          if [ -n "$runner_cgroup" ] && [ "$runner_cgroup" != "/" ]; then
+            for proc in /proc/[0-9]*; do
+              process_cgroup="$(awk -F: '$1 == "0" { print $3 }' "$proc/cgroup" 2>/dev/null || true)"
+              if [ "$process_cgroup" != "$runner_cgroup" ]; then
+                continue
+              fi
+
+              comm="$(cat "$proc/comm" 2>/dev/null || true)"
+              cmdline="$(tr '\0' ' ' < "$proc/cmdline" 2>/dev/null || true)"
+              case "$comm" in
+                cloud-hypervis|firecracker|qemu-system-*)
+                  if [[ "$cmdline" == *"/ci/"* ]]; then
+                    guest_pids+=("${proc##*/}")
+                  fi
+                  ;;
+              esac
+            done
+          fi
+
+          if (( ${#guest_pids[@]} > 0 )); then
+            echo "Stopping leftover test VMs: ${guest_pids[*]}"
+            sudo kill -TERM "${guest_pids[@]}" 2>/dev/null || true
+            sleep 2
+            for pid in "${guest_pids[@]}"; do
+              if sudo kill -0 "$pid" 2>/dev/null; then
+                sudo kill -KILL "$pid" 2>/dev/null || true
+              fi
+            done
+          fi
+
           units="$(systemctl list-units --all --full --plain 'hypeman-uffd@ci-${{ github.run_id }}-${{ github.run_attempt }}-*.service' --no-legend | awk '{print $1}' || true)"
           if [ -n "$units" ]; then
             echo "$units" | xargs -r sudo systemctl stop || true

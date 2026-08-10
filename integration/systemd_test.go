@@ -72,11 +72,6 @@ func TestSystemdMode(t *testing.T) {
 
 	instanceManager := instances.NewManager(p, imageManager, systemManager, networkManager, deviceManager, volumeManager, limits, "", instances.SnapshotPolicy{}, nil, nil)
 
-	// Cleanup any orphaned instances
-	t.Cleanup(func() {
-		instanceManager.DeleteInstance(ctx, "systemd-test")
-	})
-
 	imageName := integrationTestImageRef(t, "docker.io/jrei/systemd-ubuntu:22.04")
 
 	// Pull the systemd image
@@ -121,6 +116,13 @@ func TestSystemdMode(t *testing.T) {
 		NetworkEnabled: false, // No network needed for this test
 	})
 	require.NoError(t, err)
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cleanupCancel()
+		if err := instanceManager.DeleteInstance(cleanupCtx, inst.Id); err != nil {
+			t.Errorf("delete systemd test instance during cleanup: %v", err)
+		}
+	})
 	t.Logf("Instance created: %s", inst.Id)
 
 	// Wait for guest agent to be ready
