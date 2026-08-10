@@ -184,7 +184,7 @@ func TestVendorVFIODestroyRetainsAssignmentWhenOneVFIOPathIsMissing(t *testing.T
 	}
 }
 
-func TestVendorVFIOListProfilesCountsPerGPUNotPerVF(t *testing.T) {
+func TestVendorVFIOListProfilesCountsFreeVFs(t *testing.T) {
 	t.Parallel()
 
 	sysfs := newTestVendorVFIOSysfs(t)
@@ -196,8 +196,8 @@ func TestVendorVFIOListProfilesCountsPerGPUNotPerVF(t *testing.T) {
 	require.NoError(t, err)
 	profiles, err := sysfs.listProfiles(vfs)
 	require.NoError(t, err)
-	assert.Equal(t, 2, profileAvailability(profiles, "NVIDIA L40S-48Q"),
-		"free VFs share their parent GPU's capacity, so availability is per GPU")
+	assert.Equal(t, 3, profileAvailability(profiles, "NVIDIA L40S-48Q"),
+		"each free VF advertising the type counts as one creatable instance")
 }
 
 func TestVendorVFIOCreateReportsCapacityWhenAllGPUsFull(t *testing.T) {
