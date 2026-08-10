@@ -77,6 +77,8 @@ func TestCreateInstance_VGPUCleanupPendingBeatsWrappedErrorMapping(t *testing.T)
 	require.True(t, ok, "expected 500 vgpu_cleanup_pending, got %T", resp)
 	assert.EqualValues(t, "vgpu_cleanup_pending", pending.Code)
 	assert.Contains(t, pending.Message, "inst-1")
+	assert.Contains(t, pending.Message, network.ErrNameExists.Error(),
+		"the underlying create failure must survive the cleanup guidance")
 	assert.Contains(t, pending.Message, "delete it to retry")
 	require.NotNil(t, pending.InnerError)
 	require.NotNil(t, pending.InnerError.Code)
@@ -102,6 +104,8 @@ func TestCreateInstance_VGPUCleanupPendingWithoutRetentionUsesReconcileGuidance(
 	require.True(t, ok, "expected 500 vgpu_cleanup_pending, got %T", resp)
 	assert.EqualValues(t, "vgpu_cleanup_pending", pending.Code)
 	assert.Contains(t, pending.Message, "retention record for instance inst-1 could not be saved")
+	assert.Contains(t, pending.Message, network.ErrNameExists.Error(),
+		"the underlying create failure must survive the cleanup guidance")
 	assert.Contains(t, pending.Message, "startup reconcile")
 	assert.NotContains(t, pending.Message, "delete")
 	require.NotNil(t, pending.InnerError)
