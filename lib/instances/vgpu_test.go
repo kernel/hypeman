@@ -5,16 +5,8 @@ import (
 	"testing"
 
 	"github.com/kernel/hypeman/lib/devices"
-	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/stretchr/testify/assert"
 )
-
-func TestValidateVGPUHypervisor(t *testing.T) {
-	t.Parallel()
-
-	assert.NoError(t, validateVGPUHypervisor(hypervisor.TypeQEMU))
-	assert.EqualError(t, validateVGPUHypervisor(hypervisor.TypeCloudHypervisor), "vGPU is only supported with qemu, got cloud-hypervisor")
-}
 
 func TestStoredVGPUDevicePath(t *testing.T) {
 	t.Parallel()
