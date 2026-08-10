@@ -77,6 +77,11 @@ func TestCreateInstance_VGPUCleanupPendingBeatsWrappedErrorMapping(t *testing.T)
 	assert.EqualValues(t, "vgpu_cleanup_pending", pending.Code)
 	assert.Contains(t, pending.Message, "inst-1")
 	assert.Contains(t, pending.Message, "delete it to retry")
+	require.NotNil(t, pending.InnerError)
+	require.NotNil(t, pending.InnerError.Code)
+	assert.Equal(t, "vgpu_retained_instance", *pending.InnerError.Code)
+	require.NotNil(t, pending.InnerError.Message)
+	assert.Equal(t, "inst-1", *pending.InnerError.Message)
 }
 
 func TestCreateInstance_VGPUCleanupPendingWithoutRetentionUsesReconcileGuidance(t *testing.T) {
@@ -98,6 +103,11 @@ func TestCreateInstance_VGPUCleanupPendingWithoutRetentionUsesReconcileGuidance(
 	assert.Contains(t, pending.Message, "retention record for instance inst-1 could not be saved")
 	assert.Contains(t, pending.Message, "startup reconcile")
 	assert.NotContains(t, pending.Message, "delete")
+	require.NotNil(t, pending.InnerError)
+	require.NotNil(t, pending.InnerError.Code)
+	assert.Equal(t, "vgpu_unretained_instance", *pending.InnerError.Code)
+	require.NotNil(t, pending.InnerError.Message)
+	assert.Equal(t, "inst-1", *pending.InnerError.Message)
 }
 
 func TestCreateInstance_AutoPullImage(t *testing.T) {
