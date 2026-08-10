@@ -3,6 +3,7 @@ package instances
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -606,6 +607,9 @@ func resolveLiveHypervisorPID(storedPID *int, socketPath string) (int, error) {
 		return 0, fmt.Errorf("cannot confirm ownership of socket %s: process %d matched by command line only", socketPath, resolved)
 	}
 	if stored == 0 {
+		if err != nil && !errors.Is(err, hypervisor.ErrNoOwningProcess) {
+			return 0, fmt.Errorf("cannot confirm ownership of socket %s: %w", socketPath, err)
+		}
 		return 0, nil
 	}
 	if err != nil {
