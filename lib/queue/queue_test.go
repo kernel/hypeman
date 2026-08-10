@@ -108,13 +108,17 @@ func TestDoneRunsAfterKeyReleased(t *testing.T) {
 
 	release := make(chan struct{})
 	stateAtDone := make(chan int, 1)
+	doneSampled := make(chan struct{})
 
 	q.Enqueue("a", func() { <-release }, func() {
 		stateAtDone <- q.QueueLength()
+		close(doneSampled)
 	})
 	// "b" occupies the freed slot when "a" completes, so if the key "a" were
-	// still tracked at done time the queue would report length 2 (a + b).
-	q.Enqueue("b", func() {}, nil)
+	// still tracked at done time the queue would report length 2 (a + b). It
+	// blocks until the done hook has sampled so it cannot finish early and
+	// flake the assertion.
+	q.Enqueue("b", func() { <-doneSampled }, nil)
 
 	close(release)
 	select {
