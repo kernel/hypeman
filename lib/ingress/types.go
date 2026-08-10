@@ -31,9 +31,10 @@ type Ingress struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-const requestHeaderAuthEnvPrefix = "HYPEMAN_INGRESS_AUTH_"
-
-var requestHeaderAuthEnvPattern = regexp.MustCompile(`^HYPEMAN_INGRESS_AUTH_[A-Z0-9_]+$`)
+const (
+	requestHeaderAuthValueMinBytes = 32
+	requestHeaderAuthValueMaxBytes = 256
+)
 
 // IngressRule defines a single routing rule within an ingress.
 type IngressRule struct {
@@ -55,10 +56,10 @@ type IngressRule struct {
 	RequestHeaderAuth *RequestHeaderAuth `json:"request_header_auth,omitempty"`
 }
 
-// RequestHeaderAuth references a host environment variable containing the expected header value.
+// RequestHeaderAuth requires an exact header value before proxying a request.
 type RequestHeaderAuth struct {
-	Header    string `json:"header"`
-	SecretEnv string `json:"secret_env"`
+	Header string `json:"header"`
+	Value  string `json:"value"`
 }
 
 func (a *RequestHeaderAuth) Validate() error {
@@ -71,10 +72,22 @@ func (a *RequestHeaderAuth) Validate() error {
 	if reservedRequestHeader(a.Header) {
 		return fmt.Errorf("request_header_auth.header %q is reserved", a.Header)
 	}
-	if !requestHeaderAuthEnvPattern.MatchString(a.SecretEnv) {
-		return fmt.Errorf("request_header_auth.secret_env must be an uppercase environment name beginning with %s", requestHeaderAuthEnvPrefix)
+	if !validRequestHeaderAuthValue(a.Value) {
+		return fmt.Errorf("request_header_auth.value must be %d-%d bytes of visible ASCII without Caddy matcher metacharacters", requestHeaderAuthValueMinBytes, requestHeaderAuthValueMaxBytes)
 	}
 	return nil
+}
+
+func validRequestHeaderAuthValue(value string) bool {
+	if len(value) < requestHeaderAuthValueMinBytes || len(value) > requestHeaderAuthValueMaxBytes {
+		return false
+	}
+	for i := 0; i < len(value); i++ {
+		if value[i] < 0x21 || value[i] > 0x7e || value[i] == '*' || value[i] == '{' || value[i] == '}' {
+			return false
+		}
+	}
+	return true
 }
 
 func reservedRequestHeader(header string) bool {

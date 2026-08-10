@@ -13,13 +13,11 @@ import (
 )
 
 const (
-	testAuthEnv    = "HYPEMAN_INGRESS_AUTH_TEST"
 	testAuthHeader = "X-Ingress-Verification"
 	testAuthValue  = "0123456789abcdef0123456789abcdef"
 )
 
 func TestGenerateConfigWithRequestHeaderAuth(t *testing.T) {
-	t.Setenv(testAuthEnv, testAuthValue)
 	generator, _, cleanup := setupTestGenerator(t)
 	defer cleanup()
 
@@ -81,29 +79,11 @@ func TestGenerateConfigWithoutRequestHeaderAuthKeepsRouteShape(t *testing.T) {
 	assert.Equal(t, "reverse_proxy", handlers[0].(map[string]interface{})["handler"])
 }
 
-func TestRequestHeaderAuthEnvironmentFailuresDoNotExposeValues(t *testing.T) {
-	generator, _, cleanup := setupTestGenerator(t)
-	defer cleanup()
-	ingresses := []Ingress{protectedTestIngress()}
-
-	original, existed := os.LookupEnv(testAuthEnv)
-	require.NoError(t, os.Unsetenv(testAuthEnv))
-	t.Cleanup(func() {
-		if existed {
-			_ = os.Setenv(testAuthEnv, original)
-		} else {
-			_ = os.Unsetenv(testAuthEnv)
-		}
-	})
-	_, err := generator.GenerateConfig(context.Background(), ingresses)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), testAuthEnv)
-
-	for _, value := range []string{"", "secret\nDO_NOT_EXPOSE", "secret*wildcard"} {
-		require.NoError(t, os.Setenv(testAuthEnv, value))
-		_, err = generator.GenerateConfig(context.Background(), ingresses)
+func TestRequestHeaderAuthValidationDoesNotExposeValues(t *testing.T) {
+	for _, value := range []string{"", strings.Repeat("a", 32) + "\nDO_NOT_EXPOSE", strings.Repeat("a", 32) + "*"} {
+		auth := &RequestHeaderAuth{Header: testAuthHeader, Value: value}
+		err := auth.Validate()
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), testAuthEnv)
 		if value != "" {
 			assert.NotContains(t, err.Error(), value)
 		}
@@ -112,7 +92,6 @@ func TestRequestHeaderAuthEnvironmentFailuresDoNotExposeValues(t *testing.T) {
 }
 
 func TestRequestHeaderAuthValueLengthBoundaries(t *testing.T) {
-	auth := &RequestHeaderAuth{Header: testAuthHeader, SecretEnv: testAuthEnv}
 	tests := []struct {
 		length int
 		valid  bool
@@ -125,71 +104,57 @@ func TestRequestHeaderAuthValueLengthBoundaries(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(strconv.Itoa(tt.length), func(t *testing.T) {
-			value := strings.Repeat("a", tt.length)
-			t.Setenv(testAuthEnv, value)
-
-			resolved, err := resolveRequestHeaderAuth(auth)
+			auth := &RequestHeaderAuth{Header: testAuthHeader, Value: strings.Repeat("a", tt.length)}
+			err := auth.Validate()
 			if tt.valid {
 				require.NoError(t, err)
-				assert.Equal(t, value, resolved)
 				return
 			}
-			require.EqualError(t, err, "request header authorization environment variable "+testAuthEnv+" is invalid")
-			assert.Empty(t, resolved)
+			require.EqualError(t, err, "request_header_auth.value must be 32-256 bytes of visible ASCII without Caddy matcher metacharacters")
 		})
 	}
 }
 
-func TestCreateIngressRejectsMissingRequestHeaderAuthEnvironment(t *testing.T) {
+func TestCreateIngressRejectsInvalidRequestHeaderAuthValue(t *testing.T) {
 	manager, _, _, cleanup := setupTestManager(t)
 	defer cleanup()
-	original, existed := os.LookupEnv(testAuthEnv)
-	require.NoError(t, os.Unsetenv(testAuthEnv))
-	t.Cleanup(func() {
-		if existed {
-			_ = os.Setenv(testAuthEnv, original)
-		}
-	})
 	ingress := protectedTestIngress()
 	ingress.Rules[0].Target.Instance = "my-api"
+	ingress.Rules[0].RequestHeaderAuth.Value = "too-short"
 	_, err := manager.Create(context.Background(), CreateIngressRequest{Name: "protected", Rules: ingress.Rules})
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrInvalidRequest)
-	assert.Contains(t, err.Error(), testAuthEnv)
+	assert.NotContains(t, err.Error(), "too-short")
 }
 
-func TestRequestHeaderAuthReferenceValidation(t *testing.T) {
-	const secret = "DO_NOT_EXPOSE"
-	t.Setenv(testAuthEnv, secret)
+func TestRequestHeaderAuthFieldValidation(t *testing.T) {
 	reserved := []string{
 		"Host", "Authorization", "Cookie", "Proxy-Authorization", "Content-Length",
 		"Connection", "Keep-Alive", "Proxy-Authenticate", "Proxy-Connection", "TE",
 		"Trailer", "Transfer-Encoding", "Upgrade", "Sec-WebSocket-Key",
 	}
 	for _, header := range reserved {
-		auth := &RequestHeaderAuth{Header: header, SecretEnv: testAuthEnv}
+		auth := &RequestHeaderAuth{Header: header, Value: testAuthValue}
 		err := auth.Validate()
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "reserved")
-		assert.NotContains(t, err.Error(), secret)
+		assert.NotContains(t, err.Error(), testAuthValue)
 	}
 
 	for _, auth := range []*RequestHeaderAuth{
-		{Header: "Bad Header", SecretEnv: testAuthEnv},
-		{Header: testAuthHeader, SecretEnv: "OTHER_SECRET"},
-		{Header: testAuthHeader, SecretEnv: "HYPEMAN_INGRESS_AUTH_lowercase"},
-		{Header: testAuthHeader, SecretEnv: "HYPEMAN_INGRESS_AUTH_"},
+		{Header: "Bad Header", Value: testAuthValue},
+		{Header: testAuthHeader, Value: strings.Repeat("a", 31)},
+		{Header: testAuthHeader, Value: strings.Repeat("a", 257)},
 	} {
 		err := auth.Validate()
 		require.Error(t, err)
-		assert.NotContains(t, err.Error(), secret)
+		assert.NotContains(t, err.Error(), auth.Value)
 	}
 }
 
 func TestRequestHeaderAuthPersistenceAndBackwardCompatibility(t *testing.T) {
 	generator, p, cleanup := setupTestGenerator(t)
 	defer cleanup()
-	t.Setenv(testAuthEnv, testAuthValue)
 
 	stored := &storedIngress{
 		ID: "protected", Name: "protected", CreatedAt: "2025-01-15T10:00:00Z",
@@ -199,12 +164,15 @@ func TestRequestHeaderAuthPersistenceAndBackwardCompatibility(t *testing.T) {
 	metadata, err := os.ReadFile(p.IngressMetadata(stored.ID))
 	require.NoError(t, err)
 	assert.Contains(t, string(metadata), testAuthHeader)
-	assert.Contains(t, string(metadata), testAuthEnv)
-	assert.NotContains(t, string(metadata), testAuthValue)
+	assert.Contains(t, string(metadata), testAuthValue)
+	info, err := os.Stat(p.IngressMetadata(stored.ID))
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0600), info.Mode().Perm())
+
 	loaded, err := loadIngress(p, stored.ID)
 	require.NoError(t, err)
 	require.NotNil(t, loaded.Rules[0].RequestHeaderAuth)
-	assert.Equal(t, testAuthEnv, loaded.Rules[0].RequestHeaderAuth.SecretEnv)
+	assert.Equal(t, testAuthValue, loaded.Rules[0].RequestHeaderAuth.Value)
 
 	legacy := `{"id":"legacy","name":"legacy","rules":[{"match":{"hostname":"legacy.example.com"},"target":{"instance":"legacy","port":8080}}],"created_at":"2025-01-15T10:00:00Z"}`
 	require.NoError(t, os.WriteFile(p.IngressMetadata("legacy"), []byte(legacy), 0644))
@@ -213,9 +181,60 @@ func TestRequestHeaderAuthPersistenceAndBackwardCompatibility(t *testing.T) {
 	assert.Nil(t, loaded.Rules[0].RequestHeaderAuth)
 
 	require.NoError(t, generator.WriteConfig(context.Background(), []Ingress{protectedTestIngress()}))
-	info, err := os.Stat(p.CaddyConfig())
+	info, err = os.Stat(p.CaddyConfig())
 	require.NoError(t, err)
 	assert.Equal(t, os.FileMode(0600), info.Mode().Perm())
+}
+
+func TestRequestHeaderAuthExactRoutePrecedesPatternForBothCreationOrders(t *testing.T) {
+	orders := []struct {
+		name  string
+		first CreateIngressRequest
+		last  CreateIngressRequest
+	}{
+		{name: "pattern then exact", first: unprotectedPatternRequest(), last: protectedExactRequest()},
+		{name: "exact then pattern", first: protectedExactRequest(), last: unprotectedPatternRequest()},
+	}
+
+	for _, tt := range orders {
+		t.Run(tt.name, func(t *testing.T) {
+			manager, _, p, cleanup := setupTestManager(t)
+			defer cleanup()
+			ctx := context.Background()
+
+			_, err := manager.Create(ctx, tt.first)
+			require.NoError(t, err)
+			_, err = manager.Create(ctx, tt.last)
+			require.NoError(t, err)
+
+			data, err := os.ReadFile(p.CaddyConfig())
+			require.NoError(t, err)
+			assertProtectedExactBeforePattern(t, configRoutes(t, data, 80))
+		})
+	}
+}
+
+func TestRequestHeaderAuthExactRoutePrecedesPatternAfterPersistedReload(t *testing.T) {
+	generator, p, cleanup := setupTestGenerator(t)
+	defer cleanup()
+
+	pattern := unprotectedPatternRequest()
+	exact := protectedExactRequest()
+	require.NoError(t, saveIngress(p, &storedIngress{ID: "a-pattern", Name: pattern.Name, Rules: pattern.Rules, CreatedAt: "2025-01-15T10:00:00Z"}))
+	require.NoError(t, saveIngress(p, &storedIngress{ID: "z-exact", Name: exact.Name, Rules: exact.Rules, CreatedAt: "2025-01-15T10:00:00Z"}))
+
+	stored, err := loadAllIngresses(p)
+	require.NoError(t, err)
+	require.Len(t, stored, 2)
+	require.True(t, stored[0].Rules[0].Match.IsPattern())
+
+	ingresses := make([]Ingress, 0, len(stored))
+	for i := range stored {
+		ingresses = append(ingresses, *storedToIngress(&stored[i]))
+	}
+	data, err := generator.GenerateConfig(context.Background(), ingresses)
+	require.NoError(t, err)
+	assertProtectedExactBeforePattern(t, configRoutes(t, data, 80))
 }
 
 func protectedTestIngress() Ingress {
@@ -226,9 +245,51 @@ func protectedTestIngress() Ingress {
 			Target:            IngressTarget{Instance: "service", Port: 8080},
 			TLS:               true,
 			RedirectHTTP:      true,
-			RequestHeaderAuth: &RequestHeaderAuth{Header: testAuthHeader, SecretEnv: testAuthEnv},
+			RequestHeaderAuth: &RequestHeaderAuth{Header: testAuthHeader, Value: testAuthValue},
 		}},
 	}
+}
+
+func protectedExactRequest() CreateIngressRequest {
+	return CreateIngressRequest{
+		Name: "protected-exact",
+		Rules: []IngressRule{{
+			Match:             IngressMatch{Hostname: "admin.example.com"},
+			Target:            IngressTarget{Instance: "my-api", Port: 8080},
+			RequestHeaderAuth: &RequestHeaderAuth{Header: testAuthHeader, Value: testAuthValue},
+		}},
+	}
+}
+
+func unprotectedPatternRequest() CreateIngressRequest {
+	return CreateIngressRequest{
+		Name: "unprotected-pattern",
+		Rules: []IngressRule{{
+			Match:  IngressMatch{Hostname: "{instance}.example.com"},
+			Target: IngressTarget{Instance: "{instance}", Port: 8080},
+		}},
+	}
+}
+
+func assertProtectedExactBeforePattern(t *testing.T, routes []interface{}) {
+	t.Helper()
+	require.Len(t, routes, 4)
+	assert.Equal(t, "admin.example.com", routeHostname(t, routes[0]))
+	assert.Equal(t, "admin.example.com", routeHostname(t, routes[1]))
+	assert.Equal(t, "*.example.com", routeHostname(t, routes[2]))
+
+	authorizedMatcher := routes[0].(map[string]interface{})["match"].([]interface{})[0].(map[string]interface{})
+	assert.Contains(t, authorizedMatcher, "header")
+	denialHandler := routes[1].(map[string]interface{})["handle"].([]interface{})[0].(map[string]interface{})
+	assert.EqualValues(t, 403, denialHandler["status_code"])
+}
+
+func routeHostname(t *testing.T, route interface{}) string {
+	t.Helper()
+	matcher := route.(map[string]interface{})["match"].([]interface{})[0].(map[string]interface{})
+	hosts := matcher["host"].([]interface{})
+	require.Len(t, hosts, 1)
+	return hosts[0].(string)
 }
 
 func configRoutes(t *testing.T, data []byte, port int) []interface{} {

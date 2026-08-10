@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"os"
 	"regexp"
 	"slices"
 	"strings"
@@ -238,18 +237,6 @@ func (m *manager) Initialize(ctx context.Context) error {
 		return fmt.Errorf("regenerate config: %w", err)
 	}
 
-	// A surviving Caddy process must receive the regenerated configuration so
-	// environment-backed values rotate when the API service restarts.
-	if m.daemon.IsRunning() {
-		configData, err := os.ReadFile(m.paths.CaddyConfig())
-		if err != nil {
-			return fmt.Errorf("read regenerated caddy config: %w", err)
-		}
-		if err := m.daemon.ReloadConfig(configData); err != nil {
-			return fmt.Errorf("reload regenerated caddy config: %w", err)
-		}
-	}
-
 	// Start Caddy daemon
 	_, err = m.daemon.Start(ctx)
 	if err != nil {
@@ -277,14 +264,6 @@ func (m *manager) Create(ctx context.Context, req CreateIngressRequest) (*Ingres
 	// Validate request
 	if err := req.Validate(); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidRequest, err)
-	}
-	for _, rule := range req.Rules {
-		if rule.RequestHeaderAuth == nil {
-			continue
-		}
-		if _, err := resolveRequestHeaderAuth(rule.RequestHeaderAuth); err != nil {
-			return nil, fmt.Errorf("%w: %v", ErrInvalidRequest, err)
-		}
 	}
 
 	// Validate name format

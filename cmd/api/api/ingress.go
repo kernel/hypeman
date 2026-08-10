@@ -163,8 +163,8 @@ func ingressRuleFromOAPI(rule oapi.IngressRule) ingress.IngressRule {
 	var requestHeaderAuth *ingress.RequestHeaderAuth
 	if rule.RequestHeaderAuth != nil {
 		requestHeaderAuth = &ingress.RequestHeaderAuth{
-			Header:    rule.RequestHeaderAuth.Header,
-			SecretEnv: rule.RequestHeaderAuth.SecretEnv,
+			Header: rule.RequestHeaderAuth.Header,
+			Value:  rule.RequestHeaderAuth.Value,
 		}
 	}
 	return ingress.IngressRule{
@@ -186,8 +186,8 @@ func ingressRuleToOAPI(rule ingress.IngressRule) oapi.IngressRule {
 	var requestHeaderAuth *oapi.IngressRequestHeaderAuth
 	if rule.RequestHeaderAuth != nil {
 		requestHeaderAuth = &oapi.IngressRequestHeaderAuth{
-			Header:    rule.RequestHeaderAuth.Header,
-			SecretEnv: rule.RequestHeaderAuth.SecretEnv,
+			Header: rule.RequestHeaderAuth.Header,
+			Value:  rule.RequestHeaderAuth.Value,
 		}
 	}
 	return oapi.IngressRule{

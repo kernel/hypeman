@@ -12,7 +12,6 @@ import (
 
 func TestIngressRequestHeaderAuthAPIRoundTrip(t *testing.T) {
 	const secret = "0123456789abcdef0123456789abcdef"
-	t.Setenv("HYPEMAN_INGRESS_AUTH_SERVICE", secret)
 	port := 443
 	tls := true
 	redirect := true
@@ -22,22 +21,21 @@ func TestIngressRequestHeaderAuthAPIRoundTrip(t *testing.T) {
 		Tls:          &tls,
 		RedirectHttp: &redirect,
 		RequestHeaderAuth: &oapi.IngressRequestHeaderAuth{
-			Header:    "X-Ingress-Verification",
-			SecretEnv: "HYPEMAN_INGRESS_AUTH_SERVICE",
+			Header: "X-Ingress-Verification",
+			Value:  secret,
 		},
 	}
 
 	domainRule := ingressRuleFromOAPI(apiRule)
 	require.NotNil(t, domainRule.RequestHeaderAuth)
 	assert.Equal(t, "X-Ingress-Verification", domainRule.RequestHeaderAuth.Header)
-	assert.Equal(t, "HYPEMAN_INGRESS_AUTH_SERVICE", domainRule.RequestHeaderAuth.SecretEnv)
+	assert.Equal(t, secret, domainRule.RequestHeaderAuth.Value)
 
 	roundTrip := ingressRuleToOAPI(domainRule)
 	assert.Equal(t, apiRule, roundTrip)
 	encoded, err := json.Marshal(roundTrip)
 	require.NoError(t, err)
-	assert.Contains(t, string(encoded), "HYPEMAN_INGRESS_AUTH_SERVICE")
-	assert.NotContains(t, string(encoded), secret)
+	assert.Contains(t, string(encoded), secret)
 }
 
 func TestIngressRequestHeaderAuthOmittedWhenUnprotected(t *testing.T) {

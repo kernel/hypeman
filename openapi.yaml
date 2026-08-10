@@ -1465,17 +1465,18 @@ components:
     
     IngressRequestHeaderAuth:
       type: object
-      required: [header, secret_env]
+      required: [header, value]
       properties:
         header:
           type: string
           description: Dedicated request header that must match before proxying. Reserved authentication, cookie, host, framing, proxy, and hop-by-hop headers are not allowed.
           example: X-Ingress-Verification
-        secret_env:
+        value:
           type: string
-          description: Host environment variable containing the expected header value. Must begin with HYPEMAN_INGRESS_AUTH_. The value is never persisted or returned.
-          pattern: ^HYPEMAN_INGRESS_AUTH_[A-Z0-9_]+$
-          example: HYPEMAN_INGRESS_AUTH_SERVICE
+          minLength: 32
+          maxLength: 256
+          description: Exact header value required before proxying. This sensitive value is persisted and returned by the API like instance environment variables; clients should hide it by default.
+          example: 0123456789abcdef0123456789abcdef
 
     IngressRule:
       type: object

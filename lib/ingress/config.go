@@ -196,6 +196,38 @@ func (g *CaddyConfigGenerator) GenerateConfig(ctx context.Context, ingresses []I
 	return json.MarshalIndent(config, "", "  ")
 }
 
+type caddyRouteSet struct {
+	exact    []interface{}
+	patterns []interface{}
+}
+
+func (r *caddyRouteSet) append(pattern bool, routes ...interface{}) {
+	if pattern {
+		r.patterns = append(r.patterns, routes...)
+		return
+	}
+	r.exact = append(r.exact, routes...)
+}
+
+func (r *caddyRouteSet) prependExact(route interface{}) {
+	r.exact = append([]interface{}{route}, r.exact...)
+}
+
+func (r *caddyRouteSet) ordered() []interface{} {
+	routes := make([]interface{}, 0, len(r.exact)+len(r.patterns))
+	routes = append(routes, r.exact...)
+	return append(routes, r.patterns...)
+}
+
+func routesForPort(routesByPort map[int]*caddyRouteSet, port int) *caddyRouteSet {
+	routes := routesByPort[port]
+	if routes == nil {
+		routes = &caddyRouteSet{}
+		routesByPort[port] = routes
+	}
+	return routes
+}
+
 // buildConfig builds the complete Caddy configuration.
 // Routes are grouped by listen port to prevent conflicts when multiple wildcard
 // ingresses match the same hostname pattern on different ports.
@@ -205,7 +237,7 @@ func (g *CaddyConfigGenerator) buildConfig(ctx context.Context, ingresses []Ingr
 	// Group routes by listen port to isolate them in separate Caddy servers.
 	// This prevents conflicts when multiple wildcard ingresses match the same
 	// hostname pattern on different ports (e.g., *.host.kernel.sh:443 and *.host.kernel.sh:3000).
-	routesByPort := map[int][]interface{}{}
+	routesByPort := map[int]*caddyRouteSet{}
 	tlsHostnames := []string{}
 	tlsPortsByHostname := map[string][]int{} // Track which ports need TLS for each hostname
 	tlsEnabledPorts := map[int]bool{}        // Track which ports have at least one TLS route
@@ -213,12 +245,13 @@ func (g *CaddyConfigGenerator) buildConfig(ctx context.Context, ingresses []Ingr
 	for _, ingress := range ingresses {
 		for _, rule := range ingress.Rules {
 			port := rule.Match.GetPort()
+			isPattern := rule.Match.IsPattern()
 
 			// Determine hostname pattern (wildcard or literal) and instance expression
 			var hostnameMatch string
 			var instanceExpr string
 
-			if rule.Match.IsPattern() {
+			if isPattern {
 				// Pattern hostname - parse and use wildcard + Caddy placeholders
 				pattern, err := rule.Match.ParsePattern()
 				if err != nil {
@@ -258,11 +291,10 @@ func (g *CaddyConfigGenerator) buildConfig(ctx context.Context, ingresses []Ingr
 			matcher := map[string]interface{}{"host": []string{hostnameMatch}}
 			handlers := []interface{}{reverseProxy}
 			if rule.RequestHeaderAuth != nil {
-				secret, err := resolveRequestHeaderAuth(rule.RequestHeaderAuth)
-				if err != nil {
+				if err := rule.RequestHeaderAuth.Validate(); err != nil {
 					return nil, err
 				}
-				matcher["header"] = map[string][]string{rule.RequestHeaderAuth.Header: []string{secret}}
+				matcher["header"] = map[string][]string{rule.RequestHeaderAuth.Header: []string{rule.RequestHeaderAuth.Value}}
 				handlers = []interface{}{
 					map[string]interface{}{
 						"handler": "headers",
@@ -277,9 +309,11 @@ func (g *CaddyConfigGenerator) buildConfig(ctx context.Context, ingresses []Ingr
 				"handle":   handlers,
 				"terminal": true,
 			}
-			routesByPort[port] = append(routesByPort[port], route)
+			routes := routesForPort(routesByPort, port)
 			if rule.RequestHeaderAuth != nil {
-				routesByPort[port] = append(routesByPort[port], requestHeaderDenialRoute(hostnameMatch))
+				routes.append(isPattern, route, requestHeaderDenialRoute(hostnameMatch))
+			} else {
+				routes.append(isPattern, route)
 			}
 
 			// Track TLS hostnames for automation policy
@@ -310,7 +344,7 @@ func (g *CaddyConfigGenerator) buildConfig(ctx context.Context, ingresses []Ingr
 						},
 						"terminal": true,
 					}
-					routesByPort[80] = append(routesByPort[80], redirectRoute)
+					routesForPort(routesByPort, 80).append(isPattern, redirectRoute)
 				}
 			}
 		}
@@ -368,11 +402,11 @@ func (g *CaddyConfigGenerator) buildConfig(ctx context.Context, ingresses []Ingr
 					"terminal": true,
 				}
 				// Prepend so API redirect takes precedence
-				routesByPort[80] = append([]interface{}{apiRedirectRoute}, routesByPort[80]...)
+				routesForPort(routesByPort, 80).prependExact(apiRedirectRoute)
 			}
 		}
 		// Prepend API route so it takes precedence over wildcards
-		routesByPort[apiListenPort] = append([]interface{}{apiRoute}, routesByPort[apiListenPort]...)
+		routesForPort(routesByPort, apiListenPort).prependExact(apiRoute)
 	}
 
 	// Build base config (admin API only)
@@ -411,7 +445,7 @@ func (g *CaddyConfigGenerator) buildConfig(ctx context.Context, ingresses []Ingr
 		}
 
 		for _, port := range ports {
-			routes := routesByPort[port]
+			routes := routesByPort[port].ordered()
 
 			// Add catch-all at the end of each server's routes
 			allRoutes := append(routes, catchAllRoute)
@@ -465,37 +499,6 @@ func (g *CaddyConfigGenerator) buildConfig(ctx context.Context, ingresses []Ingr
 	}
 
 	return config, nil
-}
-
-const (
-	requestHeaderAuthValueMinBytes = 32
-	requestHeaderAuthValueMaxBytes = 256
-)
-
-func resolveRequestHeaderAuth(auth *RequestHeaderAuth) (string, error) {
-	if err := auth.Validate(); err != nil {
-		return "", err
-	}
-	value, ok := os.LookupEnv(auth.SecretEnv)
-	if !ok {
-		return "", fmt.Errorf("request header authorization environment variable %s is not set", auth.SecretEnv)
-	}
-	if !validRequestHeaderAuthValue(value) {
-		return "", fmt.Errorf("request header authorization environment variable %s is invalid", auth.SecretEnv)
-	}
-	return value, nil
-}
-
-func validRequestHeaderAuthValue(value string) bool {
-	if len(value) < requestHeaderAuthValueMinBytes || len(value) > requestHeaderAuthValueMaxBytes {
-		return false
-	}
-	for i := 0; i < len(value); i++ {
-		if value[i] < 0x21 || value[i] > 0x7e || value[i] == '*' || value[i] == '{' || value[i] == '}' {
-			return false
-		}
-	}
-	return true
 }
 
 func requestHeaderDenialRoute(hostname string) map[string]interface{} {
