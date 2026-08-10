@@ -693,7 +693,9 @@ func TestCancelBuild_QueuedBuild(t *testing.T) {
 
 // TestManagerShutdown_InFlightBuild verifies the build run detaches from
 // request cancellation while keeping request context values, and that
-// manager shutdown cancels the run and waits for its goroutine.
+// manager shutdown cancels the run and waits for its goroutine. The
+// interrupted build is left in a non-terminal status so startup recovery
+// re-runs it rather than reporting an opaque cancellation failure.
 func TestManagerShutdown_InFlightBuild(t *testing.T) {
 	mgr, instanceMgr, _, tempDir := setupTestManager(t)
 	defer os.RemoveAll(tempDir)
@@ -749,9 +751,12 @@ func TestManagerShutdown_InFlightBuild(t *testing.T) {
 	require.NoError(t, mgr.Shutdown(shutdownCtx))
 	assert.Less(t, time.Since(start), 5*time.Second, "shutdown should cancel the build promptly")
 
-	finished, err := mgr.GetBuild(context.Background(), build.ID)
+	// The interrupted build keeps its building status (no opaque "context
+	// canceled" failure) so RecoverPendingBuilds picks it up on next start.
+	interrupted, err := mgr.GetBuild(context.Background(), build.ID)
 	require.NoError(t, err)
-	assert.Equal(t, StatusFailed, finished.Status)
+	assert.Equal(t, StatusBuilding, interrupted.Status)
+	assert.Nil(t, interrupted.Error)
 }
 
 // TestCancelBuild_BuildingBuild verifies cancelling a running build deletes

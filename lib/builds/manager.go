@@ -55,7 +55,8 @@ type Manager interface {
 	Start(ctx context.Context) error
 
 	// Shutdown cancels in-flight builds and waits for their goroutines to
-	// return. Pending builds are left queued for recovery on the next start.
+	// return. Interrupted builds keep their status and pending builds stay
+	// queued on disk; both are recovered on the next start.
 	Shutdown(ctx context.Context) error
 
 	// CreateBuild starts a new build job
@@ -243,7 +244,8 @@ func (m *manager) ReadyForBuilds() bool {
 }
 
 // Shutdown cancels in-flight builds and waits for their goroutines to return.
-// Pending builds stay queued on disk and are recovered on the next start.
+// Interrupted builds keep their status and pending builds stay queued on
+// disk; both are recovered on the next start.
 func (m *manager) Shutdown(ctx context.Context) error {
 	return m.queue.Shutdown(ctx)
 }
@@ -738,6 +740,14 @@ func (m *manager) runBuild(ctx context.Context, id string, req CreateBuildReques
 	durationMS := duration.Milliseconds()
 
 	if err != nil {
+		if ctx.Err() != nil {
+			// The queue shut down mid-build (the run context is only ever
+			// cancelled by Shutdown). Leave the build in its non-terminal
+			// status so RecoverPendingBuilds re-runs it on the next start
+			// instead of failing it with an opaque cancellation error.
+			m.logger.Info("build interrupted by shutdown, left for recovery on next start", "id", id, "duration", duration)
+			return
+		}
 		m.logger.Error("build failed", "id", id, "error", err, "duration", duration)
 		errMsg := err.Error()
 		m.updateBuildComplete(id, StatusFailed, nil, &errMsg, nil, &durationMS)
@@ -776,6 +786,11 @@ func (m *manager) runBuild(ctx context.Context, id string, req CreateBuildReques
 		// Recalculate duration to include image wait time
 		duration = time.Since(start)
 		durationMS = duration.Milliseconds()
+		if ctx.Err() != nil {
+			// Interrupted by shutdown; leave for recovery as above.
+			m.logger.Info("build interrupted by shutdown during image wait, left for recovery on next start", "id", id, "duration", duration)
+			return
+		}
 		m.logger.Error("image conversion failed after build", "id", id, "error", err, "duration", duration)
 		errMsg := fmt.Sprintf("image conversion failed: %v", err)
 		m.updateBuildComplete(id, StatusFailed, nil, &errMsg, &result.Provenance, &durationMS)
@@ -1110,6 +1125,9 @@ func (m *manager) waitForResult(ctx context.Context, buildID string, inst *insta
 			}, nil
 		}
 
+		if attempt == buildAgentDialMaxAttempts-1 {
+			break // no retry sleep after the final attempt
+		}
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()

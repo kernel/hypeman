@@ -32,7 +32,7 @@ var (
 func readLimitedPart(part *multipart.Part, limit int64) ([]byte, error) {
 	data, err := io.ReadAll(io.LimitReader(part, limit+1))
 	if err != nil {
-		return nil, fmt.Errorf("failed to read %s field", part.FormName())
+		return nil, fmt.Errorf("failed to read %s field: %w", part.FormName(), err)
 	}
 	if int64(len(data)) > limit {
 		return nil, fmt.Errorf("%s exceeds the maximum size of %d bytes", part.FormName(), limit)
