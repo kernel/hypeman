@@ -277,6 +277,7 @@ func (m *manager) createInstance(
 	var gpuFramework devices.VGPUFramework
 	var gpuDevicePath string
 	var gpuMdevUUID string
+	var gpuAssignedAt *time.Time
 	var stored *StoredMetadata
 	var retainedVGPU *StoredMetadata
 
@@ -318,6 +319,8 @@ func (m *manager) createInstance(
 		gpuFramework = gpuDevice.Framework
 		gpuDevicePath = gpuDevice.SysfsPath
 		gpuMdevUUID = gpuDevice.MdevUUID
+		assignedAt := m.nowUTC()
+		gpuAssignedAt = &assignedAt
 		log.InfoContext(ctx, "created vGPU", "instance_id", id, "profile", gpuProfile, "uuid", gpuMdevUUID)
 
 		// Add vGPU cleanup to stack
@@ -426,6 +429,7 @@ func (m *manager) createInstance(
 		GPUFramework:             gpuFramework,
 		GPUDevicePath:            gpuDevicePath,
 		GPUMdevUUID:              gpuMdevUUID,
+		GPUAssignedAt:            gpuAssignedAt,
 		Entrypoint:               req.Entrypoint,
 		Cmd:                      req.Cmd,
 		SkipKernelHeaders:        req.SkipKernelHeaders,

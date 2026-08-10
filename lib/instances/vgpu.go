@@ -3,6 +3,7 @@ package instances
 import (
 	"context"
 	"path/filepath"
+	"time"
 
 	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/logger"
@@ -49,16 +50,40 @@ func (m *manager) destroyVGPUAssignment(ctx context.Context, assignment devices.
 	return destroy(ctx, assignment)
 }
 
-func setStoredVGPUDevice(stored *StoredMetadata, device *devices.VGPUDevice) {
+func setStoredVGPUDevice(stored *StoredMetadata, device *devices.VGPUDevice, assignedAt time.Time) {
 	stored.GPUFramework = device.Framework
 	stored.GPUDevicePath = device.SysfsPath
 	stored.GPUMdevUUID = device.MdevUUID
+	stored.GPUAssignedAt = &assignedAt
 }
 
 func clearStoredVGPUDevice(stored *StoredMetadata) {
 	stored.GPUFramework = devices.VGPUFrameworkNone
 	stored.GPUDevicePath = ""
 	stored.GPUMdevUUID = ""
+	stored.GPUAssignedAt = nil
+}
+
+func (m *manager) cleanupStartVGPU(ctx context.Context, instanceID string, device *devices.VGPUDevice, assignedAt time.Time, rollbackMeta metadata) {
+	assignment := devices.VGPUAssignment{
+		Framework:  device.Framework,
+		DevicePath: device.SysfsPath,
+		MdevUUID:   device.MdevUUID,
+		InstanceID: instanceID,
+	}
+	cleanupMeta := rollbackMeta
+	releaseErr := m.destroyVGPUAssignment(ctx, assignment)
+	if releaseErr != nil {
+		logger.FromContext(ctx).WarnContext(ctx, "failed to destroy vGPU on cleanup", "instance_id", instanceID, "error", releaseErr)
+		setStoredVGPUDevice(&cleanupMeta.StoredMetadata, device, assignedAt)
+	}
+	if err := m.saveMetadata(&cleanupMeta); err != nil {
+		message := "failed to save metadata after vGPU cleanup"
+		if releaseErr != nil {
+			message = "failed to retain vGPU assignment metadata after cleanup failure"
+		}
+		logger.FromContext(ctx).ErrorContext(ctx, message, "instance_id", instanceID, "error", err)
+	}
 }
 
 func (m *manager) releaseStoredVGPU(ctx context.Context, stored *StoredMetadata) error {

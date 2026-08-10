@@ -395,20 +395,26 @@ func (s vgpuReconcileManagerStub) ListInstancesForReconcile(context.Context) ([]
 	return s.list, nil
 }
 
-// The hypervisor PID is persisted only after boot, so an assignment without
-// one may belong to a VM that is still starting and must stay protected.
-func TestLiveInstanceVGPUDevicePathsProtectsAssignmentsWithoutPID(t *testing.T) {
+func TestLiveInstanceVGPUDevicePathsBoundsProtectionWithoutPID(t *testing.T) {
 	dead := exec.Command("true")
 	require.NoError(t, dead.Run())
 	deadPID := dead.Process.Pid
+	recent := time.Now().Add(-time.Minute)
+	stale := time.Now().Add(-vgpuAssignmentStartupGracePeriod - time.Minute)
 
 	manager := vgpuReconcileManagerStub{list: []instances.Instance{
-		{StoredMetadata: instances.StoredMetadata{Id: "booting", GPUDevicePath: "/sys/bus/pci/devices/0000:82:00.4"}},
-		{StoredMetadata: instances.StoredMetadata{Id: "dead", GPUDevicePath: "/sys/bus/pci/devices/0000:82:00.5", HypervisorPID: &deadPID}},
+		{StoredMetadata: instances.StoredMetadata{Id: "booting", GPUDevicePath: "/sys/bus/pci/devices/0000:82:00.4", GPUAssignedAt: &recent}},
+		{StoredMetadata: instances.StoredMetadata{Id: "orphaned", GPUDevicePath: "/sys/bus/pci/devices/0000:82:00.5", GPUAssignedAt: &stale}},
+		{StoredMetadata: instances.StoredMetadata{Id: "legacy", GPUDevicePath: "/sys/bus/pci/devices/0000:82:00.6"}},
+		{StoredMetadata: instances.StoredMetadata{Id: "dead", GPUDevicePath: "/sys/bus/pci/devices/0000:82:00.7", HypervisorPID: &deadPID}},
 	}}
 
-	protected, err := liveInstanceVGPUDevicePaths(context.Background(), manager)
+	protected, retryAfter, err := liveInstanceVGPUDevicePaths(context.Background(), manager)
 	require.NoError(t, err)
+	require.Positive(t, retryAfter)
+	require.LessOrEqual(t, retryAfter, vgpuAssignmentStartupGracePeriod)
 	assert.Contains(t, protected, "/sys/bus/pci/devices/0000:82:00.4")
 	assert.NotContains(t, protected, "/sys/bus/pci/devices/0000:82:00.5")
+	assert.NotContains(t, protected, "/sys/bus/pci/devices/0000:82:00.6")
+	assert.NotContains(t, protected, "/sys/bus/pci/devices/0000:82:00.7")
 }
