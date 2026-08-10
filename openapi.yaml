@@ -1775,7 +1775,7 @@ components:
           example: 1024
         available:
           type: integer
-          description: "Number of virtual functions currently able to create this profile. Best-effort: creating an instance may reduce availability on sibling functions sharing GPU framebuffer."
+          description: "Conservative estimate of instances concurrently creatable with this profile across all GPUs, bounded per GPU by free virtual functions and remaining framebuffer. Best-effort: recomputed from driver state on each query."
           example: 59
     
     PassthroughDevice:
