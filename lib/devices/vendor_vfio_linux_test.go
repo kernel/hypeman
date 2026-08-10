@@ -184,7 +184,7 @@ func TestVendorVFIODestroyRetainsAssignmentWhenOneVFIOPathIsMissing(t *testing.T
 	}
 }
 
-func TestVendorVFIOListProfilesCountsFreeVFs(t *testing.T) {
+func TestVendorVFIOListProfilesReportsPerGPUCapacity(t *testing.T) {
 	t.Parallel()
 
 	sysfs := newTestVendorVFIOSysfs(t)
@@ -196,8 +196,30 @@ func TestVendorVFIOListProfilesCountsFreeVFs(t *testing.T) {
 	require.NoError(t, err)
 	profiles, err := sysfs.listProfiles(vfs)
 	require.NoError(t, err)
-	assert.Equal(t, 3, profileAvailability(profiles, "NVIDIA L40S-48Q"),
-		"each free VF advertising the type counts as one creatable instance")
+	assert.Equal(t, 2, profileAvailability(profiles, "NVIDIA L40S-48Q"),
+		"one 48Q consumes a whole GPU, so two GPUs mean two creatable instances despite three free VFs")
+	assert.Equal(t, 3, profileAvailability(profiles, "NVIDIA L40S-2Q"),
+		"small profiles stay capped by the free VF count")
+}
+
+func TestVendorVFIOListProfilesCapsCapacityByRemainingFramebuffer(t *testing.T) {
+	t.Parallel()
+
+	// One 48G GPU with a 24Q already assigned: siblings only advertise up to
+	// 24Q, so at most one more 24Q fits despite two free VFs.
+	remaining := "ID    : vGPU Name\n1147  : NVIDIA L40S-1Q\n1153  : NVIDIA L40S-24Q\n"
+	sysfs := newTestVendorVFIOSysfs(t)
+	sysfs.addVF(t, "0000:82:00.0", "0000:82:00.4", "42", "1153", remaining)
+	sysfs.addVF(t, "0000:82:00.0", "0000:82:00.5", "43", "0", remaining)
+	sysfs.addVF(t, "0000:82:00.0", "0000:82:00.6", "44", "0", remaining)
+
+	vfs, err := sysfs.discoverVFs()
+	require.NoError(t, err)
+	profiles, err := sysfs.listProfiles(vfs)
+	require.NoError(t, err)
+	assert.Equal(t, 1, profileAvailability(profiles, "NVIDIA L40S-24Q"))
+	assert.Equal(t, 2, profileAvailability(profiles, "NVIDIA L40S-1Q"),
+		"framebuffer allows more 1Q instances than free VFs, so the VF count caps it")
 }
 
 func TestVendorVFIOCreateReportsCapacityWhenAllGPUsFull(t *testing.T) {
