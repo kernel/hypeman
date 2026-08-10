@@ -9,13 +9,19 @@ import (
 	"github.com/kernel/hypeman/lib/hypervisor"
 )
 
-// BuildArgs converts hypervisor.VMConfig to QEMU command-line arguments.
+// BuildArgs converts hypervisor.VMConfig to command-line arguments for standard
+// QEMU. Backend starters use buildArgs with their private machine profile.
 func BuildArgs(cfg hypervisor.VMConfig) []string {
+	machine, _ := ResolveMachineType("")
+	return buildArgs(cfg, machine)
+}
+
+func buildArgs(cfg hypervisor.VMConfig, machine MachineType) []string {
 	args := make([]string, 0, 64)
-	microvm := cfg.MachineType == MachineTypeMicroVM
+	microvm := machine == MachineTypeMicroVM
 
 	// Machine type with KVM acceleration (arch-specific when omitted).
-	args = append(args, "-machine", machineTypeForConfig(cfg))
+	args = append(args, "-machine", string(machine)+",accel=kvm")
 	if microvm {
 		// Do not allow a host qemu.conf to add devices outside microvm's
 		// documented eight virtio-mmio-device limit.
@@ -126,16 +132,6 @@ func BuildArgs(cfg hypervisor.VMConfig) []string {
 	args = append(args, "-nodefaults")
 
 	return args
-}
-
-func machineTypeForConfig(cfg hypervisor.VMConfig) string {
-	machine := cfg.MachineType
-	if machine == "" {
-		// StartVM resolves the architecture default before calling BuildArgs. Keep
-		// direct BuildArgs callers deterministic for the standard QEMU profile.
-		machine, _ = ResolveMachineType("")
-	}
-	return string(machine) + ",accel=kvm"
 }
 
 func virtioDevice(microvm bool, name string) string {

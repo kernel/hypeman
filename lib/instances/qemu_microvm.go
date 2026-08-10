@@ -47,7 +47,6 @@ func (m *manager) validateQEMUMicroVMPlan(
 	}
 
 	config := hypervisor.VMConfig{
-		MachineType:  qemu.MachineTypeMicroVM,
 		HotplugBytes: hotplugBytes,
 		Disks:        make([]hypervisor.DiskConfig, diskCount),
 		VsockCID:     3,
@@ -57,7 +56,7 @@ func (m *manager) validateQEMUMicroVMPlan(
 	if networkEnabled {
 		config.Networks = []hypervisor.NetworkConfig{{}}
 	}
-	if err := qemu.ValidateConfig(config); err != nil {
+	if err := qemu.ValidateMicroVMConfig(config); err != nil {
 		return fmt.Errorf("%w: hypervisor %s: %v", ErrInvalidRequest, hvType, err)
 	}
 	return nil

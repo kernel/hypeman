@@ -1,14 +1,8 @@
 package hypervisor
 
-// MachineType identifies a hypervisor-specific machine/board type.
-type MachineType string
-
 // VMConfig is the hypervisor-agnostic VM configuration.
 // Each hypervisor implementation translates this to its native format.
 type VMConfig struct {
-	// MachineType selects a hypervisor-specific board. It is currently used by QEMU.
-	MachineType MachineType
-
 	// Compute resources
 	VCPUs        int
 	MemoryBytes  int64

@@ -331,7 +331,7 @@ func qemuConfigMachineType(instanceDir string) (string, error) {
 	return config.MachineType, nil
 }
 
-func expectedQEMUMachineType(t *testing.T, hypervisorType hypervisor.Type) hypervisor.MachineType {
+func expectedQEMUMachineType(t *testing.T, hypervisorType hypervisor.Type) qemu.MachineType {
 	t.Helper()
 	if hypervisorType == hypervisor.TypeQEMUMicroVM {
 		return qemu.MachineTypeMicroVM

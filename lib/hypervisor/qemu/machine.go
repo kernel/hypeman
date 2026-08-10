@@ -7,22 +7,26 @@ import (
 	"github.com/kernel/hypeman/lib/hypervisor"
 )
 
+// MachineType identifies a QEMU machine/board type persisted in QEMU's private
+// restore contract. It is not part of the hypervisor-agnostic VM config.
+type MachineType string
+
 const (
 	// MachineTypeQ35 is QEMU's standard x86 board.
-	MachineTypeQ35 hypervisor.MachineType = "q35"
+	MachineTypeQ35 MachineType = "q35"
 	// MachineTypeVirt is QEMU's standard ARM board.
-	MachineTypeVirt hypervisor.MachineType = "virt"
+	MachineTypeVirt MachineType = "virt"
 	// MachineTypeMicroVM is QEMU's minimal x86-only board.
-	MachineTypeMicroVM hypervisor.MachineType = "microvm"
+	MachineTypeMicroVM MachineType = "microvm"
 )
 
 // ResolveMachineType validates a QEMU machine type for this host and resolves
 // an omitted type to the host architecture's standard board.
-func ResolveMachineType(requested hypervisor.MachineType) (hypervisor.MachineType, error) {
+func ResolveMachineType(requested MachineType) (MachineType, error) {
 	return resolveMachineTypeForPlatform(requested, runtime.GOOS, runtime.GOARCH)
 }
 
-func machineTypeForHypervisor(hypervisorType hypervisor.Type) (hypervisor.MachineType, error) {
+func machineTypeForHypervisor(hypervisorType hypervisor.Type) (MachineType, error) {
 	switch hypervisorType {
 	case hypervisor.TypeQEMU:
 		return ResolveMachineType("")
@@ -33,7 +37,7 @@ func machineTypeForHypervisor(hypervisorType hypervisor.Type) (hypervisor.Machin
 	}
 }
 
-func resolveMachineTypeForPlatform(requested hypervisor.MachineType, goos, goarch string) (hypervisor.MachineType, error) {
+func resolveMachineTypeForPlatform(requested MachineType, goos, goarch string) (MachineType, error) {
 	switch goarch {
 	case "amd64":
 		if requested == "" {
@@ -56,14 +60,28 @@ func resolveMachineTypeForPlatform(requested hypervisor.MachineType, goos, goarc
 	return "", fmt.Errorf("machine type %q is not supported on %s/%s", requested, goos, goarch)
 }
 
-// ValidateConfig validates the QEMU-specific restrictions of a VM config.
-// It is called at launch and restore time, so metadata and snapshot configs
-// cannot bypass create-time request validation.
+// ValidateConfig validates restrictions for standard QEMU on this host.
 func ValidateConfig(cfg hypervisor.VMConfig) error {
-	machine, err := ResolveMachineType(cfg.MachineType)
+	machine, err := ResolveMachineType("")
 	if err != nil {
 		return err
 	}
+	return validateConfig(cfg, machine)
+}
+
+// ValidateMicroVMConfig validates restrictions for QEMU's microvm profile.
+func ValidateMicroVMConfig(cfg hypervisor.VMConfig) error {
+	machine, err := ResolveMachineType(MachineTypeMicroVM)
+	if err != nil {
+		return err
+	}
+	return validateConfig(cfg, machine)
+}
+
+// validateConfig applies restrictions for a selected QEMU machine profile.
+// It is called at launch and restore time, so snapshot configs cannot bypass
+// create-time request validation.
+func validateConfig(cfg hypervisor.VMConfig, machine MachineType) error {
 	if machine != MachineTypeMicroVM {
 		return nil
 	}

@@ -27,7 +27,6 @@ func TestPrepareFork_RewritesSnapshotConfig(t *testing.T) {
 	sourceDir := "/src/guest"
 	targetDir := "/dst/guest"
 	initial := hypervisor.VMConfig{
-		MachineType:   MachineTypeMicroVM,
 		VCPUs:         2,
 		MemoryBytes:   2 * 1024 * 1024 * 1024,
 		SerialLogPath: sourceDir + "/logs/app.log",
@@ -49,7 +48,7 @@ func TestPrepareFork_RewritesSnapshotConfig(t *testing.T) {
 			},
 		},
 	}
-	require.NoError(t, saveVMConfig(snapshotDir, savedVMConfig{VMConfig: initial, QEMUVersion: "8.2.0"}))
+	require.NoError(t, saveVMConfig(snapshotDir, savedVMConfig{VMConfig: initial, MachineType: MachineTypeMicroVM, QEMUVersion: "8.2.0"}))
 
 	result, err := starter.PrepareFork(context.Background(), hypervisor.ForkPrepareRequest{
 		SnapshotConfigPath: filepath.Join(snapshotDir, "config.json"),

@@ -28,10 +28,10 @@ func (s *Starter) PrepareFork(ctx context.Context, req hypervisor.ForkPrepareReq
 		}
 		return hypervisor.ForkPrepareResult{}, fmt.Errorf("load qemu snapshot config: %w", err)
 	}
-	cfg, err := s.applyMachineType(saved.VMConfig, true)
-	if err != nil {
+	if _, err := s.validateSnapshotMachineType(saved.MachineType); err != nil {
 		return hypervisor.ForkPrepareResult{}, fmt.Errorf("select qemu fork machine type: %w", err)
 	}
+	cfg := saved.VMConfig
 
 	if req.SourceDataDir != "" && req.TargetDataDir != "" && req.SourceDataDir != req.TargetDataDir {
 		cfg = rewriteQEMUConfigPaths(cfg, req.SourceDataDir, req.TargetDataDir)

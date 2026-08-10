@@ -324,35 +324,33 @@ func (s *Starter) startQEMUProcess(ctx context.Context, p *paths.Paths, version 
 	return pid, hv, &cu, nil
 }
 
-func (s *Starter) applyMachineType(config hypervisor.VMConfig, restoring bool) (hypervisor.VMConfig, error) {
+func (s *Starter) validateSnapshotMachineType(stored MachineType) (MachineType, error) {
 	expected, err := machineTypeForHypervisor(s.hypervisorType)
 	if err != nil {
-		return hypervisor.VMConfig{}, err
+		return "", err
 	}
-	if restoring && s.hypervisorType == hypervisor.TypeQEMUMicroVM && config.MachineType == "" {
-		return hypervisor.VMConfig{}, fmt.Errorf("qemu-microvm snapshot is missing its machine type")
+	if s.hypervisorType == hypervisor.TypeQEMUMicroVM && stored == "" {
+		return "", fmt.Errorf("qemu-microvm snapshot is missing its machine type")
 	}
-	if config.MachineType != "" && config.MachineType != expected {
-		return hypervisor.VMConfig{}, fmt.Errorf("hypervisor %s cannot use QEMU machine type %q", s.hypervisorType, config.MachineType)
+	if stored != "" && stored != expected {
+		return "", fmt.Errorf("hypervisor %s cannot use QEMU machine type %q", s.hypervisorType, stored)
 	}
-	config.MachineType = expected
-	return config, nil
+	return expected, nil
 }
 
 // StartVM launches QEMU with the VM configuration and returns a Hypervisor client.
 // QEMU receives all configuration via command-line arguments at process start.
 func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, socketPath string, config hypervisor.VMConfig) (int, hypervisor.Hypervisor, error) {
 	log := logger.FromContext(ctx)
-	var err error
-	config, err = s.applyMachineType(config, false)
+	machineType, err := machineTypeForHypervisor(s.hypervisorType)
 	if err != nil {
 		return 0, nil, fmt.Errorf("select qemu machine type: %w", err)
 	}
-	if err := ValidateConfig(config); err != nil {
+	if err := validateConfig(config, machineType); err != nil {
 		return 0, nil, fmt.Errorf("validate qemu config: %w", err)
 	}
 	qemuVersion := ""
-	if config.MachineType == MachineTypeMicroVM {
+	if machineType == MachineTypeMicroVM {
 		qemuVersion, err = s.GetVersion(p)
 		if err != nil {
 			return 0, nil, fmt.Errorf("get QEMU version for microvm snapshot compatibility: %w", err)
@@ -388,7 +386,7 @@ func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, s
 		for transientRetry := 0; transientRetry < 2; transientRetry++ {
 			// Build command arguments: QMP socket + VM configuration
 			args := buildQMPArgs(socketPath)
-			args = append(args, BuildArgs(attempt)...)
+			args = append(args, buildArgs(attempt, machineType)...)
 			pid, hv, cu, err = s.startQEMUProcess(ctx, p, version, socketPath, args)
 			if err == nil {
 				booted = attempt
@@ -422,8 +420,8 @@ func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, s
 	// compatible across QEMU versions, so stamp the selected binary's version
 	// alongside the device model.
 	instanceDir := filepath.Dir(socketPath)
-	if err := saveVMConfig(instanceDir, savedVMConfig{VMConfig: booted, QEMUVersion: qemuVersion}); err != nil {
-		if booted.MachineType == MachineTypeMicroVM {
+	if err := saveVMConfig(instanceDir, savedVMConfig{VMConfig: booted, MachineType: machineType, QEMUVersion: qemuVersion}); err != nil {
+		if machineType == MachineTypeMicroVM {
 			return 0, nil, fmt.Errorf("save qemu-microvm restore contract: %w", err)
 		}
 		// Standard QEMU can continue, but standby restore will be unavailable.
@@ -494,16 +492,17 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 	if err != nil {
 		return 0, nil, fmt.Errorf("load vm config from snapshot: %w", err)
 	}
-	config, err := s.applyMachineType(saved.VMConfig, true)
+	machineType, err := s.validateSnapshotMachineType(saved.MachineType)
 	if err != nil {
 		return 0, nil, fmt.Errorf("select qemu snapshot machine type: %w", err)
 	}
+	config := saved.VMConfig
 	log.DebugContext(ctx, "loaded VM config from snapshot", "duration_ms", time.Since(configLoadStart).Milliseconds())
-	if err := ValidateConfig(config); err != nil {
+	if err := validateConfig(config, machineType); err != nil {
 		return 0, nil, fmt.Errorf("validate qemu snapshot config: %w", err)
 	}
 	qemuVersion := saved.QEMUVersion
-	if config.MachineType == MachineTypeMicroVM {
+	if machineType == MachineTypeMicroVM {
 		qemuVersion, err = s.validateMicroVMRestoreVersion(p, saved.QEMUVersion)
 		if err != nil {
 			return 0, nil, err
@@ -512,7 +511,7 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 
 	// Build command arguments: QMP socket + VM configuration + incoming migration
 	args := buildQMPArgs(socketPath)
-	args = append(args, BuildArgs(config)...)
+	args = append(args, buildArgs(config, machineType)...)
 
 	// Add incoming migration flag to restore from snapshot
 	// The "file:" protocol is deprecated in QEMU 7.2+, use "exec:cat < path" instead
@@ -534,7 +533,7 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 	}
 	log.DebugContext(ctx, "VM ready", "duration_ms", time.Since(migrationWaitStart).Milliseconds())
 
-	if err := saveVMConfig(filepath.Dir(socketPath), savedVMConfig{VMConfig: config, QEMUVersion: qemuVersion}); err != nil {
+	if err := saveVMConfig(filepath.Dir(socketPath), savedVMConfig{VMConfig: config, MachineType: machineType, QEMUVersion: qemuVersion}); err != nil {
 		return 0, nil, fmt.Errorf("save restored vm config: %w", err)
 	}
 
@@ -569,6 +568,7 @@ const vmConfigFile = "qemu-config.json"
 
 type savedVMConfig struct {
 	hypervisor.VMConfig
+	MachineType MachineType
 	QEMUVersion string
 }
 

@@ -109,7 +109,8 @@ func TestGetVersion_ParsesVersionCorrectly(t *testing.T) {
 func TestSaveAndLoadVMConfigPreservesRestoreContract(t *testing.T) {
 	dir := t.TempDir()
 	want := savedVMConfig{
-		VMConfig:    hypervisor.VMConfig{MachineType: MachineTypeMicroVM, VsockCID: 3},
+		VMConfig:    hypervisor.VMConfig{VsockCID: 3},
+		MachineType: MachineTypeMicroVM,
 		QEMUVersion: "8.2.0",
 	}
 	require.NoError(t, saveVMConfig(dir, want))

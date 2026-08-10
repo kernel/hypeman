@@ -1,7 +1,6 @@
 package qemu
 
 import (
-	"runtime"
 	"testing"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
@@ -13,10 +12,10 @@ func TestResolveMachineTypeForPlatform(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name      string
-		requested hypervisor.MachineType
+		requested MachineType
 		goos      string
 		arch      string
-		want      hypervisor.MachineType
+		want      MachineType
 		wantErr   bool
 	}{
 		{name: "linux amd64 defaults q35", goos: "linux", arch: "amd64", want: MachineTypeQ35},
@@ -40,26 +39,26 @@ func TestResolveMachineTypeForPlatform(t *testing.T) {
 	}
 }
 
-func TestStarterAppliesBackendMachineType(t *testing.T) {
+func TestStarterSelectsAndValidatesPrivateMachineType(t *testing.T) {
 	t.Parallel()
 
-	standard, err := NewStarter().applyMachineType(hypervisor.VMConfig{}, false)
+	standard, err := machineTypeForHypervisor(hypervisor.TypeQEMU)
 	require.NoError(t, err)
 	expectedStandard, err := ResolveMachineType("")
 	require.NoError(t, err)
-	assert.Equal(t, expectedStandard, standard.MachineType)
+	assert.Equal(t, expectedStandard, standard)
 
-	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+	if _, err := ResolveMachineType(MachineTypeMicroVM); err != nil {
 		return
 	}
-	microvm, err := NewMicroVMStarter().applyMachineType(hypervisor.VMConfig{}, false)
+	microvm, err := machineTypeForHypervisor(hypervisor.TypeQEMUMicroVM)
 	require.NoError(t, err)
-	assert.Equal(t, MachineTypeMicroVM, microvm.MachineType)
+	assert.Equal(t, MachineTypeMicroVM, microvm)
 
-	_, err = NewStarter().applyMachineType(hypervisor.VMConfig{MachineType: MachineTypeMicroVM}, false)
+	_, err = NewStarter().validateSnapshotMachineType(MachineTypeMicroVM)
 	require.ErrorContains(t, err, "hypervisor qemu cannot use QEMU machine type")
 
-	_, err = NewMicroVMStarter().applyMachineType(hypervisor.VMConfig{}, true)
+	_, err = NewMicroVMStarter().validateSnapshotMachineType("")
 	require.ErrorContains(t, err, "snapshot is missing")
 }
 
@@ -76,8 +75,8 @@ func TestValidateConfigMicroVM(t *testing.T) {
 	if _, err := ResolveMachineType(MachineTypeMicroVM); err != nil {
 		t.Skipf("microvm is unavailable on this platform: %v", err)
 	}
-	base := hypervisor.VMConfig{MachineType: MachineTypeMicroVM, Disks: make([]hypervisor.DiskConfig, 6), Networks: []hypervisor.NetworkConfig{{}}, VsockCID: 3}
-	require.NoError(t, ValidateConfig(base), "six disks, network, and vsock consume all eight slots")
+	base := hypervisor.VMConfig{Disks: make([]hypervisor.DiskConfig, 6), Networks: []hypervisor.NetworkConfig{{}}, VsockCID: 3}
+	require.NoError(t, ValidateMicroVMConfig(base), "six disks, network, and vsock consume all eight slots")
 
 	for _, tc := range []struct {
 		name   string
@@ -90,7 +89,7 @@ func TestValidateConfigMicroVM(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := base
 			tc.mutate(&cfg)
-			assert.Error(t, ValidateConfig(cfg))
+			assert.Error(t, ValidateMicroVMConfig(cfg))
 		})
 	}
 }

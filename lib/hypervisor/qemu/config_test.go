@@ -19,8 +19,9 @@ func TestBuildArgs_Basic(t *testing.T) {
 	args := BuildArgs(cfg)
 
 	// Check machine type (arch-dependent)
+	machine, _ := ResolveMachineType("")
 	assert.Contains(t, args, "-machine")
-	assert.Contains(t, args, machineTypeForConfig(cfg))
+	assert.Contains(t, args, string(machine)+",accel=kvm")
 
 	// Check CPU
 	assert.Contains(t, args, "-cpu")
@@ -164,7 +165,6 @@ func TestBuildArgs_NoSerialLog(t *testing.T) {
 
 func TestBuildArgs_MicroVM(t *testing.T) {
 	cfg := hypervisor.VMConfig{
-		MachineType:   MachineTypeMicroVM,
 		VCPUs:         1,
 		MemoryBytes:   512 * 1024 * 1024,
 		Disks:         []hypervisor.DiskConfig{{Path: "/rootfs"}},
@@ -174,7 +174,7 @@ func TestBuildArgs_MicroVM(t *testing.T) {
 		GuestMemory:   hypervisor.GuestMemoryConfig{EnableBalloon: true},
 	}
 
-	args := BuildArgs(cfg)
+	args := buildArgs(cfg, MachineTypeMicroVM)
 	assert.Contains(t, args, "microvm,accel=kvm")
 	assert.Contains(t, args, "-no-user-config")
 	assert.Contains(t, args, "virtio-blk-device,drive=drive0")
