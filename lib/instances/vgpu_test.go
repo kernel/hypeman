@@ -27,6 +27,7 @@ func TestCleanupFailedCreateRetainsVGPUAssignment(t *testing.T) {
 	t.Parallel()
 
 	m := &manager{paths: paths.New(t.TempDir())}
+	assignedAt := time.Now().UTC()
 	stored := &StoredMetadata{
 		Id:             "failed-create",
 		Name:           "failed-create",
@@ -34,6 +35,7 @@ func TestCleanupFailedCreateRetainsVGPUAssignment(t *testing.T) {
 		GPUFramework:   devices.VGPUFrameworkVendorVFIO,
 		GPUDevicePath:  "/sys/bus/pci/devices/0000:82:00.4",
 		GPUMdevUUID:    "mdev-uuid",
+		GPUAssignedAt:  &assignedAt,
 		NetworkEnabled: true,
 		IP:             "192.0.2.1",
 		Volumes:        []VolumeAttachment{{VolumeID: "volume"}},
@@ -49,6 +51,7 @@ func TestCleanupFailedCreateRetainsVGPUAssignment(t *testing.T) {
 	assert.Equal(t, stored.GPUFramework, retained.GPUFramework)
 	assert.Equal(t, stored.GPUDevicePath, retained.GPUDevicePath)
 	assert.Equal(t, stored.GPUMdevUUID, retained.GPUMdevUUID)
+	assert.Equal(t, stored.GPUAssignedAt, retained.GPUAssignedAt)
 	assert.Empty(t, retained.Name)
 	assert.Empty(t, retained.GPUProfile)
 	assert.False(t, retained.NetworkEnabled)
@@ -282,20 +285,40 @@ func TestVGPUAssignmentClaimedByLiveInstanceNormalizesLegacyMdevPath(t *testing.
 	assert.True(t, claimed)
 }
 
-func TestVGPUAssignmentClaimedByLiveInstanceErrorsOnNilPIDClaim(t *testing.T) {
+func TestVGPUAssignmentClaimedByLiveInstanceErrorsOnRecentNilPIDClaim(t *testing.T) {
 	t.Parallel()
 
 	m := &manager{paths: paths.New(t.TempDir())}
 	require.NoError(t, m.ensureDirectories("booting-claimant"))
+	assignedAt := time.Now().UTC()
 	require.NoError(t, m.saveMetadata(&metadata{StoredMetadata: StoredMetadata{
 		Id:            "booting-claimant",
 		Name:          "booting-claimant",
 		GPUDevicePath: "/sys/bus/pci/devices/0000:82:00.4",
+		GPUAssignedAt: &assignedAt,
 	}}))
 
 	_, err := m.vgpuAssignmentClaimedByLiveInstance(context.Background(), "other-instance", "/sys/bus/pci/devices/0000:82:00.4")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "booting-claimant")
+}
+
+func TestVGPUAssignmentClaimedByLiveInstanceIgnoresStaleNilPIDClaim(t *testing.T) {
+	t.Parallel()
+
+	m := &manager{paths: paths.New(t.TempDir())}
+	require.NoError(t, m.ensureDirectories("stale-claimant"))
+	assignedAt := time.Now().Add(-VGPUAssignmentStartupGracePeriod - time.Minute)
+	require.NoError(t, m.saveMetadata(&metadata{StoredMetadata: StoredMetadata{
+		Id:            "stale-claimant",
+		Name:          "stale-claimant",
+		GPUDevicePath: "/sys/bus/pci/devices/0000:82:00.4",
+		GPUAssignedAt: &assignedAt,
+	}}))
+
+	claimed, err := m.vgpuAssignmentClaimedByLiveInstance(context.Background(), "other-instance", "/sys/bus/pci/devices/0000:82:00.4")
+	require.NoError(t, err)
+	assert.False(t, claimed)
 }
 
 func TestVGPUAssignmentClaimedByLiveInstanceIgnoresDeadClaim(t *testing.T) {
@@ -349,10 +372,12 @@ func TestReleaseStoredVGPURetainsRequesterOnAmbiguousClaim(t *testing.T) {
 		},
 	}
 	require.NoError(t, m.ensureDirectories("ambiguous-claimant"))
+	assignedAt := time.Now().UTC()
 	require.NoError(t, m.saveMetadata(&metadata{StoredMetadata: StoredMetadata{
 		Id:            "ambiguous-claimant",
 		GPUFramework:  devices.VGPUFrameworkVendorVFIO,
 		GPUDevicePath: devicePath,
+		GPUAssignedAt: &assignedAt,
 	}}))
 
 	stored := &StoredMetadata{
