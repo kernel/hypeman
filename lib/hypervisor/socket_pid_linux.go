@@ -4,11 +4,14 @@ package hypervisor
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 )
 
 var procDir = "/proc"
@@ -38,7 +41,7 @@ func ResolveProcessPID(socketPath string) (pid int, confirmed bool, err error) {
 	if socketErr != nil {
 		return 0, false, socketErr
 	}
-	return 0, false, fmt.Errorf("resolve process pid for socket %s: no owning process found", socketPath)
+	return 0, false, fmt.Errorf("resolve process pid for socket %s: %w", socketPath, ErrNoOwningProcess)
 }
 
 func pidBySocketRef(socketRef string) (int, error) {
@@ -60,12 +63,18 @@ func pidBySocketRef(socketRef string) (int, error) {
 
 		fdEntries, err := os.ReadDir(filepath.Join(procDir, entry.Name(), "fd"))
 		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ESRCH) {
+				continue
+			}
 			scanErr = err
 			continue
 		}
 		for _, fdEntry := range fdEntries {
 			target, err := os.Readlink(filepath.Join(procDir, entry.Name(), "fd", fdEntry.Name()))
 			if err != nil {
+				if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ESRCH) {
+					continue
+				}
 				scanErr = err
 				continue
 			}
@@ -78,7 +87,7 @@ func pidBySocketRef(socketRef string) (int, error) {
 	if scanErr != nil {
 		return 0, fmt.Errorf("resolve process pid for %s: inspect process fds: %w", socketRef, scanErr)
 	}
-	return 0, fmt.Errorf("resolve process pid for %s: no owning process found", socketRef)
+	return 0, fmt.Errorf("resolve process pid for %s: %w", socketRef, ErrNoOwningProcess)
 }
 
 func pidByCmdline(socketPath string) (int, error) {
@@ -100,6 +109,9 @@ func pidByCmdline(socketPath string) (int, error) {
 
 		cmdline, err := os.ReadFile(filepath.Join(procDir, entry.Name(), "cmdline"))
 		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ESRCH) {
+				continue
+			}
 			scanErr = err
 			continue
 		}
@@ -116,7 +128,7 @@ func pidByCmdline(socketPath string) (int, error) {
 	if scanErr != nil {
 		return 0, fmt.Errorf("resolve process pid for socket %s: inspect process command lines: %w", socketPath, scanErr)
 	}
-	return 0, fmt.Errorf("resolve process pid for socket %s: no matching command line found", socketPath)
+	return 0, fmt.Errorf("resolve process pid for socket %s: no matching command line found: %w", socketPath, ErrNoOwningProcess)
 }
 
 func socketRefForPath(socketPath string) (string, error) {
@@ -161,5 +173,5 @@ func socketRefForPath(socketPath string) (string, error) {
 	if socketRef != "" {
 		return socketRef, nil
 	}
-	return "", fmt.Errorf("resolve process pid for socket %s: socket inode not found", socketPath)
+	return "", fmt.Errorf("resolve process pid for socket %s: socket inode not found: %w", socketPath, ErrNoOwningProcess)
 }
