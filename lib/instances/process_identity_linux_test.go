@@ -6,6 +6,8 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"io"
+	"log/slog"
 	"net"
 	"os"
 	"os/exec"
@@ -437,4 +439,63 @@ func TestHypervisorProcessExistsRejectsDifferentLiveSocketOwner(t *testing.T) {
 	})
 
 	assert.False(t, HypervisorProcessExists(process.Process.Pid, socketPath))
+}
+
+func TestResolveRuntimeHypervisorPIDMintsIdentityOnlyWhenConfirmed(t *testing.T) {
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	const deadPID = 1<<22 - 1
+	require.False(t, ProcessExists(deadPID))
+
+	t.Run("live direct child", func(t *testing.T) {
+		child := exec.Command("sleep", "30")
+		require.NoError(t, child.Start())
+		t.Cleanup(func() {
+			_ = child.Process.Kill()
+			_ = child.Wait()
+		})
+
+		stored := &StoredMetadata{SocketPath: filepath.Join(t.TempDir(), "missing.sock")}
+		pid := resolveRuntimeHypervisorPID(log, stored, child.Process.Pid)
+
+		assert.Equal(t, child.Process.Pid, pid)
+		require.NotNil(t, stored.HypervisorPID)
+		assert.Equal(t, child.Process.Pid, *stored.HypervisorPID)
+		assert.NotZero(t, stored.HypervisorStartTime)
+		assert.NotEmpty(t, stored.HypervisorBootID)
+	})
+
+	t.Run("confirmed socket owner", func(t *testing.T) {
+		socketPath := filepath.Join(t.TempDir(), "test.sock")
+		listener, err := net.Listen("unix", socketPath)
+		require.NoError(t, err)
+		defer listener.Close()
+
+		stored := &StoredMetadata{SocketPath: socketPath}
+		pid := resolveRuntimeHypervisorPID(log, stored, deadPID)
+
+		assert.Equal(t, os.Getpid(), pid)
+		require.NotNil(t, stored.HypervisorPID)
+		assert.Equal(t, os.Getpid(), *stored.HypervisorPID)
+		assert.NotZero(t, stored.HypervisorStartTime)
+		assert.NotEmpty(t, stored.HypervisorBootID)
+	})
+
+	t.Run("command-line-only match stores bare PID", func(t *testing.T) {
+		socketPath := filepath.Join(t.TempDir(), "test.sock")
+		match := exec.Command("sh", "-c", "sleep 30", "sh", socketPath)
+		require.NoError(t, match.Start())
+		t.Cleanup(func() {
+			_ = match.Process.Kill()
+			_ = match.Wait()
+		})
+
+		stored := &StoredMetadata{SocketPath: socketPath}
+		pid := resolveRuntimeHypervisorPID(log, stored, deadPID)
+
+		assert.Equal(t, match.Process.Pid, pid)
+		require.NotNil(t, stored.HypervisorPID)
+		assert.Equal(t, match.Process.Pid, *stored.HypervisorPID)
+		assert.Zero(t, stored.HypervisorStartTime, "unconfirmed match must not mint the identity token")
+		assert.Empty(t, stored.HypervisorBootID, "unconfirmed match must not mint the identity token")
+	})
 }
