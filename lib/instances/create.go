@@ -357,12 +357,6 @@ func (m *manager) createInstance(
 				}
 			}
 		})
-		// Checked after the cleanup handler is registered so rejection
-		// releases the device through the normal rollback.
-		if err := validateVGPUHypervisorCompat(gpuDevice.Framework, hvType); err != nil {
-			log.ErrorContext(ctx, "unsupported vGPU hypervisor combination", "instance_id", id, "framework", gpuDevice.Framework, "hypervisor", hvType)
-			return nil, err
-		}
 	}
 
 	if len(req.Devices) > 0 && m.deviceManager != nil {

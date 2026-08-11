@@ -319,35 +319,6 @@ func TestStartDoesNotRestrictVGPUHypervisor(t *testing.T) {
 	assert.ErrorIs(t, err, cause)
 }
 
-func TestValidateVGPUHypervisorCompat(t *testing.T) {
-	t.Parallel()
-
-	err := validateVGPUHypervisorCompat(devices.VGPUFrameworkVendorVFIO, hypervisor.TypeCloudHypervisor)
-	require.ErrorIs(t, err, ErrInvalidRequest)
-	assert.NoError(t, validateVGPUHypervisorCompat(devices.VGPUFrameworkVendorVFIO, hypervisor.TypeQEMU))
-	assert.NoError(t, validateVGPUHypervisorCompat(devices.VGPUFrameworkMdev, hypervisor.TypeCloudHypervisor))
-}
-
-func TestStartRejectsVendorVFIOOnCloudHypervisor(t *testing.T) {
-	var destroyed []devices.VGPUAssignment
-	m, id := newStartRollbackVGPUManager(t, func(_ context.Context, assignment devices.VGPUAssignment) error {
-		destroyed = append(destroyed, assignment)
-		return nil
-	})
-	meta, err := m.loadMetadata(id)
-	require.NoError(t, err)
-	meta.HypervisorType = hypervisor.TypeCloudHypervisor
-	require.NoError(t, m.saveMetadata(meta))
-
-	_, err = m.startInstance(context.Background(), id, StartInstanceRequest{})
-	require.ErrorIs(t, err, ErrInvalidRequest)
-
-	require.Len(t, destroyed, 1, "the rejected vGPU must be released by rollback")
-	stored, err := m.loadMetadata(id)
-	require.NoError(t, err)
-	assert.Empty(t, stored.GPUDevicePath, "no assignment may be persisted for a rejected combination")
-}
-
 func TestStartRollbackClearsVGPUAssignmentAfterSuccessfulDestroy(t *testing.T) {
 	var destroyed []devices.VGPUAssignment
 	m, id := newStartRollbackVGPUManager(t, func(_ context.Context, assignment devices.VGPUAssignment) error {
