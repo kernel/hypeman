@@ -405,6 +405,38 @@ func TestStartRollbackRetainsVGPUAssignmentAfterFailedDestroy(t *testing.T) {
 	assert.Empty(t, stored.Entrypoint)
 }
 
+func TestCleanupStartVGPUReportsRetainedWhenMidStartSaveSurvives(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses directory permissions")
+	}
+
+	m, id := newStartRollbackVGPUManager(t, func(context.Context, devices.VGPUAssignment) error {
+		return errors.New("destroy failed")
+	})
+	device := devices.VGPUDevice{
+		Framework: devices.VGPUFrameworkVendorVFIO,
+		SysfsPath: "/sys/bus/pci/devices/0000:82:00.4",
+	}
+	assignedAt := time.Now().UTC()
+
+	// The mid-start save already persisted the assignment.
+	meta, err := m.loadMetadata(id)
+	require.NoError(t, err)
+	rollbackMeta := *meta
+	setStoredVGPUDevice(&meta.StoredMetadata, &device, assignedAt)
+	require.NoError(t, m.saveMetadata(meta))
+
+	// The cleanup save fails, but the surviving on-disk record still points
+	// at the device, so retention must be reported as persisted.
+	instanceDir := filepath.Dir(m.paths.InstanceMetadata(id))
+	require.NoError(t, os.Chmod(instanceDir, 0o555))
+	t.Cleanup(func() { _ = os.Chmod(instanceDir, 0o755) })
+
+	retained, persisted := m.cleanupStartVGPU(context.Background(), id, &device, assignedAt, rollbackMeta)
+	assert.True(t, retained)
+	assert.True(t, persisted, "a surviving mid-start save keeps the assignment recoverable via delete")
+}
+
 func TestCleanupStartVGPURestoresMetadataAfterBootFailure(t *testing.T) {
 	m := &manager{
 		paths: paths.New(t.TempDir()),
