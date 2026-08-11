@@ -106,7 +106,11 @@ func (s vendorVFIOSysfs) listProfiles(vfs []VirtualFunction) ([]GPUProfile, erro
 	for _, vf := range vfs {
 		creatable, err := s.readCreatableProfiles(vf.PCIAddress)
 		if err != nil {
-			return nil, err
+			// Mirror discoverVFs: one unreadable VF must not blank the host's
+			// advertised capacity. Skipping only underreports availability,
+			// the safe direction for status and admission.
+			slog.Default().Warn("skipping unreadable creatable vGPU types", "vf", vf.PCIAddress, "error", err)
+			continue
 		}
 		for _, profile := range creatable {
 			profilesByType[profile.TypeName] = profile
@@ -411,6 +415,11 @@ func (s vendorVFIOSysfs) vfioDeviceInUse(vfAddress string, openPaths map[string]
 	return false, nil
 }
 
+// openVFIOPaths hard-fails on any unreadable /proc entry, unlike mdev's
+// isVFIOGroupInUse which skips them. That is deliberate: this scan authorizes
+// clearing current_vgpu_type on a VF path that is reused across assignments,
+// so an incomplete scan must fail the release (which retains metadata for a
+// later retry) rather than risk a false "not in use" answer.
 func (s vendorVFIOSysfs) openVFIOPaths() (map[string]struct{}, error) {
 	processes, err := os.ReadDir(s.procPath)
 	if err != nil {
@@ -475,6 +484,10 @@ func parseCreatableVGPUTypes(value string) ([]profileMetadata, error) {
 	return profiles, nil
 }
 
+// framebufferFromProfileName parses the framebuffer size from names like
+// "NVIDIA L40S-12Q". NVIDIA's 512 MB 0Q/0B profiles parse as 0 and would read
+// as free VRAM in least-loaded placement; no supported GPU exposes them today,
+// so placement only skews if such a profile ever appears.
 func framebufferFromProfileName(name string) int {
 	series := strings.LastIndexAny(name, "ABCQ")
 	if series <= 0 {
