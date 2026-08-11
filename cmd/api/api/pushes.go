@@ -41,6 +41,11 @@ func (s *ApiService) CreatePush(ctx context.Context, request oapi.CreatePushRequ
 				Code:    "not_found",
 				Message: "image not found",
 			}, nil
+		case errors.Is(err, imagepush.ErrNotFound):
+			return oapi.CreatePush409JSONResponse{
+				Code:    "conflict",
+				Message: err.Error(),
+			}, nil
 		case errors.Is(err, imagepush.ErrImageNotReady):
 			return oapi.CreatePush409JSONResponse{
 				Code:    "image_not_ready",
@@ -134,7 +139,7 @@ func pushToOAPI(push imagepush.Push) oapi.Push {
 		CreatedAt:     push.CreatedAt,
 		CompletedAt:   push.CompletedAt,
 	}
-	if push.Status == oapi.PushStatus(imagepush.StatusPushed) {
+	if push.Status == imagepush.StatusPushed {
 		layers := push.Layers
 		out.Layers = &layers
 		bytes := push.Bytes

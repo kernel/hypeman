@@ -112,7 +112,6 @@ func (m *manager) CreatePush(ctx context.Context, req PushRequest) (*Push, error
 	// it under the lock is what lets the dedup path hand back a durable record,
 	// and it only briefly stalls the GC live-digest read — cheap next to the
 	// registry I/O that dominates a push.
-	var meta *pushMetadata
 	m.mu.Lock()
 	if existing, ok := m.inflight[key]; ok {
 		// Merge only when the in-flight job runs under the same credentials
@@ -144,7 +143,7 @@ func (m *manager) CreatePush(ctx context.Context, req PushRequest) (*Push, error
 		return push, err
 	}
 
-	meta = &pushMetadata{
+	meta := &pushMetadata{
 		ID:             cuid2.Generate(),
 		Status:         StatusQueued,
 		Image:          img.Name,
@@ -298,7 +297,9 @@ func (m *manager) toPushWithPosition(meta *pushMetadata) *Push {
 	return push
 }
 
-func (m *manager) inProgressDigests() []string {
+// LiveCacheManifestDigests implements ocicachegc.RootsProvider so in-flight
+// push digests are treated as live alongside the OCI layout index.
+func (m *manager) LiveCacheManifestDigests() []string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -313,12 +314,6 @@ func (m *manager) inProgressDigests() []string {
 	}
 	sort.Strings(digests)
 	return digests
-}
-
-// LiveCacheManifestDigests implements ocicachegc.RootsProvider so in-flight
-// push digests are treated as live alongside the OCI layout index.
-func (m *manager) LiveCacheManifestDigests() []string {
-	return m.inProgressDigests()
 }
 
 func (m *manager) recoverInterruptedPushes() {

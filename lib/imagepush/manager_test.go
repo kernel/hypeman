@@ -242,8 +242,8 @@ func TestCreatePushEndToEnd(t *testing.T) {
 	}
 
 	// No in-flight digests once done.
-	if digests := mgr.(*manager).inProgressDigests(); len(digests) != 0 {
-		t.Errorf("inProgressDigests = %v, want empty", digests)
+	if digests := mgr.LiveCacheManifestDigests(); len(digests) != 0 {
+		t.Errorf("LiveCacheManifestDigests = %v, want empty", digests)
 	}
 }
 
@@ -266,8 +266,8 @@ func TestCreatePushDedupesInFlight(t *testing.T) {
 		t.Errorf("duplicate push got new ID %s, want %s", second.ID, first.ID)
 	}
 
-	if digests := mgr.(*manager).inProgressDigests(); len(digests) != 1 || digests[0] != digest {
-		t.Errorf("inProgressDigests = %v, want [%s]", digests, digest)
+	if digests := mgr.LiveCacheManifestDigests(); len(digests) != 1 || digests[0] != digest {
+		t.Errorf("LiveCacheManifestDigests = %v, want [%s]", digests, digest)
 	}
 
 	close(gate)
@@ -493,8 +493,8 @@ func TestCreatePushDedupesConcurrently(t *testing.T) {
 		}
 	}
 
-	if digests := mgr.(*manager).inProgressDigests(); len(digests) != 1 || digests[0] != digest {
-		t.Errorf("inProgressDigests = %v, want [%s]", digests, digest)
+	if digests := mgr.LiveCacheManifestDigests(); len(digests) != 1 || digests[0] != digest {
+		t.Errorf("LiveCacheManifestDigests = %v, want [%s]", digests, digest)
 	}
 
 	close(gate)
@@ -603,8 +603,8 @@ func TestInProgressDigestsDedupesAcrossTargets(t *testing.T) {
 		pushes = append(pushes, push.ID)
 	}
 
-	if digests := mgr.(*manager).inProgressDigests(); len(digests) != 1 || digests[0] != digest {
-		t.Errorf("inProgressDigests = %v, want [%s]", digests, digest)
+	if digests := mgr.LiveCacheManifestDigests(); len(digests) != 1 || digests[0] != digest {
+		t.Errorf("LiveCacheManifestDigests = %v, want [%s]", digests, digest)
 	}
 
 	// Drain the gated jobs so their writes land before the fixture's TempDir

@@ -178,6 +178,22 @@ func TestCreatePush_ErrorStatusMapping(t *testing.T) {
 	}
 }
 
+func TestCreatePush_FinalizationConflict(t *testing.T) {
+	t.Parallel()
+
+	svc := &ApiService{PushManager: &fakePushManager{
+		createErr: fmt.Errorf("%w: push job is being finalized; retry", imagepush.ErrNotFound),
+	}}
+	resp, err := svc.CreatePush(context.Background(), oapi.CreatePushRequestObject{
+		Body: &oapi.CreatePushRequest{Image: "alpine:latest", Target: "registry.example.com/app:v1"},
+	})
+	require.NoError(t, err)
+	got, ok := resp.(oapi.CreatePush409JSONResponse)
+	require.True(t, ok)
+	require.Equal(t, "conflict", got.Code)
+	require.Contains(t, got.Message, "retry")
+}
+
 func TestGetPush_NotFound(t *testing.T) {
 	t.Parallel()
 

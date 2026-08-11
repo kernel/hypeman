@@ -127,9 +127,6 @@ type compositeOCICacheRoots []ocicachegc.RootsProvider
 func (c compositeOCICacheRoots) LiveCacheManifestDigests() []string {
 	out := make([]string, 0)
 	for _, roots := range c {
-		if roots == nil {
-			continue
-		}
 		out = append(out, roots.LiveCacheManifestDigests()...)
 	}
 	return out
