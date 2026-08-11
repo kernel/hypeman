@@ -50,6 +50,17 @@ func (f *fakePushManager) WaitForPush(_ context.Context, _ string) error { retur
 
 func (f *fakePushManager) LiveCacheManifestDigests() []string { return nil }
 
+func TestCreatePush_RejectsMissingBody(t *testing.T) {
+	t.Parallel()
+
+	svc := &ApiService{PushManager: &fakePushManager{}}
+	resp, err := svc.CreatePush(context.Background(), oapi.CreatePushRequestObject{})
+	require.NoError(t, err)
+	got, ok := resp.(oapi.CreatePush400JSONResponse)
+	require.True(t, ok)
+	require.Equal(t, "invalid_request", got.Code)
+}
+
 func TestCreatePush_MapsRequestAndCredentials(t *testing.T) {
 	t.Parallel()
 
@@ -165,6 +176,12 @@ func TestCreatePush_ErrorStatusMapping(t *testing.T) {
 			err:      fmt.Errorf("lookup: %w", images.ErrNotFound),
 			wantType: oapi.CreatePush404JSONResponse{},
 			wantCode: "not_found",
+		},
+		{
+			name:     "credential conflict -> 409",
+			err:      fmt.Errorf("dedupe: %w", imagepush.ErrCredentialConflict),
+			wantType: oapi.CreatePush409JSONResponse{},
+			wantCode: "credential_conflict",
 		},
 		{
 			name:     "image not ready -> 409",

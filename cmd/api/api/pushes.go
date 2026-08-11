@@ -14,6 +14,13 @@ import (
 const pushRetryAfterSeconds = 2
 
 func (s *ApiService) CreatePush(ctx context.Context, request oapi.CreatePushRequestObject) (oapi.CreatePushResponseObject, error) {
+	if request.Body == nil {
+		return oapi.CreatePush400JSONResponse{
+			Code:    "invalid_request",
+			Message: "request body is required",
+		}, nil
+	}
+
 	log := logger.FromContext(ctx)
 
 	domainReq := imagepush.PushRequest{
@@ -46,6 +53,11 @@ func (s *ApiService) CreatePush(ctx context.Context, request oapi.CreatePushRequ
 		case errors.Is(err, imagepush.ErrNotFound):
 			return oapi.CreatePush409JSONResponse{
 				Code:    "conflict",
+				Message: err.Error(),
+			}, nil
+		case errors.Is(err, imagepush.ErrCredentialConflict):
+			return oapi.CreatePush409JSONResponse{
+				Code:    "credential_conflict",
 				Message: err.Error(),
 			}, nil
 		case errors.Is(err, imagepush.ErrImageNotReady):
