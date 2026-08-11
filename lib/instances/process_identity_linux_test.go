@@ -124,7 +124,7 @@ func TestKillHypervisorSucceedsOnIdentityFromDifferentBoot(t *testing.T) {
 	assert.NoError(t, syscall.Kill(pid, 0), "process identity from a different boot must not be killed")
 }
 
-func TestKillHypervisorFailsOnMismatchedStartTime(t *testing.T) {
+func TestKillHypervisorSucceedsOnMismatchedStartTimeWithNoSocketOwner(t *testing.T) {
 	process := exec.Command("sleep", "30")
 	require.NoError(t, process.Start())
 	t.Cleanup(func() {
@@ -136,8 +136,11 @@ func TestKillHypervisorFailsOnMismatchedStartTime(t *testing.T) {
 	startTime := processStartTime(pid)
 	require.NotZero(t, startTime)
 
+	// The identity token disproves the live PID holder is the recorded
+	// hypervisor, and no process owns or references the socket: the kill
+	// succeeds as a no-op and must leave the PID holder untouched.
 	m := &manager{}
-	require.Error(t, m.killHypervisor(context.Background(), &Instance{
+	require.NoError(t, m.killHypervisor(context.Background(), &Instance{
 		StoredMetadata: StoredMetadata{
 			Id:                  "kill-test",
 			HypervisorPID:       &pid,
@@ -277,7 +280,7 @@ func TestGracefulShutdownWaitsForSocketOwnerInsteadOfExitedStoredPID(t *testing.
 	assert.True(t, ProcessExists(owner.Process.Pid))
 }
 
-func TestForceKillHypervisorProcessFailsOnUnconfirmedOwnership(t *testing.T) {
+func TestForceKillHypervisorProcessSucceedsWhenNoProcessOwnsSocket(t *testing.T) {
 	process := exec.Command("sleep", "30")
 	require.NoError(t, process.Start())
 	t.Cleanup(func() {
@@ -285,12 +288,14 @@ func TestForceKillHypervisorProcessFailsOnUnconfirmedOwnership(t *testing.T) {
 		_ = process.Wait()
 	})
 
+	// No process owns or references the socket, so the live stored PID is a
+	// recycled number: force kill succeeds as a no-op without signaling it.
 	pid := process.Process.Pid
 	m := &manager{}
-	require.Error(t, m.forceKillHypervisorProcess(context.Background(), &Instance{
+	require.NoError(t, m.forceKillHypervisorProcess(context.Background(), &Instance{
 		StoredMetadata: StoredMetadata{Id: "kill-test", HypervisorPID: &pid, SocketPath: filepath.Join(t.TempDir(), "missing.sock")},
 	}))
-	assert.NoError(t, syscall.Kill(pid, 0), "process with unconfirmed socket ownership must not be killed")
+	assert.NoError(t, syscall.Kill(pid, 0), "process with a recycled PID must not be killed")
 }
 
 func TestSendSIGKILLIgnoresExitedProcess(t *testing.T) {
@@ -373,7 +378,7 @@ func TestKillHypervisorSurvivesConcurrentReaper(t *testing.T) {
 	}))
 }
 
-func TestKillHypervisorFailsOnReusedPIDWhenSocketIsGone(t *testing.T) {
+func TestKillHypervisorSucceedsOnReusedPIDWhenNoProcessOwnsSocket(t *testing.T) {
 	stale := exec.Command("sleep", "30")
 	require.NoError(t, stale.Start())
 	t.Cleanup(func() {
@@ -381,14 +386,18 @@ func TestKillHypervisorFailsOnReusedPIDWhenSocketIsGone(t *testing.T) {
 		_ = stale.Wait()
 	})
 
+	// Legacy metadata: live stored PID, no boot-scoped identity, and no
+	// process anywhere owns or references the socket. That disproves the
+	// recorded hypervisor is alive, so the kill must succeed as a no-op
+	// instead of wedging stop/delete, while the PID holder stays untouched.
 	stalePID := stale.Process.Pid
 	socketPath := filepath.Join(t.TempDir(), "missing.sock")
 	m := &manager{}
-	require.Error(t, m.killHypervisor(context.Background(), &Instance{
+	require.NoError(t, m.killHypervisor(context.Background(), &Instance{
 		StoredMetadata: StoredMetadata{Id: "kill-test", HypervisorPID: &stalePID, SocketPath: socketPath},
-	}), "unconfirmed ownership of a live stored PID must fail the kill")
+	}))
 
-	assert.NoError(t, syscall.Kill(stalePID, 0), "process with unconfirmed socket ownership must not be killed")
+	assert.NoError(t, syscall.Kill(stalePID, 0), "process with a recycled PID must not be killed")
 }
 
 func TestKillHypervisorFailsOnUnconfirmedCommandLineMatch(t *testing.T) {
