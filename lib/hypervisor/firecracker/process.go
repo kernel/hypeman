@@ -131,7 +131,7 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 	}
 
 	cu := cleanup.Make(func() {
-		_ = syscall.Kill(pid, syscall.SIGKILL)
+		cleanupFailedRestore(pid, socketPath)
 	})
 	defer cu.Clean()
 
@@ -198,6 +198,12 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 
 	cu.Release()
 	return pid, hv, nil
+}
+
+func cleanupFailedRestore(pid int, socketPath string) {
+	_ = syscall.Kill(pid, syscall.SIGKILL)
+	_, _ = syscall.Wait4(pid, nil, 0, nil)
+	_ = os.Remove(socketPath)
 }
 
 func withSnapshotSourceDirAlias(meta *restoreMetadata, targetDataDir string, run func() error) error {
