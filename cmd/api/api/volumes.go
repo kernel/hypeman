@@ -78,7 +78,7 @@ func (s *ApiService) CreateVolume(ctx context.Context, request oapi.CreateVolume
 				Message: "volume with this ID already exists",
 			}, nil
 		}
-		if errors.Is(err, tags.ErrInvalidTags) {
+		if errors.Is(err, tags.ErrInvalidTags) || errors.Is(err, volumes.ErrInvalidID) {
 			return oapi.CreateVolume400JSONResponse{
 				Code:    "invalid_request",
 				Message: err.Error(),
@@ -151,7 +151,7 @@ func (s *ApiService) CreateVolumeFromArchive(ctx context.Context, request oapi.C
 				Message: "volume with this ID already exists",
 			}, nil
 		}
-		if errors.Is(err, tags.ErrInvalidTags) {
+		if errors.Is(err, tags.ErrInvalidTags) || errors.Is(err, volumes.ErrInvalidID) {
 			return oapi.CreateVolumeFromArchive400JSONResponse{
 				Code:    "invalid_request",
 				Message: err.Error(),

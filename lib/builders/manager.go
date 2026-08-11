@@ -75,7 +75,7 @@ var builderIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)
 
 // ValidateBuilderID validates a caller-supplied builder ID.
 func ValidateBuilderID(id string) error {
-	if !builderIDPattern.MatchString(id) {
+	if paths.ValidatePathComponent(id) != nil || !builderIDPattern.MatchString(id) {
 		return fmt.Errorf("%w: must match %s", ErrInvalidID, builderIDPattern)
 	}
 	return nil

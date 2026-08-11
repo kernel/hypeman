@@ -34,6 +34,9 @@ func ensureIngressDir(p *paths.Paths) error {
 
 // loadIngress loads ingress metadata from disk.
 func loadIngress(p *paths.Paths, id string) (*storedIngress, error) {
+	if err := paths.ValidatePathComponent(id); err != nil {
+		return nil, ErrNotFound
+	}
 	metaPath := p.IngressMetadata(id)
 
 	data, err := os.ReadFile(metaPath)
@@ -54,6 +57,9 @@ func loadIngress(p *paths.Paths, id string) (*storedIngress, error) {
 
 // saveIngress saves ingress metadata to disk.
 func saveIngress(p *paths.Paths, stored *storedIngress) error {
+	if err := paths.ValidatePathComponent(stored.ID); err != nil {
+		return err
+	}
 	if err := ensureIngressDir(p); err != nil {
 		return err
 	}
@@ -92,6 +98,9 @@ func saveIngress(p *paths.Paths, stored *storedIngress) error {
 
 // deleteIngressData removes ingress data from disk.
 func deleteIngressData(p *paths.Paths, id string) error {
+	if err := paths.ValidatePathComponent(id); err != nil {
+		return ErrNotFound
+	}
 	metaPath := p.IngressMetadata(id)
 
 	if err := os.Remove(metaPath); err != nil {

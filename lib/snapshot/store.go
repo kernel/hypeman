@@ -157,8 +157,8 @@ func (s *Store) EnsureNameAvailable(sourceInstanceID, snapshotName string) error
 }
 
 func validateSnapshotID(snapshotID string) error {
-	if snapshotID == "." || !filepath.IsLocal(snapshotID) || filepath.Base(snapshotID) != snapshotID {
-		return fmt.Errorf("%w: must be a single local path component", ErrInvalidID)
+	if err := paths.ValidatePathComponent(snapshotID); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidID, err)
 	}
 	return nil
 }
