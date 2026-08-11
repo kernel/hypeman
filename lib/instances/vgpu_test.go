@@ -242,6 +242,10 @@ func TestStartRetainsVGPUWhenCreateRollbackFails(t *testing.T) {
 		Cmd:        []string{"new-command"},
 	})
 	require.ErrorIs(t, err, cause)
+	var pending *VGPUCleanupPendingError
+	require.ErrorAs(t, err, &pending)
+	assert.Equal(t, id, pending.InstanceID)
+	assert.True(t, pending.Retained)
 
 	stored, err := m.loadMetadata(id)
 	require.NoError(t, err)
@@ -256,6 +260,41 @@ func TestStartRetainsVGPUWhenCreateRollbackFails(t *testing.T) {
 	assert.Equal(t, "192.0.2.10", stored.IP)
 	assert.Equal(t, "02:00:00:00:00:10", stored.MAC)
 	assert.Equal(t, 1, networkManager.releaseCalls)
+}
+
+func TestStartReportsUnretainedVGPUWhenRetentionSaveFails(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses directory permissions")
+	}
+
+	m, id := newStartRollbackVGPUManager(t, func(context.Context, devices.VGPUAssignment) error {
+		return nil
+	})
+	device := devices.VGPUDevice{
+		Framework:   devices.VGPUFrameworkVendorVFIO,
+		VFAddress:   "0000:82:00.4",
+		ProfileType: "1148",
+		ProfileName: "NVIDIA L40S-2Q",
+		SysfsPath:   "/sys/bus/pci/devices/0000:82:00.4",
+	}
+	cause := errors.New("create verification and rollback failed")
+	m.createVGPU = func(context.Context, string, string) (*devices.VGPUDevice, error) {
+		instanceDir := filepath.Dir(m.paths.InstanceMetadata(id))
+		require.NoError(t, os.Chmod(instanceDir, 0o555))
+		t.Cleanup(func() { _ = os.Chmod(instanceDir, 0o755) })
+		return nil, &devices.VGPUCreateCleanupPendingError{Device: device, Err: cause}
+	}
+
+	_, err := m.startInstance(context.Background(), id, StartInstanceRequest{})
+	require.ErrorIs(t, err, cause)
+	var pending *VGPUCleanupPendingError
+	require.ErrorAs(t, err, &pending)
+	assert.Equal(t, id, pending.InstanceID)
+	assert.False(t, pending.Retained)
+
+	stored, err := m.loadMetadata(id)
+	require.NoError(t, err)
+	assert.Empty(t, stored.GPUDevicePath, "retention save failed, so no assignment should be recorded")
 }
 
 func TestStartDoesNotRestrictVGPUHypervisor(t *testing.T) {

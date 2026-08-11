@@ -842,7 +842,26 @@ func (s *ApiService) StartInstance(ctx context.Context, request oapi.StartInstan
 
 	result, err := s.InstanceManager.StartInstance(ctx, inst.Id, startReq)
 	if err != nil {
+		var vgpuPending *instances.VGPUCleanupPendingError
 		switch {
+		// Checked first: it wraps the original start error, so a later
+		// errors.Is case would match the cause and hide the pending vGPU cleanup.
+		case errors.As(err, &vgpuPending):
+			log.ErrorContext(ctx, "failed to start instance", "error", err)
+			message := fmt.Sprintf("failed to start instance: %v; vGPU release failed during rollback and instance %s retains the assignment, delete it or retry start to release it", vgpuPending.Err, vgpuPending.InstanceID)
+			innerCode := "vgpu_retained_instance"
+			if !vgpuPending.Retained {
+				message = fmt.Sprintf("failed to start instance: %v; vGPU release failed during rollback and the retention record for instance %s could not be saved; the assignment is recovered on the next startup reconcile", vgpuPending.Err, vgpuPending.InstanceID)
+				innerCode = "vgpu_unretained_instance"
+			}
+			return oapi.StartInstance500JSONResponse{
+				Code:    "vgpu_cleanup_pending",
+				Message: message,
+				InnerError: &oapi.ErrorDetail{
+					Code:    lo.ToPtr(innerCode),
+					Message: lo.ToPtr(vgpuPending.InstanceID),
+				},
+			}, nil
 		case errors.Is(err, instances.ErrInvalidState):
 			return oapi.StartInstance409JSONResponse{
 				Code:    "invalid_state",
