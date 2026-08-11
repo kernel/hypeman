@@ -85,6 +85,10 @@ func clearStoredVGPUDevice(stored *StoredMetadata) {
 	stored.GPUAssignedAt = nil
 }
 
+// cleanupStartVGPU wholesale-restores the pre-start metadata snapshot. That
+// is safe while the instance lock serializes start and no cleanup registered
+// after the vGPU one persists metadata; a future cleanup that writes metadata
+// must switch this to targeted field restores.
 func (m *manager) cleanupStartVGPU(ctx context.Context, instanceID string, device *devices.VGPUDevice, assignedAt time.Time, rollbackMeta metadata) {
 	assignment := devices.VGPUAssignment{
 		Framework:  device.Framework,
