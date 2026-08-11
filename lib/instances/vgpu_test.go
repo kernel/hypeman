@@ -389,6 +389,10 @@ func TestStartRollbackRetainsVGPUAssignmentAfterFailedDestroy(t *testing.T) {
 	t.Setenv("TMPDIR", filepath.Join(t.TempDir(), "missing"))
 	_, err = m.startInstance(context.Background(), id, StartInstanceRequest{Entrypoint: []string{"new-entrypoint"}})
 	require.Error(t, err)
+	var pending *VGPUCleanupPendingError
+	require.ErrorAs(t, err, &pending, "a retained rollback assignment must surface as vgpu_cleanup_pending")
+	assert.Equal(t, id, pending.InstanceID)
+	assert.True(t, pending.Retained)
 
 	stored, err := m.loadMetadata(id)
 	require.NoError(t, err)
