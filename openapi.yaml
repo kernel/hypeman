@@ -4790,6 +4790,16 @@ paths:
       responses:
         202:
           description: Push job created
+          headers:
+            Location:
+              description: URL of the created push job
+              schema:
+                type: string
+            Retry-After:
+              description: Minimum number of seconds before polling the push status
+              schema:
+                type: integer
+                format: int32
           content:
             application/json:
               schema:

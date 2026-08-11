@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -79,9 +80,17 @@ func TestCreatePush_MapsRequestAndCredentials(t *testing.T) {
 	require.IsType(t, oapi.CreatePush202JSONResponse{}, resp)
 
 	got := resp.(oapi.CreatePush202JSONResponse)
-	require.Equal(t, "push-1", got.Id)
-	require.Equal(t, oapi.PushStatus(imagepush.StatusQueued), got.Status)
-	require.Equal(t, now, got.CreatedAt)
+	require.Equal(t, "push-1", got.Body.Id)
+	require.Equal(t, oapi.PushStatus(imagepush.StatusQueued), got.Body.Status)
+	require.Equal(t, now, got.Body.CreatedAt)
+	require.Equal(t, "/pushes/push-1", got.Headers.Location)
+	require.Equal(t, int32(pushRetryAfterSeconds), got.Headers.RetryAfter)
+
+	recorder := httptest.NewRecorder()
+	require.NoError(t, got.VisitCreatePushResponse(recorder))
+	require.Equal(t, 202, recorder.Code)
+	require.Equal(t, "/pushes/push-1", recorder.Header().Get("Location"))
+	require.Equal(t, fmt.Sprint(pushRetryAfterSeconds), recorder.Header().Get("Retry-After"))
 
 	// Borrowed credentials must reach the manager as an auth config.
 	require.Equal(t, "alpine:latest", fake.createdReq.Image)

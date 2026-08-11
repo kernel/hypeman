@@ -11,6 +11,8 @@ import (
 	"github.com/kernel/hypeman/lib/oapi"
 )
 
+const pushRetryAfterSeconds = 2
+
 func (s *ApiService) CreatePush(ctx context.Context, request oapi.CreatePushRequestObject) (oapi.CreatePushResponseObject, error) {
 	log := logger.FromContext(ctx)
 
@@ -60,7 +62,13 @@ func (s *ApiService) CreatePush(ctx context.Context, request oapi.CreatePushRequ
 		}
 	}
 
-	return oapi.CreatePush202JSONResponse(pushToOAPI(*push)), nil
+	return oapi.CreatePush202JSONResponse{
+		Body: pushToOAPI(*push),
+		Headers: oapi.CreatePush202ResponseHeaders{
+			Location:   "/pushes/" + push.ID,
+			RetryAfter: pushRetryAfterSeconds,
+		},
+	}, nil
 }
 
 func (s *ApiService) GetPush(ctx context.Context, request oapi.GetPushRequestObject) (oapi.GetPushResponseObject, error) {
