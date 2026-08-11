@@ -22,6 +22,7 @@ const (
 
 func init() {
 	hypervisor.RegisterVsockDialerFactory(hypervisor.TypeQEMU, NewVsockDialer)
+	hypervisor.RegisterVsockDialerFactory(hypervisor.TypeQEMUMicroVM, NewVsockDialer)
 }
 
 // VsockDialer implements hypervisor.VsockDialer for QEMU.

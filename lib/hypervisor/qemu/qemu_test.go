@@ -12,7 +12,7 @@ func TestGetTargetGuestMemoryBytesUsesSavedConfigOnColdStart(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	require.NoError(t, saveVMConfig(dir, hypervisor.VMConfig{MemoryBytes: 768}))
+	require.NoError(t, saveVMConfig(dir, savedVMConfig{VMConfig: hypervisor.VMConfig{MemoryBytes: 768}}))
 
 	hv := &QEMU{socketPath: dir + "/qemu.sock"}
 	target, err := hv.GetTargetGuestMemoryBytes(t.Context())

@@ -31,8 +31,10 @@ const (
 	TypeCloudHypervisor Type = "cloud-hypervisor"
 	// TypeFirecracker is the Firecracker VMM
 	TypeFirecracker Type = "firecracker"
-	// TypeQEMU is the QEMU VMM
+	// TypeQEMU is QEMU with its architecture-native standard board.
 	TypeQEMU Type = "qemu"
+	// TypeQEMUMicroVM is QEMU with the minimal x86 microvm board.
+	TypeQEMUMicroVM Type = "qemu-microvm"
 	// TypeVZ is the Virtualization.framework VMM (macOS only)
 	TypeVZ Type = "vz"
 )
@@ -94,6 +96,10 @@ func CapabilitiesForType(t Type) (Capabilities, bool) {
 // - Cloud Hypervisor: starts process, configures via HTTP API, boots via HTTP API
 // - QEMU: converts config to command-line args, starts process (VM runs immediately)
 type VMStarter interface {
+	// ValidateConfig performs side-effect-free backend validation. Managers call
+	// it during preflight; starters must also validate final launch/restore state.
+	ValidateConfig(VMConfig) error
+
 	// SocketName returns the socket filename for this hypervisor.
 	// Uses short names to stay within Unix socket path length limits (SUN_LEN ~108 bytes).
 	SocketName() string
@@ -101,10 +107,12 @@ type VMStarter interface {
 	// GetBinaryPath returns the path to the hypervisor binary, extracting if needed.
 	GetBinaryPath(p *paths.Paths, version string) (string, error)
 
-	// GetVersion returns the version of the hypervisor binary.
-	// For embedded binaries (Cloud Hypervisor), returns the latest supported version.
-	// For system binaries (QEMU), queries the installed binary for its version.
+	// GetVersion returns the default or installed hypervisor version.
 	GetVersion(p *paths.Paths) (string, error)
+
+	// ResolveVersion validates an optional requested version and returns the
+	// concrete binary version to persist for a new VM or snapshot target.
+	ResolveVersion(p *paths.Paths, requested string) (string, error)
 
 	// StartVM launches the hypervisor process and boots the VM.
 	// Returns the process ID and a Hypervisor client for subsequent operations.
@@ -251,6 +259,19 @@ type Capabilities struct {
 	// SupportsSnapshotBaseReuse indicates snapshots can safely reuse a retained
 	// on-disk base across restore/standby cycles.
 	SupportsSnapshotBaseReuse bool
+
+	// RequiresHostSnapshotVersion means memory snapshots are tied to the
+	// currently installed host binary; the backend cannot launch a historical
+	// version selected from instance metadata. Generic lifecycle code therefore
+	// records the installed version on every cold start and treats a failure to
+	// detect it as fatal.
+	//
+	// For example, qemu-microvm uses the host's qemu-system binary. A standby
+	// snapshot written by QEMU 8.2 cannot be restored after the host upgrades to
+	// QEMU 9.0. Firecracker snapshots are also version-sensitive, but Firecracker
+	// leaves this false because Hypeman can launch the managed binary version
+	// recorded in instance metadata; Cloud Hypervisor is managed the same way.
+	RequiresHostSnapshotVersion bool
 
 	// SupportsConcurrentForkPrepare indicates stopped/standby forks can prepare
 	// separate target snapshots concurrently from the same source.

@@ -3,19 +3,29 @@ package qemu
 import (
 	"fmt"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
 )
 
-// BuildArgs converts hypervisor.VMConfig to QEMU command-line arguments.
+// BuildArgs converts hypervisor.VMConfig to command-line arguments for standard
+// QEMU. Backend starters use buildArgs with their private machine profile.
 func BuildArgs(cfg hypervisor.VMConfig) []string {
-	args := make([]string, 0, 64)
+	return buildArgs(cfg, standardMachineType())
+}
 
-	// Machine type with KVM acceleration (arch-specific)
-	args = append(args, "-machine", machineType())
+func buildArgs(cfg hypervisor.VMConfig, machine MachineType) []string {
+	args := make([]string, 0, 64)
+	microvm := machine == MachineTypeMicroVM
+
+	// Machine type with KVM acceleration (arch-specific when omitted).
+	args = append(args, "-machine", string(machine)+",accel=kvm")
+	if microvm {
+		// Do not allow a host qemu.conf to add devices outside microvm's
+		// documented eight virtio-mmio-device limit.
+		args = append(args, "-no-user-config")
+	}
 
 	// CPU configuration
 	args = append(args, "-cpu", "host")
@@ -26,7 +36,9 @@ func BuildArgs(cfg hypervisor.VMConfig) []string {
 	args = append(args, "-m", fmt.Sprintf("%dM", memMB))
 
 	if cfg.GuestMemory.EnableBalloon {
-		balloonOpts := []string{"virtio-balloon-pci"}
+		balloonOpts := []string{virtioDevice(microvm, "virtio-balloon")}
+		// deflate-on-oom lets the guest reclaim ballooned pages under memory
+		// pressure instead of invoking its OOM killer.
 		if cfg.GuestMemory.DeflateOnOOM {
 			balloonOpts = append(balloonOpts, "deflate-on-oom=on")
 		}
@@ -65,7 +77,7 @@ func BuildArgs(cfg hypervisor.VMConfig) []string {
 			}
 		}
 		args = append(args, "-drive", driveOpts)
-		args = append(args, "-device", fmt.Sprintf("virtio-blk-pci,drive=drive%d", i))
+		args = append(args, "-device", fmt.Sprintf("%s,drive=drive%d", virtioDevice(microvm, "virtio-blk"), i))
 	}
 
 	// Network configuration
@@ -73,13 +85,13 @@ func BuildArgs(cfg hypervisor.VMConfig) []string {
 		netdevOpts := fmt.Sprintf("tap,id=net%d,ifname=%s,script=no,downscript=no", i, net.TAPDevice)
 		args = append(args, "-netdev", netdevOpts)
 
-		deviceOpts := fmt.Sprintf("virtio-net-pci,netdev=net%d,mac=%s", i, net.MAC)
+		deviceOpts := fmt.Sprintf("%s,netdev=net%d,mac=%s", virtioDevice(microvm, "virtio-net"), i, net.MAC)
 		args = append(args, "-device", deviceOpts)
 	}
 
 	// Vsock configuration
 	if cfg.VsockCID > 0 {
-		args = append(args, "-device", fmt.Sprintf("vhost-vsock-pci,guest-cid=%d", cfg.VsockCID))
+		args = append(args, "-device", fmt.Sprintf("%s,guest-cid=%d", virtioDevice(microvm, "vhost-vsock"), cfg.VsockCID))
 	}
 
 	// PCI device passthrough (GPU, mdev vGPU, etc.)
@@ -123,13 +135,13 @@ func BuildArgs(cfg hypervisor.VMConfig) []string {
 	return args
 }
 
-// machineType returns the QEMU machine type for the host architecture.
-func machineType() string {
-	switch runtime.GOARCH {
-	case "arm64":
-		return "virt,accel=kvm"
-	default:
-		// x86_64 and others use q35
-		return "q35,accel=kvm"
+// virtioDevice returns the QEMU device model for a virtio transport. Standard
+// q35/virt guests attach virtio devices over PCI (for example, virtio-blk-pci).
+// The microvm board has no PCI bus, so it uses virtio-mmio models whose QEMU
+// names end in -device (for example, virtio-blk-device).
+func virtioDevice(microvm bool, name string) string {
+	if microvm {
+		return name + "-device"
 	}
+	return name + "-pci"
 }

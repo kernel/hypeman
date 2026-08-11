@@ -46,23 +46,42 @@ const (
 )
 
 func init() {
-	hypervisor.RegisterSocketName(hypervisor.TypeQEMU, "qemu.sock")
-	hypervisor.RegisterCapabilities(hypervisor.TypeQEMU, capabilities())
-	hypervisor.RegisterClientFactory(hypervisor.TypeQEMU, func(socketPath string) (hypervisor.Hypervisor, error) {
-		return New(socketPath)
-	})
+	for _, profile := range []profile{StandardProfile{}, MicroVMProfile{}} {
+		hypervisorType := profile.hypervisorType()
+		hypervisor.RegisterSocketName(hypervisorType, "qemu.sock")
+		hypervisor.RegisterCapabilities(hypervisorType, profile.capabilities())
+		t := hypervisorType
+		hypervisor.RegisterClientFactory(t, func(socketPath string) (hypervisor.Hypervisor, error) {
+			return NewForType(socketPath, t)
+		})
+	}
 }
 
-// Starter implements hypervisor.VMStarter for QEMU.
-type Starter struct{}
+// Starter applies a backend profile over the shared QEMU implementation.
+type Starter struct {
+	profile profile
+}
 
-// NewStarter creates a new QEMU starter.
+// NewStarter creates a QEMU starter using the architecture-native standard board.
 func NewStarter() *Starter {
-	return &Starter{}
+	return &Starter{profile: StandardProfile{}}
+}
+
+// NewMicroVMStarter creates a QEMU starter using the minimal x86 microvm board.
+func NewMicroVMStarter() *Starter {
+	return &Starter{profile: MicroVMProfile{}}
 }
 
 // Verify Starter implements the interface
 var _ hypervisor.VMStarter = (*Starter)(nil)
+
+// ValidateConfig applies the selected profile's side-effect-free constraints.
+func (s *Starter) ValidateConfig(config hypervisor.VMConfig) error {
+	if _, err := s.profile.machineType(); err != nil {
+		return err
+	}
+	return s.profile.validateConfig(config)
+}
 
 // SocketName returns the socket filename for QEMU.
 func (s *Starter) SocketName() string {
@@ -95,9 +114,24 @@ func (s *Starter) GetBinaryPath(p *paths.Paths, version string) (string, error) 
 	return "", fmt.Errorf("%s not found; install with: %s", binaryName, qemuInstallHint())
 }
 
-// GetVersion returns the version of the installed QEMU binary.
-// Parses the output of "qemu-system-* --version" to extract the version string.
+// GetVersion returns the installed QEMU version.
 func (s *Starter) GetVersion(p *paths.Paths) (string, error) {
+	return s.detectVersion(p)
+}
+
+// ResolveVersion binds QEMU metadata to the one host-installed binary.
+func (s *Starter) ResolveVersion(p *paths.Paths, requested string) (string, error) {
+	installed, err := s.GetVersion(p)
+	if err != nil {
+		return "", err
+	}
+	if requested != "" && requested != installed {
+		return "", fmt.Errorf("requested QEMU version %q does not match installed version %q", requested, installed)
+	}
+	return installed, nil
+}
+
+func (s *Starter) detectVersion(p *paths.Paths) (string, error) {
 	binaryPath, err := s.GetBinaryPath(p, "")
 	if err != nil {
 		return "", err
@@ -196,7 +230,7 @@ func (s *Starter) startQEMUProcess(ctx context.Context, p *paths.Paths, version 
 	processAttrs := hypervisor.TraceAttributesFromContext(ctx)
 	processAttrs = append(processAttrs,
 		attribute.String("operation", "start_process"),
-		attribute.String("hypervisor", string(hypervisor.TypeQEMU)),
+		attribute.String("hypervisor", string(s.profile.hypervisorType())),
 	)
 	processCtx, processSpan := otel.Tracer("hypeman/hypervisor/qemu").Start(ctx, "hypervisor.start_process", trace.WithAttributes(processAttrs...))
 	defer processSpan.End()
@@ -215,7 +249,9 @@ func (s *Starter) startQEMUProcess(ctx context.Context, p *paths.Paths, version 
 		return 0, nil, nil, fmt.Errorf("socket already in use, QEMU may be running at %s", socketPath)
 	}
 
-	// Remove stale socket if exists
+	// A graceful guest shutdown can leave the old QMP client pooled even though
+	// the process exited. Drop it before this process reuses the socket path.
+	resetClient(socketPath)
 	os.Remove(socketPath)
 
 	// Create command
@@ -295,7 +331,7 @@ func (s *Starter) startQEMUProcess(ctx context.Context, p *paths.Paths, version 
 			return 0, nil, nil, wrapped
 		}
 
-		hv, err = New(socketPath)
+		hv, err = NewForType(socketPath, s.profile.hypervisorType())
 		if err == nil {
 			break
 		}
@@ -312,10 +348,38 @@ func (s *Starter) startQEMUProcess(ctx context.Context, p *paths.Paths, version 
 	return pid, hv, &cu, nil
 }
 
+func (s *Starter) validateSnapshotMachineType(stored MachineType) (MachineType, error) {
+	expected, err := s.profile.machineType()
+	if err != nil {
+		return "", err
+	}
+	if s.profile.requiresStoredMachineType() && stored == "" {
+		return "", fmt.Errorf("%s snapshot is missing its machine type", s.profile.hypervisorType())
+	}
+	if stored != "" && stored != expected {
+		return "", fmt.Errorf("hypervisor %s cannot use QEMU machine type %q", s.profile.hypervisorType(), stored)
+	}
+	return expected, nil
+}
+
 // StartVM launches QEMU with the VM configuration and returns a Hypervisor client.
 // QEMU receives all configuration via command-line arguments at process start.
 func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, socketPath string, config hypervisor.VMConfig) (int, hypervisor.Hypervisor, error) {
 	log := logger.FromContext(ctx)
+	machineType, err := s.profile.machineType()
+	if err != nil {
+		return 0, nil, fmt.Errorf("select qemu machine type: %w", err)
+	}
+	if err := s.profile.validateConfig(config); err != nil {
+		return 0, nil, fmt.Errorf("validate qemu config: %w", err)
+	}
+	qemuVersion := version
+	if qemuVersion == "" || qemuVersion == "unknown" {
+		qemuVersion, err = s.GetVersion(p)
+		if err != nil {
+			return 0, nil, fmt.Errorf("get QEMU version for snapshot compatibility: %w", err)
+		}
+	}
 
 	// Some distro QEMU builds may not support newer balloon sub-options.
 	// Retry with progressively more conservative balloon args before failing.
@@ -338,7 +402,6 @@ func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, s
 		pid     int
 		hv      *QEMU
 		cu      *cleanup.Cleanup
-		err     error
 		booted  hypervisor.VMConfig
 		started bool
 	)
@@ -347,7 +410,7 @@ func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, s
 		for transientRetry := 0; transientRetry < 2; transientRetry++ {
 			// Build command arguments: QMP socket + VM configuration
 			args := buildQMPArgs(socketPath)
-			args = append(args, BuildArgs(attempt)...)
+			args = append(args, buildArgs(attempt, machineType)...)
 			pid, hv, cu, err = s.startQEMUProcess(ctx, p, version, socketPath, args)
 			if err == nil {
 				booted = attempt
@@ -376,11 +439,16 @@ func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, s
 	}
 	defer cu.Clean()
 
-	// Save config for potential restore later
-	// QEMU migration files only contain memory state, not device config
+	// Save config for potential restore later. QEMU migration files only
+	// contain memory state, not device config. microvm migration is not
+	// compatible across QEMU versions, so stamp the selected binary's version
+	// alongside the device model.
 	instanceDir := filepath.Dir(socketPath)
-	if err := saveVMConfig(instanceDir, booted); err != nil {
-		// Non-fatal - restore just won't work
+	if err := saveVMConfig(instanceDir, savedVMConfig{VMConfig: booted, MachineType: machineType, QEMUVersion: qemuVersion}); err != nil {
+		if machineType == MachineTypeMicroVM {
+			return 0, nil, fmt.Errorf("save qemu-microvm restore contract: %w", err)
+		}
+		// Standard QEMU can continue, but standby restore will be unavailable.
 		log.WarnContext(ctx, "failed to save VM config for restore", "error", err)
 	}
 
@@ -444,15 +512,33 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 	// Load saved VM config from snapshot directory
 	// QEMU requires exact same command-line args as when snapshot was taken
 	configLoadStart := time.Now()
-	config, err := loadVMConfig(snapshotPath)
+	saved, err := loadVMConfig(snapshotPath)
 	if err != nil {
 		return 0, nil, fmt.Errorf("load vm config from snapshot: %w", err)
 	}
+	machineType, err := s.validateSnapshotMachineType(saved.MachineType)
+	if err != nil {
+		return 0, nil, fmt.Errorf("select qemu snapshot machine type: %w", err)
+	}
+	config := saved.VMConfig
 	log.DebugContext(ctx, "loaded VM config from snapshot", "duration_ms", time.Since(configLoadStart).Milliseconds())
+	if err := s.profile.validateConfig(config); err != nil {
+		return 0, nil, fmt.Errorf("validate qemu snapshot config: %w", err)
+	}
+	storedVersion := saved.QEMUVersion
+	if storedVersion == "" && !s.profile.requiresStoredVersion() {
+		// Standard-QEMU snapshots created before qemu-config.json recorded the
+		// writer version still carry it in generic instance metadata.
+		storedVersion = version
+	}
+	qemuVersion, err := s.validateRestoreVersion(p, storedVersion)
+	if err != nil {
+		return 0, nil, err
+	}
 
 	// Build command arguments: QMP socket + VM configuration + incoming migration
 	args := buildQMPArgs(socketPath)
-	args = append(args, BuildArgs(config)...)
+	args = append(args, buildArgs(config, machineType)...)
 
 	// Add incoming migration flag to restore from snapshot
 	// The "file:" protocol is deprecated in QEMU 7.2+, use "exec:cat < path" instead
@@ -474,7 +560,7 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 	}
 	log.DebugContext(ctx, "VM ready", "duration_ms", time.Since(migrationWaitStart).Milliseconds())
 
-	if err := saveVMConfig(filepath.Dir(socketPath), config); err != nil {
+	if err := saveVMConfig(filepath.Dir(socketPath), savedVMConfig{VMConfig: config, MachineType: machineType, QEMUVersion: qemuVersion}); err != nil {
 		return 0, nil, fmt.Errorf("save restored vm config: %w", err)
 	}
 
@@ -483,12 +569,40 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 	return pid, hv, nil
 }
 
+func (s *Starter) validateRestoreVersion(p *paths.Paths, storedVersion string) (string, error) {
+	currentVersion, err := s.GetVersion(p)
+	if err != nil {
+		return "", fmt.Errorf("get QEMU version for restore: %w", err)
+	}
+	if err := validateRestoreVersions(storedVersion, currentVersion); err != nil {
+		return "", err
+	}
+	return currentVersion, nil
+}
+
+func validateRestoreVersions(storedVersion, currentVersion string) error {
+	if storedVersion == "" || storedVersion == "unknown" {
+		return fmt.Errorf("cannot safely restore a QEMU snapshot without its writer version; recreate the instance or restore a stopped snapshot")
+	}
+	if currentVersion != storedVersion {
+		return fmt.Errorf("cannot restore snapshot created with QEMU %s using QEMU %s; recreate the instance or restore a stopped snapshot", storedVersion, currentVersion)
+	}
+	return nil
+}
+
 // vmConfigFile is the name of the file where VM config is saved for restore.
 const vmConfigFile = "qemu-config.json"
 
-// saveVMConfig saves the VM configuration to a file in the instance directory.
-// This is needed for QEMU restore since migration files only contain memory state.
-func saveVMConfig(instanceDir string, config hypervisor.VMConfig) error {
+type savedVMConfig struct {
+	hypervisor.VMConfig
+	MachineType MachineType
+	QEMUVersion string
+}
+
+// saveVMConfig saves QEMU's restore contract to the instance directory.
+// Migration files contain memory state but not the device model or the QEMU
+// writer version required by QEMU migration compatibility.
+func saveVMConfig(instanceDir string, config savedVMConfig) error {
 	configPath := filepath.Join(instanceDir, vmConfigFile)
 	data, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
@@ -501,15 +615,15 @@ func saveVMConfig(instanceDir string, config hypervisor.VMConfig) error {
 }
 
 // loadVMConfig loads the VM configuration from the instance directory.
-func loadVMConfig(instanceDir string) (hypervisor.VMConfig, error) {
+func loadVMConfig(instanceDir string) (savedVMConfig, error) {
 	configPath := filepath.Join(instanceDir, vmConfigFile)
 	data, err := os.ReadFile(configPath)
 	if err != nil {
-		return hypervisor.VMConfig{}, fmt.Errorf("read config: %w", err)
+		return savedVMConfig{}, fmt.Errorf("read config: %w", err)
 	}
-	var config hypervisor.VMConfig
+	var config savedVMConfig
 	if err := json.Unmarshal(data, &config); err != nil {
-		return hypervisor.VMConfig{}, fmt.Errorf("unmarshal config: %w", err)
+		return savedVMConfig{}, fmt.Errorf("unmarshal config: %w", err)
 	}
 	return config, nil
 }

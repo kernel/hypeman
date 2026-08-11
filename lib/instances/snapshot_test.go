@@ -61,6 +61,43 @@ func TestStoppedSnapshotLifecycleAndForkAfterSourceDeletion(t *testing.T) {
 	assert.ErrorIs(t, err, ErrSnapshotNotFound)
 }
 
+func TestStoppedSnapshotRejectsInvalidQEMUMicroVMTargetBeforeMutation(t *testing.T) {
+	t.Parallel()
+	mgr, _ := setupTestManager(t)
+	ctx := context.Background()
+
+	sourceID := "snapshot-invalid-microvm-src"
+	createStoppedSnapshotSourceFixture(t, mgr, sourceID, sourceID, mgr.defaultHypervisor)
+	source, err := mgr.loadMetadata(sourceID)
+	require.NoError(t, err)
+	source.HotplugSize = 1
+	require.NoError(t, mgr.saveMetadata(source))
+
+	snap, err := mgr.CreateSnapshot(ctx, sourceID, CreateSnapshotRequest{Kind: SnapshotKindStopped})
+	require.NoError(t, err)
+	marker := filepath.Join(mgr.paths.InstanceDir(sourceID), "restore-must-not-replace")
+	require.NoError(t, os.WriteFile(marker, []byte("source"), 0600))
+
+	_, err = mgr.RestoreSnapshot(ctx, sourceID, snap.Id, RestoreSnapshotRequest{
+		TargetState:      StateStopped,
+		TargetHypervisor: hypervisor.TypeQEMUMicroVM,
+	})
+	require.ErrorIs(t, err, ErrInvalidRequest)
+	require.FileExists(t, marker, "validation must run before replacing the source payload")
+
+	before, err := mgr.ListInstances(ctx, nil)
+	require.NoError(t, err)
+	_, err = mgr.ForkSnapshot(ctx, snap.Id, ForkSnapshotRequest{
+		Name:             "snapshot-invalid-microvm-fork",
+		TargetState:      StateStopped,
+		TargetHypervisor: hypervisor.TypeQEMUMicroVM,
+	})
+	require.ErrorIs(t, err, ErrInvalidRequest)
+	after, listErr := mgr.ListInstances(ctx, nil)
+	require.NoError(t, listErr)
+	require.Len(t, after, len(before), "invalid target must not create a fork")
+}
+
 func TestStandbySnapshotRejectsTargetHypervisorOverride(t *testing.T) {
 	t.Parallel()
 	mgr, _ := setupTestManager(t)

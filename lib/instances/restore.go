@@ -389,6 +389,10 @@ func (m *manager) restoreInstance(
 		log.WarnContext(ctx, "failed to update metadata after restore", "instance_id", id, "error", err)
 	}
 
+	// A state query during RestoreVM may have cached Created. Resume succeeded,
+	// so publish Running before deriving the response and releasing the lock.
+	m.storeCachedHypervisorState(id, hypervisor.StateRunning)
+
 	// Return instance state from current metadata without forcing a log scan.
 	finalInst := m.toInstanceWithoutHydration(ctx, meta)
 	// Record metrics

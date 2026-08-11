@@ -1,7 +1,10 @@
 package qemu
 
 import (
+	"fmt"
 	"sync"
+
+	"github.com/kernel/hypeman/lib/hypervisor"
 )
 
 // clientPool manages singleton QMP connections per socket path.
@@ -14,46 +17,93 @@ var clientPool = struct {
 	clients: make(map[string]*QEMU),
 }
 
-// GetOrCreate returns an existing QEMU client for the socket path,
+// GetOrCreate returns a standard QEMU client for the socket path,
 // or creates a new one if none exists.
 func GetOrCreate(socketPath string) (*QEMU, error) {
-	// Try read lock first for existing connection
-	clientPool.RLock()
-	if client, ok := clientPool.clients[socketPath]; ok {
-		clientPool.RUnlock()
-		return client, nil
-	}
-	clientPool.RUnlock()
+	return GetOrCreateForType(socketPath, hypervisor.TypeQEMU)
+}
 
-	// Need to create new connection - acquire write lock
-	clientPool.Lock()
-	defer clientPool.Unlock()
-
-	// Double-check after acquiring write lock
-	if client, ok := clientPool.clients[socketPath]; ok {
-		return client, nil
-	}
-
-	// Create new client
-	client, err := newClient(socketPath)
+// GetOrCreateForType returns a QEMU client with the requested backend identity.
+func GetOrCreateForType(socketPath string, hypervisorType hypervisor.Type) (*QEMU, error) {
+	requestedProfile, err := profileForType(hypervisorType)
 	if err != nil {
 		return nil, err
 	}
 
+	clientPool.RLock()
+	if client, ok := clientPool.clients[socketPath]; ok {
+		clientPool.RUnlock()
+		if client.profile.hypervisorType() != hypervisorType {
+			return nil, poolTypeMismatchError(socketPath, client.profile.hypervisorType(), hypervisorType)
+		}
+		return client, nil
+	}
+	clientPool.RUnlock()
+
+	clientPool.Lock()
+	if client, ok := clientPool.clients[socketPath]; ok {
+		clientPool.Unlock()
+		if client.profile.hypervisorType() != hypervisorType {
+			return nil, poolTypeMismatchError(socketPath, client.profile.hypervisorType(), hypervisorType)
+		}
+		return client, nil
+	}
+
+	client, err := newClient(socketPath, requestedProfile)
+	if err != nil {
+		clientPool.Unlock()
+		return nil, err
+	}
 	clientPool.clients[socketPath] = client
+	clientPool.Unlock()
 	return client, nil
 }
 
-// Remove closes and removes a client from the pool.
-// Called automatically on errors to allow fresh reconnection.
-// Close is done asynchronously to avoid blocking if the connection is in a bad state.
+func poolTypeMismatchError(socketPath string, cached, requested hypervisor.Type) error {
+	return fmt.Errorf("QEMU client for %s is pooled as hypervisor %s, not %s", socketPath, cached, requested)
+}
+
+// resetClient drops a pooled connection before a new QEMU process reuses the
+// same socket path. Disconnect happens outside the pool lock and stale users
+// can only remove their own client generation.
+func resetClient(socketPath string) {
+	client := takeClient(socketPath, nil)
+	closeClientAsync(client)
+}
+
+// removeClient removes client only if it is still the current generation for
+// its socket path. This prevents a late error from an old QEMU process from
+// evicting the replacement process's client.
+func removeClient(client *QEMU) {
+	if client == nil {
+		return
+	}
+	removed := takeClient(client.socketPath, client)
+	closeClientAsync(removed)
+}
+
+// Remove closes and removes the current client for socketPath.
 func Remove(socketPath string) {
+	client := takeClient(socketPath, nil)
+	closeClientAsync(client)
+}
+
+// takeClient removes the current client. When expected is non-nil, removal is
+// conditional on pointer identity to protect against socket-path reuse.
+func takeClient(socketPath string, expected *QEMU) *QEMU {
 	clientPool.Lock()
 	defer clientPool.Unlock()
 
-	if client, ok := clientPool.clients[socketPath]; ok {
-		delete(clientPool.clients, socketPath)
-		// Close asynchronously to avoid blocking on stuck connections
+	client, ok := clientPool.clients[socketPath]
+	if !ok || (expected != nil && client != expected) {
+		return nil
+	}
+	delete(clientPool.clients, socketPath)
+	return client
+}
+
+func closeClientAsync(client *QEMU) {
+	if client != nil && client.client != nil {
 		go client.client.Close()
 	}
 }

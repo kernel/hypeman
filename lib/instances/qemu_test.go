@@ -3,6 +3,7 @@ package instances
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -10,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"testing"
@@ -22,10 +24,10 @@ import (
 	"github.com/kernel/hypeman/lib/hypervisor/qemu"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/ingress"
-	"github.com/kernel/hypeman/lib/instances/phasetracking"
 	"github.com/kernel/hypeman/lib/network"
 	"github.com/kernel/hypeman/lib/paths"
 	"github.com/kernel/hypeman/lib/resources"
+	snapshottest "github.com/kernel/hypeman/lib/snapshot/testsupport"
 	"github.com/kernel/hypeman/lib/system"
 	"github.com/kernel/hypeman/lib/volumes"
 	"github.com/stretchr/testify/assert"
@@ -114,12 +116,12 @@ func requireQEMUAvailable(t *testing.T) {
 	}
 }
 
-// waitForQEMUReady polls QEMU status via QMP until it's running or times out
-func waitForQEMUReady(ctx context.Context, socketPath string, timeout time.Duration) error {
+// waitForQEMUReady polls QEMU status via QMP until it's running or times out.
+func waitForQEMUReady(ctx context.Context, socketPath string, hypervisorType hypervisor.Type, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 
 	for time.Now().Before(deadline) {
-		client, err := qemu.New(socketPath)
+		client, err := qemu.NewForType(socketPath, hypervisorType)
 		if err != nil {
 			time.Sleep(100 * time.Millisecond)
 			continue
@@ -183,23 +185,179 @@ func (r *qemuInstanceResolver) ResolveInstance(ctx context.Context, nameOrID str
 func requireQEMUUsable(t *testing.T) {
 	t.Helper()
 
-	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
-		t.Skip("/dev/kvm not available, skipping on this platform")
+	failOrSkip := func(format string, args ...any) {
+		t.Helper()
+		if runtime.GOOS == "linux" && os.Getenv("CI") != "" {
+			t.Fatalf(format, args...)
+		}
+		t.Skipf(format, args...)
 	}
+
+	kvm, err := os.OpenFile("/dev/kvm", os.O_RDWR, 0)
+	if err != nil {
+		failOrSkip("/dev/kvm is not usable: %v", err)
+	}
+	_ = kvm.Close()
 
 	starter := qemu.NewStarter()
 	if _, err := starter.GetBinaryPath(nil, ""); err != nil {
-		t.Skipf("QEMU not available: %v", err)
+		failOrSkip("QEMU not available: %v", err)
 	}
 	if _, err := starter.GetVersion(nil); err != nil {
-		t.Skipf("QEMU is installed but not usable: %v", err)
+		failOrSkip("QEMU is installed but not usable: %v", err)
 	}
+}
+
+func requireMicroVMAvailable(t *testing.T) {
+	t.Helper()
+	if runtime.GOARCH != "amd64" {
+		t.Skip("microvm is supported only on amd64")
+	}
+	starter := qemu.NewStarter()
+	binaryPath, err := starter.GetBinaryPath(nil, "")
+	if err != nil {
+		t.Skipf("QEMU not available: %v", err)
+	}
+	output, err := exec.Command(binaryPath, "-machine", "help").CombinedOutput()
+	if err == nil && strings.Contains(string(output), "microvm") {
+		return
+	}
+	if os.Getenv("CI") != "" {
+		t.Fatalf("QEMU must advertise microvm in CI: %v (%s)", err, strings.TrimSpace(string(output)))
+	}
+	t.Skipf("QEMU does not advertise microvm: %v (%s)", err, strings.TrimSpace(string(output)))
 }
 
 // TestQEMUBasicEndToEnd tests the complete instance lifecycle with QEMU.
 // This is the primary integration test for QEMU support.
 // It tests: create, get, list, logs, network, ingress, volumes, exec, and delete.
 // It does NOT test: snapshot/standby, hot memory resize (not supported by QEMU in first pass).
+func TestQEMUMicroVMEndToEnd(t *testing.T) {
+	requireQEMUUsable(t)
+	requireMicroVMAvailable(t)
+	acquireHeavyIO(t)
+
+	manager, tmpDir := setupTestManagerForQEMU(t)
+	ctx := context.Background()
+	p := paths.New(tmpDir)
+	imageManager, err := images.NewManager(p, 1, nil)
+	require.NoError(t, err)
+	snapshottest.EnsureImageReady(t, ctx, p, imageManager, integrationTestImageRef(t, "docker.io/library/nginx:alpine"))
+	require.NoError(t, manager.systemManager.EnsureSystemFiles(ctx))
+	require.NoError(t, manager.networkManager.Initialize(ctx, nil))
+
+	inst, err := manager.CreateInstance(ctx, CreateInstanceRequest{
+		Name:           "qemu-microvm",
+		Image:          integrationTestImageRef(t, "docker.io/library/nginx:alpine"),
+		Size:           lifecycleTestMemorySize,
+		OverlaySize:    10 * 1024 * 1024 * 1024,
+		Vcpus:          1,
+		NetworkEnabled: true,
+		Hypervisor:     hypervisor.TypeQEMUMicroVM,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = deleteTestInstanceNow(context.Background(), manager, inst.Id) })
+	require.Equal(t, hypervisor.TypeQEMUMicroVM, inst.HypervisorType)
+
+	inst, err = waitForInstanceState(ctx, manager, inst.Id, StateRunning, integrationTestTimeout(30*time.Second))
+	require.NoError(t, err)
+	require.NoError(t, waitForQEMUReady(ctx, inst.SocketPath, inst.HypervisorType, integrationTestTimeout(30*time.Second)))
+	assertHostCanReachNginx(t, inst.IP, 80, 30*time.Second)
+
+	config, err := qemuConfigMachineType(p.InstanceDir(inst.Id))
+	require.NoError(t, err)
+	assert.Equal(t, string(qemu.MachineTypeMicroVM), config)
+
+	inst, err = manager.StopInstance(ctx, inst.Id)
+	require.NoError(t, err)
+	require.Equal(t, StateStopped, inst.State)
+	inst, err = manager.StartInstance(ctx, inst.Id, StartInstanceRequest{})
+	require.NoError(t, err)
+	inst, err = waitForInstanceState(ctx, manager, inst.Id, StateRunning, integrationTestTimeout(30*time.Second))
+	require.NoError(t, err)
+	assert.Equal(t, hypervisor.TypeQEMUMicroVM, inst.HypervisorType)
+}
+
+func TestQEMUStoppedSnapshotSwitchesToMicroVM(t *testing.T) {
+	requireQEMUUsable(t)
+	requireMicroVMAvailable(t)
+	acquireHeavyIO(t)
+
+	manager, tmpDir := setupTestManagerForQEMU(t)
+	ctx := context.Background()
+	p := paths.New(tmpDir)
+	imageManager, err := images.NewManager(p, 1, nil)
+	require.NoError(t, err)
+	image := integrationTestImageRef(t, "docker.io/library/nginx:alpine")
+	snapshottest.EnsureImageReady(t, ctx, p, imageManager, image)
+	require.NoError(t, manager.systemManager.EnsureSystemFiles(ctx))
+
+	inst, err := manager.CreateInstance(ctx, CreateInstanceRequest{
+		Name:           "qemu-switch-to-microvm",
+		Image:          image,
+		Size:           lifecycleTestMemorySize,
+		OverlaySize:    1024 * 1024 * 1024,
+		Vcpus:          1,
+		NetworkEnabled: false,
+		Hypervisor:     hypervisor.TypeQEMU,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = deleteTestInstanceNow(context.Background(), manager, inst.Id) })
+	inst, err = waitForInstanceState(ctx, manager, inst.Id, StateRunning, integrationTestTimeout(30*time.Second))
+	require.NoError(t, err)
+
+	inst, err = manager.StopInstance(ctx, inst.Id)
+	require.NoError(t, err)
+	require.Equal(t, StateStopped, inst.State)
+	snapshot, err := manager.CreateSnapshot(ctx, inst.Id, CreateSnapshotRequest{Kind: SnapshotKindStopped})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = manager.DeleteSnapshot(context.Background(), snapshot.Id) })
+
+	inst, err = manager.RestoreSnapshot(ctx, inst.Id, snapshot.Id, RestoreSnapshotRequest{
+		TargetState:      StateRunning,
+		TargetHypervisor: hypervisor.TypeQEMUMicroVM,
+	})
+	require.NoError(t, err)
+	inst, err = waitForInstanceState(ctx, manager, inst.Id, StateRunning, integrationTestTimeout(30*time.Second))
+	require.NoError(t, err)
+	require.Equal(t, hypervisor.TypeQEMUMicroVM, inst.HypervisorType)
+
+	machineType, err := qemuConfigMachineType(p.InstanceDir(inst.Id))
+	require.NoError(t, err)
+	require.Equal(t, string(qemu.MachineTypeMicroVM), machineType)
+}
+
+func qemuConfigMachineType(instanceDir string) (string, error) {
+	data, err := os.ReadFile(filepath.Join(instanceDir, "qemu-config.json"))
+	if err != nil {
+		return "", err
+	}
+	var config struct {
+		MachineType string `json:"MachineType"`
+	}
+	if err := json.Unmarshal(data, &config); err != nil {
+		return "", err
+	}
+	return config.MachineType, nil
+}
+
+func expectedQEMUMachineType(t *testing.T, hypervisorType hypervisor.Type) qemu.MachineType {
+	t.Helper()
+	if hypervisorType == hypervisor.TypeQEMUMicroVM {
+		return qemu.MachineTypeMicroVM
+	}
+	switch runtime.GOARCH {
+	case "amd64":
+		return qemu.MachineTypeQ35
+	case "arm64":
+		return qemu.MachineTypeVirt
+	default:
+		t.Fatalf("unsupported QEMU architecture %s", runtime.GOARCH)
+		return ""
+	}
+}
+
+// TestQEMUBasicEndToEnd tests the complete instance lifecycle with QEMU.
 func TestQEMUBasicEndToEnd(t *testing.T) {
 	t.Parallel()
 	requireQEMUUsable(t)
@@ -326,7 +484,7 @@ func TestQEMUBasicEndToEnd(t *testing.T) {
 	assert.FileExists(t, p.InstanceConfigDisk(inst.Id))
 
 	// Wait for VM to be fully running
-	err = waitForQEMUReady(ctx, inst.SocketPath, 10*time.Second)
+	err = waitForQEMUReady(ctx, inst.SocketPath, inst.HypervisorType, integrationTestTimeout(30*time.Second))
 	require.NoError(t, err, "QEMU VM should reach running state")
 	inst, err = waitForInstanceState(ctx, manager, inst.Id, StateRunning, integrationTestTimeout(20*time.Second))
 	require.NoError(t, err, "instance should reach Running state")
@@ -760,226 +918,6 @@ func TestQEMUEntrypointEnvVars(t *testing.T) {
 	require.NoError(t, err)
 }
 
-// TestQEMUStandbyAndRestore tests the standby/restore cycle with QEMU.
-// This tests QEMU's migrate-to-file snapshot mechanism.
-func TestQEMUStandbyAndRestore(t *testing.T) {
-	t.Parallel()
-	requireQEMUUsable(t)
-	acquireHeavyIO(t)
-
-	manager, tmpDir := setupTestManagerForQEMU(t)
-	ctx := context.Background()
-	p := paths.New(tmpDir)
-
-	// Get the image manager for image operations
-	imageManager, err := images.NewManager(p, 1, nil)
-	require.NoError(t, err)
-
-	// Pull nginx image
-	t.Log("Pulling nginx:alpine image...")
-	nginxImage, err := imageManager.CreateImage(ctx, images.CreateImageRequest{
-		Name: integrationTestImageRef(t, "docker.io/library/nginx:alpine"),
-	})
-	require.NoError(t, err)
-
-	// Wait for image to be ready
-	t.Log("Waiting for image build to complete...")
-	imageName := nginxImage.Name
-	for i := 0; i < 60; i++ {
-		img, err := imageManager.GetImage(ctx, imageName)
-		if err == nil && img.Status == images.StatusReady {
-			nginxImage = img
-			break
-		}
-		if err == nil && img.Status == images.StatusFailed {
-			t.Fatalf("Image build failed: %s", *img.Error)
-		}
-		time.Sleep(1 * time.Second)
-	}
-	require.Equal(t, images.StatusReady, nginxImage.Status, "Image should be ready after 60 seconds")
-	t.Log("Nginx image ready")
-
-	// Ensure system files
-	systemManager := system.NewManager(p)
-	t.Log("Ensuring system files...")
-	err = systemManager.EnsureSystemFiles(ctx)
-	require.NoError(t, err)
-	t.Log("System files ready")
-
-	// Create instance with QEMU hypervisor (no network for simpler test)
-	req := CreateInstanceRequest{
-		Name:           "test-qemu-standby",
-		Image:          integrationTestImageRef(t, "docker.io/library/nginx:alpine"),
-		Size:           2 * 1024 * 1024 * 1024,  // 2GB
-		HotplugSize:    512 * 1024 * 1024,       // 512MB (unused by QEMU)
-		OverlaySize:    10 * 1024 * 1024 * 1024, // 10GB
-		Vcpus:          1,
-		NetworkEnabled: false, // No network for simpler standby test
-		Hypervisor:     hypervisor.TypeQEMU,
-		Env:            map[string]string{},
-	}
-
-	t.Log("Creating QEMU instance...")
-	inst, err := manager.CreateInstance(ctx, req)
-	require.NoError(t, err)
-	require.NotNil(t, inst)
-	assert.Contains(t, []State{StateInitializing, StateRunning}, inst.State)
-	inst, err = waitForInstanceState(ctx, manager, inst.Id, StateRunning, integrationTestTimeout(20*time.Second))
-	require.NoError(t, err)
-	assert.Equal(t, hypervisor.TypeQEMU, inst.HypervisorType)
-	t.Logf("Instance created: %s (hypervisor: %s)", inst.Id, inst.HypervisorType)
-
-	// Wait for VM to be fully running before standby
-	err = waitForQEMUReady(ctx, inst.SocketPath, 10*time.Second)
-	require.NoError(t, err, "QEMU VM should reach running state")
-	assert.Equal(t, phasetracking.PhaseRunning, inst.Phases.Current, "fresh instance should be in running phase")
-
-	// Standby instance
-	t.Log("Standing by instance...")
-	inst, err = manager.StandbyInstance(ctx, inst.Id, StandbyInstanceRequest{})
-	require.NoError(t, err)
-	assert.Equal(t, StateStandby, inst.State)
-	assert.True(t, inst.HasSnapshot)
-	assert.Equal(t, phasetracking.PhaseStandby, inst.Phases.Current, "standby transition should set current phase")
-	assert.Greater(t, inst.Phases.Cumulative[phasetracking.PhaseRunning], int64(0), "running stint should be accrued after standby")
-	t.Log("Instance in standby")
-
-	// Verify snapshot exists
-	snapshotDir := p.InstanceSnapshotLatest(inst.Id)
-	assert.DirExists(t, snapshotDir)
-	assert.FileExists(t, filepath.Join(snapshotDir, "memory"), "QEMU snapshot memory file should exist")
-	assert.FileExists(t, filepath.Join(snapshotDir, "qemu-config.json"), "QEMU config should be saved in snapshot")
-
-	// Log snapshot files
-	t.Log("Snapshot files:")
-	entries, _ := os.ReadDir(snapshotDir)
-	for _, entry := range entries {
-		info, _ := entry.Info()
-		t.Logf("  - %s (size: %d bytes)", entry.Name(), info.Size())
-	}
-
-	// Restore instance
-	t.Log("Restoring instance...")
-	inst, err = manager.RestoreInstance(ctx, inst.Id)
-	require.NoError(t, err)
-	assert.Contains(t, []State{StateInitializing, StateRunning}, inst.State)
-	inst, err = waitForInstanceState(ctx, manager, inst.Id, StateRunning, integrationTestTimeout(20*time.Second))
-	require.NoError(t, err)
-	t.Log("Instance restored and running")
-
-	// Wait for VM to be running again
-	err = waitForQEMUReady(ctx, inst.SocketPath, 10*time.Second)
-	require.NoError(t, err, "QEMU VM should reach running state after restore")
-	assert.Equal(t, phasetracking.PhaseRunning, inst.Phases.Current, "restored instance should be in running phase")
-	assert.Greater(t, inst.Phases.Cumulative[phasetracking.PhaseStandby], int64(0), "standby stint should be accrued after restore")
-
-	// Cleanup
-	t.Log("Cleaning up...")
-	err = manager.DeleteInstance(ctx, inst.Id)
-	require.NoError(t, err)
-
-	// Verify cleanup
-	assert.NoDirExists(t, p.InstanceDir(inst.Id))
-
-	t.Log("QEMU standby/restore test complete!")
-}
-
-func TestQEMUForkFromRunningNetwork(t *testing.T) {
-	t.Parallel()
-	requireQEMUUsable(t)
-	acquireHeavyIO(t)
-
-	manager, tmpDir := setupTestManagerForQEMU(t)
-	ctx := context.Background()
-	p := paths.New(tmpDir)
-
-	imageManager, err := images.NewManager(p, 1, nil)
-	require.NoError(t, err)
-
-	t.Log("Ensuring nginx image...")
-	nginxImage, err := imageManager.CreateImage(ctx, images.CreateImageRequest{Name: integrationTestImageRef(t, "docker.io/library/nginx:alpine")})
-	require.NoError(t, err)
-
-	imageName := nginxImage.Name
-	for i := 0; i < 60; i++ {
-		img, err := imageManager.GetImage(ctx, imageName)
-		if err == nil && img.Status == images.StatusReady {
-			nginxImage = img
-			break
-		}
-		if err == nil && img.Status == images.StatusFailed {
-			t.Fatalf("image build failed: %s", *img.Error)
-		}
-		time.Sleep(1 * time.Second)
-	}
-	require.Equal(t, images.StatusReady, nginxImage.Status, "Image should be ready after 60 seconds")
-
-	require.NoError(t, manager.systemManager.EnsureSystemFiles(ctx))
-	require.NoError(t, manager.networkManager.Initialize(ctx, nil))
-
-	source, err := manager.CreateInstance(ctx, CreateInstanceRequest{
-		Name:           "qemu-fork-running-src",
-		Image:          integrationTestImageRef(t, "docker.io/library/nginx:alpine"),
-		Size:           2 * 1024 * 1024 * 1024,
-		HotplugSize:    256 * 1024 * 1024,
-		OverlaySize:    10 * 1024 * 1024 * 1024,
-		Vcpus:          1,
-		NetworkEnabled: true,
-		Hypervisor:     hypervisor.TypeQEMU,
-	})
-	require.NoError(t, err)
-	sourceID := source.Id
-	t.Cleanup(func() { _ = deleteTestInstanceNow(context.Background(), manager, sourceID) })
-	// QEMU is the slowest Linux hypervisor under full-suite load on Deft. Give
-	// the host-side Running transition more headroom so we don't fail while the
-	// VM is still legitimately completing boot marker hydration.
-	source, err = waitForInstanceState(ctx, manager, sourceID, StateRunning, 45*time.Second)
-	require.NoError(t, err)
-	require.NoError(t, waitForQEMUReady(ctx, source.SocketPath, 10*time.Second))
-
-	assert.NotEmpty(t, source.IP)
-	assert.NotEmpty(t, source.MAC)
-	assertHostCanReachNginx(t, source.IP, 80, 60*time.Second)
-
-	_, err = manager.ForkInstance(ctx, source.Id, ForkInstanceRequest{Name: "qemu-fork-running-no-flag"})
-	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrInvalidState)
-
-	forked, err := manager.ForkInstance(ctx, source.Id, ForkInstanceRequest{
-		Name:        "qemu-fork-running-copy",
-		FromRunning: true,
-		TargetState: StateStandby,
-	})
-	require.NoError(t, err)
-	require.Equal(t, StateStandby, forked.State)
-	forkedID := forked.Id
-	t.Cleanup(func() { _ = deleteTestInstanceNow(context.Background(), manager, forkedID) })
-
-	sourceAfterFork, err := manager.GetInstance(ctx, source.Id)
-	require.NoError(t, err)
-	if sourceAfterFork.State != StateRunning {
-		sourceAfterFork, err = waitForInstanceState(ctx, manager, source.Id, StateRunning, 45*time.Second)
-		require.NoError(t, err)
-	}
-	require.Equal(t, StateRunning, sourceAfterFork.State)
-	require.NotEmpty(t, sourceAfterFork.IP)
-	assertHostCanReachNginx(t, sourceAfterFork.IP, 80, 60*time.Second)
-
-	forked, err = manager.RestoreInstance(ctx, forkedID)
-	require.NoError(t, err)
-	require.Contains(t, []State{StateInitializing, StateRunning}, forked.State)
-	forked, err = waitForInstanceState(ctx, manager, forkedID, StateRunning, 45*time.Second)
-	require.NoError(t, err)
-	require.Equal(t, StateRunning, forked.State)
-	require.NoError(t, waitForQEMUReady(ctx, forked.SocketPath, 10*time.Second))
-
-	assert.NotEmpty(t, forked.IP)
-	assert.NotEmpty(t, forked.MAC)
-	assert.NotEqual(t, sourceAfterFork.IP, forked.IP)
-	assert.NotEqual(t, sourceAfterFork.MAC, forked.MAC)
-	assertHostCanReachNginx(t, forked.IP, 80, 60*time.Second)
-}
-
 func TestQEMUSnapshotFeature(t *testing.T) {
 	t.Parallel()
 	requireQEMUUsable(t)
@@ -1001,5 +939,16 @@ func TestQEMUWarmForkChain(t *testing.T) {
 	runWarmForkChain(t, mgr, tmpDir, warmForkChainConfig{
 		hypervisor: hypervisor.TypeQEMU,
 		namePrefix: "qemu",
+	})
+}
+
+func TestQEMUMicroVMWarmForkChain(t *testing.T) {
+	requireQEMUUsable(t)
+	requireMicroVMAvailable(t)
+
+	mgr, tmpDir := setupTestManagerForQEMU(t)
+	runWarmForkChain(t, mgr, tmpDir, warmForkChainConfig{
+		hypervisor: hypervisor.TypeQEMUMicroVM,
+		namePrefix: "qemu-microvm",
 	})
 }

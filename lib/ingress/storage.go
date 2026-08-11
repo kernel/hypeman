@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/kernel/hypeman/lib/paths"
@@ -64,8 +65,26 @@ func saveIngress(p *paths.Paths, stored *storedIngress) error {
 		return fmt.Errorf("marshal metadata: %w", err)
 	}
 
-	if err := os.WriteFile(metaPath, data, 0644); err != nil {
-		return fmt.Errorf("write metadata: %w", err)
+	tmp, err := os.CreateTemp(filepath.Dir(metaPath), ".ingress-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create temporary metadata: %w", err)
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return fmt.Errorf("write temporary metadata: %w", err)
+	}
+	if err := tmp.Chmod(0600); err != nil {
+		tmp.Close()
+		return fmt.Errorf("chmod temporary metadata: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close temporary metadata: %w", err)
+	}
+	if err := os.Rename(tmpPath, metaPath); err != nil {
+		return fmt.Errorf("rename metadata: %w", err)
 	}
 
 	return nil

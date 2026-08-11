@@ -635,8 +635,8 @@ components:
             $ref: "#/components/schemas/VolumeMount"
         hypervisor:
           type: string
-          enum: [cloud-hypervisor, firecracker, qemu, vz]
-          description: Hypervisor to use for this instance. Defaults to server configuration.
+          enum: [cloud-hypervisor, firecracker, qemu, qemu-microvm, vz]
+          description: Hypervisor backend to use for this instance. qemu uses the architecture-native standard board; qemu-microvm uses QEMU's minimal Linux amd64 board and does not support PCI devices, hotplug memory, or more than eight virtio-mmio devices. Defaults to server configuration.
           example: cloud-hypervisor
         snapshot_policy:
           description: Snapshot policy for this instance. Controls compression settings applied when creating snapshots or entering standby, plus any default standby-only compression delay.
@@ -747,7 +747,7 @@ components:
           example: nginx1
         source_hypervisor:
           type: string
-          enum: [cloud-hypervisor, firecracker, qemu, vz]
+          enum: [cloud-hypervisor, firecracker, qemu, qemu-microvm, vz]
           description: Source instance hypervisor at snapshot creation time
           example: cloud-hypervisor
         created_at:
@@ -856,7 +856,7 @@ components:
             - Stopped snapshot defaults to Stopped
         target_hypervisor:
           type: string
-          enum: [cloud-hypervisor, firecracker, qemu, vz]
+          enum: [cloud-hypervisor, firecracker, qemu, qemu-microvm, vz]
           description: |
             Optional hypervisor override. Allowed only when restoring from a Stopped snapshot.
             Standby snapshots must restore with their original hypervisor.
@@ -881,7 +881,7 @@ components:
             - Stopped snapshot defaults to Stopped
         target_hypervisor:
           type: string
-          enum: [cloud-hypervisor, firecracker, qemu, vz]
+          enum: [cloud-hypervisor, firecracker, qemu, qemu-microvm, vz]
           description: |
             Optional hypervisor override. Allowed only when forking from a Stopped snapshot.
             Standby snapshots must fork with their original hypervisor.
@@ -1099,8 +1099,8 @@ components:
           example: false
         hypervisor:
           type: string
-          enum: [cloud-hypervisor, firecracker, qemu, vz]
-          description: Hypervisor running this instance
+          enum: [cloud-hypervisor, firecracker, qemu, qemu-microvm, vz]
+          description: Hypervisor backend running this instance
           example: cloud-hypervisor
         snapshot_policy:
           $ref: "#/components/schemas/SnapshotPolicy"
@@ -1463,6 +1463,21 @@ components:
           description: Target port on the instance
           example: 8080
     
+    IngressRequestHeaderAuth:
+      type: object
+      required: [header, value]
+      properties:
+        header:
+          type: string
+          description: Dedicated request header that must match before proxying. Reserved authentication, cookie, host, framing, proxy, and hop-by-hop headers are not allowed.
+          example: X-Ingress-Verification
+        value:
+          type: string
+          minLength: 32
+          maxLength: 256
+          description: Exact header value required before proxying. This sensitive value is persisted and returned by the API like instance environment variables; clients should hide it by default.
+          example: 0123456789abcdef0123456789abcdef
+
     IngressRule:
       type: object
       required: [match, target]
@@ -1479,6 +1494,8 @@ components:
           type: boolean
           description: Auto-create HTTP to HTTPS redirect for this hostname (only applies when tls is enabled)
           default: false
+        request_header_auth:
+          $ref: "#/components/schemas/IngressRequestHeaderAuth"
     
     CreateIngressRequest:
       type: object
@@ -2173,7 +2190,7 @@ components:
           type: string
         hypervisor:
           type: string
-          enum: [cloud-hypervisor, firecracker, qemu, vz]
+          enum: [cloud-hypervisor, firecracker, qemu, qemu-microvm, vz]
         assigned_memory_bytes:
           type: integer
           format: int64

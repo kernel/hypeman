@@ -99,7 +99,7 @@ func TestGuestMemoryPolicyQEMU(t *testing.T) {
 		_ = mgr.DeleteInstance(ctx, inst.Id)
 	})
 
-	require.NoError(t, waitForQEMUReady(ctx, inst.SocketPath, 10*time.Second))
+	require.NoError(t, waitForQEMUReady(ctx, inst.SocketPath, inst.HypervisorType, 10*time.Second))
 
 	pid := requireHypervisorPID(t, ctx, mgr, inst.Id)
 	cmdline, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))

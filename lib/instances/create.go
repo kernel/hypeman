@@ -103,6 +103,12 @@ func (m *manager) createInstance(
 	if hvType == "" {
 		hvType = m.defaultHypervisor
 	}
+	starter, starterErr := m.getVMStarter(hvType)
+	if starterErr == nil {
+		if err := m.validateCreateVMConfig(starter, req, hvType); err != nil {
+			return nil, err
+		}
+	}
 
 	// 2. Validate image exists and is ready; auto-pull if not found
 	log.DebugContext(ctx, "validating image", "image", req.Image)
@@ -133,6 +139,13 @@ func (m *manager) createInstance(
 		return nil, err
 	}
 	m.recordImageUsage(ctx, imageInfo)
+
+	// Preserve image-retention cleanup even if this manager cannot start the
+	// requested backend. Backend-specific config errors were already rejected
+	// before image resolution whenever a starter was available.
+	if starterErr != nil {
+		return nil, fmt.Errorf("get vm starter for %s: %w", hvType, starterErr)
+	}
 
 	defaultKernel := m.systemManager.GetDefaultKernelVersion()
 	kernelVer, err := resolveCreateKernelVersion(imageInfo, defaultKernel)
@@ -233,25 +246,9 @@ func (m *manager) createInstance(
 	ctx = logger.AddToContext(ctx, log)
 	ctx = enrichInstancesTrace(ctx, attribute.String("hypervisor", string(hvType)))
 
-	starter, err := m.getVMStarter(hvType)
+	hvVersion, err := m.resolveCreateHypervisorVersion(ctx, starter, hvType, req.HypervisorVersion)
 	if err != nil {
-		log.ErrorContext(ctx, "failed to get vm starter", "error", err)
-		return nil, fmt.Errorf("get vm starter for %s: %w", hvType, err)
-	}
-
-	// Get hypervisor version: prefer explicit request, then configured default
-	hvVersion := req.HypervisorVersion
-	if hvVersion != "" {
-		if _, err := starter.GetBinaryPath(m.paths, hvVersion); err != nil {
-			return nil, fmt.Errorf("invalid hypervisor version %q: %w", hvVersion, err)
-		}
-	} else {
-		var verErr error
-		hvVersion, verErr = starter.GetVersion(m.paths)
-		if verErr != nil {
-			log.WarnContext(ctx, "failed to get hypervisor version", "hypervisor", hvType, "error", verErr)
-			hvVersion = "unknown"
-		}
+		return nil, err
 	}
 
 	// 10. Validate, resolve, and auto-bind devices (GPU passthrough)
@@ -522,7 +519,7 @@ func (m *manager) createInstance(
 		attribute.String("hypervisor", string(stored.HypervisorType)),
 		attribute.String("operation", "start_vm"),
 	)
-	if err := m.startAndBootVM(startVMCtx, stored, imageInfo, netConfig); err != nil {
+	if err := m.startAndBootVM(startVMCtx, stored, imageInfo, netConfig, false); err != nil {
 		startVMSpanEnd(err)
 		log.ErrorContext(ctx, "failed to start and boot VM", "instance_id", id, "error", err)
 		return nil, err
@@ -746,6 +743,7 @@ func (m *manager) startAndBootVM(
 	stored *StoredMetadata,
 	imageInfo *images.Image,
 	netConfig *network.NetworkConfig,
+	refreshHostVersion bool,
 ) error {
 	log := logger.FromContext(ctx)
 
@@ -753,6 +751,16 @@ func (m *manager) startAndBootVM(
 	starter, err := m.getVMStarter(stored.HypervisorType)
 	if err != nil {
 		return fmt.Errorf("get vm starter: %w", err)
+	}
+
+	// Version-locked snapshot backends must refresh metadata on every cold
+	// start so host upgrades do not leave the reported version stale.
+	if refreshHostVersion && requiresHostSnapshotVersion(stored.HypervisorType) {
+		resolvedVersion, err := starter.ResolveVersion(m.paths, "")
+		if err != nil {
+			return fmt.Errorf("resolve version for hypervisor %s start: %w", stored.HypervisorType, err)
+		}
+		stored.HypervisorVersion = resolvedVersion
 	}
 
 	// Build VM configuration
@@ -819,14 +827,15 @@ func (m *manager) buildHypervisorConfig(ctx context.Context, inst *Instance, ima
 		burstBps = 0
 	}
 
-	disks := []hypervisor.DiskConfig{
+	disks := make([]hypervisor.DiskConfig, 0, instanceDiskCount(inst.Volumes))
+	disks = append(disks,
 		// Rootfs (from image, read-only)
-		{Path: rootfsPath, Readonly: true, IOBps: ioBps, IOBurstBps: burstBps},
+		hypervisor.DiskConfig{Path: rootfsPath, Readonly: true, IOBps: ioBps, IOBurstBps: burstBps},
 		// Overlay disk (writable)
-		{Path: m.paths.InstanceOverlay(inst.Id), Readonly: false, IOBps: ioBps, IOBurstBps: burstBps},
+		hypervisor.DiskConfig{Path: m.paths.InstanceOverlay(inst.Id), Readonly: false, IOBps: ioBps, IOBurstBps: burstBps},
 		// Config disk (read-only)
-		{Path: m.paths.InstanceConfigDisk(inst.Id), Readonly: true, IOBps: ioBps, IOBurstBps: burstBps},
-	}
+		hypervisor.DiskConfig{Path: m.paths.InstanceConfigDisk(inst.Id), Readonly: true, IOBps: ioBps, IOBurstBps: burstBps},
+	)
 
 	// Add attached volumes as additional disks
 	for _, volAttach := range inst.Volumes {
@@ -855,6 +864,10 @@ func (m *manager) buildHypervisorConfig(ctx context.Context, inst *Instance, ima
 				IOBurstBps: burstBps,
 			})
 		}
+	}
+
+	if len(disks) != instanceDiskCount(inst.Volumes) {
+		return hypervisor.VMConfig{}, fmt.Errorf("internal disk plan mismatch: built %d disks, planned %d", len(disks), instanceDiskCount(inst.Volumes))
 	}
 
 	// Network configuration

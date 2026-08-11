@@ -57,7 +57,7 @@ func runStandbySnapshotScenario(t *testing.T, mgr *manager, tmpDir string, cfg s
 		Cmd:            []string{"sleep", "infinity"},
 	})
 	requireNoErr(err)
-
+	require.Equal(t, cfg.hypervisor, source.HypervisorType)
 	sourceID := source.Id
 	sourceDeleted := false
 	t.Cleanup(func() {
@@ -101,6 +101,7 @@ func runStandbySnapshotScenario(t *testing.T, mgr *manager, tmpDir string, cfg s
 	})
 	requireNoErr(err)
 	require.Equal(t, StateStandby, forked.State)
+	require.Equal(t, cfg.hypervisor, forked.HypervisorType)
 
 	forkID := forked.Id
 	t.Cleanup(func() { _ = deleteTestInstanceNow(context.Background(), mgr, forkID) })

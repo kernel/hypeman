@@ -5,10 +5,15 @@ package main
 import (
 	"fmt"
 	"os"
+	"runtime"
 )
 
 // checkHypervisorAccess verifies KVM is available and the user has permission to use it
 func checkHypervisorAccess() error {
+	if runtime.GOARCH != "amd64" && runtime.GOARCH != "arm64" {
+		return fmt.Errorf("Hypeman requires amd64 or arm64, got %s", runtime.GOARCH)
+	}
+
 	f, err := os.OpenFile("/dev/kvm", os.O_RDWR, 0)
 	if err != nil {
 		if os.IsNotExist(err) {
