@@ -164,7 +164,8 @@ Credentials use the Docker model:
   including `/root/.docker/config.json` or the configured service user's
   `~/.docker/config.json` and any credential helpers.
 - If Hypeman restarts while a push using borrowed credentials is running, that
-  job fails instead of retrying without the original credentials.
+  job fails instead of retrying without the original credentials. Anonymous
+  interrupted jobs can be recovered with the server's keychain.
 
 Use an HTTPS API URL when sending credentials. The `insecure` request field
 controls only the connection from Hypeman to the destination registry.
