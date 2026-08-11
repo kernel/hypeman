@@ -29,6 +29,34 @@ func TestParseCreatableVGPUTypes(t *testing.T) {
 	assert.Equal(t, profileMetadata{TypeName: "1159", Name: "NVIDIA L40S-48Q", FramebufferMB: 48 * 1024}, profiles[2])
 }
 
+func TestVendorVFIODiscoverSkipsUnreadableVF(t *testing.T) {
+	sysfs := newTestVendorVFIOSysfs(t)
+	sysfs.addVF(t, "0000:82:00.0", "0000:82:00.4", "42", "0", testCreatableTypes)
+	sysfs.addVF(t, "0000:82:00.0", "0000:82:00.5", "43", "0", testCreatableTypes)
+	// Replace one VF's current_vgpu_type with a directory so reading it fails.
+	badType := filepath.Join(sysfs.pciDevicesPath, "0000:82:00.5", "nvidia", "current_vgpu_type")
+	require.NoError(t, os.Remove(badType))
+	require.NoError(t, os.Mkdir(badType, 0755))
+
+	vfs, err := sysfs.discoverVFs()
+	require.NoError(t, err)
+	require.Len(t, vfs, 1)
+	assert.Equal(t, "0000:82:00.4", vfs[0].PCIAddress)
+}
+
+func TestVendorVFIODiscoverFailsWhenNoVFIsReadable(t *testing.T) {
+	sysfs := newTestVendorVFIOSysfs(t)
+	sysfs.addVF(t, "0000:82:00.0", "0000:82:00.4", "42", "0", testCreatableTypes)
+	badType := filepath.Join(sysfs.pciDevicesPath, "0000:82:00.4", "nvidia", "current_vgpu_type")
+	require.NoError(t, os.Remove(badType))
+	require.NoError(t, os.Mkdir(badType, 0755))
+
+	// With every VF unreadable, discovery must fail rather than report an
+	// empty inventory that would demote the host to passthrough.
+	_, err := sysfs.discoverVFs()
+	require.Error(t, err)
+}
+
 func TestVendorVFIOCreateAndDestroy(t *testing.T) {
 	t.Parallel()
 
