@@ -100,6 +100,16 @@ caddy:
   stop_on_shutdown: false
 
 # =============================================================================
+# Public API Ingress (optional)
+# =============================================================================
+# Exposes the Hypeman API through Caddy. Leave hostname empty to use the API
+# directly on port 4973 instead.
+# api:
+#   hostname: api.example.com
+#   tls: true                     # requires the hostname in acme.allowed_domains
+#   redirect_http: true           # redirect HTTP requests to HTTPS
+
+# =============================================================================
 # Build System Configuration
 # =============================================================================
 # For builds on macOS with VZ, the registry URL needs to be accessible from
@@ -124,6 +134,7 @@ build:
 limits:
   max_vcpus_per_instance: 4
   max_memory_per_instance: 8GB
+  # max_concurrent_pushes: 2     # concurrent outbound registry pushes
   # max_total_volume_storage: ""  # 0 or empty = unlimited
 
 # =============================================================================
