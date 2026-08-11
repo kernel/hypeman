@@ -54,6 +54,9 @@ func (m *buildMetadata) toBuild() *Build {
 
 // writeMetadata writes build metadata to disk atomically
 func writeMetadata(p *paths.Paths, meta *buildMetadata) error {
+	if err := paths.ValidatePathComponent(meta.ID); err != nil {
+		return err
+	}
 	dir := p.BuildDir(meta.ID)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("create build directory: %w", err)
@@ -81,6 +84,9 @@ func writeMetadata(p *paths.Paths, meta *buildMetadata) error {
 
 // readMetadata reads build metadata from disk
 func readMetadata(p *paths.Paths, id string) (*buildMetadata, error) {
+	if err := paths.ValidatePathComponent(id); err != nil {
+		return nil, ErrNotFound
+	}
 	path := p.BuildMetadata(id)
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -157,6 +163,9 @@ func listPendingBuilds(p *paths.Paths) ([]*buildMetadata, error) {
 
 // deleteBuild removes a build's data from disk
 func deleteBuild(p *paths.Paths, id string) error {
+	if err := paths.ValidatePathComponent(id); err != nil {
+		return ErrNotFound
+	}
 	dir := p.BuildDir(id)
 
 	// Check if exists
@@ -176,6 +185,9 @@ func deleteBuild(p *paths.Paths, id string) error {
 
 // ensureLogsDir ensures the logs directory exists for a build
 func ensureLogsDir(p *paths.Paths, id string) error {
+	if err := paths.ValidatePathComponent(id); err != nil {
+		return err
+	}
 	logsDir := p.BuildLogs(id)
 	return os.MkdirAll(logsDir, 0755)
 }
@@ -214,6 +226,9 @@ func writeLog(p *paths.Paths, id string, data []byte) error {
 
 // readLog reads the build log file
 func readLog(p *paths.Paths, id string) ([]byte, error) {
+	if err := paths.ValidatePathComponent(id); err != nil {
+		return nil, ErrNotFound
+	}
 	logPath := p.BuildLog(id)
 	data, err := os.ReadFile(logPath)
 	if err != nil {
@@ -227,6 +242,9 @@ func readLog(p *paths.Paths, id string) ([]byte, error) {
 
 // writeBuildConfig writes the build config for the builder VM
 func writeBuildConfig(p *paths.Paths, id string, config *BuildConfig) error {
+	if err := paths.ValidatePathComponent(id); err != nil {
+		return err
+	}
 	dir := p.BuildDir(id)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("create build directory: %w", err)
@@ -247,6 +265,9 @@ func writeBuildConfig(p *paths.Paths, id string, config *BuildConfig) error {
 
 // readBuildConfig reads the build config for a build
 func readBuildConfig(p *paths.Paths, id string) (*BuildConfig, error) {
+	if err := paths.ValidatePathComponent(id); err != nil {
+		return nil, ErrNotFound
+	}
 	configPath := p.BuildConfig(id)
 	data, err := os.ReadFile(configPath)
 	if err != nil {

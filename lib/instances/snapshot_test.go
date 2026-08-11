@@ -61,6 +61,28 @@ func TestStoppedSnapshotLifecycleAndForkAfterSourceDeletion(t *testing.T) {
 	assert.ErrorIs(t, err, ErrSnapshotNotFound)
 }
 
+func TestSnapshotOperationsRejectPathTraversal(t *testing.T) {
+	t.Parallel()
+
+	mgr, _ := setupTestManager(t)
+	ctx := context.Background()
+	marker := filepath.Join(mgr.paths.DataDir(), "keep")
+	require.NoError(t, os.WriteFile(marker, []byte("keep"), 0644))
+
+	_, err := mgr.GetSnapshot(ctx, "..")
+	require.ErrorIs(t, err, ErrSnapshotNotFound)
+
+	err = mgr.DeleteSnapshot(ctx, "..")
+	require.ErrorIs(t, err, ErrSnapshotNotFound)
+	require.FileExists(t, marker)
+
+	_, err = mgr.ForkSnapshot(ctx, "..", ForkSnapshotRequest{Name: "snapshot-fork"})
+	require.ErrorIs(t, err, ErrSnapshotNotFound)
+
+	_, err = mgr.RestoreSnapshot(ctx, "source", "..", RestoreSnapshotRequest{})
+	require.ErrorIs(t, err, ErrSnapshotNotFound)
+}
+
 func TestStoppedSnapshotRejectsInvalidQEMUMicroVMTargetBeforeMutation(t *testing.T) {
 	t.Parallel()
 	mgr, _ := setupTestManager(t)

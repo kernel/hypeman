@@ -839,7 +839,10 @@ func (m *manager) buildHypervisorConfig(ctx context.Context, inst *Instance, ima
 
 	// Add attached volumes as additional disks
 	for _, volAttach := range inst.Volumes {
-		volumePath := m.volumeManager.GetVolumePath(volAttach.VolumeID)
+		volumePath, err := m.volumeManager.GetVolumePath(volAttach.VolumeID)
+		if err != nil {
+			return hypervisor.VMConfig{}, fmt.Errorf("get volume path: %w", err)
+		}
 		if volAttach.Overlay {
 			// Base volume is always read-only when overlay is enabled
 			disks = append(disks, hypervisor.DiskConfig{

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/kernel/hypeman/lib/paths"
@@ -30,6 +31,26 @@ func setupTestManager(t *testing.T) (Manager, *paths.Paths, func()) {
 	}
 
 	return manager, p, cleanup
+}
+
+func TestVolumeIDsRejectPathTraversal(t *testing.T) {
+	manager, p, cleanup := setupTestManager(t)
+	defer cleanup()
+	ctx := context.Background()
+	id := ".."
+
+	_, err := manager.CreateVolume(ctx, CreateVolumeRequest{Id: &id, SizeGb: 1})
+	require.ErrorIs(t, err, ErrInvalidID)
+	_, err = manager.CreateVolumeFromArchive(ctx, CreateVolumeFromArchiveRequest{Id: &id, SizeGb: 1}, nil)
+	require.ErrorIs(t, err, ErrInvalidID)
+	require.ErrorIs(t, saveMetadata(p, &storedMetadata{Id: id}), ErrInvalidID)
+	_, err = manager.GetVolumePath(id)
+	require.ErrorIs(t, err, ErrInvalidID)
+
+	marker := filepath.Join(p.DataDir(), "keep")
+	require.NoError(t, os.WriteFile(marker, []byte("keep"), 0644))
+	require.ErrorIs(t, manager.DeleteVolume(ctx, id), ErrNotFound)
+	require.FileExists(t, marker)
 }
 
 func TestMultiAttach_FirstAttachmentRW(t *testing.T) {

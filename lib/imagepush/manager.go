@@ -251,7 +251,7 @@ func (m *manager) executePush(ctx context.Context, meta *pushMetadata, provider 
 func (m *manager) persistTerminal(meta *pushMetadata) error {
 	if err := m.writeTerminal(meta); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: push %s to %s finished as %s but the job record could not be persisted: %v\n", meta.ID, meta.Target, strings.ToLower(meta.Status), err)
-		os.RemoveAll(m.paths.PushDir(meta.ID))
+		removePushData(m.paths, meta.ID)
 		persistErr := fmt.Errorf("job record could not be persisted: %w", err)
 		errorMsg := persistErr.Error()
 		meta.Status = StatusFailed
@@ -459,7 +459,7 @@ func (m *manager) failRecovered(meta *pushMetadata, reason string) {
 	meta.CompletedAt = &now
 	if err := m.writeTerminal(meta); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: dropping unrecoverable push record %s: %v\n", meta.ID, err)
-		os.RemoveAll(m.paths.PushDir(meta.ID))
+		removePushData(m.paths, meta.ID)
 	}
 	m.notify(meta.ID, StatusFailed, errors.New(reason))
 }

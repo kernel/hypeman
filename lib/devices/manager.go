@@ -265,6 +265,9 @@ func (m *manager) DeleteDevice(ctx context.Context, id string) error {
 	}
 
 	// Remove device directory
+	if err := paths.ValidatePathComponent(id); err != nil {
+		return ErrNotFound
+	}
 	if err := os.RemoveAll(m.paths.DeviceDir(id)); err != nil {
 		return fmt.Errorf("remove device dir: %w", err)
 	}
@@ -721,6 +724,9 @@ func (m *manager) resetOrphanedDevice(ctx context.Context, device *Device, stats
 // Helper methods
 
 func (m *manager) loadDevice(id string) (*Device, error) {
+	if err := paths.ValidatePathComponent(id); err != nil {
+		return nil, ErrNotFound
+	}
 	data, err := os.ReadFile(m.paths.DeviceMetadata(id))
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -738,6 +744,9 @@ func (m *manager) loadDevice(id string) (*Device, error) {
 }
 
 func (m *manager) saveDevice(device *Device) error {
+	if err := paths.ValidatePathComponent(device.Id); err != nil {
+		return err
+	}
 	data, err := json.MarshalIndent(device, "", "  ")
 	if err != nil {
 		return err

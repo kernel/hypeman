@@ -1,7 +1,9 @@
 package devices
 
 import (
+	"context"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -163,6 +165,21 @@ func TestErrors(t *testing.T) {
 		assert.Contains(t, ErrInUse.Error(), "in use")
 		assert.Contains(t, ErrInvalidName.Error(), "pattern")
 	})
+}
+
+func TestDeviceLookupAndDeleteRejectPathTraversal(t *testing.T) {
+	p := paths.New(filepath.Join(t.TempDir(), "data"))
+	require.NoError(t, os.MkdirAll(p.DataDir(), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(p.DataDir(), "metadata.json"), []byte(`{"id":"outside"}`), 0644))
+	marker := filepath.Join(p.DataDir(), "keep")
+	require.NoError(t, os.WriteFile(marker, []byte("keep"), 0644))
+	mgr := &manager{paths: p, vfioBinder: NewVFIOBinder()}
+
+	_, err := mgr.GetDevice(context.Background(), "..")
+	require.ErrorIs(t, err, ErrNotFound)
+	require.ErrorIs(t, mgr.saveDevice(&Device{Id: ".."}), paths.ErrInvalidPathComponent)
+	require.ErrorIs(t, mgr.DeleteDevice(context.Background(), ".."), ErrNotFound)
+	require.FileExists(t, marker)
 }
 
 func TestSaveLoadDevice_MetadataRoundTrip(t *testing.T) {

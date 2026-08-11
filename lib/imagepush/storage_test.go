@@ -3,11 +3,28 @@ package imagepush
 import (
 	"errors"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/kernel/hypeman/lib/paths"
+	"github.com/stretchr/testify/require"
 )
+
+func TestPushStorageRejectsPathTraversal(t *testing.T) {
+	dataDir := filepath.Join(t.TempDir(), "data")
+	p := paths.New(dataDir)
+	require.NoError(t, os.MkdirAll(dataDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(dataDir, "metadata.json"), []byte(`{"id":"outside"}`), 0644))
+
+	marker := filepath.Join(dataDir, "keep")
+	require.NoError(t, os.WriteFile(marker, []byte("keep"), 0644))
+	_, err := readMetadata(p, "..")
+	require.ErrorIs(t, err, ErrNotFound)
+	require.ErrorIs(t, writeMetadata(p, &pushMetadata{ID: ".."}), paths.ErrInvalidPathComponent)
+	require.ErrorIs(t, removePushData(p, ".."), ErrNotFound)
+	require.FileExists(t, marker)
+}
 
 func TestPushMetadataRoundTrip(t *testing.T) {
 	p := paths.New(t.TempDir())

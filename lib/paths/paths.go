@@ -2,6 +2,7 @@
 package paths
 
 import (
+	"errors"
 	"path/filepath"
 	"runtime"
 )
@@ -14,6 +15,17 @@ type Paths struct {
 // New creates a new Paths instance for the given data directory.
 func New(dataDir string) *Paths {
 	return &Paths{dataDir: dataDir}
+}
+
+// ErrInvalidPathComponent is returned when a value cannot be safely joined as one path component.
+var ErrInvalidPathComponent = errors.New("invalid path component")
+
+// ValidatePathComponent rejects empty, nested, absolute, and traversing paths.
+func ValidatePathComponent(value string) error {
+	if value == "." || !filepath.IsLocal(value) || filepath.Base(value) != value {
+		return ErrInvalidPathComponent
+	}
+	return nil
 }
 
 // DataDir returns the root data directory.

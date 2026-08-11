@@ -33,6 +33,13 @@ type storedMetadata struct {
 	Attachments []storedAttachment `json:"attachments,omitempty"`
 }
 
+func validateVolumeID(id string) error {
+	if err := paths.ValidatePathComponent(id); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidID, err)
+	}
+	return nil
+}
+
 // ensureVolumeDir creates the volume directory
 func ensureVolumeDir(p *paths.Paths, id string) error {
 	dir := p.VolumeDir(id)
@@ -44,6 +51,9 @@ func ensureVolumeDir(p *paths.Paths, id string) error {
 
 // loadMetadata loads volume metadata from disk
 func loadMetadata(p *paths.Paths, id string) (*storedMetadata, error) {
+	if err := validateVolumeID(id); err != nil {
+		return nil, ErrNotFound
+	}
 	metaPath := p.VolumeMetadata(id)
 
 	data, err := os.ReadFile(metaPath)
@@ -64,6 +74,9 @@ func loadMetadata(p *paths.Paths, id string) (*storedMetadata, error) {
 
 // saveMetadata saves volume metadata to disk
 func saveMetadata(p *paths.Paths, meta *storedMetadata) error {
+	if err := validateVolumeID(meta.Id); err != nil {
+		return err
+	}
 	metaPath := p.VolumeMetadata(meta.Id)
 
 	data, err := json.MarshalIndent(meta, "", "  ")
@@ -87,6 +100,9 @@ func createVolumeDisk(p *paths.Paths, id string, sizeGb int) error {
 
 // deleteVolumeData removes all volume data from disk
 func deleteVolumeData(p *paths.Paths, id string) error {
+	if err := validateVolumeID(id); err != nil {
+		return ErrNotFound
+	}
 	volDir := p.VolumeDir(id)
 
 	if err := os.RemoveAll(volDir); err != nil {

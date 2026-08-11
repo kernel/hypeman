@@ -47,6 +47,9 @@ func (m *pushMetadata) toPush() *Push {
 
 // writeMetadata writes push metadata to disk atomically.
 func writeMetadata(p *paths.Paths, meta *pushMetadata) error {
+	if err := paths.ValidatePathComponent(meta.ID); err != nil {
+		return err
+	}
 	dir := p.PushDir(meta.ID)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("create push directory: %w", err)
@@ -98,6 +101,9 @@ func writeMetadata(p *paths.Paths, meta *pushMetadata) error {
 }
 
 func readMetadata(p *paths.Paths, id string) (*pushMetadata, error) {
+	if err := paths.ValidatePathComponent(id); err != nil {
+		return nil, ErrNotFound
+	}
 	data, err := os.ReadFile(p.PushMetadata(id))
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -110,8 +116,18 @@ func readMetadata(p *paths.Paths, id string) (*pushMetadata, error) {
 	if err := json.Unmarshal(data, &meta); err != nil {
 		return nil, fmt.Errorf("unmarshal metadata: %w", err)
 	}
+	if err := paths.ValidatePathComponent(meta.ID); err != nil {
+		return nil, fmt.Errorf("invalid push metadata id: %w", err)
+	}
 
 	return &meta, nil
+}
+
+func removePushData(p *paths.Paths, id string) error {
+	if err := paths.ValidatePathComponent(id); err != nil {
+		return ErrNotFound
+	}
+	return os.RemoveAll(p.PushDir(id))
 }
 
 // listAllPushes returns all pushes sorted by creation time (newest first).
@@ -169,7 +185,7 @@ func removeOrphanedPushDirs(p *paths.Paths) {
 		}
 		if _, err := os.Stat(p.PushMetadata(entry.Name())); errors.Is(err, os.ErrNotExist) {
 			fmt.Fprintf(os.Stderr, "Warning: removing orphaned push directory %s (no metadata.json)\n", entry.Name())
-			os.RemoveAll(p.PushDir(entry.Name()))
+			removePushData(p, entry.Name())
 		}
 	}
 }
