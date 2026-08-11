@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/devices"
-	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/logger"
 )
 
@@ -62,18 +61,6 @@ func retainedVGPUFromCreateError(instanceID string, assignedAt time.Time, err er
 		GPUMdevUUID:   device.MdevUUID,
 		GPUAssignedAt: &assignedAt,
 	}
-}
-
-// validateVGPUHypervisorCompat rejects the one proven-broken combination:
-// vendor VFIO vGPUs boot but are non-functional on Cloud Hypervisor (upstream
-// cloud-hypervisor#7572), and the wedged VM then blocks the VF release until
-// startup reconcile. Hypervisor selection otherwise remains caller policy;
-// mdev on Cloud Hypervisor keeps working. See lib/devices/GPU.md.
-func validateVGPUHypervisorCompat(framework devices.VGPUFramework, hvType hypervisor.Type) error {
-	if framework == devices.VGPUFrameworkVendorVFIO && hvType == hypervisor.TypeCloudHypervisor {
-		return fmt.Errorf("%w: vendor VFIO vGPUs are not functional on cloud-hypervisor, use qemu", ErrInvalidRequest)
-	}
-	return nil
 }
 
 func (m *manager) destroyVGPUAssignment(ctx context.Context, assignment devices.VGPUAssignment) error {
