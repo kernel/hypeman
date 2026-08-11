@@ -96,7 +96,7 @@ func TestKillHypervisorUsesMatchingStartTimeWhenSocketIsGone(t *testing.T) {
 	assert.True(t, os.IsNotExist(statErr), "instance socket should be removed")
 }
 
-func TestKillHypervisorFailsOnMatchingStartTimeFromDifferentBoot(t *testing.T) {
+func TestKillHypervisorSucceedsOnIdentityFromDifferentBoot(t *testing.T) {
 	process := exec.Command("sleep", "30")
 	require.NoError(t, process.Start())
 	t.Cleanup(func() {
@@ -108,8 +108,11 @@ func TestKillHypervisorFailsOnMatchingStartTimeFromDifferentBoot(t *testing.T) {
 	startTime := processStartTime(pid)
 	require.NotZero(t, startTime)
 
+	// An identity recorded under a different host boot proves the recorded
+	// hypervisor is gone: the kill must succeed as a no-op so delete can
+	// proceed, without signaling whatever process wears the PID now.
 	m := &manager{}
-	require.Error(t, m.killHypervisor(context.Background(), &Instance{
+	require.NoError(t, m.killHypervisor(context.Background(), &Instance{
 		StoredMetadata: StoredMetadata{
 			Id:                  "kill-test",
 			HypervisorPID:       &pid,
