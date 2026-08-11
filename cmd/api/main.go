@@ -269,12 +269,10 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("invalid metrics allocation reconcile interval %q: %w", app.Config.Metrics.AllocationReconcileInterval, err)
 	}
-	resourceMonitoringStarted := time.Now()
 	logger.Info("starting resource monitoring", "refresh_interval", resourceRefreshInterval)
 	if err := app.ResourceManager.StartMonitoring(ctx, otelProvider.Meter, resourceRefreshInterval); err != nil {
 		return fmt.Errorf("start resource monitoring: %w", err)
 	}
-	logger.Info("resource monitoring started", "duration", time.Since(resourceMonitoringStarted))
 	if reconciler, ok := app.InstanceManager.(interface {
 		StartAdmissionAllocationReconciler(context.Context, time.Duration)
 	}); ok {
