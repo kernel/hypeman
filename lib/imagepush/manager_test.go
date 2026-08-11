@@ -164,8 +164,8 @@ func testManager(t *testing.T, maxConcurrent int, provider registrypush.Provider
 }
 
 // waitTerminal polls GetPush until the push reaches a terminal (pushed or
-// failed) state and returns it. It replaces the removed WaitForPush surface:
-// pushes complete asynchronously and tests observe the result by polling.
+// failed) state and returns it. Tests use the same persisted status surface as
+// the HTTP API.
 func waitTerminal(t *testing.T, mgr Manager, id string) *Push {
 	t.Helper()
 	deadline := time.Now().Add(15 * time.Second)
@@ -215,6 +215,34 @@ func writePushes(t *testing.T, p *paths.Paths, metas ...*pushMetadata) {
 		if err := writeMetadata(p, meta); err != nil {
 			t.Fatalf("writeMetadata(%s): %v", meta.ID, err)
 		}
+	}
+}
+
+func TestWaitForPush(t *testing.T) {
+	mgr, _ := testManager(t, 2, nil, nil)
+	host := openRegistry(t)
+
+	push, err := mgr.CreatePush(context.Background(), PushRequest{
+		Image:    "myapp:v1",
+		Target:   host + "/export/app:v1",
+		Insecure: true,
+	})
+	if err != nil {
+		t.Fatalf("CreatePush: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := mgr.WaitForPush(ctx, push.ID); err != nil {
+		t.Fatalf("WaitForPush: %v", err)
+	}
+
+	got, err := mgr.GetPush(context.Background(), push.ID)
+	if err != nil {
+		t.Fatalf("GetPush: %v", err)
+	}
+	if got.Status != StatusPushed {
+		t.Fatalf("push status = %s, want %s", got.Status, StatusPushed)
 	}
 }
 

@@ -117,6 +117,12 @@ type ImageResolver interface {
 	GetImage(ctx context.Context, name string) (*images.Image, error)
 }
 
+// StatusEvent represents a terminal status change for push notifications.
+type StatusEvent struct {
+	Status string
+	Err    error
+}
+
 // Manager orchestrates push jobs.
 type Manager interface {
 	// CreatePush validates the request, persists a queued job, and enqueues it.
@@ -129,6 +135,10 @@ type Manager interface {
 	GetPush(ctx context.Context, id string) (*Push, error)
 	// ListPushes returns all pushes, newest first.
 	ListPushes(ctx context.Context) ([]Push, error)
+	// WaitForPush blocks until the push reaches a terminal state (pushed or
+	// failed) or the context is cancelled. The HTTP API currently polls the
+	// persisted job instead; this remains available to in-process callers.
+	WaitForPush(ctx context.Context, id string) error
 	// LiveCacheManifestDigests implements ocicachegc.RootsProvider: the
 	// manifest digests of queued and pushing jobs, so the OCI cache GC keeps
 	// their blobs alive mid-push.

@@ -32,6 +32,9 @@ type manager struct {
 
 	mu       sync.Mutex
 	inflight map[string]inflightPush // key = pushKey(digest, target, insecure)
+
+	subscriberMu sync.RWMutex
+	subscribers  map[string][]chan StatusEvent // keyed by push ID
 }
 
 // NewManager creates a push manager. provider may be nil, in which case
@@ -46,11 +49,12 @@ func NewManager(p *paths.Paths, resolver ImageResolver, provider registrypush.Pr
 	}
 
 	m := &manager{
-		paths:    p,
-		resolver: resolver,
-		provider: provider,
-		queue:    queue.New(maxConcurrent),
-		inflight: make(map[string]inflightPush),
+		paths:       p,
+		resolver:    resolver,
+		provider:    provider,
+		queue:       queue.New(maxConcurrent),
+		inflight:    make(map[string]inflightPush),
+		subscribers: make(map[string][]chan StatusEvent),
 	}
 
 	m.recoverInterruptedPushes()
@@ -188,7 +192,12 @@ func (m *manager) executePush(ctx context.Context, meta *pushMetadata, provider 
 			meta.Status = StatusFailed
 			meta.Error = &errorMsg
 			meta.CompletedAt = &now
-			m.persistTerminal(meta)
+			panicErr := fmt.Errorf("push panicked: %v", r)
+			if err := m.persistTerminal(meta); err != nil {
+				m.notify(meta.ID, StatusFailed, err)
+			} else {
+				m.notify(meta.ID, StatusFailed, panicErr)
+			}
 		}
 	}()
 
@@ -214,14 +223,22 @@ func (m *manager) executePush(ctx context.Context, meta *pushMetadata, provider 
 	}
 	meta.CompletedAt = &now
 
-	m.persistTerminal(meta)
+	if err := m.persistTerminal(meta); err != nil {
+		m.notify(meta.ID, StatusFailed, err)
+		return
+	}
+	if pushErr != nil {
+		m.notify(meta.ID, StatusFailed, pushErr)
+	} else {
+		m.notify(meta.ID, StatusPushed, nil)
+	}
 }
 
 // persistTerminal writes a terminal status and, if that write fails, drops the
 // record so GetPush/ListPushes do not surface a half-written job. Both the
 // normal completion path and the panic handler use it so they agree on what
-// "couldn't persist" means; the actual push outcome only reaches the log.
-func (m *manager) persistTerminal(meta *pushMetadata) {
+// "couldn't persist" means.
+func (m *manager) persistTerminal(meta *pushMetadata) error {
 	if err := m.writeTerminal(meta); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: push %s to %s finished as %s but the job record could not be persisted: %v\n", meta.ID, meta.Target, strings.ToLower(meta.Status), err)
 		os.RemoveAll(m.paths.PushDir(meta.ID))
@@ -229,7 +246,9 @@ func (m *manager) persistTerminal(meta *pushMetadata) {
 		errorMsg := persistErr.Error()
 		meta.Status = StatusFailed
 		meta.Error = &errorMsg
+		return persistErr
 	}
+	return nil
 }
 
 // writeTerminal persists a terminal status, retrying once.
@@ -284,6 +303,59 @@ func (m *manager) ListPushes(ctx context.Context) ([]Push, error) {
 		pushes = append(pushes, *m.toPushWithPosition(meta))
 	}
 	return pushes, nil
+}
+
+// WaitForPush blocks until the push reaches a terminal state (pushed or
+// failed) or the context is cancelled. The HTTP API currently polls the
+// persisted job instead; this remains available to in-process callers.
+func (m *manager) WaitForPush(ctx context.Context, id string) error {
+	push, err := m.GetPush(ctx, id)
+	if err != nil {
+		return err
+	}
+
+	switch push.Status {
+	case StatusPushed:
+		return nil
+	case StatusFailed:
+		return pushError(push)
+	}
+
+	ch := make(chan StatusEvent, 1)
+	m.subscribe(id, ch)
+	defer m.unsubscribe(id, ch)
+
+	// Re-check after subscribing to close the race window.
+	push, err = m.GetPush(ctx, id)
+	if err != nil {
+		return err
+	}
+	switch push.Status {
+	case StatusPushed:
+		return nil
+	case StatusFailed:
+		return pushError(push)
+	}
+
+	select {
+	case event := <-ch:
+		if event.Status == StatusPushed {
+			return nil
+		}
+		if event.Err != nil {
+			return fmt.Errorf("push failed: %w", event.Err)
+		}
+		return fmt.Errorf("push failed")
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func pushError(push *Push) error {
+	if push.Error != nil {
+		return fmt.Errorf("push failed: %s", *push.Error)
+	}
+	return fmt.Errorf("push failed")
 }
 
 // toPushWithPosition projects a stored record to its domain form and, for a
@@ -369,6 +441,7 @@ func (m *manager) recoverInterruptedPushes() {
 
 // failRecovered marks a recovered job failed. If the status cannot be
 // persisted, the record is removed instead of being left permanently queued.
+// Subscribers are notified so a WaitForPush racing the close does not hang.
 func (m *manager) failRecovered(meta *pushMetadata, reason string) {
 	meta.Status = StatusFailed
 	meta.Error = &reason
@@ -377,5 +450,41 @@ func (m *manager) failRecovered(meta *pushMetadata, reason string) {
 	if err := m.writeTerminal(meta); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: dropping unrecoverable push record %s: %v\n", meta.ID, err)
 		os.RemoveAll(m.paths.PushDir(meta.ID))
+	}
+	m.notify(meta.ID, StatusFailed, errors.New(reason))
+}
+
+func (m *manager) subscribe(id string, ch chan StatusEvent) {
+	m.subscriberMu.Lock()
+	defer m.subscriberMu.Unlock()
+	m.subscribers[id] = append(m.subscribers[id], ch)
+}
+
+func (m *manager) unsubscribe(id string, ch chan StatusEvent) {
+	m.subscriberMu.Lock()
+	defer m.subscriberMu.Unlock()
+
+	subs := m.subscribers[id]
+	for i, sub := range subs {
+		if sub == ch {
+			m.subscribers[id] = append(subs[:i], subs[i+1:]...)
+			break
+		}
+	}
+	if len(m.subscribers[id]) == 0 {
+		delete(m.subscribers, id)
+	}
+}
+
+func (m *manager) notify(id, status string, err error) {
+	m.subscriberMu.RLock()
+	defer m.subscriberMu.RUnlock()
+
+	event := StatusEvent{Status: status, Err: err}
+	for _, ch := range m.subscribers[id] {
+		select {
+		case ch <- event:
+		default:
+		}
 	}
 }
