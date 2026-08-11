@@ -186,6 +186,16 @@ func run() error {
 		return fmt.Errorf("invalid configuration: %w", err)
 	}
 
+	hostLock, err := acquireHostLock(cfg.DataDir)
+	if err != nil {
+		return fmt.Errorf("acquire host ownership: %w", err)
+	}
+	defer func() {
+		if err := releaseHostLock(hostLock); err != nil {
+			slog.Warn("failed to release host ownership", "error", err)
+		}
+	}()
+
 	// Configure GPU profile cache TTL
 	devices.SetGPUProfileCacheTTL(cfg.GPU.ProfileCacheTTL)
 
