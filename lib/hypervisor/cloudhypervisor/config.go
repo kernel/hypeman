@@ -25,6 +25,8 @@ func serialSocketPath(logPath string) string {
 	return filepath.Join(filepath.Dir(filepath.Dir(logPath)), "serial.sock")
 }
 
+const kernelPagingMemoryZoneID = "hypeman-kernel-paging"
+
 // ToVMConfig converts hypervisor.VMConfig to Cloud Hypervisor's vmm.VmConfig.
 func ToVMConfig(cfg hypervisor.VMConfig) vmm.VmConfig {
 	// Payload configuration (kernel + initramfs)
@@ -51,8 +53,21 @@ func ToVMConfig(cfg hypervisor.VMConfig) vmm.VmConfig {
 	}
 
 	// Memory configuration
-	memory := vmm.MemoryConfig{
-		Size: cfg.MemoryBytes,
+	memory := vmm.MemoryConfig{Size: cfg.MemoryBytes}
+	if cfg.MemoryBackingFile != "" {
+		zones := []vmm.MemoryZoneConfig{{
+			Id:        kernelPagingMemoryZoneID,
+			Size:      cfg.MemoryBytes,
+			File:      ptr(cfg.MemoryBackingFile),
+			Shared:    ptr(false),
+			Prefault:  ptr(false),
+			Hugepages: ptr(false),
+		}}
+		memory.Size = 0
+		memory.Shared = ptr(false)
+		memory.Prefault = ptr(false)
+		memory.Hugepages = ptr(false)
+		memory.Zones = &zones
 	}
 	if cfg.HotplugBytes > 0 {
 		memory.HotplugSize = &cfg.HotplugBytes

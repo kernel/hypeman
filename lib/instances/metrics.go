@@ -255,7 +255,7 @@ func newInstanceMetrics(meter metric.Meter, tracer trace.Tracer, m *manager) (*M
 
 	forkMemFileShareFallbacksTotal, err := meter.Int64Counter(
 		"hypeman_fork_memfile_share_fallbacks_total",
-		metric.WithDescription("Total number of fork mem-file hardlink failures that fell back to a full copy"),
+		metric.WithDescription("Total number of fork snapshot memory hardlink failures that fell back to copying"),
 	)
 	if err != nil {
 		return nil, err
@@ -653,12 +653,13 @@ func (m *manager) recordSnapshotCodecFallback(ctx context.Context, algorithm sna
 	))
 }
 
-func (m *manager) recordForkMemFileShareFallback(ctx context.Context, reason string) {
+func (m *manager) recordForkMemFileShareFallback(ctx context.Context, hvType hypervisor.Type, reason string) {
 	if m.metrics == nil {
 		return
 	}
 
 	m.metrics.forkMemFileShareFallbacksTotal.Add(ctx, 1, metric.WithAttributes(
+		attribute.String("hypervisor", string(hvType)),
 		attribute.String("reason", reason),
 	))
 }

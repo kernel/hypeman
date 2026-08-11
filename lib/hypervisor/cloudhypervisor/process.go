@@ -73,7 +73,24 @@ func NewStarter() *Starter {
 // Verify Starter implements the interface
 var _ hypervisor.VMStarter = (*Starter)(nil)
 
-func (s *Starter) ValidateConfig(hypervisor.VMConfig) error { return nil }
+func (s *Starter) ValidateConfig(config hypervisor.VMConfig) error {
+	if config.MemoryBackingFile == "" {
+		return nil
+	}
+	if config.MemoryBytes <= 0 {
+		return fmt.Errorf("file-backed memory requires a positive memory size")
+	}
+	if config.HotplugBytes > 0 {
+		return fmt.Errorf("file-backed memory does not support hotplug memory")
+	}
+	if config.GuestMemory.EnableBalloon {
+		return fmt.Errorf("file-backed memory does not support ballooning")
+	}
+	if len(config.PCIDevices) > 0 {
+		return fmt.Errorf("file-backed memory does not support PCI passthrough")
+	}
+	return nil
+}
 
 // SocketName returns the socket filename for Cloud Hypervisor.
 func (s *Starter) SocketName() string {
@@ -111,10 +128,18 @@ func (s *Starter) ResolveVersion(p *paths.Paths, requested string) (string, erro
 func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, socketPath string, config hypervisor.VMConfig) (int, hypervisor.Hypervisor, error) {
 	log := logger.FromContext(ctx)
 
-	// Validate version
 	chVersion := vmm.CHVersion(version)
 	if !vmm.IsVersionSupported(chVersion) {
 		return 0, nil, fmt.Errorf("unsupported cloud-hypervisor version: %s", version)
+	}
+	if config.MemoryBackingFile != "" && chVersion != vmm.V51_1 {
+		return 0, nil, fmt.Errorf("file-backed memory requires cloud-hypervisor %s", vmm.V51_1)
+	}
+	if err := s.ValidateConfig(config); err != nil {
+		return 0, nil, err
+	}
+	if err := prepareMemoryBackingFile(config.MemoryBackingFile, config.MemoryBytes); err != nil {
+		return 0, nil, fmt.Errorf("prepare memory backing file: %w", err)
 	}
 
 	// 0. Start the serial reader before CH so the unix socket is bound by
@@ -252,6 +277,37 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 	cu.Release()
 	log.DebugContext(ctx, "CH restore complete", "pid", pid, "total_duration_ms", time.Since(startTime).Milliseconds())
 	return pid, hv, nil
+}
+
+func prepareMemoryBackingFile(path string, size int64) (retErr error) {
+	if path == "" {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+	file, err := os.CreateTemp(filepath.Dir(path), ".memory.*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := file.Name()
+	defer func() {
+		if retErr != nil {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if err := file.Chmod(0600); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := file.Truncate(size); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
 }
 
 func ptr[T any](v T) *T {

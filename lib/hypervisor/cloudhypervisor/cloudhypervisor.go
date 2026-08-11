@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
+	"github.com/kernel/hypeman/lib/logger"
 	"github.com/kernel/hypeman/lib/vmm"
 )
 
@@ -70,6 +71,7 @@ func CapabilitiesForVersion(v vmm.CHVersion) hypervisor.Capabilities {
 	switch v {
 	case vmm.V51_1:
 		caps.SupportsDiskResize = true
+		caps.SupportsConcurrentForkPrepare = true
 	}
 	return caps
 }
@@ -169,6 +171,13 @@ func (c *CloudHypervisor) Snapshot(ctx context.Context, destPath string) error {
 	}
 	if resp.StatusCode() != 204 {
 		return fmt.Errorf("snapshot failed with status %d", resp.StatusCode())
+	}
+	optimized, err := prepareSnapshotForKernelPaging(destPath)
+	if err != nil {
+		return fmt.Errorf("prepare kernel-paged snapshot: %w", err)
+	}
+	if optimized {
+		logger.FromContext(ctx).DebugContext(ctx, "prepared Cloud Hypervisor snapshot for kernel paging", "snapshot_dir", destPath)
 	}
 	return nil
 }

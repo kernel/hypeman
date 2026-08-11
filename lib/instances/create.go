@@ -19,6 +19,7 @@ import (
 	"github.com/kernel/hypeman/lib/network"
 	"github.com/kernel/hypeman/lib/system"
 	"github.com/kernel/hypeman/lib/tags"
+	"github.com/kernel/hypeman/lib/vmm"
 	"github.com/kernel/hypeman/lib/volumes"
 	"github.com/nrednav/cuid2"
 	"go.opentelemetry.io/otel/attribute"
@@ -30,7 +31,8 @@ const (
 	// to a single instance. This limit exists because volume devices are named
 	// /dev/vdd, /dev/vde, ... /dev/vdz (letters d-z = 23 devices).
 	// Devices a-c are reserved for rootfs, overlay, and config disk.
-	MaxVolumesPerInstance = 23
+	MaxVolumesPerInstance                = 23
+	cloudHypervisorMemoryBackingFilename = "memory.raw"
 )
 
 // systemDirectories are paths that cannot be used as volume mount points
@@ -922,22 +924,31 @@ func (m *manager) buildHypervisorConfig(ctx context.Context, inst *Instance, ima
 		}
 	}
 
+	guestMemory := m.guestMemoryConfig()
+	memoryBackingFile := ""
+	if inst.HypervisorType == hypervisor.TypeCloudHypervisor &&
+		inst.HypervisorVersion == string(vmm.V51_1) &&
+		inst.HotplugSize == 0 && !guestMemory.EnableBalloon && len(pciDevices) == 0 {
+		memoryBackingFile = filepath.Join(inst.DataDir, cloudHypervisorMemoryBackingFilename)
+	}
+
 	return hypervisor.VMConfig{
-		VCPUs:         inst.Vcpus,
-		MemoryBytes:   inst.Size,
-		HotplugBytes:  inst.HotplugSize,
-		Topology:      topology,
-		GuestMemory:   m.guestMemoryConfig(),
-		Disks:         disks,
-		Networks:      networks,
-		SerialLogPath: m.paths.InstanceAppLog(inst.Id),
-		VsockCID:      inst.VsockCID,
-		VsockSocket:   inst.VsockSocket,
-		PCIDevices:    pciDevices,
-		KernelPath:    kernelPath,
-		InitrdPath:    initrdPath,
-		KernelArgs:    m.kernelArgs(inst.HypervisorType),
-		EnableRosetta: inst.EnableRosetta,
+		VCPUs:             inst.Vcpus,
+		MemoryBytes:       inst.Size,
+		HotplugBytes:      inst.HotplugSize,
+		MemoryBackingFile: memoryBackingFile,
+		Topology:          topology,
+		GuestMemory:       guestMemory,
+		Disks:             disks,
+		Networks:          networks,
+		SerialLogPath:     m.paths.InstanceAppLog(inst.Id),
+		VsockCID:          inst.VsockCID,
+		VsockSocket:       inst.VsockSocket,
+		PCIDevices:        pciDevices,
+		KernelPath:        kernelPath,
+		InitrdPath:        initrdPath,
+		KernelArgs:        m.kernelArgs(inst.HypervisorType),
+		EnableRosetta:     inst.EnableRosetta,
 	}, nil
 }
 

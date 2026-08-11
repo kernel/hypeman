@@ -257,7 +257,7 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 
 	srcDir := m.paths.InstanceDir(id)
 	dstDir := m.paths.InstanceDir(forkID)
-	shareMemFile := stored.HypervisorType == hypervisor.TypeFirecracker && source.State == StateStandby
+	shareMemFile := source.State == StateStandby && supportsSharedSnapshotMemory(stored.HypervisorType)
 
 	cu := cleanup.Make(func() {
 		_ = os.RemoveAll(dstDir)
