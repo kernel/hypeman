@@ -993,3 +993,13 @@ func TestCredFingerprintNormalizesAuth(t *testing.T) {
 		t.Error("anonymous configs should share the empty fingerprint")
 	}
 }
+
+func TestCredentialFingerprintSeparatesAuthModes(t *testing.T) {
+	basic := credentialFingerprint("user", "password", "", "")
+	identity := credentialFingerprint("user", "password", "token", "")
+	registry := credentialFingerprint("user", "password", "", "token")
+
+	if basic == identity || basic == registry || identity == registry {
+		t.Fatal("different auth modes should have different fingerprints")
+	}
+}

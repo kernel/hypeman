@@ -25,10 +25,11 @@ type inflightPush struct {
 }
 
 type manager struct {
-	paths    *paths.Paths
-	resolver ImageResolver
-	provider registrypush.Provider
-	queue    *queue.Queue
+	paths       *paths.Paths
+	resolver    ImageResolver
+	provider    registrypush.Provider
+	queue       *queue.Queue
+	pushTimeout time.Duration
 
 	mu       sync.Mutex
 	inflight map[string]inflightPush // key = pushKey(digest, target, insecure)
@@ -37,12 +38,20 @@ type manager struct {
 	subscribers  map[string][]chan StatusEvent // keyed by push ID
 }
 
-// NewManager creates a push manager. provider may be nil, in which case
-// credentials resolve from the default Docker keychain. Interrupted pushes
-// from a previous run are re-enqueued FIFO.
+// NewManager creates a push manager using DefaultPushTimeout. provider may be
+// nil, in which case credentials resolve from the default Docker keychain.
+// Interrupted pushes from a previous run are re-enqueued FIFO.
 func NewManager(p *paths.Paths, resolver ImageResolver, provider registrypush.Provider, maxConcurrent int) (Manager, error) {
+	return NewManagerWithTimeout(p, resolver, provider, maxConcurrent, DefaultPushTimeout)
+}
+
+// NewManagerWithTimeout creates a push manager with a per-push timeout.
+func NewManagerWithTimeout(p *paths.Paths, resolver ImageResolver, provider registrypush.Provider, maxConcurrent int, timeout time.Duration) (Manager, error) {
 	if resolver == nil {
 		return nil, fmt.Errorf("image resolver is required")
+	}
+	if timeout <= 0 {
+		return nil, fmt.Errorf("push timeout must be positive")
 	}
 	if provider == nil {
 		provider = &registrypush.KeychainProvider{}
@@ -53,6 +62,7 @@ func NewManager(p *paths.Paths, resolver ImageResolver, provider registrypush.Pr
 		resolver:    resolver,
 		provider:    provider,
 		queue:       queue.New(maxConcurrent),
+		pushTimeout: timeout,
 		inflight:    make(map[string]inflightPush),
 		subscribers: make(map[string][]chan StatusEvent),
 	}
@@ -178,7 +188,7 @@ func (m *manager) CreatePush(ctx context.Context, req PushRequest) (*Push, error
 
 func (m *manager) executePush(ctx context.Context, meta *pushMetadata, provider registrypush.Provider) {
 	// Bound each export so a wedged registry cannot pin a queue slot forever.
-	ctx, cancel := context.WithTimeout(ctx, pushTimeout)
+	ctx, cancel := context.WithTimeout(ctx, m.pushTimeout)
 	defer cancel()
 
 	// Contain panics in the job goroutine: record a failed terminal instead

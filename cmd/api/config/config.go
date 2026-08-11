@@ -188,6 +188,7 @@ type LimitsConfig struct {
 	MaxTotalVolumeStorage string  `koanf:"max_total_volume_storage"`
 	MaxConcurrentBuilds   int     `koanf:"max_concurrent_builds"`
 	MaxConcurrentPushes   int     `koanf:"max_concurrent_pushes"`
+	PushTimeout           string  `koanf:"push_timeout"`
 	MaxOverlaySize        string  `koanf:"max_overlay_size"`
 	MaxImageStorage       float64 `koanf:"max_image_storage"`
 }
@@ -432,6 +433,7 @@ func defaultConfig() *Config {
 			MaxTotalVolumeStorage: "",
 			MaxConcurrentBuilds:   1,
 			MaxConcurrentPushes:   2,
+			PushTimeout:           "30m",
 			MaxOverlaySize:        "100GB",
 			MaxImageStorage:       0.2,
 		},
@@ -644,6 +646,16 @@ func (c *Config) Validate() error {
 	}
 	if c.Build.MaxConcurrentSourceBuilds <= 0 {
 		return fmt.Errorf("build.max_concurrent_source_builds must be positive, got %d", c.Build.MaxConcurrentSourceBuilds)
+	}
+	if c.Limits.MaxConcurrentPushes <= 0 {
+		return fmt.Errorf("limits.max_concurrent_pushes must be positive, got %d", c.Limits.MaxConcurrentPushes)
+	}
+	pushTimeout, err := time.ParseDuration(c.Limits.PushTimeout)
+	if err != nil {
+		return fmt.Errorf("limits.push_timeout must be a valid duration, got %q: %w", c.Limits.PushTimeout, err)
+	}
+	if pushTimeout <= 0 {
+		return fmt.Errorf("limits.push_timeout must be positive, got %q", c.Limits.PushTimeout)
 	}
 	if c.Build.Timeout <= 0 {
 		return fmt.Errorf("build.timeout must be positive, got %d", c.Build.Timeout)

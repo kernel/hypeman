@@ -251,7 +251,11 @@ func ProvideRegistry(p *paths.Paths, imageManager images.Manager) (*registry.Reg
 // can instead lend per-request credentials, which the manager borrows for the
 // duration of a single push without persisting them.
 func ProvidePushManager(p *paths.Paths, cfg *config.Config, imageManager images.Manager) (imagepush.Manager, error) {
-	return imagepush.NewManager(p, imageManager, nil, cfg.Limits.MaxConcurrentPushes)
+	pushTimeout, err := time.ParseDuration(cfg.Limits.PushTimeout)
+	if err != nil {
+		return nil, fmt.Errorf("parse limits.push_timeout: %w", err)
+	}
+	return imagepush.NewManagerWithTimeout(p, imageManager, nil, cfg.Limits.MaxConcurrentPushes, pushTimeout)
 }
 
 // ProvideResourceManager provides the resource manager for capacity tracking

@@ -1806,11 +1806,7 @@ components:
     PushCredentials:
       type: object
       description: |
-        Registry credentials borrowed for this push only, docker-style: the
-        caller's registry login (e.g. from the client's ~/.docker/config.json)
-        rides along with the request instead of living on the server. Never
-        persisted or logged; a push interrupted by a restart fails instead of
-        retrying without them. When omitted, the server's own registry
+        Registry credentials borrowed for this push only. When omitted, the server's own registry
         credentials are used.
       properties:
         username:
@@ -1822,7 +1818,7 @@ components:
           format: password
         registry_token:
           type: string
-          description: Bearer token sent as-is in the Authorization header
+          description: Bearer token for an Authorization header
           format: password
 
     CreatePushRequest:
@@ -1872,19 +1868,19 @@ components:
           $ref: "#/components/schemas/PushStatus"
         queue_position:
           type: integer
-          description: Position in the push queue (only when status is queued)
+          description: Position in the push queue
           nullable: true
         error:
           type: string
-          description: Error message (only when status is failed)
+          description: Error message
           nullable: true
         layers:
           type: integer
-          description: Number of layers pushed (only when status is pushed)
+          description: Number of layers pushed
         bytes:
           type: integer
           format: int64
-          description: Total compressed layer bytes pushed (only when status is pushed)
+          description: Total compressed layer bytes pushed
         created_at:
           type: string
           format: date-time
@@ -4774,9 +4770,7 @@ paths:
       summary: Push an image to a remote registry
       description: |
         Creates a push job that exports a hypeman image from the local OCI
-        cache to a remote registry (e.g. AWS ECR, Docker Hub). Credentials are
-        borrowed from the request when provided and never persisted; otherwise
-        the server's own registry credentials are used. Only images in the
+        cache to a remote registry (e.g. AWS ECR, Docker Hub). Only images in the
         ready state can be pushed.
       operationId: createPush
       security:

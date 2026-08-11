@@ -27,10 +27,9 @@ const (
 	StatusPushed  = "pushed"
 	StatusFailed  = "failed"
 
-	// pushTimeout bounds a single registry export so a wedged registry cannot
-	// pin a queue slot forever; with a bounded concurrency pool one hung push
-	// would otherwise block every later push.
-	pushTimeout = 30 * time.Minute
+	// DefaultPushTimeout bounds a single registry export so a wedged registry
+	// cannot pin a queue slot forever.
+	DefaultPushTimeout = 30 * time.Minute
 )
 
 var (
@@ -93,7 +92,11 @@ func credFingerprint(c *authn.AuthConfig) string {
 	// IdentityToken and RegistryToken are distinct auth modes (token/registry-
 	// scoped) and are kept as-is; they can carry a different identity than the
 	// basic-auth pair.
-	sum := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%s\x00%s\x00%s", username, password, c.IdentityToken, c.RegistryToken)))
+	return credentialFingerprint(username, password, c.IdentityToken, c.RegistryToken)
+}
+
+func credentialFingerprint(username, password, identityToken, registryToken string) string {
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%s\x00%s\x00%s", username, password, identityToken, registryToken)))
 	return hex.EncodeToString(sum[:])
 }
 
