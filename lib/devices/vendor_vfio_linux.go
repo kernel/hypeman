@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -50,6 +51,7 @@ func (s vendorVFIOSysfs) discoverVFs() ([]VirtualFunction, error) {
 	}
 
 	vfs := make([]VirtualFunction, 0)
+	var vfErrs []error
 	for _, entry := range entries {
 		vfPath := filepath.Join(s.pciDevicesPath, entry.Name())
 		nvidiaPath := filepath.Join(vfPath, "nvidia")
@@ -57,12 +59,14 @@ func (s vendorVFIOSysfs) discoverVFs() ([]VirtualFunction, error) {
 			if os.IsNotExist(err) {
 				continue
 			}
-			return nil, fmt.Errorf("stat creatable vGPU types for VF %s: %w", entry.Name(), err)
+			vfErrs = append(vfErrs, fmt.Errorf("stat creatable vGPU types for VF %s: %w", entry.Name(), err))
+			continue
 		}
 
 		currentType, err := readCurrentVGPUType(filepath.Join(nvidiaPath, "current_vgpu_type"))
 		if err != nil {
-			return nil, fmt.Errorf("read current vGPU type for VF %s: %w", entry.Name(), err)
+			vfErrs = append(vfErrs, fmt.Errorf("read current vGPU type for VF %s: %w", entry.Name(), err))
+			continue
 		}
 
 		parentGPU := ""
@@ -75,6 +79,17 @@ func (s vendorVFIOSysfs) discoverVFs() ([]VirtualFunction, error) {
 			Allocated:   currentType != "0",
 			ProfileType: currentType,
 		})
+	}
+	if len(vfErrs) > 0 {
+		// One unreadable VF must not blank out the host's GPU capacity: skip
+		// it and keep the readable inventory. A skipped VF is never selected
+		// for placement and never reconciled, both safe directions. Only when
+		// no VF is readable does discovery fail, so a wholesale sysfs outage
+		// cannot demote a vGPU host to passthrough while assignments exist.
+		if len(vfs) == 0 {
+			return nil, errors.Join(vfErrs...)
+		}
+		slog.Default().Warn("skipping unreadable vendor VFIO VFs", "error", errors.Join(vfErrs...))
 	}
 
 	sort.Slice(vfs, func(i, j int) bool { return vfs[i].PCIAddress < vfs[j].PCIAddress })

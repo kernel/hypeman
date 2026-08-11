@@ -99,6 +99,13 @@ Instance Stop/Delete → Release profile → VF available again
 
 Hypeman reconciles orphaned assignments on server restart while preserving devices held open by a running VMM.
 
+### Hypervisor Support
+
+Hypervisor selection for vGPU instances is caller policy; hypeman does not enforce it. In practice **QEMU is the only hypervisor with working vGPU support**:
+
+- **QEMU**: fully supported and validated on both mdev and vendor VFIO hosts.
+- **Cloud Hypervisor**: vendor VFIO vGPUs are known broken upstream ([cloud-hypervisor#7572](https://github.com/cloud-hypervisor/cloud-hypervisor/issues/7572)) — the VM boots and the VF attaches, but VFIO region reads fail, the guest driver cannot initialize, and the vGPU is non-functional. Do not place vGPU instances on Cloud Hypervisor.
+
 ## Passthrough Mode
 
 Passthrough mode assigns entire physical GPUs to instances via VFIO.
