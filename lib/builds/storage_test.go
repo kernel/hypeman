@@ -18,10 +18,29 @@ func TestBuildStorageRejectsPathTraversal(t *testing.T) {
 	marker := filepath.Join(dataDir, "keep")
 	require.NoError(t, os.WriteFile(marker, []byte("keep"), 0644))
 
-	_, err := readMetadata(p, "..")
-	require.ErrorIs(t, err, ErrNotFound)
-	require.ErrorIs(t, writeMetadata(p, &buildMetadata{ID: ".."}), paths.ErrInvalidPathComponent)
-	require.ErrorIs(t, deleteBuild(p, ".."), ErrNotFound)
+	require.NoError(t, os.MkdirAll(filepath.Join(dataDir, "logs"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(dataDir, "logs", "build.log"), []byte("outside"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(dataDir, "config.json"), []byte(`{}`), 0644))
+
+	tests := []struct {
+		name string
+		run  func() error
+		want error
+	}{
+		{"read metadata", func() error { _, err := readMetadata(p, ".."); return err }, ErrNotFound},
+		{"write metadata", func() error { return writeMetadata(p, &buildMetadata{ID: ".."}) }, paths.ErrInvalidPathComponent},
+		{"delete build", func() error { return deleteBuild(p, "..") }, ErrNotFound},
+		{"append log", func() error { return appendLog(p, "..", []byte("data")) }, paths.ErrInvalidPathComponent},
+		{"write log", func() error { return writeLog(p, "..", []byte("data")) }, paths.ErrInvalidPathComponent},
+		{"read log", func() error { _, err := readLog(p, ".."); return err }, ErrNotFound},
+		{"write config", func() error { return writeBuildConfig(p, "..", &BuildConfig{}) }, paths.ErrInvalidPathComponent},
+		{"read config", func() error { _, err := readBuildConfig(p, ".."); return err }, ErrNotFound},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.ErrorIs(t, tt.run(), tt.want)
+		})
+	}
 	require.FileExists(t, marker)
 }
 

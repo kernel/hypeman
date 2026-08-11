@@ -44,6 +44,8 @@ func TestVolumeIDsRejectPathTraversal(t *testing.T) {
 	_, err = manager.CreateVolumeFromArchive(ctx, CreateVolumeFromArchiveRequest{Id: &id, SizeGb: 1}, nil)
 	require.ErrorIs(t, err, ErrInvalidID)
 	require.ErrorIs(t, saveMetadata(p, &storedMetadata{Id: id}), ErrInvalidID)
+	_, err = manager.GetVolumePath(id)
+	require.ErrorIs(t, err, ErrInvalidID)
 
 	marker := filepath.Join(p.DataDir(), "keep")
 	require.NoError(t, os.WriteFile(marker, []byte("keep"), 0644))
