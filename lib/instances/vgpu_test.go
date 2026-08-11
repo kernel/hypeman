@@ -528,6 +528,38 @@ func TestVGPUAssignmentClaimedByLiveInstanceIgnoresStaleNilPIDClaim(t *testing.T
 	assert.False(t, claimed)
 }
 
+func TestVGPUAssignmentClaimedByLiveInstanceGracesRecentDeadPIDClaim(t *testing.T) {
+	m := &manager{paths: paths.New(t.TempDir())}
+	claimantID := "claimant-dead-pid"
+	require.NoError(t, m.ensureDirectories(claimantID))
+	deadPID := 1<<22 - 1
+	require.False(t, ProcessExists(deadPID))
+	assignedAt := time.Now().UTC()
+	require.NoError(t, m.saveMetadata(&metadata{StoredMetadata: StoredMetadata{
+		Id:            claimantID,
+		HypervisorPID: &deadPID,
+		GPUFramework:  devices.VGPUFrameworkVendorVFIO,
+		GPUDevicePath: "/sys/bus/pci/devices/0000:82:00.4",
+		GPUAssignedAt: &assignedAt,
+	}}))
+
+	// Same bounded grace as startup reconcile: a recent claim whose PID is
+	// dead fails closed instead of being treated as unclaimed.
+	_, err := m.vgpuAssignmentClaimedByLiveInstance(context.Background(), "requester", "/sys/bus/pci/devices/0000:82:00.4")
+	require.Error(t, err)
+
+	// Past the grace period the dead claim no longer blocks the release.
+	stale := assignedAt.Add(-2 * VGPUAssignmentStartupGracePeriod)
+	meta, err := m.loadMetadata(claimantID)
+	require.NoError(t, err)
+	meta.GPUAssignedAt = &stale
+	require.NoError(t, m.saveMetadata(meta))
+
+	claimed, err := m.vgpuAssignmentClaimedByLiveInstance(context.Background(), "requester", "/sys/bus/pci/devices/0000:82:00.4")
+	require.NoError(t, err)
+	assert.False(t, claimed)
+}
+
 func TestVGPUAssignmentClaimedByLiveInstanceIgnoresDeadClaim(t *testing.T) {
 	t.Parallel()
 
