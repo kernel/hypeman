@@ -57,6 +57,24 @@ func TestVendorVFIODiscoverFailsWhenNoVFIsReadable(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestVendorVFIOListProfilesSkipsUnreadableVF(t *testing.T) {
+	sysfs := newTestVendorVFIOSysfs(t)
+	sysfs.addVF(t, "0000:82:00.0", "0000:82:00.4", "42", "0", testCreatableTypes)
+	sysfs.addVF(t, "0000:82:00.0", "0000:82:00.5", "43", "0", testCreatableTypes)
+	badCreatable := filepath.Join(sysfs.pciDevicesPath, "0000:82:00.5", "nvidia", "creatable_vgpu_types")
+	require.NoError(t, os.Remove(badCreatable))
+	require.NoError(t, os.Mkdir(badCreatable, 0755))
+
+	vfs, err := sysfs.discoverVFs()
+	require.NoError(t, err)
+
+	profiles, err := sysfs.listProfiles(vfs)
+	require.NoError(t, err)
+	require.NotEmpty(t, profiles, "readable VFs must keep advertising capacity")
+	assert.Equal(t, 1, profileAvailability(profiles, "NVIDIA L40S-1Q"),
+		"only the readable VF counts toward availability")
+}
+
 func TestVendorVFIOCreateAndDestroy(t *testing.T) {
 	t.Parallel()
 
