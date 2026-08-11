@@ -8,11 +8,13 @@
 package imagepush
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
-	"strings"
+	"fmt"
 	"time"
 
 	"github.com/google/go-containerregistry/pkg/authn"
@@ -24,6 +26,10 @@ const (
 	StatusPushing = "pushing"
 	StatusPushed  = "pushed"
 	StatusFailed  = "failed"
+
+	// DefaultPushTimeout bounds a single registry export so a wedged registry
+	// cannot pin a queue slot forever.
+	DefaultPushTimeout = 30 * time.Minute
 )
 
 var (
@@ -71,7 +77,26 @@ func credFingerprint(c *authn.AuthConfig) string {
 	if !credsPresent(c) {
 		return ""
 	}
-	sum := sha256.Sum256([]byte(strings.Join([]string{c.Username, c.Password, c.Auth, c.IdentityToken, c.RegistryToken}, "\x00")))
+	// Normalize the precomputed base64 "user:pass" Auth shorthand into its
+	// username/password parts so the same login supplied either way hashes
+	// identically (AuthConfig.UnmarshalJSON already expands it, but a config
+	// built in code may not have gone through JSON).
+	username, password := c.Username, c.Password
+	if c.Auth != "" {
+		if decoded, err := base64.StdEncoding.DecodeString(c.Auth); err == nil {
+			if i := bytes.IndexByte(decoded, ':'); i >= 0 {
+				username, password = string(decoded[:i]), string(decoded[i+1:])
+			}
+		}
+	}
+	// IdentityToken and RegistryToken are distinct auth modes (token/registry-
+	// scoped) and are kept as-is; they can carry a different identity than the
+	// basic-auth pair.
+	return credentialFingerprint(username, password, c.IdentityToken, c.RegistryToken)
+}
+
+func credentialFingerprint(username, password, identityToken, registryToken string) string {
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%s\x00%s\x00%s", username, password, identityToken, registryToken)))
 	return hex.EncodeToString(sum[:])
 }
 
@@ -114,9 +139,11 @@ type Manager interface {
 	// ListPushes returns all pushes, newest first.
 	ListPushes(ctx context.Context) ([]Push, error)
 	// WaitForPush blocks until the push reaches a terminal state (pushed or
-	// failed) or the context is cancelled.
+	// failed) or the context is cancelled. The HTTP API currently polls the
+	// persisted job instead; this remains available to in-process callers.
 	WaitForPush(ctx context.Context, id string) error
-	// InProgressDigests returns the manifest digests of queued and pushing
-	// jobs so the OCI cache GC can keep their blobs alive mid-push.
-	InProgressDigests() []string
+	// LiveCacheManifestDigests implements ocicachegc.RootsProvider: the
+	// manifest digests of queued and pushing jobs, so the OCI cache GC keeps
+	// their blobs alive mid-push.
+	LiveCacheManifestDigests() []string
 }

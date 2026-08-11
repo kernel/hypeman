@@ -233,6 +233,11 @@ var RouteScopes = map[string]Scope{
 	"DELETE /images/{name}": ImageDelete,
 	"GET /images/{name}":    ImageRead,
 
+	// Pushes (outbound image pushes to remote registries)
+	"POST /pushes":     ImageWrite,
+	"GET /pushes":      ImageRead,
+	"GET /pushes/{id}": ImageRead,
+
 	// Ingresses
 	"GET /ingresses":         IngressRead,
 	"POST /ingresses":        IngressWrite,

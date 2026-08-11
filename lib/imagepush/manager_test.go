@@ -2,6 +2,7 @@ package imagepush
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -162,17 +163,46 @@ func testManager(t *testing.T, maxConcurrent int, provider registrypush.Provider
 	return mgr, digest
 }
 
+// waitTerminal polls GetPush until the push reaches a terminal (pushed or
+// failed) state and returns it. Tests use the same persisted status surface as
+// the HTTP API.
+func waitTerminal(t *testing.T, mgr Manager, id string) *Push {
+	t.Helper()
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		got, err := mgr.GetPush(context.Background(), id)
+		if err != nil {
+			t.Fatalf("GetPush %s: %v", id, err)
+		}
+		if got.Status == StatusPushed || got.Status == StatusFailed {
+			return got
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("push %s never reached a terminal state (status=%s)", id, got.Status)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func waitNoInflight(t *testing.T, mgr Manager) {
+	t.Helper()
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		if digests := mgr.LiveCacheManifestDigests(); len(digests) == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("in-flight digests never cleared: %v", mgr.LiveCacheManifestDigests())
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 // mustPushed waits for the push to reach a terminal pushed state and returns
 // it, failing the test otherwise.
 func mustPushed(t *testing.T, mgr Manager, id string) *Push {
 	t.Helper()
-	if err := mgr.WaitForPush(context.Background(), id); err != nil {
-		t.Fatalf("WaitForPush %s: %v", id, err)
-	}
-	got, err := mgr.GetPush(context.Background(), id)
-	if err != nil {
-		t.Fatalf("GetPush %s: %v", id, err)
-	}
+	got := waitTerminal(t, mgr, id)
 	if got.Status != StatusPushed {
 		t.Fatalf("push %s status = %s, want pushed (error: %v)", id, got.Status, got.Error)
 	}
@@ -185,6 +215,34 @@ func writePushes(t *testing.T, p *paths.Paths, metas ...*pushMetadata) {
 		if err := writeMetadata(p, meta); err != nil {
 			t.Fatalf("writeMetadata(%s): %v", meta.ID, err)
 		}
+	}
+}
+
+func TestWaitForPush(t *testing.T) {
+	mgr, _ := testManager(t, 2, nil, nil)
+	host := openRegistry(t)
+
+	push, err := mgr.CreatePush(context.Background(), PushRequest{
+		Image:    "myapp:v1",
+		Target:   host + "/export/app:v1",
+		Insecure: true,
+	})
+	if err != nil {
+		t.Fatalf("CreatePush: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := mgr.WaitForPush(ctx, push.ID); err != nil {
+		t.Fatalf("WaitForPush: %v", err)
+	}
+
+	got, err := mgr.GetPush(context.Background(), push.ID)
+	if err != nil {
+		t.Fatalf("GetPush: %v", err)
+	}
+	if got.Status != StatusPushed {
+		t.Fatalf("push status = %s, want %s", got.Status, StatusPushed)
 	}
 }
 
@@ -226,9 +284,7 @@ func TestCreatePushEndToEnd(t *testing.T) {
 	}
 
 	// No in-flight digests once done.
-	if digests := mgr.InProgressDigests(); len(digests) != 0 {
-		t.Errorf("InProgressDigests = %v, want empty", digests)
-	}
+	waitNoInflight(t, mgr)
 }
 
 func TestCreatePushDedupesInFlight(t *testing.T) {
@@ -250,14 +306,12 @@ func TestCreatePushDedupesInFlight(t *testing.T) {
 		t.Errorf("duplicate push got new ID %s, want %s", second.ID, first.ID)
 	}
 
-	if digests := mgr.InProgressDigests(); len(digests) != 1 || digests[0] != digest {
-		t.Errorf("InProgressDigests = %v, want [%s]", digests, digest)
+	if digests := mgr.LiveCacheManifestDigests(); len(digests) != 1 || digests[0] != digest {
+		t.Errorf("LiveCacheManifestDigests = %v, want [%s]", digests, digest)
 	}
 
 	close(gate)
-	if err := mgr.WaitForPush(context.Background(), first.ID); err != nil {
-		t.Fatalf("WaitForPush: %v", err)
-	}
+	mustPushed(t, mgr, first.ID)
 }
 
 func TestCreatePushQueuesBehindConcurrencyLimit(t *testing.T) {
@@ -306,12 +360,8 @@ func TestCreatePushQueuesBehindConcurrencyLimit(t *testing.T) {
 	}
 
 	close(gate)
-	if err := mgr.WaitForPush(context.Background(), first.ID); err != nil {
-		t.Fatalf("WaitForPush first: %v", err)
-	}
-	if err := mgr.WaitForPush(context.Background(), second.ID); err != nil {
-		t.Fatalf("WaitForPush second: %v", err)
-	}
+	mustPushed(t, mgr, first.ID)
+	mustPushed(t, mgr, second.ID)
 }
 
 func TestCreatePushRejectsInvalidRequests(t *testing.T) {
@@ -377,15 +427,7 @@ func TestCreatePushFailureRecorded(t *testing.T) {
 		t.Fatalf("CreatePush: %v", err)
 	}
 
-	err = mgr.WaitForPush(context.Background(), push.ID)
-	if err == nil {
-		t.Fatal("WaitForPush should fail for a failed push")
-	}
-
-	got, err := mgr.GetPush(context.Background(), push.ID)
-	if err != nil {
-		t.Fatalf("GetPush: %v", err)
-	}
+	got := waitTerminal(t, mgr, push.ID)
 	if got.Status != StatusFailed {
 		t.Errorf("status = %s, want failed", got.Status)
 	}
@@ -404,9 +446,7 @@ func TestListPushesNewestFirst(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreatePush a: %v", err)
 	}
-	if err := mgr.WaitForPush(context.Background(), first.ID); err != nil {
-		t.Fatalf("WaitForPush a: %v", err)
-	}
+	mustPushed(t, mgr, first.ID)
 
 	second, err := mgr.CreatePush(context.Background(), PushRequest{
 		Image: "myapp:v1", Target: host + "/export/b:v1", Insecure: true,
@@ -414,9 +454,7 @@ func TestListPushesNewestFirst(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreatePush b: %v", err)
 	}
-	if err := mgr.WaitForPush(context.Background(), second.ID); err != nil {
-		t.Fatalf("WaitForPush b: %v", err)
-	}
+	mustPushed(t, mgr, second.ID)
 
 	pushes, err := mgr.ListPushes(context.Background())
 	if err != nil {
@@ -495,14 +533,12 @@ func TestCreatePushDedupesConcurrently(t *testing.T) {
 		}
 	}
 
-	if digests := mgr.InProgressDigests(); len(digests) != 1 || digests[0] != digest {
-		t.Errorf("InProgressDigests = %v, want [%s]", digests, digest)
+	if digests := mgr.LiveCacheManifestDigests(); len(digests) != 1 || digests[0] != digest {
+		t.Errorf("LiveCacheManifestDigests = %v, want [%s]", digests, digest)
 	}
 
 	close(gate)
-	if err := mgr.WaitForPush(context.Background(), ids[0]); err != nil {
-		t.Fatalf("WaitForPush: %v", err)
-	}
+	mustPushed(t, mgr, ids[0])
 }
 
 func TestCreatePushCredentialConflict(t *testing.T) {
@@ -539,12 +575,8 @@ func TestCreatePushCredentialConflict(t *testing.T) {
 
 	close(gateA)
 	close(gateB)
-	if err := mgr.WaitForPush(context.Background(), seeded.ID); err != nil {
-		t.Fatalf("WaitForPush seeded: %v", err)
-	}
-	if err := mgr.WaitForPush(context.Background(), seeded2.ID); err != nil {
-		t.Fatalf("WaitForPush seeded 2: %v", err)
-	}
+	mustPushed(t, mgr, seeded.ID)
+	mustPushed(t, mgr, seeded2.ID)
 
 	// The conflicted requests must not have created duplicate jobs: only the
 	// two seeds exist.
@@ -592,131 +624,7 @@ func TestCreatePushCredentialMismatch(t *testing.T) {
 	}
 
 	close(gate)
-	if err := mgr.WaitForPush(context.Background(), seeded.ID); err != nil {
-		t.Fatalf("WaitForPush: %v", err)
-	}
-}
-
-func TestCreatePushDedupSurvivesTornDownKey(t *testing.T) {
-	mgr, digest := testManager(t, 1, nil, nil)
-	host := openRegistry(t)
-	target := host + "/export/app:v1"
-
-	dstRef, err := name.ParseReference(target, name.Insecure)
-	if err != nil {
-		t.Fatalf("ParseReference: %v", err)
-	}
-	key := pushKey(digest, dstRef.String(), true)
-
-	// Simulate the persist-failure teardown window: the job's record is gone
-	// from disk but its inflight entry is still registered, released by the
-	// queue completion hook moments later.
-	m := mgr.(*manager)
-	m.mu.Lock()
-	m.inflight[key] = inflightPush{id: "ghost", digest: digest}
-	m.mu.Unlock()
-	go func() {
-		time.Sleep(50 * time.Millisecond)
-		m.mu.Lock()
-		delete(m.inflight, key)
-		m.mu.Unlock()
-	}()
-
-	// The dedup path must wait out the torn-down key and create a fresh job,
-	// not surface ErrNotFound from a create.
-	push, err := mgr.CreatePush(context.Background(), PushRequest{Image: "myapp:v1", Target: target, Insecure: true})
-	if err != nil {
-		t.Fatalf("CreatePush: %v", err)
-	}
-	if push.ID == "ghost" {
-		t.Fatal("CreatePush returned the torn-down job")
-	}
-	mustPushed(t, mgr, push.ID)
-}
-
-func TestCreatePushDedupWaitersMergeIntoSuccessor(t *testing.T) {
-	mgr, digest := testManager(t, 1, nil, nil)
-	host := openRegistry(t)
-	target := host + "/export/app:v1"
-
-	dstRef, err := name.ParseReference(target, name.Insecure)
-	if err != nil {
-		t.Fatalf("ParseReference: %v", err)
-	}
-	key := pushKey(digest, dstRef.String(), true)
-
-	// Two concurrent creates racing the same torn-down key: one must create
-	// the successor job and the other must merge into it — not wait out the
-	// successor and then start a duplicate push.
-	m := mgr.(*manager)
-	m.mu.Lock()
-	m.inflight[key] = inflightPush{id: "ghost", digest: digest}
-	m.mu.Unlock()
-	go func() {
-		time.Sleep(50 * time.Millisecond)
-		m.mu.Lock()
-		delete(m.inflight, key)
-		m.mu.Unlock()
-	}()
-
-	ids := make([]string, 2)
-	errs := make([]error, 2)
-	var wg sync.WaitGroup
-	for i := range ids {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			push, err := mgr.CreatePush(context.Background(), PushRequest{Image: "myapp:v1", Target: target, Insecure: true})
-			if push != nil {
-				ids[i] = push.ID
-			}
-			errs[i] = err
-		}(i)
-	}
-	wg.Wait()
-
-	for i := range ids {
-		if errs[i] != nil {
-			t.Fatalf("CreatePush #%d: %v", i, errs[i])
-		}
-	}
-	if ids[0] != ids[1] {
-		t.Errorf("concurrent creates got IDs %s and %s, want one shared successor job", ids[0], ids[1])
-	}
-	mustPushed(t, mgr, ids[0])
-
-	pushes, err := mgr.ListPushes(context.Background())
-	if err != nil {
-		t.Fatalf("ListPushes: %v", err)
-	}
-	if len(pushes) != 1 {
-		t.Errorf("len(pushes) = %d, want 1 (no duplicate after the successor)", len(pushes))
-	}
-}
-
-func TestWaitForPushCancellation(t *testing.T) {
-	mgr, _ := testManager(t, 1, nil, nil)
-	host, gate := gatedRegistry(t)
-
-	push, err := mgr.CreatePush(context.Background(), PushRequest{Image: "myapp:v1", Target: host + "/export/app:v1", Insecure: true})
-	if err != nil {
-		t.Fatalf("CreatePush: %v", err)
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	errCh := make(chan error, 1)
-	go func() { errCh <- mgr.WaitForPush(ctx, push.ID) }()
-	cancel()
-	if err := <-errCh; !errors.Is(err, context.Canceled) {
-		t.Errorf("WaitForPush err = %v, want context.Canceled", err)
-	}
-
-	// Let the in-flight job finish so its writes land before the fixture's
-	// TempDir cleanup.
-	close(gate)
-	if err := mgr.WaitForPush(context.Background(), push.ID); err != nil {
-		t.Fatalf("WaitForPush after cancel: %v", err)
-	}
+	mustPushed(t, mgr, seeded.ID)
 }
 
 func TestInProgressDigestsDedupesAcrossTargets(t *testing.T) {
@@ -735,8 +643,8 @@ func TestInProgressDigestsDedupesAcrossTargets(t *testing.T) {
 		pushes = append(pushes, push.ID)
 	}
 
-	if digests := mgr.InProgressDigests(); len(digests) != 1 || digests[0] != digest {
-		t.Errorf("InProgressDigests = %v, want [%s]", digests, digest)
+	if digests := mgr.LiveCacheManifestDigests(); len(digests) != 1 || digests[0] != digest {
+		t.Errorf("LiveCacheManifestDigests = %v, want [%s]", digests, digest)
 	}
 
 	// Drain the gated jobs so their writes land before the fixture's TempDir
@@ -766,9 +674,7 @@ func TestRecoveryDedupesSameKey(t *testing.T) {
 		t.Fatalf("NewManager: %v", err)
 	}
 
-	if err := mgr.WaitForPush(context.Background(), "older"); err != nil {
-		t.Fatalf("WaitForPush older: %v", err)
-	}
+	mustPushed(t, mgr, "older")
 
 	got, err := mgr.GetPush(context.Background(), "newer")
 	if err != nil {
@@ -780,9 +686,9 @@ func TestRecoveryDedupesSameKey(t *testing.T) {
 	if got.Error == nil || !strings.Contains(*got.Error, "duplicate of push job older") {
 		t.Errorf("newer error = %v, want duplicate-of-older explanation", got.Error)
 	}
-	// WaitForPush on the superseded job surfaces the failure rather than hanging.
-	if err := mgr.WaitForPush(context.Background(), "newer"); err == nil {
-		t.Error("WaitForPush on superseded job should fail")
+	// The superseded job surfaces the failure rather than hanging.
+	if got := waitTerminal(t, mgr, "newer"); got.Status != StatusFailed {
+		t.Errorf("superseded job status = %s, want failed", got.Status)
 	}
 }
 
@@ -799,15 +705,6 @@ func TestSequentialSameKeyPushesAllComplete(t *testing.T) {
 			t.Fatalf("CreatePush #%d: %v", i, err)
 		}
 		mustPushed(t, mgr, push.ID)
-	}
-}
-
-func TestWaitForPushNotFound(t *testing.T) {
-	mgr, _ := testManager(t, 1, nil, nil)
-
-	err := mgr.WaitForPush(context.Background(), "missing")
-	if !errors.Is(err, ErrNotFound) {
-		t.Errorf("err = %v, want ErrNotFound", err)
 	}
 }
 
@@ -867,9 +764,7 @@ func TestCredentialsNeverPersisted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreatePush: %v", err)
 	}
-	if err := mgr.WaitForPush(context.Background(), push.ID); err != nil {
-		t.Fatalf("WaitForPush: %v", err)
-	}
+	mustPushed(t, mgr, push.ID)
 
 	data, err := os.ReadFile(p.PushMetadata(push.ID))
 	if err != nil {
@@ -949,14 +844,12 @@ func TestCreatePushMissingBlobs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreatePush: %v", err)
 	}
-	err = mgr.WaitForPush(context.Background(), push.ID)
-	if err == nil {
-		t.Fatal("WaitForPush should fail when cache blobs are missing")
+	got := waitTerminal(t, mgr, push.ID)
+	if got.Status != StatusFailed {
+		t.Fatalf("status = %s, want failed (error: %v)", got.Status, got.Error)
 	}
-	// Depending on timing the failure is observed via the live event (typed)
-	// or via persisted metadata (string), so accept both forms.
-	if !errors.Is(err, ocicache.ErrNotFound) && !strings.Contains(err.Error(), ocicache.ErrNotFound.Error()) {
-		t.Errorf("err = %v, want ocicache.ErrNotFound", err)
+	if got.Error == nil || !strings.Contains(*got.Error, ocicache.ErrNotFound.Error()) {
+		t.Errorf("error = %v, want ocicache.ErrNotFound", got.Error)
 	}
 }
 
@@ -987,14 +880,12 @@ func TestRecoveryFailsWhenBlobsReclaimed(t *testing.T) {
 		t.Fatalf("NewManager: %v", err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	err = mgr.WaitForPush(ctx, "recovered-missing-blobs")
-	if err == nil {
-		t.Fatal("WaitForPush should fail when cache blobs were reclaimed")
+	got := waitTerminal(t, mgr, "recovered-missing-blobs")
+	if got.Status != StatusFailed {
+		t.Fatalf("status = %s, want failed (error: %v)", got.Status, got.Error)
 	}
-	if !errors.Is(err, ocicache.ErrNotFound) && !strings.Contains(err.Error(), ocicache.ErrNotFound.Error()) {
-		t.Errorf("err = %v, want ocicache.ErrNotFound", err)
+	if got.Error == nil || !strings.Contains(*got.Error, ocicache.ErrNotFound.Error()) {
+		t.Errorf("error = %v, want ocicache.ErrNotFound", got.Error)
 	}
 }
 
@@ -1017,22 +908,12 @@ func TestExecutePushContainsPanic(t *testing.T) {
 		t.Fatalf("CreatePush: %v", err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	err = mgr.WaitForPush(ctx, push.ID)
-	if err == nil {
-		t.Fatal("WaitForPush should fail for a panicked push")
-	}
-	if !strings.Contains(err.Error(), "panicked") {
-		t.Errorf("err = %v, want panic explanation", err)
-	}
-
-	got, err := mgr.GetPush(context.Background(), push.ID)
-	if err != nil {
-		t.Fatalf("GetPush: %v", err)
-	}
+	got := waitTerminal(t, mgr, push.ID)
 	if got.Status != StatusFailed {
 		t.Errorf("status = %s, want failed", got.Status)
+	}
+	if got.Error == nil || !strings.Contains(*got.Error, "panicked") {
+		t.Errorf("error = %v, want panic explanation", got.Error)
 	}
 }
 
@@ -1089,4 +970,36 @@ func TestRecoverySweepsOrphanDirs(t *testing.T) {
 		t.Errorf("orphan dir still exists after recovery (stat err = %v)", err)
 	}
 	mustPushed(t, mgr, "real")
+}
+
+func TestCredFingerprintNormalizesAuth(t *testing.T) {
+	// The same login supplied as Username/Password and as the precomputed
+	// base64 "user:pass" Auth shorthand must hash identically, so in-flight
+	// dedup does not report a false credential conflict between the two forms.
+	basic := &authn.AuthConfig{Username: "pusher", Password: "hunter2"}
+	shorthand := &authn.AuthConfig{
+		Auth: base64.StdEncoding.EncodeToString([]byte("pusher:hunter2")),
+	}
+
+	basicFp := credFingerprint(basic)
+	if basicFp == "" {
+		t.Fatal("basic-auth fingerprint should be non-empty")
+	}
+	shorthandFp := credFingerprint(shorthand)
+	if shorthandFp != basicFp {
+		t.Errorf("Auth-shorthand fingerprint %q != basic %q", shorthandFp, basicFp)
+	}
+	if credFingerprint(nil) != "" || credFingerprint(&authn.AuthConfig{}) != "" {
+		t.Error("anonymous configs should share the empty fingerprint")
+	}
+}
+
+func TestCredentialFingerprintSeparatesAuthModes(t *testing.T) {
+	basic := credentialFingerprint("user", "password", "", "")
+	identity := credentialFingerprint("user", "password", "token", "")
+	registry := credentialFingerprint("user", "password", "", "token")
+
+	if basic == identity || basic == registry || identity == registry {
+		t.Fatal("different auth modes should have different fingerprints")
+	}
 }

@@ -18,6 +18,7 @@ import (
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/hypervisor/cloudhypervisor"
 	"github.com/kernel/hypeman/lib/hypervisor/firecracker"
+	"github.com/kernel/hypeman/lib/imagepush"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/ingress"
 	"github.com/kernel/hypeman/lib/instances"
@@ -243,6 +244,18 @@ func parseRequiredDuration(value string) (time.Duration, error) {
 // ProvideRegistry provides the OCI registry for image push
 func ProvideRegistry(p *paths.Paths, imageManager images.Manager) (*registry.Registry, error) {
 	return registry.New(p, imageManager)
+}
+
+// ProvidePushManager provides the manager for outbound image pushes to remote
+// registries. Credentials default to the server's Docker keychain; API callers
+// can instead lend per-request credentials, which the manager borrows for the
+// duration of a single push without persisting them.
+func ProvidePushManager(p *paths.Paths, cfg *config.Config, imageManager images.Manager) (imagepush.Manager, error) {
+	pushTimeout, err := time.ParseDuration(cfg.Limits.PushTimeout)
+	if err != nil {
+		return nil, fmt.Errorf("parse limits.push_timeout: %w", err)
+	}
+	return imagepush.NewManagerWithTimeout(p, imageManager, nil, cfg.Limits.MaxConcurrentPushes, pushTimeout)
 }
 
 // ProvideResourceManager provides the resource manager for capacity tracking
