@@ -322,7 +322,9 @@ func (s vendorVFIOSysfs) selectLeastLoadedVF(vfs []VirtualFunction, profileType 
 		}
 		profiles, err := s.readCreatableProfiles(vf.PCIAddress)
 		if err != nil {
-			return "", err
+			// An unreadable free VF is just not a placement candidate.
+			slog.Default().Warn("skipping unreadable creatable vGPU types", "vf", vf.PCIAddress, "error", err)
+			continue
 		}
 		for _, profile := range profiles {
 			if profile.TypeName == profileType {
@@ -356,7 +358,10 @@ func (s vendorVFIOSysfs) profileMetadata(vfs []VirtualFunction) ([]profileMetada
 	for _, vf := range vfs {
 		profiles, err := s.readCreatableProfiles(vf.PCIAddress)
 		if err != nil {
-			return nil, err
+			// Mirror listProfiles: an unreadable VF must not fail placement
+			// while /resources still advertises the remaining capacity.
+			slog.Default().Warn("skipping unreadable creatable vGPU types", "vf", vf.PCIAddress, "error", err)
+			continue
 		}
 		for _, profile := range profiles {
 			profilesByType[profile.TypeName] = profile
