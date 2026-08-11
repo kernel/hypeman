@@ -149,7 +149,7 @@ func TestLifecycleNoopStandbyWithOptionsStillRejectsStandbyInstance(t *testing.T
 	assertNoLifecycleEvent(t, events)
 }
 
-func TestDeleteRetainsMetadataWhenVGPUReleaseFails(t *testing.T) {
+func TestDeleteContinuesWhenVGPUReleaseFails(t *testing.T) {
 	m, id := newLifecycleNoopManagerWithInstance(t, StateStopped, time.Now().UTC())
 	meta, err := m.loadMetadata(id)
 	require.NoError(t, err)
@@ -158,32 +158,13 @@ func TestDeleteRetainsMetadataWhenVGPUReleaseFails(t *testing.T) {
 	meta.GPUDevicePath = "/sys/bus/pci/devices/0000:82:00.4"
 	require.NoError(t, m.saveMetadata(meta))
 
-	err = m.DeleteInstance(context.Background(), id)
-	require.Error(t, err)
+	// A failed release is logged and the delete continues, matching the
+	// pre-refactor contract; the leaked assignment is recovered by startup
+	// reconciliation.
+	require.NoError(t, m.DeleteInstance(context.Background(), id))
 
-	stored, err := m.loadMetadata(id)
-	require.NoError(t, err)
-	assert.Equal(t, devices.VGPUFramework("future-framework"), stored.GPUFramework)
-	assert.Equal(t, "/sys/bus/pci/devices/0000:82:00.4", stored.GPUDevicePath)
-}
-
-func TestDeleteBlocksRestartPolicyWhenVGPUReleaseFails(t *testing.T) {
-	m, id := newLifecycleNoopManagerWithInstance(t, StateStopped, time.Now().UTC())
-	meta, err := m.loadMetadata(id)
-	require.NoError(t, err)
-	meta.RestartPolicy = &restartpolicy.Policy{Policy: restartpolicy.PolicyAlways}
-	meta.GPUProfile = "NVIDIA L40S-2Q"
-	meta.GPUFramework = devices.VGPUFramework("future-framework")
-	meta.GPUDevicePath = "/sys/bus/pci/devices/0000:82:00.4"
-	require.NoError(t, m.saveMetadata(meta))
-
-	err = m.DeleteInstance(context.Background(), id)
-	require.Error(t, err)
-
-	stored, err := m.loadMetadata(id)
-	require.NoError(t, err)
-	assert.Equal(t, restartpolicy.BlockedReasonManualStop, stored.RestartStatus.BlockedReason,
-		"a failed delete must not leave the instance restartable")
+	_, err = m.loadMetadata(id)
+	require.Error(t, err, "instance data must be deleted despite the failed release")
 }
 
 func TestDeletePersistsVGPUReleaseBeforeTeardown(t *testing.T) {
@@ -214,7 +195,7 @@ func TestDeletePersistsVGPUReleaseBeforeTeardown(t *testing.T) {
 	assert.Equal(t, restartpolicy.BlockedReasonManualStop, persisted.RestartStatus.BlockedReason)
 }
 
-func TestDeleteReleasesVGPUBeforeTeardown(t *testing.T) {
+func TestDeleteContinuesTeardownAfterFailedVGPURelease(t *testing.T) {
 	m, id := newLifecycleNoopManagerWithInstance(t, StateStopped, time.Now().UTC())
 	deviceManager := &recordingDeviceManager{}
 	m.deviceManager = deviceManager
@@ -226,15 +207,13 @@ func TestDeleteReleasesVGPUBeforeTeardown(t *testing.T) {
 	meta.Devices = []string{"dev-1"}
 	require.NoError(t, m.saveMetadata(meta))
 
-	err = m.DeleteInstance(context.Background(), id)
-	require.Error(t, err)
-	assert.ErrorContains(t, err, "destroy vGPU")
-	assert.Empty(t, deviceManager.detached)
-	assert.Empty(t, deviceManager.unbound)
+	// The failed release must not block the rest of the teardown: devices
+	// are detached and the instance is fully deleted.
+	require.NoError(t, m.DeleteInstance(context.Background(), id))
+	assert.Equal(t, []string{"dev-1"}, deviceManager.detached)
 
-	stored, err := m.loadMetadata(id)
-	require.NoError(t, err)
-	assert.Equal(t, devices.VGPUFramework("future-framework"), stored.GPUFramework)
+	_, err = m.loadMetadata(id)
+	require.Error(t, err, "instance data must be deleted despite the failed release")
 }
 
 // A stale release during start must be persisted immediately: if start fails
