@@ -197,7 +197,7 @@ func NewManager(cfg *config.Config, p *paths.Paths) *Manager {
 		cfg:        cfg,
 		paths:      p,
 		resources:  make(map[ResourceType]Resource),
-		monitoring: &monitoringState{},
+		monitoring: newMonitoringState(),
 		pending:    make(map[string]pendingAllocation),
 	}
 }

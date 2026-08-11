@@ -141,12 +141,53 @@ func TestStartMonitoringPublishesCapacityMetrics(t *testing.T) {
 	require.Equal(t, status.DiskDetail.OCICache, int64GaugeValue(t, rm, "hypeman_resources_disk_breakdown_bytes", map[string]string{"component": "oci_cache"}))
 	require.Equal(t, status.DiskDetail.Volumes, int64GaugeValue(t, rm, "hypeman_resources_disk_breakdown_bytes", map[string]string{"component": "volumes"}))
 	require.Equal(t, status.DiskDetail.Overlays, int64GaugeValue(t, rm, "hypeman_resources_disk_breakdown_bytes", map[string]string{"component": "overlays"}))
-	require.Equal(t, int64(0), int64GaugeValue(t, rm, "hypeman_disk_utilization_bytes", map[string]string{"component": "images"}))
-	require.Equal(t, int64(0), int64GaugeValue(t, rm, "hypeman_disk_utilization_bytes", map[string]string{"component": "snapshot_other"}))
 
 	currentImageStorage := status.DiskDetail.Images + status.DiskDetail.OCICache
 	require.Equal(t, currentImageStorage, int64GaugeValue(t, rm, "hypeman_resources_image_storage_bytes", map[string]string{"kind": "current"}))
 	require.Equal(t, mgr.MaxImageStorageBytes(), int64GaugeValue(t, rm, "hypeman_resources_image_storage_bytes", map[string]string{"kind": "max"}))
+}
+
+func TestStartMonitoringDoesNotWaitForDiskUtilization(t *testing.T) {
+	mgr, _, _ := monitoringTestManager(t)
+
+	collectionStarted := make(chan struct{})
+	releaseCollection := make(chan struct{})
+	defer close(releaseCollection)
+	mgr.monitoring.collectDiskUtilization = func(*paths.Paths) (diskutilization.Breakdown, error) {
+		close(collectionStarted)
+		<-releaseCollection
+		return diskutilization.Breakdown{}, nil
+	}
+
+	reader := otelmetric.NewManualReader()
+	provider := otelmetric.NewMeterProvider(otelmetric.WithReader(reader))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	monitoringStarted := make(chan error, 1)
+	go func() {
+		monitoringStarted <- mgr.StartMonitoring(ctx, provider.Meter("test"), time.Hour)
+	}()
+
+	select {
+	case err := <-monitoringStarted:
+		require.NoError(t, err)
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("StartMonitoring blocked on disk utilization collection")
+	}
+
+	select {
+	case <-collectionStarted:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("disk utilization collection did not start")
+	}
+
+	rm := collectMonitoringMetrics(t, reader)
+	require.NotZero(t, int64GaugeValue(t, rm, "hypeman_resources_capacity", map[string]string{"resource": "cpu"}))
+	snapshot, ok := mgr.currentMonitoringSnapshot()
+	require.True(t, ok)
+	require.False(t, snapshot.hasDiskUtilizationData)
 }
 
 func TestStartMonitoringRefreshesSnapshot(t *testing.T) {
@@ -243,12 +284,17 @@ func TestStartMonitoringPublishesDiskUtilizationFromCachedSnapshot(t *testing.T)
 
 	require.NoError(t, mgr.StartMonitoring(ctx, provider.Meter("test"), time.Hour))
 
+	require.Eventually(t, func() bool {
+		snapshot, ok := mgr.currentMonitoringSnapshot()
+		return ok && snapshot.hasDiskUtilizationData
+	}, time.Second, 10*time.Millisecond)
+
 	initialRM := collectMonitoringMetrics(t, reader)
 	initialVolumeBytes := int64GaugeValue(t, initialRM, "hypeman_disk_utilization_bytes", map[string]string{"component": "volumes"})
 	initialCompressedSnapshotBytes := int64GaugeValue(t, initialRM, "hypeman_disk_utilization_bytes", map[string]string{"component": diskutilization.ComponentSnapshotCompressed})
 	require.Equal(t, allocatedBytesForMonitoringPath(volumePath), initialVolumeBytes)
-	require.Equal(t, int64(100*1024*1024*1024), int64GaugeValue(t, initialRM, "hypeman_resources_disk_breakdown_bytes", map[string]string{"component": "volumes"}))
 	require.Greater(t, initialCompressedSnapshotBytes, int64(0))
+	require.Equal(t, int64(100*1024*1024*1024), int64GaugeValue(t, initialRM, "hypeman_resources_disk_breakdown_bytes", map[string]string{"component": "volumes"}))
 
 	f, err := os.OpenFile(volumePath, os.O_WRONLY, 0)
 	require.NoError(t, err)
@@ -256,10 +302,11 @@ func TestStartMonitoringPublishesDiskUtilizationFromCachedSnapshot(t *testing.T)
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
 
+	require.NoError(t, mgr.refreshMonitoringSnapshot(context.Background()))
 	cachedRM := collectMonitoringMetrics(t, reader)
 	require.Equal(t, initialVolumeBytes, int64GaugeValue(t, cachedRM, "hypeman_disk_utilization_bytes", map[string]string{"component": "volumes"}))
 
-	require.NoError(t, mgr.refreshMonitoringSnapshot(context.Background()))
+	require.NoError(t, mgr.refreshDiskUtilizationSnapshot())
 
 	refreshedRM := collectMonitoringMetrics(t, reader)
 	refreshedVolumeBytes := int64GaugeValue(t, refreshedRM, "hypeman_disk_utilization_bytes", map[string]string{"component": "volumes"})

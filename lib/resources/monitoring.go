@@ -9,23 +9,32 @@ import (
 
 	"github.com/kernel/hypeman/lib/diskutilization"
 	"github.com/kernel/hypeman/lib/logger"
+	"github.com/kernel/hypeman/lib/paths"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 )
 
 type monitoringState struct {
-	mu                sync.RWMutex
-	started           bool
-	metricsRegistered bool
-	snapshot          monitoringSnapshot
-	hasSnapshot       bool
+	mu                     sync.RWMutex
+	started                bool
+	metricsRegistered      bool
+	collectDiskUtilization func(*paths.Paths) (diskutilization.Breakdown, error)
+	snapshot               monitoringSnapshot
+	hasSnapshot            bool
+}
+
+func newMonitoringState() *monitoringState {
+	return &monitoringState{
+		collectDiskUtilization: diskutilization.Collect,
+	}
 }
 
 type monitoringSnapshot struct {
-	status              FullResourceStatus
-	imageStorageCurrent int64
-	imageStorageMax     int64
-	diskUtilization     diskutilization.Breakdown
+	status                 FullResourceStatus
+	imageStorageCurrent    int64
+	imageStorageMax        int64
+	diskUtilization        diskutilization.Breakdown
+	hasDiskUtilizationData bool
 }
 
 func (m *Manager) StartMonitoring(ctx context.Context, meter metric.Meter, refreshInterval time.Duration) error {
@@ -76,6 +85,10 @@ func (m *Manager) StartMonitoring(ctx context.Context, meter metric.Meter, refre
 			}
 		}()
 
+		if err := m.refreshDiskUtilizationSnapshot(); err != nil {
+			log.WarnContext(ctx, "disk utilization snapshot refresh failed", "error", err)
+		}
+
 		ticker := time.NewTicker(refreshInterval)
 		defer ticker.Stop()
 
@@ -86,6 +99,10 @@ func (m *Manager) StartMonitoring(ctx context.Context, meter metric.Meter, refre
 			case <-ticker.C:
 				if err := m.refreshMonitoringSnapshot(ctx); err != nil {
 					log.WarnContext(ctx, "resource monitoring snapshot refresh failed", "error", err)
+					continue
+				}
+				if err := m.refreshDiskUtilizationSnapshot(); err != nil {
+					log.WarnContext(ctx, "disk utilization snapshot refresh failed", "error", err)
 				}
 			}
 		}
@@ -108,15 +125,25 @@ func (m *Manager) refreshMonitoringSnapshot(ctx context.Context) error {
 	}
 	snapshot.imageStorageMax = m.MaxImageStorageBytes()
 
-	diskUtilization, err := diskutilization.Collect(m.paths)
+	m.monitoring.mu.Lock()
+	snapshot.diskUtilization = m.monitoring.snapshot.diskUtilization
+	snapshot.hasDiskUtilizationData = m.monitoring.snapshot.hasDiskUtilizationData
+	m.monitoring.snapshot = snapshot
+	m.monitoring.hasSnapshot = true
+	m.monitoring.mu.Unlock()
+
+	return nil
+}
+
+func (m *Manager) refreshDiskUtilizationSnapshot() error {
+	diskUtilization, err := m.monitoring.collectDiskUtilization(m.paths)
 	if err != nil {
 		return err
 	}
-	snapshot.diskUtilization = diskUtilization
 
 	m.monitoring.mu.Lock()
-	m.monitoring.snapshot = snapshot
-	m.monitoring.hasSnapshot = true
+	m.monitoring.snapshot.diskUtilization = diskUtilization
+	m.monitoring.snapshot.hasDiskUtilizationData = true
 	m.monitoring.mu.Unlock()
 
 	return nil
@@ -238,8 +265,10 @@ func newMonitoringMetrics(meter metric.Meter, mgr *Manager) error {
 			o.ObserveInt64(imageStorage, snapshot.imageStorageCurrent, metric.WithAttributes(attribute.String("kind", "current")))
 		}
 
-		for component, value := range snapshot.diskUtilization.Components() {
-			o.ObserveInt64(diskUtilization, value, metric.WithAttributes(attribute.String("component", component)))
+		if snapshot.hasDiskUtilizationData {
+			for component, value := range snapshot.diskUtilization.Components() {
+				o.ObserveInt64(diskUtilization, value, metric.WithAttributes(attribute.String("component", component)))
+			}
 		}
 		o.ObserveInt64(imageStorage, snapshot.imageStorageMax, metric.WithAttributes(attribute.String("kind", "max")))
 
