@@ -143,9 +143,11 @@ func TestVGPUDevicePendingCleanup(t *testing.T) {
 	assert.Equal(t, device, *actual)
 
 	assignedAt := time.Now().UTC()
-	retained := retainedVGPUFromCreateError("inst-1", assignedAt, wrapped)
+	retained := retainedVGPUFromCreateError(StoredMetadata{Id: "inst-1", Name: "named", Image: "img"}, assignedAt, wrapped)
 	require.NotNil(t, retained)
 	assert.Equal(t, "inst-1", retained.Id)
+	assert.Equal(t, "named", retained.Name, "identity fields must survive into the retention stub")
+	assert.Equal(t, "img", retained.Image)
 	assert.Equal(t, device.Framework, retained.GPUFramework)
 	assert.Equal(t, device.SysfsPath, retained.GPUDevicePath)
 	assert.Equal(t, assignedAt, *retained.GPUAssignedAt)
@@ -153,7 +155,7 @@ func TestVGPUDevicePendingCleanup(t *testing.T) {
 	actual, ok = vgpuDevicePendingCleanup(cause)
 	assert.False(t, ok)
 	assert.Nil(t, actual)
-	assert.Nil(t, retainedVGPUFromCreateError("inst-1", assignedAt, cause))
+	assert.Nil(t, retainedVGPUFromCreateError(StoredMetadata{Id: "inst-1"}, assignedAt, cause))
 }
 
 type startRetentionNetworkManager struct {
