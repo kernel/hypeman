@@ -58,6 +58,28 @@ func TestSharedExtentTrackerAdd(t *testing.T) {
 	require.Equal(t, int64(50), tracker.add(1050, 100))
 	require.Equal(t, int64(100), tracker.add(1200, 100))
 	require.Equal(t, int64(100), tracker.add(900, 200))
+	require.Equal(t, int64(50), tracker.add(1150, 50))
+	require.Equal(t, []physicalRange{{start: 900, end: 1300}}, tracker.ranges)
+}
+
+func TestSharedExtentTrackerAddOutOfOrder(t *testing.T) {
+	tracker := newSharedExtentTracker()
+
+	require.Equal(t, int64(100), tracker.add(300, 100))
+	require.Equal(t, int64(100), tracker.add(100, 100))
+	require.Equal(t, int64(100), tracker.add(500, 100))
+	require.Equal(t, int64(100), tracker.add(200, 100))
+	require.Equal(t, int64(100), tracker.add(400, 100))
+	require.Equal(t, []physicalRange{{start: 100, end: 600}}, tracker.ranges)
+}
+
+func BenchmarkSharedExtentTrackerAdd(b *testing.B) {
+	for b.Loop() {
+		tracker := newSharedExtentTracker()
+		for i := range 10_000 {
+			tracker.add(uint64(i*8192), 4096)
+		}
+	}
 }
 
 func cloneTestFile(srcPath, dstPath string) (bool, error) {
