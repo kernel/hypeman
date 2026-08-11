@@ -1296,6 +1296,9 @@ func instanceToOAPI(inst instances.Instance) oapi.Instance {
 		if inst.GPUMdevUUID != "" {
 			gpu.MdevUuid = lo.ToPtr(inst.GPUMdevUUID)
 		}
+		if inst.GPUDevicePath != "" {
+			gpu.DevicePath = lo.ToPtr(inst.GPUDevicePath)
+		}
 		oapiInst.Gpu = gpu
 	}
 
