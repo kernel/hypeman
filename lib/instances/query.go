@@ -601,6 +601,12 @@ func resolveLiveHypervisorPID(storedPID *int, storedStartTime uint64, storedBoot
 		return stored, nil
 	}
 	bootID := hostBootID()
+	if stored != 0 && storedBootID != "" && bootID != "" && storedBootID != bootID {
+		// The recorded identity is scoped to a previous host boot, so whatever
+		// process wears the stored PID now is provably not the recorded
+		// hypervisor. Treat the stored PID as dead rather than failing closed.
+		stored = 0
+	}
 	if stored != 0 && storedStartTime != 0 && storedBootID != "" && bootID != "" && storedBootID == bootID && processStartTime(stored) == storedStartTime {
 		return stored, nil
 	}
