@@ -130,7 +130,17 @@ func (m *manager) cleanupStartVGPU(ctx context.Context, instanceID string, devic
 			message = "failed to retain vGPU assignment metadata after cleanup failure"
 		}
 		logger.FromContext(ctx).ErrorContext(ctx, message, "instance_id", instanceID, "error", err)
-		return retained, false
+		if !retained {
+			return false, false
+		}
+		// The mid-start save may already have persisted this assignment, in
+		// which case the on-disk record still points at the device and
+		// delete or a retried start can release it (matching create's
+		// retention-survives check).
+		if meta, loadErr := m.loadMetadata(instanceID); loadErr == nil && storedVGPUDevicePath(&meta.StoredMetadata) == device.SysfsPath {
+			return true, true
+		}
+		return true, false
 	}
 	return retained, retained
 }
