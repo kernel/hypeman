@@ -191,6 +191,12 @@ func (m *manager) startInstance(
 		cu.Add(func() {
 			m.cleanupStartVGPU(ctx, id, device, assignedAt, rollbackMeta)
 		})
+		// Checked after the cleanup handler is registered so rejection
+		// releases the device through the normal rollback.
+		if err := validateVGPUHypervisorCompat(device.Framework, stored.HypervisorType); err != nil {
+			log.ErrorContext(ctx, "unsupported vGPU hypervisor combination", "instance_id", id, "framework", device.Framework, "hypervisor", stored.HypervisorType)
+			return nil, err
+		}
 		if err := m.saveMetadata(meta); err != nil {
 			log.ErrorContext(ctx, "failed to save metadata after vGPU creation", "instance_id", id, "error", err)
 			return nil, fmt.Errorf("save metadata after vGPU creation: %w", err)
