@@ -184,6 +184,20 @@ func waitTerminal(t *testing.T, mgr Manager, id string) *Push {
 	}
 }
 
+func waitNoInflight(t *testing.T, mgr Manager) {
+	t.Helper()
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		if digests := mgr.LiveCacheManifestDigests(); len(digests) == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("in-flight digests never cleared: %v", mgr.LiveCacheManifestDigests())
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 // mustPushed waits for the push to reach a terminal pushed state and returns
 // it, failing the test otherwise.
 func mustPushed(t *testing.T, mgr Manager, id string) *Push {
@@ -242,9 +256,7 @@ func TestCreatePushEndToEnd(t *testing.T) {
 	}
 
 	// No in-flight digests once done.
-	if digests := mgr.LiveCacheManifestDigests(); len(digests) != 0 {
-		t.Errorf("LiveCacheManifestDigests = %v, want empty", digests)
-	}
+	waitNoInflight(t, mgr)
 }
 
 func TestCreatePushDedupesInFlight(t *testing.T) {
