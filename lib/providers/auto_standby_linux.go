@@ -108,6 +108,9 @@ func ProvideAutoStandbyController(instanceManager instances.Manager, cfg *config
 		return nil
 	}
 
+	finish := trackInitialization(log, "auto-standby controller")
+	defer func() { finish(nil) }()
+
 	runtimeManager, ok := instanceManager.(autoStandbyRuntimeManager)
 	if !ok {
 		return nil
