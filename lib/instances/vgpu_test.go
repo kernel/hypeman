@@ -47,12 +47,16 @@ func TestCleanupFailedCreateRetainsVGPUAssignment(t *testing.T) {
 	assert.Equal(t, stored.GPUDevicePath, retained.GPUDevicePath)
 	assert.Equal(t, stored.GPUMdevUUID, retained.GPUMdevUUID)
 	assert.Equal(t, stored.GPUAssignedAt, retained.GPUAssignedAt)
-	assert.Empty(t, retained.Name)
-	assert.Empty(t, retained.GPUProfile)
+	// Identity fields survive so the retained record lists as a
+	// recognizable, deletable instance instead of a nameless phantom.
+	assert.Equal(t, stored.Name, retained.Name)
+	assert.Equal(t, stored.GPUProfile, retained.GPUProfile)
+	assert.Equal(t, stored.HypervisorType, retained.HypervisorType)
+	assert.Equal(t, stored.DataDir, retained.DataDir)
+	// Resource claims released by rollback stay dropped.
 	assert.False(t, retained.NetworkEnabled)
 	assert.Empty(t, retained.IP)
 	assert.Empty(t, retained.Volumes)
-	assert.Empty(t, retained.DataDir)
 }
 
 func TestCleanupFailedCreateDeletesDataWithoutRetainedVGPU(t *testing.T) {
@@ -313,6 +317,35 @@ func TestStartDoesNotRestrictVGPUHypervisor(t *testing.T) {
 
 	_, err = m.startInstance(context.Background(), id, StartInstanceRequest{})
 	assert.ErrorIs(t, err, cause)
+}
+
+func TestValidateVGPUHypervisorCompat(t *testing.T) {
+	t.Parallel()
+
+	err := validateVGPUHypervisorCompat(devices.VGPUFrameworkVendorVFIO, hypervisor.TypeCloudHypervisor)
+	require.ErrorIs(t, err, ErrInvalidRequest)
+	assert.NoError(t, validateVGPUHypervisorCompat(devices.VGPUFrameworkVendorVFIO, hypervisor.TypeQEMU))
+	assert.NoError(t, validateVGPUHypervisorCompat(devices.VGPUFrameworkMdev, hypervisor.TypeCloudHypervisor))
+}
+
+func TestStartRejectsVendorVFIOOnCloudHypervisor(t *testing.T) {
+	var destroyed []devices.VGPUAssignment
+	m, id := newStartRollbackVGPUManager(t, func(_ context.Context, assignment devices.VGPUAssignment) error {
+		destroyed = append(destroyed, assignment)
+		return nil
+	})
+	meta, err := m.loadMetadata(id)
+	require.NoError(t, err)
+	meta.HypervisorType = hypervisor.TypeCloudHypervisor
+	require.NoError(t, m.saveMetadata(meta))
+
+	_, err = m.startInstance(context.Background(), id, StartInstanceRequest{})
+	require.ErrorIs(t, err, ErrInvalidRequest)
+
+	require.Len(t, destroyed, 1, "the rejected vGPU must be released by rollback")
+	stored, err := m.loadMetadata(id)
+	require.NoError(t, err)
+	assert.Empty(t, stored.GPUDevicePath, "no assignment may be persisted for a rejected combination")
 }
 
 func TestStartRollbackClearsVGPUAssignmentAfterSuccessfulDestroy(t *testing.T) {

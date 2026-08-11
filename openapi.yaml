@@ -1757,8 +1757,12 @@ components:
           example: "L40S-1Q"
         mdev_uuid:
           type: string
-          description: mdev device UUID
+          description: mdev device UUID (mdev hosts only)
           example: "aa618089-8b16-4d01-a136-25a0f3c73123"
+        device_path:
+          type: string
+          description: sysfs path of the assigned vGPU device
+          example: "/sys/bus/pci/devices/0000:82:00.4"
     
     GPUProfile:
       type: object
