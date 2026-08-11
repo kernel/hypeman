@@ -105,7 +105,12 @@ func clearStoredVGPUDevice(stored *StoredMetadata) {
 // start. The snapshot is also a shallow copy (Phases shares its map), so it
 // must be persisted before any Phases.Record on the live struct. Violating
 // either invariant requires switching to targeted field restores.
-func (m *manager) cleanupStartVGPU(ctx context.Context, instanceID string, device *devices.VGPUDevice, assignedAt time.Time, rollbackMeta metadata) {
+//
+// It reports whether the assignment was retained after a failed destroy and
+// whether that retention record was persisted, so start can surface the
+// pending cleanup as a typed error like create does.
+func (m *manager) cleanupStartVGPU(ctx context.Context, instanceID string, device *devices.VGPUDevice, assignedAt time.Time, rollbackMeta metadata) (retained, persisted bool) {
+	logger.FromContext(ctx).DebugContext(ctx, "destroying vGPU on cleanup", "instance_id", instanceID, "uuid", device.MdevUUID)
 	assignment := devices.VGPUAssignment{
 		Framework:  device.Framework,
 		DevicePath: device.SysfsPath,
@@ -117,6 +122,7 @@ func (m *manager) cleanupStartVGPU(ctx context.Context, instanceID string, devic
 	if releaseErr != nil {
 		logger.FromContext(ctx).WarnContext(ctx, "failed to destroy vGPU on cleanup", "instance_id", instanceID, "error", releaseErr)
 		setStoredVGPUDevice(&cleanupMeta.StoredMetadata, device, assignedAt)
+		retained = true
 	}
 	if err := m.saveMetadata(&cleanupMeta); err != nil {
 		message := "failed to save metadata after vGPU cleanup"
@@ -124,7 +130,9 @@ func (m *manager) cleanupStartVGPU(ctx context.Context, instanceID string, devic
 			message = "failed to retain vGPU assignment metadata after cleanup failure"
 		}
 		logger.FromContext(ctx).ErrorContext(ctx, message, "instance_id", instanceID, "error", err)
+		return retained, false
 	}
+	return retained, retained
 }
 
 func (m *manager) releaseStoredVGPU(ctx context.Context, stored *StoredMetadata) error {
