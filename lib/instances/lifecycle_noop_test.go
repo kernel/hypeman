@@ -196,6 +196,43 @@ func TestDeletePersistsVGPUReleaseBeforeTeardown(t *testing.T) {
 	assert.Equal(t, restartpolicy.BlockedReasonManualStop, persisted.RestartStatus.BlockedReason)
 }
 
+// A failed create whose vGPU release also failed retains a minimal
+// GPU-fields-only stub, and the API tells the caller to delete it to retry
+// the release. Exercise that recovery path against the exact stub shape
+// cleanupFailedCreate writes.
+func TestDeleteReleasesRetainedCreateStub(t *testing.T) {
+	p := paths.New(t.TempDir())
+	var destroyed []devices.VGPUAssignment
+	m := &manager{
+		paths:           p,
+		instanceLocks:   sync.Map{},
+		bootMarkerScans: sync.Map{},
+		now:             time.Now,
+		lifecycleEvents: newLifecycleSubscribers(),
+		destroyVGPU: func(_ context.Context, assignment devices.VGPUAssignment) error {
+			destroyed = append(destroyed, assignment)
+			return nil
+		},
+	}
+	const id = "retained-stub"
+	require.NoError(t, m.ensureDirectories(id))
+	assignedAt := time.Now().UTC()
+	require.NoError(t, m.saveMetadata(&metadata{StoredMetadata: StoredMetadata{
+		Id:            id,
+		GPUFramework:  devices.VGPUFrameworkVendorVFIO,
+		GPUDevicePath: "/sys/bus/pci/devices/0000:82:00.4",
+		GPUAssignedAt: &assignedAt,
+	}}))
+
+	require.NoError(t, m.DeleteInstance(context.Background(), id))
+
+	require.Len(t, destroyed, 1)
+	assert.Equal(t, "/sys/bus/pci/devices/0000:82:00.4", destroyed[0].DevicePath)
+	assert.Equal(t, id, destroyed[0].InstanceID)
+	_, err := m.loadMetadata(id)
+	require.Error(t, err, "retained stub must be fully deleted")
+}
+
 func TestDeleteDropsStaleVGPUClaimedByLiveInstance(t *testing.T) {
 	now := time.Now().UTC()
 	m, id := newLifecycleNoopManagerWithInstance(t, StateStopped, now)

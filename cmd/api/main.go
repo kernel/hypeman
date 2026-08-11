@@ -218,7 +218,10 @@ func liveInstanceVGPUDevicePaths(ctx context.Context, instanceManager instances.
 func reconcileVGPUs(ctx context.Context, instanceManager instances.Manager, logger *slog.Logger) {
 	protected, retryAfter, err := liveInstanceVGPUDevicePaths(ctx, instanceManager)
 	if err != nil {
-		logger.Warn("failed to list instances for vGPU reconcile protection; reconciling mdev only", "error", err)
+		// Operator-actionable: vendor VFIO reconciliation stays disabled
+		// host-wide (and releases fail closed on the same inventory) until
+		// the unreadable instance metadata is repaired.
+		logger.Error("failed to list instances for vGPU reconcile protection; reconciling mdev only", "error", err)
 		protected = nil
 		retryAfter = 0
 	}
