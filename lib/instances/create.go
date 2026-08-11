@@ -312,7 +312,21 @@ func (m *manager) createInstance(
 		log.InfoContext(ctx, "creating vGPU", "instance_id", id, "profile", req.GPU.Profile)
 		gpuDevice, err = m.createVGPUDevice(ctx, req.GPU.Profile, id)
 		if err != nil {
-			retainedVGPU = retainedVGPUFromCreateError(id, m.nowUTC(), err)
+			stub := StoredMetadata{
+				Id:                id,
+				Name:              req.Name,
+				Image:             req.Image,
+				ResolvedImage:     resolvedImageRef,
+				Platform:          imageInfo.Platform,
+				CreatedAt:         time.Now(),
+				HypervisorType:    hvType,
+				HypervisorVersion: hvVersion,
+				DataDir:           m.paths.InstanceDir(id),
+			}
+			if starterErr == nil {
+				stub.SocketPath = m.paths.InstanceSocket(id, starter.SocketName())
+			}
+			retainedVGPU = retainedVGPUFromCreateError(stub, m.nowUTC(), err)
 			log.ErrorContext(ctx, "failed to create vGPU", "profile", req.GPU.Profile, "error", err)
 			return nil, wrapCreateVGPUErr(req.GPU.Profile, err)
 		}
