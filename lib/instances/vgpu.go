@@ -110,7 +110,7 @@ func (m *manager) cleanupStartVGPU(ctx context.Context, instanceID string, devic
 	cleanupMeta := rollbackMeta
 	releaseErr := m.destroyVGPUAssignment(ctx, assignment)
 	if releaseErr != nil {
-		logger.FromContext(ctx).WarnContext(ctx, "failed to destroy vGPU on cleanup", "instance_id", instanceID, "error", releaseErr)
+		logger.FromContext(ctx).WarnContext(ctx, "failed to destroy vGPU on cleanup", "instance_id", instanceID, "uuid", device.MdevUUID, "error", releaseErr)
 		setStoredVGPUDevice(&cleanupMeta.StoredMetadata, device, assignedAt)
 		retained = true
 	}
@@ -207,6 +207,12 @@ func (m *manager) vgpuAssignmentClaimedByLiveInstance(ctx context.Context, exclu
 		}
 		if pid > 0 {
 			return true, nil
+		}
+		// A dead PID with a recent assignment gets the same bounded grace as
+		// startup reconcile protection, so the two guards agree in the
+		// fail-closed direction while a mid-boot claimant hydrates.
+		if stored.GPUAssignedAt != nil && time.Since(*stored.GPUAssignedAt) < VGPUAssignmentStartupGracePeriod {
+			return false, fmt.Errorf("cannot confirm liveness of recent vGPU claimant %s on %s: recorded hypervisor is not running", id, devicePath)
 		}
 	}
 	return false, nil
