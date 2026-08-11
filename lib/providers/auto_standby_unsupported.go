@@ -11,6 +11,13 @@ import (
 )
 
 // ProvideAutoStandbyController is unavailable on non-Linux platforms.
-func ProvideAutoStandbyController(instances.Manager, *config.Config, *slog.Logger) *autostandby.Controller {
+func ProvideAutoStandbyController(_ instances.Manager, _ *config.Config, log *slog.Logger) *autostandby.Controller {
+	if log == nil {
+		return nil
+	}
+
+	finish := trackInitialization(log, "auto-standby controller")
+	defer func() { finish(nil) }()
+
 	return nil
 }

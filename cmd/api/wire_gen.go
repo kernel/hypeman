@@ -40,18 +40,18 @@ func initializeApp() (*application, func(), error) {
 	paths := providers.ProvidePaths(config)
 	logger := providers.ProvideLogger(paths)
 	context := providers.ProvideContext(logger)
-	manager, err := providers.ProvideImageManager(paths, config)
+	manager, err := providers.ProvideImageManager(paths, config, logger)
 	if err != nil {
 		return nil, nil, err
 	}
-	systemManager := providers.ProvideSystemManager(paths)
-	networkManager := providers.ProvideNetworkManager(paths, config)
-	devicesManager := providers.ProvideDeviceManager(paths)
-	volumesManager, err := providers.ProvideVolumeManager(paths, config)
+	systemManager := providers.ProvideSystemManager(paths, logger)
+	networkManager := providers.ProvideNetworkManager(paths, config, logger)
+	devicesManager := providers.ProvideDeviceManager(paths, logger)
+	volumesManager, err := providers.ProvideVolumeManager(paths, config, logger)
 	if err != nil {
 		return nil, nil, err
 	}
-	instancesManager, err := providers.ProvideInstanceManager(paths, config, manager, systemManager, networkManager, devicesManager, volumesManager)
+	instancesManager, err := providers.ProvideInstanceManager(paths, config, manager, systemManager, networkManager, devicesManager, volumesManager, logger)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -59,7 +59,7 @@ func initializeApp() (*application, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	ingressManager, err := providers.ProvideIngressManager(paths, config, instancesManager)
+	ingressManager, err := providers.ProvideIngressManager(paths, config, instancesManager, logger)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -67,7 +67,7 @@ func initializeApp() (*application, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	resourcesManager, err := providers.ProvideResourceManager(context, config, paths, manager, instancesManager, volumesManager)
+	resourcesManager, err := providers.ProvideResourceManager(context, config, paths, manager, instancesManager, volumesManager, logger)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -81,7 +81,7 @@ func initializeApp() (*application, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	registry, err := providers.ProvideRegistry(paths, manager)
+	registry, err := providers.ProvideRegistry(paths, manager, logger)
 	if err != nil {
 		return nil, nil, err
 	}

@@ -7,5 +7,8 @@ import (
 )
 
 func ProvideHealthCheckController(instanceManager instances.Manager, log *slog.Logger) *instances.HealthCheckController {
+	finish := trackInitialization(log, "health check controller")
+	defer func() { finish(nil) }()
+
 	return instances.NewHealthCheckController(instanceManager, log)
 }

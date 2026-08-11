@@ -56,6 +56,18 @@ func ProvideContext(log *slog.Logger) context.Context {
 	return logger.AddToContext(context.Background(), log)
 }
 
+func trackInitialization(log *slog.Logger, component string) func(error) {
+	startedAt := time.Now()
+	log.Info("application component initialization started", "component", component)
+	return func(err error) {
+		if err != nil {
+			log.Error("application component initialization failed", "component", component, "duration", time.Since(startedAt), "error", err)
+			return
+		}
+		log.Info("application component initialization completed", "component", component, "duration", time.Since(startedAt))
+	}
+}
+
 // ProvideConfig provides the application configuration.
 // Panics if configuration is invalid (prevents startup with bad config).
 // Config path can be specified via CONFIG_PATH env var or defaults to platform-specific locations.
@@ -77,29 +89,44 @@ func ProvidePaths(cfg *config.Config) *paths.Paths {
 }
 
 // ProvideImageManager provides the image manager
-func ProvideImageManager(p *paths.Paths, cfg *config.Config) (images.Manager, error) {
+func ProvideImageManager(p *paths.Paths, cfg *config.Config, log *slog.Logger) (_ images.Manager, err error) {
+	finish := trackInitialization(log, "image manager")
+	defer func() { finish(err) }()
+
 	meter := otel.GetMeterProvider().Meter("hypeman")
 	return images.NewManager(p, cfg.Limits.MaxConcurrentBuilds, meter)
 }
 
 // ProvideSystemManager provides the system manager
-func ProvideSystemManager(p *paths.Paths) system.Manager {
+func ProvideSystemManager(p *paths.Paths, log *slog.Logger) system.Manager {
+	finish := trackInitialization(log, "system manager")
+	defer func() { finish(nil) }()
+
 	return system.NewManager(p)
 }
 
 // ProvideNetworkManager provides the network manager
-func ProvideNetworkManager(p *paths.Paths, cfg *config.Config) network.Manager {
+func ProvideNetworkManager(p *paths.Paths, cfg *config.Config, log *slog.Logger) network.Manager {
+	finish := trackInitialization(log, "network manager")
+	defer func() { finish(nil) }()
+
 	meter := otel.GetMeterProvider().Meter("hypeman")
 	return network.NewManager(p, cfg, meter)
 }
 
 // ProvideDeviceManager provides the device manager
-func ProvideDeviceManager(p *paths.Paths) devices.Manager {
+func ProvideDeviceManager(p *paths.Paths, log *slog.Logger) devices.Manager {
+	finish := trackInitialization(log, "device manager")
+	defer func() { finish(nil) }()
+
 	return devices.NewManager(p)
 }
 
 // ProvideInstanceManager provides the instance manager
-func ProvideInstanceManager(p *paths.Paths, cfg *config.Config, imageManager images.Manager, systemManager system.Manager, networkManager network.Manager, deviceManager devices.Manager, volumeManager volumes.Manager) (instances.Manager, error) {
+func ProvideInstanceManager(p *paths.Paths, cfg *config.Config, imageManager images.Manager, systemManager system.Manager, networkManager network.Manager, deviceManager devices.Manager, volumeManager volumes.Manager, log *slog.Logger) (_ instances.Manager, err error) {
+	finish := trackInitialization(log, "instance manager")
+	defer func() { finish(err) }()
+
 	firecracker.SetCustomBinaryPath(cfg.Hypervisor.FirecrackerBinaryPath)
 	if err := cloudhypervisor.SetDefaultVersion(cfg.Hypervisor.CloudHypervisorDefaultVersion); err != nil {
 		return nil, fmt.Errorf("invalid cloud-hypervisor default version: %w", err)
@@ -172,7 +199,10 @@ func snapshotDefaultsFromConfig(cfg *config.Config) instances.SnapshotPolicy {
 }
 
 // ProvideGuestMemoryController provides the active ballooning controller.
-func ProvideGuestMemoryController(instanceManager instances.Manager, cfg *config.Config, log *slog.Logger) (guestmemory.Controller, error) {
+func ProvideGuestMemoryController(instanceManager instances.Manager, cfg *config.Config, log *slog.Logger) (_ guestmemory.Controller, err error) {
+	finish := trackInitialization(log, "guest memory controller")
+	defer func() { finish(err) }()
+
 	pollInterval, err := parseRequiredDuration(cfg.Hypervisor.Memory.ActiveBallooning.PollInterval)
 	if err != nil {
 		return nil, fmt.Errorf("parse active ballooning poll interval: %w", err)
@@ -217,7 +247,10 @@ func ProvideGuestMemoryController(instanceManager instances.Manager, cfg *config
 }
 
 // ProvideVolumeManager provides the volume manager
-func ProvideVolumeManager(p *paths.Paths, cfg *config.Config) (volumes.Manager, error) {
+func ProvideVolumeManager(p *paths.Paths, cfg *config.Config, log *slog.Logger) (_ volumes.Manager, err error) {
+	finish := trackInitialization(log, "volume manager")
+	defer func() { finish(err) }()
+
 	// Parse max total volume storage (empty or "0" means unlimited)
 	var maxTotalVolumeStorage int64
 	if cfg.Limits.MaxTotalVolumeStorage != "" && cfg.Limits.MaxTotalVolumeStorage != "0" {
@@ -241,12 +274,18 @@ func parseRequiredDuration(value string) (time.Duration, error) {
 }
 
 // ProvideRegistry provides the OCI registry for image push
-func ProvideRegistry(p *paths.Paths, imageManager images.Manager) (*registry.Registry, error) {
+func ProvideRegistry(p *paths.Paths, imageManager images.Manager, log *slog.Logger) (_ *registry.Registry, err error) {
+	finish := trackInitialization(log, "OCI registry")
+	defer func() { finish(err) }()
+
 	return registry.New(p, imageManager)
 }
 
 // ProvideResourceManager provides the resource manager for capacity tracking
-func ProvideResourceManager(ctx context.Context, cfg *config.Config, p *paths.Paths, imageManager images.Manager, instanceManager instances.Manager, volumeManager volumes.Manager) (*resources.Manager, error) {
+func ProvideResourceManager(ctx context.Context, cfg *config.Config, p *paths.Paths, imageManager images.Manager, instanceManager instances.Manager, volumeManager volumes.Manager, log *slog.Logger) (_ *resources.Manager, err error) {
+	finish := trackInitialization(log, "resource manager")
+	defer func() { finish(err) }()
+
 	mgr := resources.NewManager(cfg, p)
 
 	// Managers implement the lister interfaces directly
@@ -263,7 +302,10 @@ func ProvideResourceManager(ctx context.Context, cfg *config.Config, p *paths.Pa
 }
 
 // ProvideVMMetricsManager provides the VM metrics manager for utilization tracking
-func ProvideVMMetricsManager(instanceManager instances.Manager, cfg *config.Config, log *slog.Logger) (*vm_metrics.Manager, error) {
+func ProvideVMMetricsManager(instanceManager instances.Manager, cfg *config.Config, log *slog.Logger) (_ *vm_metrics.Manager, err error) {
+	finish := trackInitialization(log, "VM metrics manager")
+	defer func() { finish(err) }()
+
 	mgr := vm_metrics.NewManager()
 	mgr.SetVMLabelBudget(cfg.Metrics.VMLabelBudget)
 	mgr.SetLogger(log)
@@ -316,7 +358,10 @@ func parseByteSize(value string) (int64, error) {
 }
 
 // ProvideIngressManager provides the ingress manager
-func ProvideIngressManager(p *paths.Paths, cfg *config.Config, instanceManager instances.Manager) (ingress.Manager, error) {
+func ProvideIngressManager(p *paths.Paths, cfg *config.Config, instanceManager instances.Manager, log *slog.Logger) (_ ingress.Manager, err error) {
+	finish := trackInitialization(log, "ingress manager")
+	defer func() { finish(err) }()
+
 	// Parse DNS provider - fail if invalid
 	dnsProvider, err := ingress.ParseDNSProvider(cfg.ACME.DNSProvider)
 	if err != nil {
@@ -380,7 +425,10 @@ func ProvideIngressManager(p *paths.Paths, cfg *config.Config, instanceManager i
 }
 
 // ProvideBuilderManager provides the builders manager
-func ProvideBuilderManager(p *paths.Paths, cfg *config.Config, instanceManager instances.Manager, volumeManager volumes.Manager, log *slog.Logger) (builders.Manager, error) {
+func ProvideBuilderManager(p *paths.Paths, cfg *config.Config, instanceManager instances.Manager, volumeManager volumes.Manager, log *slog.Logger) (_ builders.Manager, err error) {
+	finish := trackInitialization(log, "builder manager")
+	defer func() { finish(err) }()
+
 	meter := otel.GetMeterProvider().Meter("hypeman")
 	return builders.NewManager(p, builders.Config{
 		MaxCount:          cfg.Builders.MaxCount,
@@ -391,7 +439,10 @@ func ProvideBuilderManager(p *paths.Paths, cfg *config.Config, instanceManager i
 }
 
 // ProvideBuildManager provides the build manager
-func ProvideBuildManager(p *paths.Paths, cfg *config.Config, instanceManager instances.Manager, volumeManager volumes.Manager, builderManager builders.Manager, imageManager images.Manager, networkManager network.Manager, log *slog.Logger) (builds.Manager, error) {
+func ProvideBuildManager(p *paths.Paths, cfg *config.Config, instanceManager instances.Manager, volumeManager volumes.Manager, builderManager builders.Manager, imageManager images.Manager, networkManager network.Manager, log *slog.Logger) (_ builds.Manager, err error) {
+	finish := trackInitialization(log, "build manager")
+	defer func() { finish(err) }()
+
 	// Read CA cert file if specified
 	var registryCACert string
 	if cfg.Registry.CACertFile != "" {

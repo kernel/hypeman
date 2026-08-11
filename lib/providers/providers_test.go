@@ -1,6 +1,9 @@
 package providers
 
 import (
+	"bytes"
+	"errors"
+	"log/slog"
 	"testing"
 
 	"github.com/kernel/hypeman/cmd/api/config"
@@ -8,6 +11,34 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestTrackInitialization(t *testing.T) {
+	t.Parallel()
+
+	var output bytes.Buffer
+	log := slog.New(slog.NewJSONHandler(&output, nil))
+	finish := trackInitialization(log, "test component")
+	finish(nil)
+
+	logs := output.String()
+	assert.Contains(t, logs, `"msg":"application component initialization started"`)
+	assert.Contains(t, logs, `"msg":"application component initialization completed"`)
+	assert.Contains(t, logs, `"component":"test component"`)
+	assert.Contains(t, logs, `"duration":`)
+}
+
+func TestTrackInitializationFailure(t *testing.T) {
+	t.Parallel()
+
+	var output bytes.Buffer
+	log := slog.New(slog.NewJSONHandler(&output, nil))
+	finish := trackInitialization(log, "test component")
+	finish(errors.New("failed"))
+
+	logs := output.String()
+	assert.Contains(t, logs, `"msg":"application component initialization failed"`)
+	assert.Contains(t, logs, `"error":"failed"`)
+}
 
 func TestSnapshotDefaultsFromConfigDisabledReturnsNilCompression(t *testing.T) {
 	t.Parallel()
