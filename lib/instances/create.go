@@ -357,6 +357,12 @@ func (m *manager) createInstance(
 				}
 			}
 		})
+		// Checked after the cleanup handler is registered so rejection
+		// releases the device through the normal rollback.
+		if err := validateVGPUHypervisorCompat(gpuDevice.Framework, hvType); err != nil {
+			log.ErrorContext(ctx, "unsupported vGPU hypervisor combination", "instance_id", id, "framework", gpuDevice.Framework, "hypervisor", hvType)
+			return nil, err
+		}
 	}
 
 	if len(req.Devices) > 0 && m.deviceManager != nil {
@@ -669,12 +675,25 @@ func (m *manager) cleanupFailedCreate(ctx context.Context, id string, retainedVG
 		log.ErrorContext(ctx, "failed to retain instance data after vGPU cleanup failure", "instance_id", id, "error", err)
 		return retentionSurvives()
 	}
+	// Retain identity fields so the instance lists as a recognizable,
+	// deletable record rather than a nameless phantom, but drop resource
+	// claims (network, volumes, devices) that rollback already released.
 	retained := StoredMetadata{
-		Id:            id,
-		GPUFramework:  retainedVGPU.GPUFramework,
-		GPUDevicePath: retainedVGPU.GPUDevicePath,
-		GPUMdevUUID:   retainedVGPU.GPUMdevUUID,
-		GPUAssignedAt: retainedVGPU.GPUAssignedAt,
+		Id:                id,
+		Name:              retainedVGPU.Name,
+		Image:             retainedVGPU.Image,
+		ResolvedImage:     retainedVGPU.ResolvedImage,
+		Platform:          retainedVGPU.Platform,
+		CreatedAt:         retainedVGPU.CreatedAt,
+		HypervisorType:    retainedVGPU.HypervisorType,
+		HypervisorVersion: retainedVGPU.HypervisorVersion,
+		SocketPath:        retainedVGPU.SocketPath,
+		DataDir:           retainedVGPU.DataDir,
+		GPUProfile:        retainedVGPU.GPUProfile,
+		GPUFramework:      retainedVGPU.GPUFramework,
+		GPUDevicePath:     retainedVGPU.GPUDevicePath,
+		GPUMdevUUID:       retainedVGPU.GPUMdevUUID,
+		GPUAssignedAt:     retainedVGPU.GPUAssignedAt,
 	}
 	if err := m.saveMetadata(&metadata{StoredMetadata: retained}); err != nil {
 		log.ErrorContext(ctx, "failed to retain vGPU assignment metadata after cleanup failure", "instance_id", id, "error", err)

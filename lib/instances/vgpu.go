@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/devices"
+	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/logger"
 )
 
@@ -63,6 +64,18 @@ func retainedVGPUFromCreateError(instanceID string, assignedAt time.Time, err er
 	}
 }
 
+// validateVGPUHypervisorCompat rejects the one proven-broken combination:
+// vendor VFIO vGPUs boot but are non-functional on Cloud Hypervisor (upstream
+// cloud-hypervisor#7572), and the wedged VM then blocks the VF release until
+// startup reconcile. Hypervisor selection otherwise remains caller policy;
+// mdev on Cloud Hypervisor keeps working. See lib/devices/GPU.md.
+func validateVGPUHypervisorCompat(framework devices.VGPUFramework, hvType hypervisor.Type) error {
+	if framework == devices.VGPUFrameworkVendorVFIO && hvType == hypervisor.TypeCloudHypervisor {
+		return fmt.Errorf("%w: vendor VFIO vGPUs are not functional on cloud-hypervisor, use qemu", ErrInvalidRequest)
+	}
+	return nil
+}
+
 func (m *manager) destroyVGPUAssignment(ctx context.Context, assignment devices.VGPUAssignment) error {
 	destroy := m.destroyVGPU
 	if destroy == nil {
@@ -85,10 +98,13 @@ func clearStoredVGPUDevice(stored *StoredMetadata) {
 	stored.GPUAssignedAt = nil
 }
 
-// cleanupStartVGPU wholesale-restores the pre-start metadata snapshot. That
-// is safe while the instance lock serializes start and no cleanup registered
-// after the vGPU one persists metadata; a future cleanup that writes metadata
-// must switch this to targeted field restores.
+// cleanupStartVGPU wholesale-restores the pre-start metadata snapshot. The
+// cleanup stack is LIFO, so cleanups registered after this one run before it
+// and this restore would clobber anything they persisted; it is safe only
+// while no such cleanup writes metadata and the instance lock serializes
+// start. The snapshot is also a shallow copy (Phases shares its map), so it
+// must be persisted before any Phases.Record on the live struct. Violating
+// either invariant requires switching to targeted field restores.
 func (m *manager) cleanupStartVGPU(ctx context.Context, instanceID string, device *devices.VGPUDevice, assignedAt time.Time, rollbackMeta metadata) {
 	assignment := devices.VGPUAssignment{
 		Framework:  device.Framework,
