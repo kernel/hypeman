@@ -636,6 +636,16 @@ func resolveLiveHypervisorPID(storedPID *int, storedStartTime uint64, storedBoot
 		return 0, nil
 	}
 	if err != nil {
+		if errors.Is(err, hypervisor.ErrNoOwningProcess) {
+			// Neither the socket-owner scan nor the full command-line scan
+			// found any process tied to the socket. A live hypervisor always
+			// holds its control-socket listener, so the recorded hypervisor is
+			// gone and the live stored PID is a recycled number — the same
+			// conclusion already drawn above when the stored PID is dead.
+			// Without this, legacy metadata carrying no boot-scoped identity
+			// wedges stop and delete forever once its PID is reused.
+			return 0, nil
+		}
 		return 0, fmt.Errorf("cannot confirm ownership of socket %s for stored hypervisor PID %d: %w", socketPath, stored, err)
 	}
 	return 0, fmt.Errorf("cannot confirm ownership of socket %s for stored hypervisor PID %d: process %d matched by command line only", socketPath, stored, resolved)
@@ -665,7 +675,10 @@ func HypervisorProcessIdentityExists(pid int, startTime uint64, bootID, socketPa
 	return HypervisorProcessExists(pid, socketPath)
 }
 
-// HypervisorProcessExists reports whether pid owns the instance's hypervisor socket.
+// HypervisorProcessExists reports whether pid owns the instance's hypervisor
+// socket. It fails open: when ownership cannot be resolved it returns true,
+// which is the safe direction for its callers (reconcile protection and claim
+// checks, where true means "protect"). Do not use it to authorize teardown.
 func HypervisorProcessExists(pid int, socketPath string) bool {
 	if !ProcessExists(pid) {
 		return false
