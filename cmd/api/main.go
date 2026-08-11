@@ -186,6 +186,9 @@ func configureUFFDGraduationController(cfg *config.Config, instanceManager insta
 }
 
 func run() error {
+	startupStarted := time.Now()
+	slog.Info("starting hypeman initialization")
+
 	// Load config early for OTel initialization
 	// Config path can be specified via CONFIG_PATH env var or defaults to platform-specific locations
 	configPath := os.Getenv("CONFIG_PATH")
@@ -215,10 +218,13 @@ func run() error {
 		Env:                      cfg.Env,
 	}
 
+	telemetryStarted := time.Now()
+	slog.Info("initializing OpenTelemetry")
 	otelProvider, otelShutdown, err := otel.Init(context.Background(), otelCfg)
 	if err != nil {
 		return fmt.Errorf("initialize telemetry: %w", err)
 	}
+	slog.Info("OpenTelemetry initialized", "duration", time.Since(telemetryStarted))
 	defer func() {
 		slog.Info("shutting down OpenTelemetry")
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -247,10 +253,14 @@ func run() error {
 	}
 
 	// Initialize app with wire
+	appInitializationStarted := time.Now()
+	slog.Info("initializing application dependencies")
 	app, cleanup, err := initializeApp()
 	if err != nil {
 		return fmt.Errorf("initialize application: %w", err)
 	}
+	logger := app.Logger
+	logger.Info("application dependencies initialized", "duration", time.Since(appInitializationStarted))
 	defer func() {
 		slog.Info("cleaning up application resources")
 		cleanup()
@@ -264,8 +274,6 @@ func run() error {
 		slog.Info("signal handler stopped")
 	}()
 
-	logger := app.Logger
-
 	resourceRefreshInterval, err := time.ParseDuration(app.Config.Metrics.ResourceRefreshInterval)
 	if err != nil {
 		return fmt.Errorf("invalid metrics resource refresh interval %q: %w", app.Config.Metrics.ResourceRefreshInterval, err)
@@ -274,6 +282,7 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("invalid metrics allocation reconcile interval %q: %w", app.Config.Metrics.AllocationReconcileInterval, err)
 	}
+	logger.Info("starting resource monitoring", "refresh_interval", resourceRefreshInterval)
 	if err := app.ResourceManager.StartMonitoring(ctx, otelProvider.Meter, resourceRefreshInterval); err != nil {
 		return fmt.Errorf("start resource monitoring: %w", err)
 	}
@@ -654,6 +663,8 @@ func run() error {
 			return restartController.StartRestartPolicyController(gctx)
 		})
 	}
+
+	logger.Info("hypeman initialization complete", "duration", time.Since(startupStarted))
 
 	// Run the server
 	grp.Go(func() error {
