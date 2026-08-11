@@ -53,6 +53,33 @@ func TestStoreSaveLoadListDelete(t *testing.T) {
 	require.True(t, errors.Is(err, ErrNotFound))
 }
 
+func TestStoreRejectsSnapshotIDsOutsideStoreRoot(t *testing.T) {
+	t.Parallel()
+
+	dataDir := filepath.Join(t.TempDir(), "data")
+	p := paths.New(dataDir)
+	store := NewStore(p)
+
+	outsideDir := filepath.Join(dataDir, "outside")
+	require.NoError(t, os.MkdirAll(outsideDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(outsideDir, "snapshot.json"), []byte(`{"snapshot":{"id":"outside"}}`), 0644))
+
+	for _, snapshotID := range []string{"", ".", "..", "../outside", "nested/snapshot", "/absolute"} {
+		t.Run(snapshotID, func(t *testing.T) {
+			_, err := store.LoadRecord(snapshotID)
+			require.ErrorIs(t, err, ErrInvalidID)
+
+			err = store.SaveRecord(&Record{Snapshot: Snapshot{Id: snapshotID}})
+			require.ErrorIs(t, err, ErrInvalidID)
+		})
+	}
+
+	marker := filepath.Join(dataDir, "keep")
+	require.NoError(t, os.WriteFile(marker, []byte("keep"), 0644))
+	require.ErrorIs(t, store.Delete(".."), ErrInvalidID)
+	require.FileExists(t, marker)
+}
+
 func TestStoreEnsureNameAvailable(t *testing.T) {
 	t.Parallel()
 

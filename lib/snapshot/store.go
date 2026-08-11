@@ -14,6 +14,7 @@ import (
 var (
 	ErrNotFound   = errors.New("snapshot not found")
 	ErrNameExists = errors.New("snapshot name already exists")
+	ErrInvalidID  = errors.New("invalid snapshot id")
 )
 
 // Record is the persisted representation of a snapshot plus source metadata.
@@ -59,6 +60,9 @@ func (s *Store) SaveRecord(record *Record) error {
 	if record == nil {
 		return fmt.Errorf("nil snapshot record")
 	}
+	if err := validateSnapshotID(record.Snapshot.Id); err != nil {
+		return err
+	}
 	dir := s.paths.SnapshotDir(record.Snapshot.Id)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("create snapshot directory: %w", err)
@@ -74,6 +78,9 @@ func (s *Store) SaveRecord(record *Record) error {
 }
 
 func (s *Store) LoadRecord(snapshotID string) (*Record, error) {
+	if err := validateSnapshotID(snapshotID); err != nil {
+		return nil, err
+	}
 	content, err := os.ReadFile(s.paths.SnapshotMetadata(snapshotID))
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -117,6 +124,9 @@ func (s *Store) ListRecords() ([]Record, error) {
 }
 
 func (s *Store) Delete(snapshotID string) error {
+	if err := validateSnapshotID(snapshotID); err != nil {
+		return err
+	}
 	path := s.paths.SnapshotDir(snapshotID)
 	if _, err := os.Stat(path); err != nil {
 		if os.IsNotExist(err) {
@@ -142,6 +152,13 @@ func (s *Store) EnsureNameAvailable(sourceInstanceID, snapshotName string) error
 		if record.Snapshot.SourceInstanceID == sourceInstanceID && record.Snapshot.Name == snapshotName {
 			return fmt.Errorf("%w: snapshot name %q already exists for source instance %s", ErrNameExists, snapshotName, sourceInstanceID)
 		}
+	}
+	return nil
+}
+
+func validateSnapshotID(snapshotID string) error {
+	if snapshotID == "." || !filepath.IsLocal(snapshotID) || filepath.Base(snapshotID) != snapshotID {
+		return fmt.Errorf("%w: must be a single local path component", ErrInvalidID)
 	}
 	return nil
 }
