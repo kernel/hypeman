@@ -645,30 +645,53 @@ EOF
 fi
 
 # =============================================================================
-# Build builder image (macOS)
+# Build builder image (all platforms)
 # =============================================================================
+#
+# Source-to-image builds boot builder VMs from hypeman/builder:latest, and the
+# API's fallback for installed (non-source) services is to find that image in
+# the local Docker daemon (lib/builds/manager.go). Previously only the macOS
+# source-install path built it, so a Linux release install could never run
+# `hypeman build`: builder preparation retried forever and every build failed.
 
-if [ "$OS" = "darwin" ]; then
-    info "Attempting to build builder image..."
-    if command -v docker >/dev/null 2>&1; then
+if command -v docker >/dev/null 2>&1; then
+    if docker image inspect hypeman/builder:latest >/dev/null 2>&1; then
+        info "Builder image hypeman/builder:latest already present, skipping build"
+    else
+        info "Building builder image..."
         if [ -n "$BRANCH" ] && [ -d "${TMP_DIR}/hypeman" ]; then
             BUILD_CONTEXT="${TMP_DIR}/hypeman"
+        elif [ -n "$VERSION" ] && [ "${VERSION#v}" != "$VERSION" ]; then
+            # Release install: no source checkout on disk, so fetch the source
+            # for the exact installed version — the builder Dockerfile the API
+            # expects is part of the same tree.
+            info "Fetching source for ${VERSION} to build the builder image..."
+            if curl -fsSL "https://github.com/${REPO}/archive/refs/tags/${VERSION}.tar.gz" -o "${TMP_DIR}/hypeman-src.tar.gz" \
+                && mkdir -p "${TMP_DIR}/hypeman-src" \
+                && tar -xzf "${TMP_DIR}/hypeman-src.tar.gz" -C "${TMP_DIR}/hypeman-src" --strip-components=1; then
+                BUILD_CONTEXT="${TMP_DIR}/hypeman-src"
+            else
+                BUILD_CONTEXT=""
+                warn "Failed to fetch source for ${VERSION}; skipping builder image build"
+            fi
         else
             BUILD_CONTEXT=""
         fi
 
         if [ -n "$BUILD_CONTEXT" ] && [ -f "${BUILD_CONTEXT}/lib/builds/images/generic/Dockerfile" ]; then
             if ! docker build -t hypeman/builder:latest -f "${BUILD_CONTEXT}/lib/builds/images/generic/Dockerfile" "$BUILD_CONTEXT" 2>/dev/null; then
-                warn "Failed to build builder image. You can build it later manually."
+                warn "Failed to build builder image. Source builds will not work until it exists: docker build -t hypeman/builder:latest -f lib/builds/images/generic/Dockerfile <source checkout>"
             else
                 info "Builder image built successfully"
             fi
-        else
+        elif [ -z "$BUILD_CONTEXT" ]; then
             warn "Builder image Dockerfile not available. Build it manually: docker build -t hypeman/builder:latest -f lib/builds/images/generic/Dockerfile ."
+        else
+            warn "Builder image Dockerfile not found in source; build it manually: docker build -t hypeman/builder:latest -f lib/builds/images/generic/Dockerfile ."
         fi
-    else
-        warn "Docker not available, skipping builder image build"
     fi
+else
+    warn "Docker not available, skipping builder image build (hypeman build will not work without it)"
 fi
 
 if [ "$OS" = "darwin" ]; then
