@@ -86,9 +86,9 @@ func (m *manager) deleteInstanceWithOptions(
 	}
 
 	// 3b. Block the restart policy before any teardown. If the delete fails
-	// partway (e.g. a failed vGPU release) the metadata is retained with the
-	// VMM already stopped, and without this marker the restart policy
-	// controller would start the instance again.
+	// partway (e.g. the hypervisor cannot be confirmed dead) the metadata is
+	// retained with the VMM already stopped, and without this marker the
+	// restart policy controller would start the instance again.
 	if err := m.markRestartManualStopLocked(ctx, id); err != nil {
 		return fmt.Errorf("block restart policy before delete: %w", err)
 	}
@@ -141,18 +141,21 @@ func (m *manager) deleteInstanceWithOptions(
 	m.closeFirecrackerUFFDSession(ctx, stored)
 
 	// 5b. Release the vGPU assignment if present, before any network, device,
-	// or volume teardown. A failed release retains the instance metadata; the
-	// VMM has already been stopped, but its attachments are intact and the
-	// restart policy is blocked, so a retried delete is safe.
+	// or volume teardown. Release failure is logged and the delete continues,
+	// matching the pre-refactor contract: the VMM is already confirmed dead,
+	// the guards inside the release never destroy a device they cannot prove
+	// is unowned, and a skipped release is recovered by startup
+	// reconciliation.
 	hadVGPUAssignment := storedVGPUDevicePath(stored) != ""
-	if err := releaseStoredVGPU(ctx, stored); err != nil {
-		log.ErrorContext(ctx, "failed to destroy vGPU; retaining instance metadata", "instance_id", id, "error", err)
-		return fmt.Errorf("destroy vGPU: %w", err)
-	}
 	if hadVGPUAssignment {
+		log.InfoContext(ctx, "destroying vGPU", "instance_id", id, "uuid", stored.GPUMdevUUID)
+	}
+	if err := releaseStoredVGPU(ctx, stored); err != nil {
+		// Log error but continue with cleanup.
+		log.WarnContext(ctx, "failed to destroy vGPU, continuing with cleanup", "instance_id", id, "uuid", stored.GPUMdevUUID, "error", err)
+	} else if hadVGPUAssignment {
 		if err := m.saveMetadata(meta); err != nil {
-			log.ErrorContext(ctx, "failed to save metadata after vGPU release", "instance_id", id, "error", err)
-			return fmt.Errorf("save metadata after vGPU release: %w", err)
+			log.WarnContext(ctx, "failed to save metadata after vGPU release", "instance_id", id, "error", err)
 		}
 	}
 
