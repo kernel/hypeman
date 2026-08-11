@@ -140,35 +140,34 @@ func (t *sharedExtentTracker) add(start, length uint64) int64 {
 	}
 
 	end := start + length
+	first := sort.Search(len(t.ranges), func(i int) bool {
+		return t.ranges[i].end >= start
+	})
+	last := first
+	mergedStart := start
+	mergedEnd := end
 	added := length
-	for _, existing := range t.ranges {
-		if existing.end <= start || end <= existing.start {
-			continue
-		}
+	for last < len(t.ranges) && t.ranges[last].start <= mergedEnd {
+		existing := t.ranges[last]
 		overlapStart := max(start, existing.start)
 		overlapEnd := min(end, existing.end)
-		added -= overlapEnd - overlapStart
+		if overlapStart < overlapEnd {
+			added -= overlapEnd - overlapStart
+		}
+		mergedStart = min(mergedStart, existing.start)
+		mergedEnd = max(mergedEnd, existing.end)
+		last++
 	}
 
-	t.ranges = append(t.ranges, physicalRange{start: start, end: end})
-	t.compact()
+	merged := physicalRange{start: mergedStart, end: mergedEnd}
+	if first == last {
+		t.ranges = append(t.ranges, physicalRange{})
+		copy(t.ranges[first+1:], t.ranges[first:])
+		t.ranges[first] = merged
+	} else {
+		t.ranges[first] = merged
+		copy(t.ranges[first+1:], t.ranges[last:])
+		t.ranges = t.ranges[:len(t.ranges)-(last-first)+1]
+	}
 	return int64(added)
-}
-
-func (t *sharedExtentTracker) compact() {
-	sort.Slice(t.ranges, func(i, j int) bool {
-		return t.ranges[i].start < t.ranges[j].start
-	})
-
-	merged := t.ranges[:0]
-	for _, current := range t.ranges {
-		if len(merged) == 0 || merged[len(merged)-1].end < current.start {
-			merged = append(merged, current)
-			continue
-		}
-		if current.end > merged[len(merged)-1].end {
-			merged[len(merged)-1].end = current.end
-		}
-	}
-	t.ranges = merged
 }
