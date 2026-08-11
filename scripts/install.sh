@@ -655,7 +655,17 @@ fi
 # `hypeman build`: builder preparation retried forever and every build failed.
 
 if command -v docker >/dev/null 2>&1; then
-    if docker image inspect hypeman/builder:latest >/dev/null 2>&1; then
+    # `docker` needs daemon access, which the invoking user may not have on
+    # Linux (not in the `docker` group); the rest of the script already
+    # escalates privileged operations through $SUDO, so do the same here
+    # rather than failing the one step this script exists to make work.
+    DOCKER="docker"
+    if ! docker info >/dev/null 2>&1; then
+        if [ -n "$SUDO" ] && $SUDO docker info >/dev/null 2>&1; then
+            DOCKER="$SUDO docker"
+        fi
+    fi
+    if $DOCKER image inspect hypeman/builder:latest >/dev/null 2>&1; then
         info "Builder image hypeman/builder:latest already present, skipping build"
     else
         info "Building builder image..."
@@ -679,8 +689,9 @@ if command -v docker >/dev/null 2>&1; then
         fi
 
         if [ -n "$BUILD_CONTEXT" ] && [ -f "${BUILD_CONTEXT}/lib/builds/images/generic/Dockerfile" ]; then
-            if ! docker build -t hypeman/builder:latest -f "${BUILD_CONTEXT}/lib/builds/images/generic/Dockerfile" "$BUILD_CONTEXT" 2>/dev/null; then
-                warn "Failed to build builder image. Source builds will not work until it exists: docker build -t hypeman/builder:latest -f lib/builds/images/generic/Dockerfile <source checkout>"
+            BUILDER_BUILD_LOG="${TMP_DIR}/builder-image-build.log"
+            if ! $DOCKER build -t hypeman/builder:latest -f "${BUILD_CONTEXT}/lib/builds/images/generic/Dockerfile" "$BUILD_CONTEXT" > "$BUILDER_BUILD_LOG" 2>&1; then
+                warn "Failed to build builder image (log: ${BUILDER_BUILD_LOG}). Source builds will not work until it exists: docker build -t hypeman/builder:latest -f lib/builds/images/generic/Dockerfile <source checkout>"
             else
                 info "Builder image built successfully"
             fi
