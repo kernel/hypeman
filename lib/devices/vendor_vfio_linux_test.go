@@ -75,6 +75,20 @@ func TestVendorVFIOListProfilesSkipsUnreadableVF(t *testing.T) {
 		"only the readable VF counts toward availability")
 }
 
+func TestVendorVFIOCreateSkipsUnreadableVF(t *testing.T) {
+	sysfs := newTestVendorVFIOSysfs(t)
+	sysfs.addVF(t, "0000:82:00.0", "0000:82:00.4", "42", "0", testCreatableTypes)
+	sysfs.addVF(t, "0000:82:00.0", "0000:82:00.5", "43", "0", testCreatableTypes)
+	badCreatable := filepath.Join(sysfs.pciDevicesPath, "0000:82:00.5", "nvidia", "creatable_vgpu_types")
+	require.NoError(t, os.Remove(badCreatable))
+	require.NoError(t, os.Mkdir(badCreatable, 0755))
+
+	// Create places on the readable VF instead of failing the placement.
+	device, err := sysfs.create(context.Background(), "NVIDIA L40S-1Q", "inst-1")
+	require.NoError(t, err)
+	assert.Equal(t, "0000:82:00.4", device.VFAddress)
+}
+
 func TestVendorVFIOCreateAndDestroy(t *testing.T) {
 	t.Parallel()
 
