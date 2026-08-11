@@ -49,18 +49,21 @@ func vgpuDevicePendingCleanup(err error) (*devices.VGPUDevice, bool) {
 	return &pending.Device, true
 }
 
-func retainedVGPUFromCreateError(instanceID string, assignedAt time.Time, err error) *StoredMetadata {
+// retainedVGPUFromCreateError fills stub with the pending device's assignment
+// fields when err carries a failed device-layer cleanup. The caller provides
+// identity fields on stub so the retained record lists as a recognizable,
+// deletable instance.
+func retainedVGPUFromCreateError(stub StoredMetadata, assignedAt time.Time, err error) *StoredMetadata {
 	device, ok := vgpuDevicePendingCleanup(err)
 	if !ok {
 		return nil
 	}
-	return &StoredMetadata{
-		Id:            instanceID,
-		GPUFramework:  device.Framework,
-		GPUDevicePath: device.SysfsPath,
-		GPUMdevUUID:   device.MdevUUID,
-		GPUAssignedAt: &assignedAt,
-	}
+	stub.GPUProfile = device.ProfileName
+	stub.GPUFramework = device.Framework
+	stub.GPUDevicePath = device.SysfsPath
+	stub.GPUMdevUUID = device.MdevUUID
+	stub.GPUAssignedAt = &assignedAt
+	return &stub
 }
 
 func (m *manager) destroyVGPUAssignment(ctx context.Context, assignment devices.VGPUAssignment) error {
