@@ -1082,6 +1082,68 @@ func TestRestoreInstance_ErrorMapping(t *testing.T) {
 	}
 }
 
+// A retained-assignment error must win over the mapping of the start error
+// it wraps, or the response omits the pending vGPU cleanup the caller has to
+// resolve.
+func TestStartInstance_VGPUCleanupPendingBeatsWrappedErrorMapping(t *testing.T) {
+	t.Parallel()
+
+	resolved := &instances.Instance{
+		StoredMetadata: instances.StoredMetadata{Id: "inst-1", Name: "inst-1"},
+		State:          instances.StateStopped,
+	}
+
+	t.Run("retained", func(t *testing.T) {
+		t.Parallel()
+		svc := newTestService(t)
+		svc.InstanceManager = &errActionInstanceManager{Manager: svc.InstanceManager, err: &instances.VGPUCleanupPendingError{
+			InstanceID: "inst-1",
+			Retained:   true,
+			Err:        fmt.Errorf("create vGPU for profile p: %w", instances.ErrInsufficientResources),
+		}}
+
+		resp, rerr := svc.StartInstance(mw.WithResolvedInstance(ctx(), resolved.Id, resolved), oapi.StartInstanceRequestObject{Id: resolved.Id})
+		require.NoError(t, rerr)
+
+		pending, ok := resp.(oapi.StartInstance500JSONResponse)
+		require.True(t, ok, "expected 500 vgpu_cleanup_pending, got %T", resp)
+		assert.EqualValues(t, "vgpu_cleanup_pending", pending.Code)
+		assert.Contains(t, pending.Message, "inst-1")
+		assert.Contains(t, pending.Message, instances.ErrInsufficientResources.Error(),
+			"the underlying start failure must survive the cleanup guidance")
+		assert.Contains(t, pending.Message, "delete it or retry start")
+		require.NotNil(t, pending.InnerError)
+		require.NotNil(t, pending.InnerError.Code)
+		assert.Equal(t, "vgpu_retained_instance", *pending.InnerError.Code)
+		require.NotNil(t, pending.InnerError.Message)
+		assert.Equal(t, "inst-1", *pending.InnerError.Message)
+	})
+
+	t.Run("unretained", func(t *testing.T) {
+		t.Parallel()
+		svc := newTestService(t)
+		svc.InstanceManager = &errActionInstanceManager{Manager: svc.InstanceManager, err: &instances.VGPUCleanupPendingError{
+			InstanceID: "inst-1",
+			Err:        fmt.Errorf("create vGPU for profile p: %w", instances.ErrInsufficientResources),
+		}}
+
+		resp, rerr := svc.StartInstance(mw.WithResolvedInstance(ctx(), resolved.Id, resolved), oapi.StartInstanceRequestObject{Id: resolved.Id})
+		require.NoError(t, rerr)
+
+		pending, ok := resp.(oapi.StartInstance500JSONResponse)
+		require.True(t, ok, "expected 500 vgpu_cleanup_pending, got %T", resp)
+		assert.EqualValues(t, "vgpu_cleanup_pending", pending.Code)
+		assert.Contains(t, pending.Message, "retention record for instance inst-1 could not be saved")
+		assert.Contains(t, pending.Message, "startup reconcile")
+		assert.NotContains(t, pending.Message, "delete")
+		require.NotNil(t, pending.InnerError)
+		require.NotNil(t, pending.InnerError.Code)
+		assert.Equal(t, "vgpu_unretained_instance", *pending.InnerError.Code)
+		require.NotNil(t, pending.InnerError.Message)
+		assert.Equal(t, "inst-1", *pending.InnerError.Message)
+	})
+}
+
 func TestInstanceActions_ImageNotFoundMapsTo404(t *testing.T) {
 	t.Parallel()
 
