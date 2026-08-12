@@ -37,7 +37,7 @@ KEEP_DATA=false bash scripts/uninstall.sh 2>/dev/null || true
 # =============================================================================
 info "Phase 2: Installing from source..."
 if [ -n "${BINARY_DIR:-}" ]; then
-    BINARY_DIR="$BINARY_DIR" CLI_BRANCH="${CLI_BRANCH:-}" bash scripts/install.sh
+    BRANCH= VERSION= BINARY_DIR="$BINARY_DIR" CLI_BRANCH="${CLI_BRANCH:-}" bash scripts/install.sh
 else
     # Use the ref GitHub provides; on tag pushes rev-parse returns a detached "HEAD"
     BRANCH="${GITHUB_REF_NAME:-$(git rev-parse --abbrev-ref HEAD)}"
