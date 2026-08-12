@@ -21,7 +21,7 @@ pass() { echo -e "${GREEN}[PASS]${NC} $1"; }
 fail() { echo -e "${RED}[FAIL]${NC} $1"; exit 1; }
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+REPO_DIR="${HYPEMAN_E2E_REPO_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 
 cd "$REPO_DIR"

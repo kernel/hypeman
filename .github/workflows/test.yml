@@ -381,7 +381,12 @@ jobs:
           go build -o bin/hypeman-token ./cmd/gen-jwt
           cp config.example.darwin.yaml bin/
       - name: Run E2E install test
-        run: BINARY_DIR="$PWD/bin" bash scripts/e2e-install-test.sh
+        run: |
+          curl -fsSL --retry 5 --retry-all-errors \
+            "https://raw.githubusercontent.com/${{ github.repository }}/${{ github.sha }}/scripts/e2e-install-test.sh" \
+            -o "$RUNNER_TEMP/e2e-install-test.sh"
+          HYPEMAN_E2E_REPO_DIR="$PWD" BINARY_DIR="$PWD/bin" \
+            bash "$RUNNER_TEMP/e2e-install-test.sh"
       - name: Run E2E CLI-only install test
         run: |
           CLI_DIR="$(mktemp -d)"
