@@ -72,6 +72,7 @@ func CapabilitiesForVersion(v vmm.CHVersion) hypervisor.Capabilities {
 	case vmm.V51_1:
 		caps.SupportsDiskResize = true
 		caps.SupportsConcurrentForkPrepare = true
+		caps.SupportsSnapshotBaseReuse = experimentalDiffSnapshotsEnabled()
 	}
 	return caps
 }
@@ -163,14 +164,39 @@ func (c *CloudHypervisor) Resume(ctx context.Context) error {
 
 // Snapshot creates a VM snapshot.
 func (c *CloudHypervisor) Snapshot(ctx context.Context, destPath string) error {
+	diff, err := prepareDiffSnapshotDestination(destPath)
+	if err != nil {
+		return fmt.Errorf("prepare diff snapshot destination: %w", err)
+	}
+
 	snapshotURL := "file://" + destPath
 	snapshotConfig := vmm.VmSnapshotConfig{DestinationUrl: &snapshotURL}
+	if experimentalDiffSnapshotsEnabled() {
+		snapshotType := vmm.Full
+		if diff {
+			snapshotType = vmm.Diff
+		}
+		snapshotConfig.SnapshotType = &snapshotType
+	}
 	resp, err := c.client.PutVmSnapshotWithResponse(ctx, snapshotConfig)
 	if err != nil {
 		return fmt.Errorf("snapshot: %w", err)
 	}
 	if resp.StatusCode() != 204 {
 		return fmt.Errorf("snapshot failed with status %d", resp.StatusCode())
+	}
+	if diff {
+		stats, err := mergeCloudHypervisorDiff(destPath)
+		if err != nil {
+			return fmt.Errorf("merge diff snapshot: %w", err)
+		}
+		logger.FromContext(ctx).InfoContext(ctx, "merged Cloud Hypervisor diff snapshot",
+			"snapshot_dir", destPath,
+			"delta_bytes", stats.DeltaBytes,
+			"extents", stats.ExtentCount,
+			"reflinked_bytes", stats.ReflinkedBytes,
+			"copied_bytes", stats.CopiedBytes,
+		)
 	}
 	optimized, err := prepareSnapshotForKernelPaging(destPath)
 	if err != nil {

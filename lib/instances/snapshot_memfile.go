@@ -74,16 +74,20 @@ func linkFallbackReason(err error) string {
 	return "unknown"
 }
 
-// ensureExclusiveSnapshotMemoryOwnership replaces the snapshot mem-file with a
-// private copy when other hardlinks to its inode exist (fanout forks).
-// Firecracker merges diff snapshots by writing dirty pages into this file in
-// place, which must never mutate memory another instance still reads.
+// ensureExclusiveSnapshotMemoryOwnership replaces the snapshot mem-file before
+// a diff snapshot when another instance shares it. Cloud Hypervisor always gets
+// a reflinked inode because its running VM can still map the current base while
+// the sparse delta is merged.
 //
 // The stat -> copy -> rename sequence is not internally synchronized; callers
 // must hold the instance's write lock (the standby path does) so no fork can
 // take a new hardlink between the link-count check and the replacement.
-func ensureExclusiveSnapshotMemoryOwnership(ctx context.Context, snapshotDir string) error {
-	memPath := filepath.Join(snapshotDir, "memory")
+func ensureExclusiveSnapshotMemoryOwnership(ctx context.Context, snapshotDir string, hvType hypervisor.Type) error {
+	relPath, ok := sharedSnapshotMemoryRelPath(hvType)
+	if !ok {
+		return fmt.Errorf("snapshot memory ownership is not supported for hypervisor %s", hvType)
+	}
+	memPath := filepath.Join(snapshotDir, filepath.Base(relPath))
 	tmpPath := memPath + ".unshare.tmp"
 	// Sweep any stale tmp from a crash between copy and rename; it is
 	// mem-file-sized and must not linger.
@@ -97,20 +101,20 @@ func ensureExclusiveSnapshotMemoryOwnership(ctx context.Context, snapshotDir str
 		return fmt.Errorf("stat snapshot memory: %w", err)
 	}
 	stat, ok := info.Sys().(*syscall.Stat_t)
-	if !ok || stat.Nlink <= 1 {
+	if !ok || (stat.Nlink <= 1 && hvType != hypervisor.TypeCloudHypervisor) {
 		return nil
 	}
 
 	start := time.Now()
 	if err := forkvm.CopyRegularFile(memPath, tmpPath); err != nil {
 		_ = os.Remove(tmpPath)
-		return fmt.Errorf("copy shared snapshot memory: %w", err)
+		return fmt.Errorf("copy snapshot memory: %w", err)
 	}
 	if err := os.Rename(tmpPath, memPath); err != nil {
 		_ = os.Remove(tmpPath)
-		return fmt.Errorf("replace shared snapshot memory: %w", err)
+		return fmt.Errorf("replace snapshot memory: %w", err)
 	}
-	logger.FromContext(ctx).InfoContext(ctx, "unshared snapshot memory before diff snapshot",
+	logger.FromContext(ctx).InfoContext(ctx, "detached snapshot memory before diff snapshot",
 		"path", memPath, "links", stat.Nlink, "duration", time.Since(start).String())
 	return nil
 }

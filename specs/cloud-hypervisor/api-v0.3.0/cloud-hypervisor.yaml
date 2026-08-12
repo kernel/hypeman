@@ -1266,6 +1266,10 @@ components:
       properties:
         destination_url:
           type: string
+        snapshot_type:
+          type: string
+          enum: [full, diff]
+          default: full
 
     VmCoredumpData:
       type: object
@@ -1282,6 +1286,9 @@ components:
           type: string
         prefault:
           type: boolean
+        track_dirty_pages:
+          type: boolean
+          default: false
 
     ReceiveMigrationData:
       required:
