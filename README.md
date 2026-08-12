@@ -27,6 +27,7 @@
 - **Built-in ingress** — reverse proxy with TLS termination and subdomain routing
 - **GPU passthrough** — vGPU and VFIO device support
 - **OCI image support** — pull and run standard container images
+- **Remote registry push** — export cached images to any OCI registry (AWS ECR, Docker Hub, ghcr, ...) with docker-style borrowed credentials
 - **Remote API** — JWT-authenticated server with a separate CLI client
 
 ## Requirements
@@ -103,6 +104,17 @@ Hypeman is configured via YAML config files.
 
 See [`config.example.yaml`](config.example.yaml) (Linux) and [`config.example.darwin.yaml`](config.example.darwin.yaml) (macOS) for all available server options.
 
+To expose the API through Caddy on a public HTTPS hostname, configure the hostname and TLS in the server config. The hostname must also be included in `acme.allowed_domains`:
+
+```yaml
+api:
+  hostname: api.example.com
+  tls: true
+  redirect_http: true
+```
+
+With this configuration, use `https://api.example.com` as the API base URL. Without it, the API is available on the server's configured port (4973 by default).
+
 ## Usage
 
 ```bash
@@ -131,6 +143,80 @@ hypeman exec my-app whoami
 
 # Shell into the VM
 hypeman exec -it my-app /bin/sh
+```
+
+### Pushing Images to Remote Registries
+
+A ready image can be exported asynchronously to any OCI registry through the
+remote API. Set the API base URL and API key used by the examples below:
+
+```bash
+export HYPEMAN_BASE_URL="https://api.example.com"
+export HYPEMAN_API_KEY="<api-key>"
+```
+
+Credentials use the Docker model:
+
+- If `credentials` is provided, the client lends `username`/`password` or
+  `registry_token` for this push only. Hypeman uses them in memory and never
+  persists or logs them.
+- If `credentials` is omitted, Hypeman uses the server's Docker keychain,
+  including `/root/.docker/config.json` or the configured service user's
+  `~/.docker/config.json` and any credential helpers.
+- If Hypeman restarts while a push using borrowed credentials is running, that
+  job fails instead of retrying without the original credentials. Anonymous
+  interrupted jobs can be recovered with the server's keychain.
+
+Use an HTTPS API URL when sending credentials. The `insecure` request field
+controls only the connection from Hypeman to the destination registry.
+
+For example, push to ECR using a short-lived login password:
+
+```bash
+export ECR_PASSWORD="$(aws ecr get-login-password --region us-east-1)"
+
+curl --fail-with-body --silent --show-error \
+  -X POST "$HYPEMAN_BASE_URL/pushes" \
+  -H "Authorization: Bearer $HYPEMAN_API_KEY" \
+  -H "Content-Type: application/json" \
+  --data "{
+    \"image\": \"myapp:latest\",
+    \"target\": \"123456789.dkr.ecr.us-east-1.amazonaws.com/myapp:v1\",
+    \"credentials\": {
+      \"username\": \"AWS\",
+      \"password\": \"$ECR_PASSWORD\"
+    }
+  }"
+```
+
+The response contains a push `id`. Poll it until the status is `pushed` or
+`failed`:
+
+```bash
+curl --fail-with-body --silent --show-error \
+  "$HYPEMAN_BASE_URL/pushes/<push-id>" \
+  -H "Authorization: Bearer $HYPEMAN_API_KEY"
+```
+
+Push jobs move through `queued`, `pushing`, and `pushed` or `failed`.
+`queue_position` is present while a job is queued; successful jobs report
+`layers`, `bytes`, and `completed_at`, while failed jobs report `error`.
+`GET /pushes` lists jobs newest first.
+
+Set `"insecure": true` only when the destination registry uses plain HTTP.
+HTTPS registries do not need this option. Invalid image names or targets return
+`400`, a missing image returns `404`, and only images in the `ready` state can
+be pushed (`409 image_not_ready` otherwise).
+
+Layer blobs are preserved. OCI manifest digests are preserved too, while a
+Docker v2 manifest is converted to OCI and can therefore receive a new digest;
+use the returned `digest` as the destination manifest digest.
+
+The default limit is two concurrent pushes. Increase or lower it with:
+
+```yaml
+limits:
+  max_concurrent_pushes: 2
 ```
 
 ### VM Lifecycle

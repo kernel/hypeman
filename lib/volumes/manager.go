@@ -33,7 +33,7 @@ type Manager interface {
 	DetachVolume(ctx context.Context, volumeID string, instanceID string) error
 
 	// GetVolumePath returns the path to the volume data file
-	GetVolumePath(id string) string
+	GetVolumePath(id string) (string, error)
 
 	// TotalVolumeBytes returns the total size of all volumes.
 	// Used by the resource manager for disk capacity tracking.
@@ -166,6 +166,9 @@ func (m *manager) CreateVolume(ctx context.Context, req CreateVolumeRequest) (*V
 	if req.Id != nil && *req.Id != "" {
 		id = *req.Id
 	}
+	if err := validateVolumeID(id); err != nil {
+		return nil, err
+	}
 
 	// Check volume doesn't already exist
 	if _, err := loadMetadata(m.paths, id); err == nil {
@@ -233,6 +236,9 @@ func (m *manager) CreateVolumeFromArchive(ctx context.Context, req CreateVolumeF
 	id := cuid2.Generate()
 	if req.Id != nil && *req.Id != "" {
 		id = *req.Id
+	}
+	if err := validateVolumeID(id); err != nil {
+		return nil, err
 	}
 
 	// Check volume doesn't already exist
@@ -454,8 +460,11 @@ func (m *manager) DetachVolume(ctx context.Context, volumeID string, instanceID 
 }
 
 // GetVolumePath returns the path to the volume data file
-func (m *manager) GetVolumePath(id string) string {
-	return m.paths.VolumeData(id)
+func (m *manager) GetVolumePath(id string) (string, error) {
+	if err := validateVolumeID(id); err != nil {
+		return "", err
+	}
+	return m.paths.VolumeData(id), nil
 }
 
 // TotalVolumeBytes returns the total size of all volumes.

@@ -27,6 +27,9 @@ type storedMetadata struct {
 
 // loadMetadata loads builder metadata from disk
 func loadMetadata(p *paths.Paths, id string) (*storedMetadata, error) {
+	if err := ValidateBuilderID(id); err != nil {
+		return nil, ErrNotFound
+	}
 	data, err := os.ReadFile(p.BuilderMetadata(id))
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -45,6 +48,9 @@ func loadMetadata(p *paths.Paths, id string) (*storedMetadata, error) {
 
 // saveMetadata writes builder metadata to disk atomically
 func saveMetadata(p *paths.Paths, meta *storedMetadata) error {
+	if err := ValidateBuilderID(meta.ID); err != nil {
+		return err
+	}
 	dir := p.BuilderDir(meta.ID)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("create builder directory: %w", err)
@@ -69,6 +75,9 @@ func saveMetadata(p *paths.Paths, meta *storedMetadata) error {
 
 // deleteBuilderData removes all builder data from disk
 func deleteBuilderData(p *paths.Paths, id string) error {
+	if err := ValidateBuilderID(id); err != nil {
+		return ErrNotFound
+	}
 	if err := os.RemoveAll(p.BuilderDir(id)); err != nil {
 		return fmt.Errorf("remove builder directory: %w", err)
 	}

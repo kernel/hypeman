@@ -292,8 +292,8 @@ func (m *mockVolumeManager) DetachVolume(ctx context.Context, volumeID string, i
 	return nil
 }
 
-func (m *mockVolumeManager) GetVolumePath(id string) string {
-	return "/tmp/volumes/" + id
+func (m *mockVolumeManager) GetVolumePath(id string) (string, error) {
+	return "/tmp/volumes/" + id, nil
 }
 
 func (m *mockVolumeManager) TotalVolumeBytes(ctx context.Context) (int64, error) {

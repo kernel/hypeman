@@ -115,6 +115,14 @@ func monitoringTestManager(t *testing.T) (*Manager, *monitoringInstanceLister, *
 	return mgr, instanceLister, imageLister
 }
 
+func waitForMonitoringSnapshot(t *testing.T, mgr *Manager) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		_, ok := mgr.currentMonitoringSnapshot()
+		return ok
+	}, 5*time.Second, 10*time.Millisecond)
+}
+
 func TestStartMonitoringPublishesCapacityMetrics(t *testing.T) {
 	mgr, _, _ := monitoringTestManager(t)
 
@@ -125,6 +133,7 @@ func TestStartMonitoringPublishesCapacityMetrics(t *testing.T) {
 	defer cancel()
 
 	require.NoError(t, mgr.StartMonitoring(ctx, provider.Meter("test"), time.Hour))
+	waitForMonitoringSnapshot(t, mgr)
 
 	status, err := mgr.GetFullStatus(context.Background())
 	require.NoError(t, err)
@@ -159,6 +168,7 @@ func TestStartMonitoringRefreshesSnapshot(t *testing.T) {
 	defer cancel()
 
 	require.NoError(t, mgr.StartMonitoring(ctx, provider.Meter("test"), 20*time.Millisecond))
+	waitForMonitoringSnapshot(t, mgr)
 
 	instanceLister.SetAllocations([]InstanceAllocation{
 		{
@@ -210,6 +220,7 @@ func TestStartMonitoringPublishesGPUMetrics(t *testing.T) {
 	defer cancel()
 
 	require.NoError(t, mgr.StartMonitoring(ctx, provider.Meter("test"), time.Hour))
+	waitForMonitoringSnapshot(t, mgr)
 
 	rm := collectMonitoringMetrics(t, reader)
 	require.Equal(t, int64(3), int64GaugeValue(t, rm, "hypeman_resources_gpu_slots", map[string]string{"kind": "used"}))
@@ -242,6 +253,7 @@ func TestStartMonitoringPublishesDiskUtilizationFromCachedSnapshot(t *testing.T)
 	defer cancel()
 
 	require.NoError(t, mgr.StartMonitoring(ctx, provider.Meter("test"), time.Hour))
+	waitForMonitoringSnapshot(t, mgr)
 
 	initialRM := collectMonitoringMetrics(t, reader)
 	initialVolumeBytes := int64GaugeValue(t, initialRM, "hypeman_disk_utilization_bytes", map[string]string{"component": "volumes"})

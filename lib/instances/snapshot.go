@@ -37,7 +37,7 @@ func (m *manager) getSnapshot(ctx context.Context, snapshotID string) (*Snapshot
 	_ = ctx
 	snapshot, err := m.snapshotStore().Get(snapshotID)
 	if err != nil {
-		if errors.Is(err, snapshotstore.ErrNotFound) {
+		if errors.Is(err, snapshotstore.ErrNotFound) || errors.Is(err, snapshotstore.ErrInvalidID) {
 			return nil, ErrSnapshotNotFound
 		}
 		return nil, err
@@ -232,7 +232,7 @@ func (m *manager) deleteSnapshot(ctx context.Context, snapshotID string) error {
 		m.recordSnapshotCompressionPreemption(ctx, snapshotCompressionPreemptionDeleteSnapshot, target.Target)
 	}
 	if err := m.snapshotStore().Delete(snapshotID); err != nil {
-		if errors.Is(err, snapshotstore.ErrNotFound) {
+		if errors.Is(err, snapshotstore.ErrNotFound) || errors.Is(err, snapshotstore.ErrInvalidID) {
 			return ErrSnapshotNotFound
 		}
 		return err
@@ -637,7 +637,7 @@ func (m *manager) saveSnapshotRecord(rec *snapshotRecord) error {
 func (m *manager) loadSnapshotRecord(snapshotID string) (*snapshotRecord, error) {
 	record, err := snapshotstore.LoadTypedRecord[StoredMetadata](m.snapshotStore(), snapshotID)
 	if err != nil {
-		if errors.Is(err, snapshotstore.ErrNotFound) {
+		if errors.Is(err, snapshotstore.ErrNotFound) || errors.Is(err, snapshotstore.ErrInvalidID) {
 			return nil, ErrSnapshotNotFound
 		}
 		return nil, err

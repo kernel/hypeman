@@ -15,6 +15,7 @@ import (
 	"github.com/kernel/hypeman/lib/builds"
 	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/guestmemory"
+	"github.com/kernel/hypeman/lib/imagepush"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/ingress"
 	"github.com/kernel/hypeman/lib/instances"
@@ -67,6 +68,10 @@ func initializeApp() (*application, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	imagepushManager, err := providers.ProvidePushManager(paths, config, manager)
+	if err != nil {
+		return nil, nil, err
+	}
 	resourcesManager, err := providers.ProvideResourceManager(context, config, paths, manager, instancesManager, volumesManager)
 	if err != nil {
 		return nil, nil, err
@@ -85,7 +90,7 @@ func initializeApp() (*application, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	apiService := api.New(config, manager, instancesManager, volumesManager, buildersManager, networkManager, devicesManager, ingressManager, buildsManager, resourcesManager, controller, autostandbyController, vm_metricsManager)
+	apiService := api.New(config, manager, instancesManager, volumesManager, buildersManager, networkManager, devicesManager, ingressManager, buildsManager, imagepushManager, resourcesManager, controller, autostandbyController, vm_metricsManager)
 	mainApplication := &application{
 		Ctx:                   context,
 		Logger:                logger,
@@ -99,6 +104,7 @@ func initializeApp() (*application, func(), error) {
 		BuilderManager:        buildersManager,
 		IngressManager:        ingressManager,
 		BuildManager:          buildsManager,
+		PushManager:           imagepushManager,
 		ResourceManager:       resourcesManager,
 		GuestMemoryController: controller,
 		AutoStandbyController: autostandbyController,
@@ -127,6 +133,7 @@ type application struct {
 	BuilderManager        builders.Manager
 	IngressManager        ingress.Manager
 	BuildManager          builds.Manager
+	PushManager           imagepush.Manager
 	ResourceManager       *resources.Manager
 	GuestMemoryController guestmemory.Controller
 	AutoStandbyController *autostandby.Controller
