@@ -146,7 +146,16 @@ jobs:
           export HYPEMAN_TEST_PREWARM_DIR="/ci/prewarm/linux-amd64"
           mkdir -p "$HYPEMAN_TEST_PREWARM_DIR"
           sudo chown -R "$(id -u):$(id -g)" "$HYPEMAN_TEST_PREWARM_DIR"
-          go run ./cmd/test-prewarm
+          for attempt in 1 2 3; do
+            if go run ./cmd/test-prewarm; then
+              exit 0
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              echo "prewarm failed (attempt ${attempt}/3); retrying in 10 seconds..."
+              sleep 10
+            fi
+          done
+          exit 1
 
       - name: Check gofmt
         run: |
@@ -374,12 +383,14 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_PASSWORD }}
-      - name: Build E2E install binaries
+      - name: Build E2E install artifacts
         run: |
           make sign-darwin
           cp bin/hypeman bin/hypeman-api
           go build -o bin/hypeman-token ./cmd/gen-jwt
           cp config.example.darwin.yaml bin/
+          docker build -t hypeman/builder:latest \
+            -f lib/builds/images/generic/Dockerfile .
       - name: Run E2E install test
         run: |
           curl -fsSL --retry 5 --retry-all-errors \
