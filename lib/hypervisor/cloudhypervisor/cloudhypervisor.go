@@ -208,8 +208,33 @@ func (c *CloudHypervisor) Snapshot(ctx context.Context, destPath string) error {
 	return nil
 }
 
+func (c *CloudHypervisor) ResizeVCPUs(ctx context.Context, vcpus int) error {
+	resp, err := c.client.PutVmResizeWithResponse(ctx, vmm.VmResize{DesiredVcpus: &vcpus})
+	if err != nil {
+		return fmt.Errorf("resize vCPUs: %w", err)
+	}
+	if resp.StatusCode() != 204 {
+		return fmt.Errorf("resize vCPUs failed with status %d", resp.StatusCode())
+	}
+	return nil
+}
+
 // ResizeMemory changes the VM's memory allocation.
 func (c *CloudHypervisor) ResizeMemory(ctx context.Context, bytes int64) error {
+	if ExperimentalHotplugOverlayEnabled() {
+		resp, err := c.client.PutVmResizeZoneWithResponse(ctx, vmm.VmResizeZone{
+			Id:         ptr(kernelPagingMemoryZoneID),
+			DesiredRam: ptr(bytes),
+		})
+		if err != nil {
+			return fmt.Errorf("resize memory zone: %w", err)
+		}
+		if resp.StatusCode() != 204 {
+			return fmt.Errorf("resize memory zone failed with status %d", resp.StatusCode())
+		}
+		return nil
+	}
+
 	resizeConfig := vmm.VmResize{DesiredRam: &bytes}
 	resp, err := c.client.PutVmResizeWithResponse(ctx, resizeConfig)
 	if err != nil {

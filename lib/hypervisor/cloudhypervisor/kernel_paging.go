@@ -80,12 +80,16 @@ func prepareSnapshotForKernelPaging(snapshotDir string) (bool, error) {
 		return false, nil
 	}
 
-	fileOffsets, totalSize, ok := snapshotMappingFileOffsets(ranges, mappings)
-	if !ok || totalSize != uint64(memoryInfo.Size()) {
-		return false, nil
-	}
-	for i := range mappings {
-		mappings[i].FileOffset = fileOffsets[i]
+	fixedLayout := ExperimentalHotplugOverlayEnabled() &&
+		fixedSnapshotMappingLayout(ranges, mappings, uint64(memoryInfo.Size()))
+	if !fixedLayout {
+		fileOffsets, totalSize, ok := snapshotMappingFileOffsets(ranges, mappings)
+		if !ok || totalSize != uint64(memoryInfo.Size()) {
+			return false, nil
+		}
+		for i := range mappings {
+			mappings[i].FileOffset = fileOffsets[i]
+		}
 	}
 
 	updatedConfig, ok, err := kernelPagingConfig(configData, memoryPath, mappings)
@@ -256,6 +260,55 @@ func snapshotMappingFileOffsets(
 	return mappingOffsets, offset, true
 }
 
+func fixedSnapshotMappingLayout(
+	ranges []snapshotMemoryRange,
+	mappings []snapshotGuestRAMMapping,
+	fileSize uint64,
+) bool {
+	if len(ranges) == 0 || len(mappings) == 0 {
+		return false
+	}
+
+	hasVirtioMem := false
+	var layoutSize uint64
+	for _, mapping := range mappings {
+		if mapping.Size == 0 || mapping.FileOffset > ^uint64(0)-mapping.Size {
+			return false
+		}
+		end := mapping.FileOffset + mapping.Size
+		if end > layoutSize {
+			layoutSize = end
+		}
+		hasVirtioMem = hasVirtioMem || mapping.VirtioMem
+	}
+	if !hasVirtioMem || layoutSize != fileSize {
+		return false
+	}
+
+	for _, r := range ranges {
+		if r.Length == 0 || r.GPA > ^uint64(0)-r.Length {
+			return false
+		}
+		rangeEnd := r.GPA + r.Length
+		found := false
+		for _, mapping := range mappings {
+			if mapping.GPA > ^uint64(0)-mapping.Size {
+				return false
+			}
+			if r.GPA >= mapping.GPA && rangeEnd <= mapping.GPA+mapping.Size {
+				if found {
+					return false
+				}
+				found = true
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+
 func kernelPagingConfig(
 	configData []byte,
 	memoryPath string,
@@ -301,8 +354,9 @@ func kernelPagingConfig(
 	}
 
 	zone := zones[0]
+	zoneHasHotplug := hasConfiguredDevice(zone["hotplug_size"]) || hasConfiguredDevice(zone["hotplugged_size"])
 	if rawBool(zone["shared"]) || rawBool(zone["hugepages"]) ||
-		hasConfiguredDevice(zone["hotplug_size"]) || hasConfiguredDevice(zone["hotplugged_size"]) {
+		(zoneHasHotplug && !ExperimentalHotplugOverlayEnabled()) {
 		return nil, false, nil
 	}
 	var zoneID string
@@ -310,7 +364,7 @@ func kernelPagingConfig(
 		return nil, false, nil
 	}
 	for _, mapping := range mappings {
-		if mapping.ZoneID != zoneID {
+		if mapping.ZoneID != zoneID || (mapping.VirtioMem && !ExperimentalHotplugOverlayEnabled()) {
 			return nil, false, nil
 		}
 	}

@@ -80,7 +80,7 @@ func (s *Starter) ValidateConfig(config hypervisor.VMConfig) error {
 	if config.MemoryBytes <= 0 {
 		return fmt.Errorf("file-backed memory requires a positive memory size")
 	}
-	if config.HotplugBytes > 0 {
+	if config.HotplugBytes > 0 && !ExperimentalHotplugOverlayEnabled() {
 		return fmt.Errorf("file-backed memory does not support hotplug memory")
 	}
 	if config.GuestMemory.EnableBalloon {
@@ -138,7 +138,11 @@ func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, s
 	if err := s.ValidateConfig(config); err != nil {
 		return 0, nil, err
 	}
-	if err := prepareMemoryBackingFile(config.MemoryBackingFile, config.MemoryBytes); err != nil {
+	memoryBackingSize := config.MemoryBytes
+	if config.MemoryBackingFile != "" && ExperimentalHotplugOverlayEnabled() {
+		memoryBackingSize += config.HotplugBytes
+	}
+	if err := prepareMemoryBackingFile(config.MemoryBackingFile, memoryBackingSize); err != nil {
 		return 0, nil, fmt.Errorf("prepare memory backing file: %w", err)
 	}
 

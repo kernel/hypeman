@@ -37,13 +37,17 @@ func ToVMConfig(cfg hypervisor.VMConfig) vmm.VmConfig {
 	}
 
 	// CPU configuration
+	maxVCPUs := cfg.VCPUs
+	if experimentalMaxVCPUs := ExperimentalMaxVCPUs(); experimentalMaxVCPUs > maxVCPUs {
+		maxVCPUs = experimentalMaxVCPUs
+	}
 	cpus := vmm.CpusConfig{
 		BootVcpus: cfg.VCPUs,
-		MaxVcpus:  cfg.VCPUs,
+		MaxVcpus:  maxVCPUs,
 	}
 
-	// Add topology if provided
-	if cfg.Topology != nil {
+	// Add topology if provided.
+	if cfg.Topology != nil && maxVCPUs == cfg.VCPUs {
 		cpus.Topology = &vmm.CpuTopology{
 			ThreadsPerCore: ptr(cfg.Topology.ThreadsPerCore),
 			CoresPerDie:    ptr(cfg.Topology.CoresPerDie),
@@ -55,21 +59,26 @@ func ToVMConfig(cfg hypervisor.VMConfig) vmm.VmConfig {
 	// Memory configuration
 	memory := vmm.MemoryConfig{Size: cfg.MemoryBytes}
 	if cfg.MemoryBackingFile != "" {
-		zones := []vmm.MemoryZoneConfig{{
+		zone := vmm.MemoryZoneConfig{
 			Id:        kernelPagingMemoryZoneID,
 			Size:      cfg.MemoryBytes,
 			File:      ptr(cfg.MemoryBackingFile),
 			Shared:    ptr(false),
 			Prefault:  ptr(false),
 			Hugepages: ptr(false),
-		}}
+		}
+		if cfg.HotplugBytes > 0 && ExperimentalHotplugOverlayEnabled() {
+			zone.HotplugSize = &cfg.HotplugBytes
+			memory.HotplugMethod = ptr("VirtioMem")
+		}
+		zones := []vmm.MemoryZoneConfig{zone}
 		memory.Size = 0
 		memory.Shared = ptr(false)
 		memory.Prefault = ptr(false)
 		memory.Hugepages = ptr(false)
 		memory.Zones = &zones
 	}
-	if cfg.HotplugBytes > 0 {
+	if cfg.HotplugBytes > 0 && (cfg.MemoryBackingFile == "" || !ExperimentalHotplugOverlayEnabled()) {
 		memory.HotplugSize = &cfg.HotplugBytes
 		memory.HotplugMethod = ptr("VirtioMem")
 	}

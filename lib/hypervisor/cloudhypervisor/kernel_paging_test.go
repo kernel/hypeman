@@ -70,6 +70,59 @@ func TestPrepareSnapshotForKernelPaging(t *testing.T) {
 	assert.False(t, optimized)
 }
 
+func TestPrepareSnapshotForKernelPagingWithHotplugOverlay(t *testing.T) {
+	t.Setenv(experimentalHotplugOverlayEnv, "true")
+
+	dir := writeKernelPagingSnapshot(t, kernelPagingSnapshotFixture{
+		Ranges: []snapshotMemoryRange{
+			{GPA: 0, Length: 4096},
+			{GPA: 1 << 32, Length: 4096},
+		},
+		Mappings: []snapshotGuestRAMMapping{
+			{Slot: 0, GPA: 0, Size: 4096, ZoneID: kernelPagingMemoryZoneID},
+			{Slot: 1, GPA: 1 << 32, Size: 8192, ZoneID: kernelPagingMemoryZoneID, VirtioMem: true, FileOffset: 4096},
+		},
+		MemorySize:     0,
+		MemoryFileSize: 12288,
+		Zones: []map[string]any{{
+			"id":              kernelPagingMemoryZoneID,
+			"size":            4096,
+			"file":            "/old/memory.raw",
+			"hotplug_size":    8192,
+			"hotplugged_size": 4096,
+		}},
+	})
+
+	optimized, err := prepareSnapshotForKernelPaging(dir)
+	require.NoError(t, err)
+	require.True(t, optimized)
+
+	stateData, err := os.ReadFile(filepath.Join(dir, cloudHypervisorStateFile))
+	require.NoError(t, err)
+	_, _, ranges, mappings, err := decodeSnapshotMemoryState(stateData)
+	require.NoError(t, err)
+	assert.Empty(t, ranges)
+	require.Len(t, mappings, 2)
+	assert.Equal(t, uint64(4096), mappings[1].FileOffset)
+
+	configData, err := os.ReadFile(filepath.Join(dir, cloudHypervisorConfigFile))
+	require.NoError(t, err)
+	var config struct {
+		Memory struct {
+			Zones []struct {
+				File           string `json:"file"`
+				HotplugSize    uint64 `json:"hotplug_size"`
+				HotpluggedSize uint64 `json:"hotplugged_size"`
+			} `json:"zones"`
+		} `json:"memory"`
+	}
+	require.NoError(t, json.Unmarshal(configData, &config))
+	require.Len(t, config.Memory.Zones, 1)
+	assert.Equal(t, filepath.Join(dir, cloudHypervisorMemoryFile), config.Memory.Zones[0].File)
+	assert.Equal(t, uint64(8192), config.Memory.Zones[0].HotplugSize)
+	assert.Equal(t, uint64(4096), config.Memory.Zones[0].HotpluggedSize)
+}
+
 func TestPrepareSnapshotForKernelPagingIgnoresUnmarkedMemoryZones(t *testing.T) {
 	t.Parallel()
 
@@ -177,23 +230,26 @@ func TestPrepareSnapshotForKernelPagingLeavesUnsupportedSnapshotsUnchanged(t *te
 }
 
 type kernelPagingSnapshotFixture struct {
-	Ranges     []snapshotMemoryRange
-	Mappings   []snapshotGuestRAMMapping
-	MemorySize uint64
-	Zones      []map[string]any
-	Balloon    any
-	Hugepages  bool
-	Net        any
-	Devices    any
+	Ranges         []snapshotMemoryRange
+	Mappings       []snapshotGuestRAMMapping
+	MemorySize     uint64
+	MemoryFileSize int64
+	Zones          []map[string]any
+	Balloon        any
+	Hugepages      bool
+	Net            any
+	Devices        any
 }
 
 func writeKernelPagingSnapshot(t *testing.T, fixture kernelPagingSnapshotFixture) string {
 	t.Helper()
 
 	dir := t.TempDir()
-	memorySize := int64(0)
-	for _, r := range fixture.Ranges {
-		memorySize += int64(r.Length)
+	memorySize := fixture.MemoryFileSize
+	if memorySize == 0 {
+		for _, r := range fixture.Ranges {
+			memorySize += int64(r.Length)
+		}
 	}
 	require.NoError(t, os.WriteFile(filepath.Join(dir, cloudHypervisorMemoryFile), nil, 0600))
 	require.NoError(t, os.Truncate(filepath.Join(dir, cloudHypervisorMemoryFile), memorySize))
