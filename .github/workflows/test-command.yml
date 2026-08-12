@@ -6,6 +6,7 @@ on:
 
 permissions:
   actions: write
+  checks: read
   contents: read
   issues: write
   pull-requests: read
@@ -66,6 +67,32 @@ jobs:
             echo "head_sha=$head_sha"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Reject commits pushed after the command
+        if: steps.command.outputs.run == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+          COMMENT_CREATED_AT: ${{ github.event.comment.created_at }}
+        run: |
+          set -euo pipefail
+          first_seen_at="$(gh api --paginate "repos/$REPO/commits/$HEAD_SHA/check-suites?per_page=100" \
+            --jq '.check_suites[].created_at' | sort | head -n1)"
+          if [ -z "$first_seen_at" ]; then
+            echo "::error::cannot verify when GitHub first saw commit $HEAD_SHA"
+            exit 1
+          fi
+
+          first_seen_epoch="$(jq -nr --arg timestamp "$first_seen_at" '$timestamp | fromdateiso8601')"
+          comment_epoch="$(jq -nr --arg timestamp "$COMMENT_CREATED_AT" '$timestamp | fromdateiso8601')"
+          if [ "$first_seen_epoch" -ge "$comment_epoch" ]; then
+            gh api "repos/$REPO/issues/$PR_NUMBER/comments" \
+              --field body="Tests were not dispatched because the current commit was pushed after the /test command. Review the latest changes and comment /test again."
+            echo "::error::commit $HEAD_SHA was first seen at $first_seen_at, not before the command at $COMMENT_CREATED_AT"
+            exit 1
+          fi
+
       - name: Reject dependency changes
         if: steps.command.outputs.run == 'true' && steps.pr.outputs.head_repo != github.repository
         env:
@@ -88,10 +115,19 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.issue.number }}
           HEAD_REPO: ${{ steps.pr.outputs.head_repo }}
           HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
         run: |
           set -euo pipefail
+          current_head_sha="$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.head.sha')"
+          if [ "$current_head_sha" != "$HEAD_SHA" ]; then
+            gh api "repos/$REPO/issues/$PR_NUMBER/comments" \
+              --field body="Tests were not dispatched because the pull request changed after the /test command. Review the latest changes and comment /test again."
+            echo "::error::pull request head changed from $HEAD_SHA to $current_head_sha"
+            exit 1
+          fi
+
           gh workflow run test.yml \
             --repo "$REPO" \
             --ref main \
