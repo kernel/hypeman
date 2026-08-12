@@ -159,6 +159,132 @@ func TestResolveProcessPIDFailsWhenFDIsUnreadable(t *testing.T) {
 	require.False(t, errors.Is(err, ErrNoOwningProcess))
 }
 
+func TestResolveProcessPIDForOwnerConfirmsCandidateWithoutFullScan(t *testing.T) {
+	oldProcDir := procDir
+	procDir = t.TempDir()
+	t.Cleanup(func() { procDir = oldProcDir })
+
+	socketPath := "/tmp/test.sock"
+	require.NoError(t, os.MkdirAll(filepath.Join(procDir, "net"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(procDir, "net", "unix"), []byte("00000000: 00000002 00000000 00010000 0001 01 12345 "+socketPath+"\n"), 0o644))
+
+	fdDir := filepath.Join(procDir, "100", "fd")
+	require.NoError(t, os.MkdirAll(fdDir, 0o755))
+	require.NoError(t, os.Symlink("socket:[12345]", filepath.Join(fdDir, "3")))
+
+	// An unreadable sibling fd must not block confirming the candidate.
+	siblingFDDir := filepath.Join(procDir, "123", "fd")
+	require.NoError(t, os.MkdirAll(siblingFDDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(siblingFDDir, "3"), nil, 0o644))
+
+	pid, confirmed, err := ResolveProcessPIDForOwner(socketPath, 100)
+	require.NoError(t, err)
+	require.True(t, confirmed)
+	require.Equal(t, 100, pid)
+}
+
+func TestResolveProcessPIDForOwnerFallsThroughWhenCandidateLacksSocket(t *testing.T) {
+	oldProcDir := procDir
+	procDir = t.TempDir()
+	t.Cleanup(func() { procDir = oldProcDir })
+
+	socketPath := "/tmp/test.sock"
+	require.NoError(t, os.MkdirAll(filepath.Join(procDir, "net"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(procDir, "net", "unix"), []byte("00000000: 00000002 00000000 00010000 0001 01 12345 "+socketPath+"\n"), 0o644))
+
+	candidateFDDir := filepath.Join(procDir, "999", "fd")
+	require.NoError(t, os.MkdirAll(candidateFDDir, 0o755))
+	require.NoError(t, os.Symlink("socket:[99999]", filepath.Join(candidateFDDir, "3")))
+
+	ownerFDDir := filepath.Join(procDir, "200", "fd")
+	require.NoError(t, os.MkdirAll(ownerFDDir, 0o755))
+	require.NoError(t, os.Symlink("socket:[12345]", filepath.Join(ownerFDDir, "3")))
+
+	pid, confirmed, err := ResolveProcessPIDForOwner(socketPath, 999)
+	require.NoError(t, err)
+	require.True(t, confirmed)
+	require.Equal(t, 200, pid)
+}
+
+func TestResolveProcessPIDForOwnerFallsThroughWhenCandidateIsGone(t *testing.T) {
+	oldProcDir := procDir
+	procDir = t.TempDir()
+	t.Cleanup(func() { procDir = oldProcDir })
+
+	socketPath := "/tmp/test.sock"
+	require.NoError(t, os.MkdirAll(filepath.Join(procDir, "net"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(procDir, "net", "unix"), []byte("00000000: 00000002 00000000 00010000 0001 01 12345 "+socketPath+"\n"), 0o644))
+
+	ownerFDDir := filepath.Join(procDir, "200", "fd")
+	require.NoError(t, os.MkdirAll(ownerFDDir, 0o755))
+	require.NoError(t, os.Symlink("socket:[12345]", filepath.Join(ownerFDDir, "3")))
+
+	pid, confirmed, err := ResolveProcessPIDForOwner(socketPath, 999)
+	require.NoError(t, err)
+	require.True(t, confirmed)
+	require.Equal(t, 200, pid)
+}
+
+func TestResolveProcessPIDForOwnerReportsMissingSocket(t *testing.T) {
+	oldProcDir := procDir
+	procDir = t.TempDir()
+	t.Cleanup(func() { procDir = oldProcDir })
+
+	require.NoError(t, os.MkdirAll(filepath.Join(procDir, "net"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(procDir, "net", "unix"), []byte("00000000: 00000002 00000000 00010000 0001 01 12345 /tmp/other.sock\n"), 0o644))
+
+	_, confirmed, err := ResolveProcessPIDForOwner("/tmp/missing.sock", 100)
+	require.ErrorIs(t, err, ErrNoOwningProcess)
+	require.False(t, confirmed)
+}
+
+func TestResolveProcessPIDForOwnerReportsMissingSocketWithHeaderOnlyUnixTable(t *testing.T) {
+	oldProcDir := procDir
+	procDir = t.TempDir()
+	t.Cleanup(func() { procDir = oldProcDir })
+
+	require.NoError(t, os.MkdirAll(filepath.Join(procDir, "net"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(procDir, "net", "unix"), []byte("Num       RefCount Protocol Flags    Type St Inode Path\n"), 0o644))
+
+	_, confirmed, err := ResolveProcessPIDForOwner("/tmp/missing.sock", 100)
+	require.ErrorIs(t, err, ErrNoOwningProcess)
+	require.False(t, confirmed)
+}
+
+func TestResolveProcessPIDForOwnerReportsDuplicateSocketInodes(t *testing.T) {
+	oldProcDir := procDir
+	procDir = t.TempDir()
+	t.Cleanup(func() { procDir = oldProcDir })
+
+	socketPath := "/tmp/test.sock"
+	require.NoError(t, os.MkdirAll(filepath.Join(procDir, "net"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(procDir, "net", "unix"), []byte(
+		"00000000: 00000002 00000000 00010000 0001 01 12345 "+socketPath+"\n"+
+			"00000000: 00000002 00000000 00010000 0001 01 67890 "+socketPath+"\n"), 0o644))
+
+	fdDir := filepath.Join(procDir, "100", "fd")
+	require.NoError(t, os.MkdirAll(fdDir, 0o755))
+	require.NoError(t, os.Symlink("socket:[12345]", filepath.Join(fdDir, "3")))
+
+	_, confirmed, err := ResolveProcessPIDForOwner(socketPath, 100)
+	require.ErrorContains(t, err, "multiple socket inodes found")
+	require.False(t, confirmed)
+}
+
+func TestResolveProcessPIDForOwnerConfirmsLiveListener(t *testing.T) {
+	tmpDir := t.TempDir()
+	socketPath := filepath.Join(tmpDir, "test.sock")
+
+	listener, err := net.Listen("unix", socketPath)
+	require.NoError(t, err)
+	defer listener.Close()
+
+	pid, confirmed, err := ResolveProcessPIDForOwner(socketPath, os.Getpid())
+	require.NoError(t, err)
+	require.True(t, confirmed)
+	require.Equal(t, os.Getpid(), pid)
+}
+
 func TestResolveProcessPIDDuringProcessChurn(t *testing.T) {
 	socketPath := filepath.Join(t.TempDir(), "test.sock")
 	listener, err := net.Listen("unix", socketPath)
