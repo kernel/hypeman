@@ -37,8 +37,9 @@ func (s *ApiService) CreateImage(ctx context.Context, request oapi.CreateImageRe
 	log := logger.FromContext(ctx)
 
 	domainReq := images.CreateImageRequest{
-		Name: request.Body.Name,
-		Tags: toMapTags(request.Body.Tags),
+		Name:        request.Body.Name,
+		Tags:        toMapTags(request.Body.Tags),
+		Credentials: registryCredentialsToAuthn(request.Body.Credentials),
 	}
 	if request.Body.Platform != nil {
 		domainReq.Platform = *request.Body.Platform

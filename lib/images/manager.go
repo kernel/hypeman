@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/kernel/hypeman/lib/paths"
 	"github.com/kernel/hypeman/lib/queue"
 	"github.com/kernel/hypeman/lib/tags"
@@ -62,6 +63,7 @@ type manager struct {
 	readyImageBytes  int64
 	ociCacheBytes    int64
 	metrics          *Metrics
+	inflightAuth     map[string][32]byte           // keyed by digest
 	readySubscribers map[string][]chan StatusEvent // keyed by digestHex
 	subscriberMu     sync.RWMutex
 }
@@ -96,6 +98,14 @@ func NewManager(p *paths.Paths, maxConcurrentBuilds int, meter metric.Meter) (Ma
 	return m, nil
 }
 
+func cloneCredentials(credentials *authn.AuthConfig) *authn.AuthConfig {
+	if credentials == nil || (credentials.Username == "" && credentials.Password == "" && credentials.RegistryToken == "") {
+		return nil
+	}
+	cloned := *credentials
+	return &cloned
+}
+
 func (m *manager) ListImages(ctx context.Context) ([]Image, error) {
 	metas, err := listAllMetadata(m.paths)
 	if err != nil {
@@ -111,6 +121,7 @@ func (m *manager) ListImages(ctx context.Context) ([]Image, error) {
 }
 
 func (m *manager) CreateImage(ctx context.Context, req CreateImageRequest) (*Image, error) {
+	req.Credentials = cloneCredentials(req.Credentials)
 	if err := tags.Validate(req.Tags); err != nil {
 		return nil, err
 	}
@@ -133,6 +144,11 @@ func (m *manager) CreateImage(ctx context.Context, req CreateImageRequest) (*Ima
 	resolveCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
+	var inspector ManifestInspector = m.ociClient
+	if req.Credentials != nil {
+		inspector = &credentialedManifestInspector{client: m.ociClient, credentials: req.Credentials}
+	}
+
 	var ref *ResolvedRef
 	if normalized.IsDigest() {
 		// A digest pin must resolve to its exact manifest (verifying the digest
@@ -143,7 +159,7 @@ func (m *manager) CreateImage(ctx context.Context, req CreateImageRequest) (*Ima
 		// resolve goes through the ManifestInspector seam, symmetric with the tag
 		// path below, so it stays fake-testable.
 		var actual Platform
-		actual, ref, err = normalized.ResolveDigest(resolveCtx, m.ociClient, platform.ToGCR())
+		actual, ref, err = normalized.ResolveDigest(resolveCtx, inspector, platform.ToGCR())
 		if err != nil {
 			return nil, fmt.Errorf("resolve digest manifest: %w", err)
 		}
@@ -153,7 +169,7 @@ func (m *manager) CreateImage(ctx context.Context, req CreateImageRequest) (*Ima
 	} else {
 		// inspectManifestWithPlatform already classifies registry errors via
 		// ClassifyRegistryError, so just propagate with %w to keep the errors.Is chain.
-		ref, err = normalized.ResolveForPlatform(resolveCtx, m.ociClient, platform.ToGCR())
+		ref, err = normalized.ResolveForPlatform(resolveCtx, inspector, platform.ToGCR())
 		if err != nil {
 			return nil, fmt.Errorf("resolve manifest for platform %s: %w", platform, err)
 		}
@@ -251,13 +267,14 @@ func (m *manager) createAndQueueImage(ref *ResolvedRef, req CreateImageRequest, 
 	// buildImage overwrites it with the authoritative manifest platform once the
 	// image config is pulled.
 	meta := &imageMetadata{
-		Name:      ref.String(),
-		Digest:    ref.Digest(),
-		Platform:  requestedPlatform.String(),
-		Status:    StatusPending,
-		Request:   &storedReq,
-		Tags:      tags.Clone(req.Tags),
-		CreatedAt: time.Now(),
+		Name:         ref.String(),
+		Digest:       ref.Digest(),
+		Platform:     requestedPlatform.String(),
+		Status:       StatusPending,
+		Request:      &storedReq,
+		BorrowedAuth: req.Credentials != nil,
+		Tags:         tags.Clone(req.Tags),
+		CreatedAt:    time.Now(),
 	}
 
 	// Write initial metadata
@@ -267,7 +284,7 @@ func (m *manager) createAndQueueImage(ref *ResolvedRef, req CreateImageRequest, 
 
 	// Enqueue the build using digest as the queue key for deduplication
 	queuePos := m.queue.Enqueue(ref.Digest(), func() {
-		m.buildImage(context.Background(), ref)
+		m.buildImage(context.Background(), ref, req.Credentials)
 	}, nil)
 
 	img := meta.toImage()
@@ -277,7 +294,7 @@ func (m *manager) createAndQueueImage(ref *ResolvedRef, req CreateImageRequest, 
 	return img, nil
 }
 
-func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef) {
+func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef, credentials *authn.AuthConfig) {
 	buildStart := time.Now()
 	buildStatus := "failed"
 	buildDir := m.paths.SystemBuild(ref.String())
@@ -306,7 +323,7 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef) {
 	// still pulls the architecture its digest identifies. Uses the cache if the
 	// digest is already pulled.
 	pullRef := ref.DigestRef()
-	result, err := m.ociClient.pullAndExport(ctx, pullRef, ref.Digest(), tempDir)
+	result, err := m.ociClient.pullAndExportWithAuth(ctx, pullRef, ref.Digest(), tempDir, credentials)
 	m.recordPullResultMetrics(ctx, ref.Digest(), result)
 	if err != nil {
 		m.updateStatusByDigest(ref, StatusFailed, fmt.Errorf("pull and export: %w", err))
@@ -476,6 +493,14 @@ func (m *manager) RecoverInterruptedBuilds() {
 	for _, meta := range metas {
 		switch meta.Status {
 		case StatusPending, StatusPulling, StatusConverting:
+			if meta.BorrowedAuth {
+				normalized, parseErr := ParseNormalizedRef(meta.Name)
+				if parseErr == nil {
+					ref := NewResolvedRef(normalized, meta.Digest)
+					m.updateStatusByDigest(ref, StatusFailed, ErrBorrowedCredentialsExpired)
+				}
+				continue
+			}
 			if meta.Request != nil && meta.Digest != "" {
 				metaCopy := meta
 				normalized, err := ParseNormalizedRef(metaCopy.Name)
@@ -485,7 +510,7 @@ func (m *manager) RecoverInterruptedBuilds() {
 				// Create a ResolvedRef since we already have the digest from metadata
 				ref := NewResolvedRef(normalized, metaCopy.Digest)
 				m.queue.Enqueue(metaCopy.Digest, func() {
-					m.buildImage(context.Background(), ref)
+					m.buildImage(context.Background(), ref, nil)
 				}, nil)
 			}
 		}

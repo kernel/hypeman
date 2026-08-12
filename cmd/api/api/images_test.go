@@ -27,6 +27,52 @@ func (m createImageErrManager) CreateImage(context.Context, images.CreateImageRe
 	return nil, m.err
 }
 
+type captureCreateImageManager struct {
+	images.Manager
+	req images.CreateImageRequest
+}
+
+func (m *captureCreateImageManager) CreateImage(_ context.Context, req images.CreateImageRequest) (*images.Image, error) {
+	m.req = req
+	return &images.Image{Name: req.Name, Digest: "sha256:test", Status: images.StatusPending, CreatedAt: time.Now()}, nil
+}
+
+func TestCreateImage_MapsBorrowedCredentials(t *testing.T) {
+	t.Parallel()
+
+	username, password, token := "borrower", "secret", "registry-token"
+	manager := &captureCreateImageManager{}
+	svc := &ApiService{ImageManager: manager}
+
+	resp, err := svc.CreateImage(context.Background(), oapi.CreateImageRequestObject{Body: &oapi.CreateImageRequest{
+		Name: "registry.example/private/image:latest",
+		Credentials: &oapi.PushCredentials{
+			Username:      &username,
+			Password:      &password,
+			RegistryToken: &token,
+		},
+	}})
+	require.NoError(t, err)
+	require.IsType(t, oapi.CreateImage202JSONResponse{}, resp)
+	require.NotNil(t, manager.req.Credentials)
+	assert.Equal(t, username, manager.req.Credentials.Username)
+	assert.Equal(t, password, manager.req.Credentials.Password)
+	assert.Equal(t, token, manager.req.Credentials.RegistryToken)
+}
+
+func TestCreateImage_EmptyCredentialsUseServerKeychain(t *testing.T) {
+	t.Parallel()
+
+	manager := &captureCreateImageManager{}
+	svc := &ApiService{ImageManager: manager}
+	_, err := svc.CreateImage(context.Background(), oapi.CreateImageRequestObject{Body: &oapi.CreateImageRequest{
+		Name:        "docker.io/library/alpine:latest",
+		Credentials: &oapi.PushCredentials{},
+	}})
+	require.NoError(t, err)
+	assert.Nil(t, manager.req.Credentials)
+}
+
 func TestCreateImage_ErrorStatusMapping(t *testing.T) {
 	t.Parallel()
 
