@@ -67,7 +67,9 @@ func processHoldsSocketRef(pid int, socketRef string) bool {
 	for _, fdEntry := range fdEntries {
 		target, err := os.Readlink(filepath.Join(procDir, strconv.Itoa(pid), "fd", fdEntry.Name()))
 		if err != nil {
-			return false
+			// Skip fds that cannot be read, like the full scan does: an fd
+			// vanishing mid-scan must not hide a listener held by a later fd.
+			continue
 		}
 		if strings.TrimSpace(target) == socketRef {
 			return true
