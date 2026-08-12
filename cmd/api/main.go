@@ -296,6 +296,11 @@ func run() error {
 	}); ok {
 		reconciler.StartTAPGCReconciler(ctx)
 	}
+	if backfiller, ok := app.InstanceManager.(interface {
+		BackfillHypervisorProcessIdentities(context.Context)
+	}); ok {
+		go backfiller.BackfillHypervisorProcessIdentities(ctx)
+	}
 
 	// Log OTel status
 	if cfg.Otel.Enabled {
