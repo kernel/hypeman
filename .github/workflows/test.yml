@@ -2,8 +2,6 @@ name: Test
 
 on:
   push: {}
-  pull_request:
-    branches: [main]
   workflow_dispatch:
     inputs:
       pr_head_repo:
@@ -16,11 +14,14 @@ on:
         type: string
 
 # A slash-command dispatch supplies a fork repository and immutable commit SHA.
-# Normal PR runs keep using the upstream merge ref.
+# Normal push runs use the upstream repository and pushed ref.
 env:
-  TEST_PR_HEAD_REPO: ${{ inputs.pr_head_repo || github.event.pull_request.head.repo.full_name || github.repository }}
+  TEST_PR_HEAD_REPO: ${{ inputs.pr_head_repo || github.repository }}
   TEST_SOURCE_REPO: ${{ inputs.pr_head_repo || github.repository }}
   TEST_SOURCE_REF: ${{ inputs.pr_head_sha || github.ref }}
+
+permissions:
+  contents: read
 
 jobs:
   test:

@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   dispatch:
-    if: ${{ github.event.issue.pull_request && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) }}
+    if: ${{ github.event.issue.pull_request }}
     runs-on: ubuntu-latest
     steps:
       - name: Check command
@@ -26,6 +26,24 @@ jobs:
             exit 0
           fi
           echo "run=true" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout command configuration
+        if: steps.command.outputs.run == 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Check maintainer authorization
+        if: steps.command.outputs.run == 'true'
+        env:
+          AUTHOR: ${{ github.event.comment.user.login }}
+        run: |
+          set -euo pipefail
+          if ! grep -Fxq "$AUTHOR" .github/test-command-maintainers; then
+            echo "::error::$AUTHOR is not authorized to run public contribution tests"
+            exit 1
+          fi
 
       - name: Resolve pull request head
         if: steps.command.outputs.run == 'true'
@@ -47,6 +65,23 @@ jobs:
             echo "head_repo=$head_repo"
             echo "head_sha=$head_sha"
           } >> "$GITHUB_OUTPUT"
+
+      - name: Reject dependency changes
+        if: steps.command.outputs.run == 'true' && steps.pr.outputs.head_repo != github.repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          dependency_files="$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" \
+            --jq '.[] | select(.filename == "go.mod" or .filename == "go.sum") | .filename')"
+          if [ -n "$dependency_files" ]; then
+            gh api "repos/$REPO/issues/$PR_NUMBER/comments" \
+              --field body="Tests were not dispatched because public contributions cannot change go.mod or go.sum."
+            echo "::error::public contribution changes dependency files: $dependency_files"
+            exit 1
+          fi
 
       - name: Dispatch tests
         if: steps.command.outputs.run == 'true'
