@@ -691,7 +691,11 @@ if command -v docker >/dev/null 2>&1; then
         if [ -n "$BUILD_CONTEXT" ] && [ -f "${BUILD_CONTEXT}/lib/builds/images/generic/Dockerfile" ]; then
             BUILDER_BUILD_LOG="${TMP_DIR}/builder-image-build.log"
             if ! $DOCKER build -t hypeman/builder:latest -f "${BUILD_CONTEXT}/lib/builds/images/generic/Dockerfile" "$BUILD_CONTEXT" > "$BUILDER_BUILD_LOG" 2>&1; then
-                warn "Failed to build builder image (log: ${BUILDER_BUILD_LOG}). Source builds will not work until it exists: docker build -t hypeman/builder:latest -f lib/builds/images/generic/Dockerfile <source checkout>"
+                # TMP_DIR is removed by the EXIT trap, so print the captured output
+                # now rather than naming a log path that will not survive the install.
+                warn "Failed to build builder image; docker build output follows:"
+                sed 's/^/    /' "$BUILDER_BUILD_LOG" >&2
+                warn "Source builds will not work until it exists: docker build -t hypeman/builder:latest -f lib/builds/images/generic/Dockerfile <source checkout>"
             else
                 info "Builder image built successfully"
             fi
