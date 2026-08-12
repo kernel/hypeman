@@ -51,12 +51,6 @@ jobs:
           cache: false
           go-version: '1.25.4'
 
-      - name: Prepare Docker config
-        if: env.TEST_PR_HEAD_REPO != github.repository
-        run: |
-          mkdir -p "$RUNNER_TEMP/empty-docker-config"
-          printf '{}\n' > "$RUNNER_TEMP/empty-docker-config/config.json"
-
       - name: Check UFFD pager version
         run: |
           git fetch "https://github.com/${{ github.repository }}.git" main:refs/remotes/upstream/main --depth=1
@@ -103,10 +97,9 @@ jobs:
             sudo env "PATH=$TEST_PATH" bash -lc "command -v '$bin'"
           done
 
-      # Avoid rate limits when running trusted branches. Fork PRs cannot access
-      # repository secrets, so they use the runner's existing image cache.
+      # Slash-command runs are maintainer-approved and need authenticated pulls
+      # for images that are not covered by the prewarm cache.
       - name: Login to Docker Hub
-        if: env.TEST_PR_HEAD_REPO == github.repository
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -143,7 +136,7 @@ jobs:
 
       - name: Prewarm test cache
         env:
-          DOCKER_CONFIG: ${{ env.TEST_PR_HEAD_REPO == github.repository && '/home/debianuser/.docker' || format('{0}/empty-docker-config', runner.temp) }}
+          DOCKER_CONFIG: /home/debianuser/.docker
           HYPEMAN_TEST_REGISTRY: 127.0.0.1:5001
         run: |
           # Prewarm cache must live on the same filesystem as the test TMPDIR
@@ -173,7 +166,7 @@ jobs:
         env:
           GO_TEST_TIMEOUT: 600s
           # Docker auth for tests running as root (sudo)
-          DOCKER_CONFIG: ${{ env.TEST_PR_HEAD_REPO == github.repository && '/home/debianuser/.docker' || format('{0}/empty-docker-config', runner.temp) }}
+          DOCKER_CONFIG: /home/debianuser/.docker
           # TLS/ACME testing (optional - tests will skip if not configured)
           ACME_EMAIL: ${{ env.TEST_PR_HEAD_REPO == github.repository && secrets.ACME_EMAIL || '' }}
           ACME_DNS_PROVIDER: "cloudflare"
@@ -276,7 +269,6 @@ jobs:
 
           docker info
       - name: Login to Docker Hub
-        if: env.TEST_PR_HEAD_REPO == github.repository
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -377,6 +369,11 @@ jobs:
           # Self-hosted runners retain Docker layers across jobs. Start the
           # install E2E with deterministic headroom for its builder image.
           docker system prune --all --force --volumes
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_PASSWORD }}
       - name: Build E2E install binaries
         run: |
           make sign-darwin
