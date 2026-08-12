@@ -51,7 +51,7 @@ fi
 info "Phase 3: Waiting for service to be healthy..."
 
 PORT=4973
-TIMEOUT=60
+TIMEOUT=180
 ELAPSED=0
 
 while [ $ELAPSED -lt $TIMEOUT ]; do

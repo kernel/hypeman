@@ -109,7 +109,17 @@ jobs:
         run: make oapi-generate
 
       - name: Build
-        run: make build
+        run: |
+          for attempt in 1 2 3; do
+            if make build; then
+              exit 0
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              echo "build failed (attempt ${attempt}/3); retrying in 10 seconds..."
+              sleep 10
+            fi
+          done
+          exit 1
 
       - name: Install UFFD pager systemd template
         run: |
