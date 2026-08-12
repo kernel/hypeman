@@ -184,6 +184,7 @@ jobs:
       - name: Run tests
         env:
           GO_TEST_TIMEOUT: 600s
+          GODEBUG: http2client=0
           # Docker auth for tests running as root (sudo)
           DOCKER_CONFIG: /home/debianuser/.docker
           # TLS/ACME testing (optional - tests will skip if not configured)
