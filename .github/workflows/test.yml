@@ -114,15 +114,24 @@ jobs:
         run: |
           set -euo pipefail
           for version in v49.0 v51.1; do
-            destination="lib/vmm/binaries/cloud-hypervisor/$version/x86_64/cloud-hypervisor"
-            mkdir -p "$(dirname "$destination")"
-            gh release download "$version" \
-              --repo cloud-hypervisor/cloud-hypervisor \
-              --pattern cloud-hypervisor-static \
-              --output "$destination" \
-              --clobber
-            chmod +x "$destination"
-            file "$destination" | grep -q 'x86-64'
+            for architecture in x86_64 aarch64; do
+              if [ "$architecture" = "x86_64" ]; then
+                asset="cloud-hypervisor-static"
+                file_pattern='x86-64'
+              else
+                asset="cloud-hypervisor-static-aarch64"
+                file_pattern='aarch64|ARM aarch64'
+              fi
+              destination="lib/vmm/binaries/cloud-hypervisor/$version/$architecture/cloud-hypervisor"
+              mkdir -p "$(dirname "$destination")"
+              gh release download "$version" \
+                --repo cloud-hypervisor/cloud-hypervisor \
+                --pattern "$asset" \
+                --output "$destination" \
+                --clobber
+              chmod +x "$destination"
+              file "$destination" | grep -Eiq "$file_pattern"
+            done
           done
 
       - name: Build
