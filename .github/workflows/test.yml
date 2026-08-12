@@ -172,7 +172,8 @@ jobs:
         env:
           GO_TEST_TIMEOUT: 600s
           # Docker auth for tests running as root (sudo)
-          DOCKER_CONFIG: ${{ env.TEST_PR_HEAD_REPO == github.repository && '/home/debianuser/.docker' || format('{0}/empty-docker-config', runner.temp) }}          # TLS/ACME testing (optional - tests will skip if not configured)
+          DOCKER_CONFIG: ${{ env.TEST_PR_HEAD_REPO == github.repository && '/home/debianuser/.docker' || format('{0}/empty-docker-config', runner.temp) }}
+          # TLS/ACME testing (optional - tests will skip if not configured)
           ACME_EMAIL: ${{ env.TEST_PR_HEAD_REPO == github.repository && secrets.ACME_EMAIL || '' }}
           ACME_DNS_PROVIDER: "cloudflare"
           ACME_CA: "https://acme-staging-v02.api.letsencrypt.org/directory"
