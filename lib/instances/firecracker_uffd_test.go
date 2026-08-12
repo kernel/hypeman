@@ -263,7 +263,7 @@ func TestEnsureExclusiveSnapshotMemoryOwnershipUnsharesHardlinkedMemory(t *testi
 	forkLinkPath := filepath.Join(root, "fork-memory")
 	require.NoError(t, os.Link(memPath, forkLinkPath))
 
-	require.NoError(t, ensureExclusiveSnapshotMemoryOwnership(context.Background(), snapshotDir))
+	require.NoError(t, ensureExclusiveSnapshotMemoryOwnership(context.Background(), snapshotDir, hypervisor.TypeFirecracker))
 
 	assertDifferentInode(t, memPath, forkLinkPath)
 	unshared, err := os.ReadFile(memPath)
@@ -286,14 +286,14 @@ func TestEnsureExclusiveSnapshotMemoryOwnershipSkipsPrivateMemory(t *testing.T) 
 	before, err := os.Stat(memPath)
 	require.NoError(t, err)
 
-	require.NoError(t, ensureExclusiveSnapshotMemoryOwnership(context.Background(), snapshotDir))
+	require.NoError(t, ensureExclusiveSnapshotMemoryOwnership(context.Background(), snapshotDir, hypervisor.TypeFirecracker))
 
 	after, err := os.Stat(memPath)
 	require.NoError(t, err)
 	assert.True(t, os.SameFile(before, after), "private mem-file must not be rewritten")
 	assert.NoFileExists(t, stalePath, "stale unshare tmp must be swept on standby entry")
 
-	require.NoError(t, ensureExclusiveSnapshotMemoryOwnership(context.Background(), filepath.Join(t.TempDir(), "missing")))
+	require.NoError(t, ensureExclusiveSnapshotMemoryOwnership(context.Background(), filepath.Join(t.TempDir(), "missing"), hypervisor.TypeFirecracker))
 }
 
 func installOneShotFirecrackerStarter(t *testing.T, mgr *manager) {

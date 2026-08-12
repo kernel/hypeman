@@ -50,6 +50,12 @@ const (
 	Shutdown VmInfoState = "Shutdown"
 )
 
+// Defines values for VmSnapshotConfigSnapshotType.
+const (
+	Diff VmSnapshotConfigSnapshotType = "diff"
+	Full VmSnapshotConfigSnapshotType = "full"
+)
+
 // BalloonConfig defines model for BalloonConfig.
 type BalloonConfig struct {
 	// DeflateOnOom Deflate balloon when the guest is under memory pressure.
@@ -314,8 +320,9 @@ type ReceiveMigrationData struct {
 
 // RestoreConfig defines model for RestoreConfig.
 type RestoreConfig struct {
-	Prefault  *bool  `json:"prefault,omitempty"`
-	SourceUrl string `json:"source_url"`
+	Prefault        *bool  `json:"prefault,omitempty"`
+	SourceUrl       string `json:"source_url"`
+	TrackDirtyPages *bool  `json:"track_dirty_pages,omitempty"`
 }
 
 // RngConfig defines model for RngConfig.
@@ -451,8 +458,12 @@ type VmResizeZone struct {
 
 // VmSnapshotConfig defines model for VmSnapshotConfig.
 type VmSnapshotConfig struct {
-	DestinationUrl *string `json:"destination_url,omitempty"`
+	DestinationUrl *string                       `json:"destination_url,omitempty"`
+	SnapshotType   *VmSnapshotConfigSnapshotType `json:"snapshot_type,omitempty"`
 }
+
+// VmSnapshotConfigSnapshotType defines model for VmSnapshotConfig.SnapshotType.
+type VmSnapshotConfigSnapshotType string
 
 // VmmPingResponse Virtual Machine Monitor information
 type VmmPingResponse struct {

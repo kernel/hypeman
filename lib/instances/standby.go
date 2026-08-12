@@ -138,10 +138,9 @@ func (m *manager) standbyInstance(
 			}
 			return nil, fmt.Errorf("prepare retained snapshot target: %w", err)
 		}
-		// The diff snapshot below writes dirty pages into the mem-file in
-		// place; if fanout forks still hardlink its inode, replace it with a
-		// private copy first so their memory is never mutated.
-		if err := ensureExclusiveSnapshotMemoryOwnership(ctx, snapshotDir); err != nil {
+		// Detach the retained memory before merging a diff so sibling forks
+		// and the running VM keep their immutable view of the prior base.
+		if err := ensureExclusiveSnapshotMemoryOwnership(ctx, snapshotDir, stored.HypervisorType); err != nil {
 			if resumeErr := hv.Resume(ctx); resumeErr != nil {
 				log.ErrorContext(ctx, "failed to resume VM after snapshot memory unshare error", "instance_id", id, "error", resumeErr)
 			}

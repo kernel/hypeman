@@ -261,6 +261,9 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 		SourceUrl: sourceURL,
 		Prefault:  ptr(false),
 	}
+	if experimentalDiffSnapshotsEnabled() {
+		restoreConfig.TrackDirtyPages = ptr(true)
+	}
 	resp, err := hv.client.PutVmRestoreWithResponse(ctx, restoreConfig)
 	if err != nil {
 		return 0, nil, fmt.Errorf("restore: %w", err)
