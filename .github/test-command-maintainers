@@ -1,0 +1,7 @@
+# SECURITY: REVIEW PUBLIC CONTRIBUTIONS BEFORE APPROVING THEM
+#
+# Everyone listed below is expected to verify that a public contribution is safe
+# to run on Kernel CI before approving it with the /test slash command.
+# One GitHub username per line.
+sjmiller609
+chruffins

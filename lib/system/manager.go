@@ -55,7 +55,7 @@ func getInitrdEnsureLock(initrdDir string) *sync.Mutex {
 // downloading/building them if needed.
 func (m *manager) EnsureSystemFiles(ctx context.Context) error {
 	for _, kernelVer := range SupportedKernelVersions {
-		if _, err := m.ensureKernel(kernelVer); err != nil {
+		if _, err := m.ensureKernel(ctx, kernelVer); err != nil {
 			return fmt.Errorf("ensure kernel %s: %w", kernelVer, err)
 		}
 	}
