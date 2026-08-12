@@ -108,7 +108,26 @@ jobs:
       - name: Generate OpenAPI code
         run: make oapi-generate
 
+      - name: Download Cloud Hypervisor binaries
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for version in v49.0 v51.1; do
+            destination="lib/vmm/binaries/cloud-hypervisor/$version/x86_64/cloud-hypervisor"
+            mkdir -p "$(dirname "$destination")"
+            gh release download "$version" \
+              --repo cloud-hypervisor/cloud-hypervisor \
+              --pattern cloud-hypervisor-static \
+              --output "$destination" \
+              --clobber
+            chmod +x "$destination"
+            file "$destination" | grep -q 'x86-64'
+          done
+
       - name: Build
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           for attempt in 1 2 3; do
             if make build; then
@@ -147,6 +166,7 @@ jobs:
       - name: Prewarm test cache
         env:
           DOCKER_CONFIG: /home/debianuser/.docker
+          GITHUB_TOKEN: ${{ github.token }}
           HYPEMAN_TEST_REGISTRY: 127.0.0.1:5001
         run: |
           # Prewarm cache must live on the same filesystem as the test TMPDIR
@@ -184,6 +204,7 @@ jobs:
       - name: Run tests
         env:
           GO_TEST_TIMEOUT: 600s
+          GITHUB_TOKEN: ${{ github.token }}
           # Docker auth for tests running as root (sudo)
           DOCKER_CONFIG: /home/debianuser/.docker
           # TLS/ACME testing (optional - tests will skip if not configured)
@@ -302,10 +323,13 @@ jobs:
       - name: Generate OpenAPI code
         run: make oapi-generate
       - name: Build
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: make build
 
       - name: Prewarm test cache
         env:
+          GITHUB_TOKEN: ${{ github.token }}
           HYPEMAN_TEST_REGISTRY: 127.0.0.1:5001
         run: |
           export HYPEMAN_TEST_PREWARM_DIR="$HOME/.cache/hypeman-ci/darwin-arm64"
@@ -329,6 +353,7 @@ jobs:
         env:
           GO_TEST_TIMEOUT: 600s
           DEFAULT_HYPERVISOR: vz
+          GITHUB_TOKEN: ${{ github.token }}
           JWT_SECRET: ci-test-secret
           HYPEMAN_TEST_PREWARM_STRICT: "1"
           HYPEMAN_TEST_REGISTRY: 127.0.0.1:5001
@@ -394,6 +419,8 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_PASSWORD }}
       - name: Build E2E install artifacts
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           make sign-darwin
           cp bin/hypeman bin/hypeman-api
@@ -402,6 +429,8 @@ jobs:
           docker build -t hypeman/builder:latest \
             -f lib/builds/images/generic/Dockerfile .
       - name: Run E2E install test
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           curl -fsSL --retry 5 --retry-all-errors \
             "https://raw.githubusercontent.com/${{ github.repository }}/${{ github.sha }}/scripts/e2e-install-test.sh" \
@@ -409,6 +438,8 @@ jobs:
           HYPEMAN_E2E_REPO_DIR="$PWD" BINARY_DIR="$PWD/bin" \
             bash "$RUNNER_TEMP/e2e-install-test.sh"
       - name: Run E2E CLI-only install test
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           CLI_DIR="$(mktemp -d)"
           INSTALL_DIR="$CLI_DIR" bash scripts/install-cli.sh

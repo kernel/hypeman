@@ -1,6 +1,7 @@
 package system
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -9,7 +10,7 @@ import (
 )
 
 // downloadKernel downloads a kernel from Cloud Hypervisor releases
-func (m *manager) downloadKernel(version KernelVersion, arch string) error {
+func (m *manager) downloadKernel(ctx context.Context, version KernelVersion, arch string) error {
 	url, ok := KernelDownloadURLs[version][arch]
 	if !ok {
 		return fmt.Errorf("unsupported kernel version/arch: %s/%s", version, arch)
@@ -29,7 +30,7 @@ func (m *manager) downloadKernel(version KernelVersion, arch string) error {
 		},
 	}
 
-	resp, err := client.Get(url)
+	resp, err := doDownloadRequest(ctx, client, url)
 	if err != nil {
 		return fmt.Errorf("http get: %w", err)
 	}
@@ -61,7 +62,7 @@ func (m *manager) downloadKernel(version KernelVersion, arch string) error {
 }
 
 // ensureKernel ensures kernel exists, downloads if missing
-func (m *manager) ensureKernel(version KernelVersion) (string, error) {
+func (m *manager) ensureKernel(ctx context.Context, version KernelVersion) (string, error) {
 	arch := GetArch()
 
 	kernelPath := m.paths.SystemKernel(string(version), arch)
@@ -72,7 +73,7 @@ func (m *manager) ensureKernel(version KernelVersion) (string, error) {
 	}
 
 	// Download kernel
-	if err := m.downloadKernel(version, arch); err != nil {
+	if err := m.downloadKernel(ctx, version, arch); err != nil {
 		return "", fmt.Errorf("download kernel: %w", err)
 	}
 
