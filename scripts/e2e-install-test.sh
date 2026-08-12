@@ -36,10 +36,14 @@ KEEP_DATA=false bash scripts/uninstall.sh 2>/dev/null || true
 # Phase 2: Install from source
 # =============================================================================
 info "Phase 2: Installing from source..."
-# Use the ref GitHub provides; on tag pushes rev-parse returns a detached "HEAD"
-BRANCH="${GITHUB_REF_NAME:-$(git rev-parse --abbrev-ref HEAD)}"
-# Build CLI from source too when CLI_BRANCH is set (e.g., for testing unreleased CLI features)
-BRANCH="$BRANCH" CLI_BRANCH="${CLI_BRANCH:-}" bash scripts/install.sh
+if [ -n "${BINARY_DIR:-}" ]; then
+    BINARY_DIR="$BINARY_DIR" CLI_BRANCH="${CLI_BRANCH:-}" bash scripts/install.sh
+else
+    # Use the ref GitHub provides; on tag pushes rev-parse returns a detached "HEAD"
+    BRANCH="${GITHUB_REF_NAME:-$(git rev-parse --abbrev-ref HEAD)}"
+    # Build CLI from source too when CLI_BRANCH is set (e.g., for testing unreleased CLI features)
+    BRANCH="$BRANCH" CLI_BRANCH="${CLI_BRANCH:-}" bash scripts/install.sh
+fi
 
 # =============================================================================
 # Phase 3: Wait for service

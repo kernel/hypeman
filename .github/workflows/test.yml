@@ -377,8 +377,14 @@ jobs:
           # Self-hosted runners retain Docker layers across jobs. Start the
           # install E2E with deterministic headroom for its builder image.
           docker system prune --all --force --volumes
+      - name: Build E2E install binaries
+        run: |
+          make sign-darwin
+          cp bin/hypeman bin/hypeman-api
+          go build -o bin/hypeman-token ./cmd/gen-jwt
+          cp config.example.darwin.yaml bin/
       - name: Run E2E install test
-        run: bash scripts/e2e-install-test.sh
+        run: BINARY_DIR="$PWD/bin" bash scripts/e2e-install-test.sh
       - name: Run E2E CLI-only install test
         run: |
           CLI_DIR="$(mktemp -d)"
