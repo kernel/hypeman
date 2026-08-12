@@ -50,7 +50,7 @@ func mergeCloudHypervisorDiff(snapshotDir string) (diffMergeStats, error) {
 	dstFD := int(dst.Fd())
 	size := srcInfo.Size()
 	offset := int64(0)
-	cloneRanges := true
+	cloneRanges := !ExperimentalHotplugOverlayEnabled()
 	buf := make([]byte, 1<<20)
 
 	for offset < size {

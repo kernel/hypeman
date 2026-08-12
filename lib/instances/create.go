@@ -13,6 +13,7 @@ import (
 	"github.com/kernel/hypeman/lib/egressproxy"
 	"github.com/kernel/hypeman/lib/guestmemory"
 	"github.com/kernel/hypeman/lib/hypervisor"
+	"github.com/kernel/hypeman/lib/hypervisor/cloudhypervisor"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/instances/phasetracking"
 	"github.com/kernel/hypeman/lib/logger"
@@ -928,7 +929,8 @@ func (m *manager) buildHypervisorConfig(ctx context.Context, inst *Instance, ima
 	memoryBackingFile := ""
 	if inst.HypervisorType == hypervisor.TypeCloudHypervisor &&
 		inst.HypervisorVersion == string(vmm.V51_1) &&
-		inst.HotplugSize == 0 && !guestMemory.EnableBalloon && len(pciDevices) == 0 {
+		(inst.HotplugSize == 0 || cloudhypervisor.ExperimentalHotplugOverlayEnabled()) &&
+		!guestMemory.EnableBalloon && len(pciDevices) == 0 {
 		memoryBackingFile = filepath.Join(inst.DataDir, cloudHypervisorMemoryBackingFilename)
 	}
 
