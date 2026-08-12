@@ -1,0 +1,76 @@
+name: Test command
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: write
+  contents: read
+  issues: write
+  pull-requests: read
+
+jobs:
+  dispatch:
+    if: ${{ github.event.issue.pull_request && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check command
+        id: command
+        env:
+          BODY: ${{ github.event.comment.body }}
+        run: |
+          set -euo pipefail
+          if [[ "$BODY" != "/test" && "$BODY" != "/run-tests" ]]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "run=true" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve pull request head
+        if: steps.command.outputs.run == 'true'
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$REPO/pulls/$PR_NUMBER" \
+            --jq '[.state, .base.ref, .head.repo.full_name, .head.sha] | @tsv' > "$RUNNER_TEMP/pr.tsv"
+          read -r state base_repo head_repo head_sha < "$RUNNER_TEMP/pr.tsv"
+          if [ "$state" != "open" ] || [ "$base_repo" != "main" ] || [ -z "$head_repo" ]; then
+            echo "::error::only open pull requests targeting main can be tested"
+            exit 1
+          fi
+          {
+            echo "head_repo=$head_repo"
+            echo "head_sha=$head_sha"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Dispatch tests
+        if: steps.command.outputs.run == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_REPO: ${{ steps.pr.outputs.head_repo }}
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          gh workflow run test.yml \
+            --repo "$REPO" \
+            --ref main \
+            --field pr_head_repo="$HEAD_REPO" \
+            --field pr_head_sha="$HEAD_SHA"
+
+      - name: Report dispatch
+        if: steps.command.outputs.run == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$REPO/issues/$PR_NUMBER/comments" \
+            --field body="Test workflow dispatched for commit ${HEAD_SHA:0:12}. Results: https://github.com/$REPO/actions/workflows/test.yml"

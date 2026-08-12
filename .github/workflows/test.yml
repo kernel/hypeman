@@ -5,6 +5,22 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      pr_head_repo:
+        description: "Fork repository containing the PR commit"
+        required: false
+        type: string
+      pr_head_sha:
+        description: "Exact PR commit to test"
+        required: false
+        type: string
+
+# A slash-command dispatch supplies a fork repository and immutable commit SHA.
+# Normal PR runs keep using the upstream merge ref.
+env:
+  TEST_PR_HEAD_REPO: ${{ inputs.pr_head_repo || github.event.pull_request.head.repo.full_name || github.repository }}
+  TEST_SOURCE_REPO: ${{ inputs.pr_head_repo || github.repository }}
+  TEST_SOURCE_REF: ${{ inputs.pr_head_sha || github.ref }}
 
 jobs:
   test:
@@ -13,6 +29,9 @@ jobs:
       - uses: actions/checkout@v4
         with:
           clean: false
+          repository: ${{ env.TEST_SOURCE_REPO }}
+          ref: ${{ env.TEST_SOURCE_REF }}
+          persist-credentials: false
 
       - name: Clean workspace (preserve binary caches)
         run: |
@@ -31,10 +50,16 @@ jobs:
           cache: false
           go-version: '1.25.4'
 
+      - name: Prepare Docker config
+        if: env.TEST_PR_HEAD_REPO != github.repository
+        run: |
+          mkdir -p "$RUNNER_TEMP/empty-docker-config"
+          printf '{}\n' > "$RUNNER_TEMP/empty-docker-config/config.json"
+
       - name: Check UFFD pager version
         run: |
-          git fetch origin main --depth=1
-          bash scripts/check-uffd-version.sh origin/main
+          git fetch "https://github.com/${{ github.repository }}.git" main:refs/remotes/upstream/main --depth=1
+          bash scripts/check-uffd-version.sh upstream/main
       
       - name: Install dependencies
         run: |
@@ -80,7 +105,7 @@ jobs:
       # Avoid rate limits when running trusted branches. Fork PRs cannot access
       # repository secrets, so they use the runner's existing image cache.
       - name: Login to Docker Hub
-        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        if: env.TEST_PR_HEAD_REPO == github.repository
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -117,6 +142,7 @@ jobs:
 
       - name: Prewarm test cache
         env:
+          DOCKER_CONFIG: ${{ env.TEST_PR_HEAD_REPO == github.repository && '/home/debianuser/.docker' || format('{0}/empty-docker-config', runner.temp) }}
           HYPEMAN_TEST_REGISTRY: 127.0.0.1:5001
         run: |
           # Prewarm cache must live on the same filesystem as the test TMPDIR
@@ -146,12 +172,11 @@ jobs:
         env:
           GO_TEST_TIMEOUT: 600s
           # Docker auth for tests running as root (sudo)
-          DOCKER_CONFIG: /home/debianuser/.docker
-          # TLS/ACME testing (optional - tests will skip if not configured)
-          ACME_EMAIL: ${{ secrets.ACME_EMAIL }}
+          DOCKER_CONFIG: ${{ env.TEST_PR_HEAD_REPO == github.repository && '/home/debianuser/.docker' || format('{0}/empty-docker-config', runner.temp) }}          # TLS/ACME testing (optional - tests will skip if not configured)
+          ACME_EMAIL: ${{ env.TEST_PR_HEAD_REPO == github.repository && secrets.ACME_EMAIL || '' }}
           ACME_DNS_PROVIDER: "cloudflare"
           ACME_CA: "https://acme-staging-v02.api.letsencrypt.org/directory"
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ env.TEST_PR_HEAD_REPO == github.repository && secrets.CLOUDFLARE_API_TOKEN || '' }}
           TLS_TEST_DOMAIN: "test.hypeman-development.com"
           TLS_ALLOWED_DOMAINS: '*.hypeman-development.com'
           HYPEMAN_TEST_PREWARM_STRICT: "1"
@@ -213,6 +238,10 @@ jobs:
       DATA_DIR: /tmp/hypeman-ci-${{ github.run_id }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.TEST_SOURCE_REPO }}
+          ref: ${{ env.TEST_SOURCE_REF }}
+          persist-credentials: false
       - uses: actions/setup-go@v6
         with:
           go-version: '1.25.4'
@@ -245,7 +274,7 @@ jobs:
 
           docker info
       - name: Login to Docker Hub
-        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        if: env.TEST_PR_HEAD_REPO == github.repository
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -318,6 +347,10 @@ jobs:
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.TEST_SOURCE_REPO }}
+          ref: ${{ env.TEST_SOURCE_REF }}
+          persist-credentials: false
       - uses: actions/setup-go@v6
         with:
           go-version: '1.25.4'
