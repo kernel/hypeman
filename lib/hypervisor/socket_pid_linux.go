@@ -36,6 +36,11 @@ func resolveProcessPID(socketPath string, ownerPID int) (pid int, confirmed bool
 	socketRef, socketErr := socketRefForPath(socketPath)
 	var refErr error
 	if socketErr == nil {
+		// Confirm the expected owner first so a live stored PID does not
+		// require scanning every process fd.
+		if ownerPID > 0 && processHoldsSocketRef(ownerPID, socketRef) {
+			return ownerPID, true, nil
+		}
 		pid, refErr = pidBySocketRef(socketRef, ownerPID)
 		if refErr == nil {
 			return pid, true, nil
@@ -52,6 +57,23 @@ func resolveProcessPID(socketPath string, ownerPID int) (pid int, confirmed bool
 		return 0, false, socketErr
 	}
 	return 0, false, fmt.Errorf("resolve process pid for socket %s: %w", socketPath, ErrNoOwningProcess)
+}
+
+func processHoldsSocketRef(pid int, socketRef string) bool {
+	fdEntries, err := os.ReadDir(filepath.Join(procDir, strconv.Itoa(pid), "fd"))
+	if err != nil {
+		return false
+	}
+	for _, fdEntry := range fdEntries {
+		target, err := os.Readlink(filepath.Join(procDir, strconv.Itoa(pid), "fd", fdEntry.Name()))
+		if err != nil {
+			return false
+		}
+		if strings.TrimSpace(target) == socketRef {
+			return true
+		}
+	}
+	return false
 }
 
 func pidBySocketRef(socketRef string, ownerPID int) (int, error) {
