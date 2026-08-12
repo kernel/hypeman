@@ -40,6 +40,12 @@ func TestResolveLiveHypervisorPIDWithoutStoredPID(t *testing.T) {
 	})
 }
 
+func TestHostBootIDIsStable(t *testing.T) {
+	first := hostBootID()
+	require.NotEmpty(t, first)
+	assert.Equal(t, first, hostBootID())
+}
+
 func TestProcessStartTime(t *testing.T) {
 	assert.NotZero(t, processStartTime(os.Getpid()))
 	assert.Zero(t, processStartTime(0))
