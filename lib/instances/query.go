@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -731,7 +732,9 @@ func readLinuxProcessState(pid int) (string, error) {
 	return "", fmt.Errorf("process state missing from %s", statusPath)
 }
 
-func hostBootID() string {
+var hostBootID = sync.OnceValue(readHostBootID)
+
+func readHostBootID() string {
 	if runtime.GOOS != "linux" {
 		return ""
 	}
