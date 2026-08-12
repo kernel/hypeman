@@ -183,6 +183,28 @@ func TestResolveProcessPIDForOwnerConfirmsCandidateWithoutFullScan(t *testing.T)
 	require.Equal(t, 100, pid)
 }
 
+func TestResolveProcessPIDForOwnerSkipsUnreadableCandidateFD(t *testing.T) {
+	oldProcDir := procDir
+	procDir = t.TempDir()
+	t.Cleanup(func() { procDir = oldProcDir })
+
+	socketPath := "/tmp/test.sock"
+	require.NoError(t, os.MkdirAll(filepath.Join(procDir, "net"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(procDir, "net", "unix"), []byte("00000000: 00000002 00000000 00010000 0001 01 12345 "+socketPath+"\n"), 0o644))
+
+	// An unreadable fd before the listener fd must not abort the candidate
+	// check; the scan skips it and still finds the match.
+	fdDir := filepath.Join(procDir, "100", "fd")
+	require.NoError(t, os.MkdirAll(fdDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(fdDir, "1"), nil, 0o644))
+	require.NoError(t, os.Symlink("socket:[12345]", filepath.Join(fdDir, "3")))
+
+	pid, confirmed, err := ResolveProcessPIDForOwner(socketPath, 100)
+	require.NoError(t, err)
+	require.True(t, confirmed)
+	require.Equal(t, 100, pid)
+}
+
 func TestResolveProcessPIDForOwnerFallsThroughWhenCandidateLacksSocket(t *testing.T) {
 	oldProcDir := procDir
 	procDir = t.TempDir()
