@@ -311,6 +311,63 @@ func TestShutdownHypervisorSparesReusedPIDWhenNoProcessOwnsSocket(t *testing.T) 
 	assert.NoError(t, syscall.Kill(pid, 0), "process with a recycled PID must not be killed")
 }
 
+func TestClassifyResolvedHypervisorOwnerTreatsDeadCmdlineMatchAsDeath(t *testing.T) {
+	const deadPID = 1<<22 - 1
+	require.False(t, ProcessExists(deadPID))
+
+	live := exec.Command("sleep", "30")
+	require.NoError(t, live.Start())
+	t.Cleanup(func() {
+		_ = live.Process.Kill()
+		_ = live.Wait()
+	})
+
+	// The resolver's command-line match exited between the scan and the
+	// liveness check: no live process owns or references the socket, so the
+	// recorded hypervisor is provably gone even with a live stored PID,
+	// matching the ErrNoOwningProcess conclusion instead of failing closed.
+	pid, err := classifyResolvedHypervisorOwner("/fake.sock", live.Process.Pid, deadPID, false, nil)
+	require.NoError(t, err)
+	assert.Zero(t, pid)
+
+	pid, err = classifyResolvedHypervisorOwner("/fake.sock", 0, deadPID, false, nil)
+	require.NoError(t, err)
+	assert.Zero(t, pid)
+}
+
+func TestShutdownHypervisorKillsResolvedOwnerWhenClientUnavailable(t *testing.T) {
+	socketPath := filepath.Join(t.TempDir(), "test.sock")
+	owner := exec.Command(os.Args[0], "-test.run=^TestHypervisorProcessExistsWithReboundSocketPathHelper$")
+	owner.Env = append(os.Environ(), "HYPERVISOR_SOCKET_HELPER=1", "HYPERVISOR_SOCKET_PATH="+socketPath)
+	stdin, err := owner.StdinPipe()
+	require.NoError(t, err)
+	stdout, err := owner.StdoutPipe()
+	require.NoError(t, err)
+	require.NoError(t, owner.Start())
+	t.Cleanup(func() {
+		_ = stdin.Close()
+		_ = owner.Process.Kill()
+		_ = owner.Wait()
+	})
+	_, err = bufio.NewReader(stdout).ReadString('\n')
+	require.NoError(t, err)
+
+	// No client factory exists for this hypervisor type, so getHypervisor
+	// fails while the resolved socket owner is alive: shutdown must kill the
+	// owner instead of reporting a completed shutdown.
+	m := &manager{}
+	require.NoError(t, m.shutdownHypervisor(context.Background(), &Instance{
+		StoredMetadata: StoredMetadata{
+			Id:             "shutdown-no-client",
+			HypervisorType: hypervisor.Type("unregistered-shutdown-test"),
+			SocketPath:     socketPath,
+		},
+	}))
+	assert.True(t, WaitForProcessExit(owner.Process.Pid, 5*time.Second), "resolved socket owner must be killed when the control client is unavailable")
+	_, statErr := os.Stat(socketPath)
+	assert.True(t, os.IsNotExist(statErr), "instance socket should be removed")
+}
+
 func TestShutdownHypervisorFailsClosedOnUnconfirmedOwnership(t *testing.T) {
 	socketPath := filepath.Join(t.TempDir(), "test.sock")
 	require.NoError(t, os.WriteFile(socketPath, nil, 0600))
