@@ -1261,6 +1261,8 @@ components:
           pattern: '^[a-z0-9]+/[a-z0-9]+(/[a-z0-9.]+)?$'
           description: 'Target platform as os/arch[/variant] (e.g. "linux/amd64"), matching Docker --platform. Omit for the host platform. Not a fixed enum: the os/arch[/variant] grammar is validated server-side and invalid values return 400 invalid_platform. Only os "linux" with arch amd64 or arm64 is accepted today.'
           example: linux/amd64
+        credentials:
+          $ref: "#/components/schemas/PushCredentials"
         tags:
           $ref: "#/components/schemas/Tags"
     
@@ -1806,8 +1808,9 @@ components:
     PushCredentials:
       type: object
       description: |
-        Registry credentials borrowed for this push only. When omitted, the server's own registry
-        credentials are used.
+        Docker-style registry credentials borrowed for one image pull or push request. They remain
+        in memory and are never persisted or logged. When omitted or empty, the server's own registry
+        credentials are used. An interrupted credentialed operation must be retried with fresh credentials.
       properties:
         username:
           type: string
@@ -2388,6 +2391,12 @@ paths:
                 $ref: "#/components/schemas/Error"
         404:
           description: Image not found or requested platform not available
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        409:
+          description: An image pull is already in flight with different credentials
           content:
             application/json:
               schema:

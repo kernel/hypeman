@@ -3,6 +3,7 @@ package images
 import (
 	"time"
 
+	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/kernel/hypeman/lib/tags"
 )
 
@@ -31,4 +32,7 @@ type CreateImageRequest struct {
 	// Platform selects which platform variant of a multi-arch image to pull as
 	// os/arch[/variant] (e.g., linux/amd64). Empty means the host platform.
 	Platform string
+	// Credentials are borrowed for this request's registry operations only.
+	// They intentionally have no JSON representation and must never be persisted.
+	Credentials *authn.AuthConfig `json:"-"`
 }
