@@ -63,6 +63,31 @@ func TestForkInstanceClearsVGPUAssignment(t *testing.T) {
 	assert.Equal(t, "/sys/bus/pci/devices/0000:82:00.4", source.GPUDevicePath)
 }
 
+func TestForkInstanceRejectsVGPURetentionRecord(t *testing.T) {
+	manager, _ := setupTestManager(t)
+	ctx := context.Background()
+	hvType := hypervisor.Type("fork-vgpu-retention-test")
+	hypervisor.RegisterCapabilities(hvType, hypervisor.Capabilities{SupportsConcurrentForkPrepare: true})
+	manager.vmStarters[hvType] = concurrentForkPrepareTestStarter{}
+
+	sourceID := "fork-vgpu-retention-source"
+	createStoppedSnapshotSourceFixture(t, manager, sourceID, sourceID, hvType)
+
+	meta, err := manager.loadMetadata(sourceID)
+	require.NoError(t, err)
+	meta.GPUProfile = "NVIDIA L40S-2Q"
+	meta.GPUFramework = devices.VGPUFramework("future-framework")
+	meta.GPUDevicePath = "/sys/bus/pci/devices/0000:82:00.4"
+	meta.GPURetainedForCleanup = true
+	require.NoError(t, manager.saveMetadata(meta))
+
+	// The delete-only retention stub has no boot configuration, so a fork of
+	// it could never boot; only delete may act on it.
+	_, err = manager.ForkInstance(ctx, sourceID, ForkInstanceRequest{Name: "fork-vgpu-retention-copy"})
+	require.ErrorIs(t, err, ErrInvalidState)
+	require.ErrorContains(t, err, "delete it to release the assignment")
+}
+
 func TestForkInstance_VZStoppedSourceSupported(t *testing.T) {
 	t.Parallel()
 	manager, _ := setupTestManager(t)
