@@ -286,6 +286,65 @@ func TestGracefulShutdownWaitsForSocketOwnerInsteadOfExitedStoredPID(t *testing.
 	assert.True(t, ProcessExists(owner.Process.Pid))
 }
 
+func TestShutdownHypervisorSparesReusedPIDWhenNoProcessOwnsSocket(t *testing.T) {
+	process := exec.Command("sleep", "30")
+	require.NoError(t, process.Start())
+	t.Cleanup(func() {
+		_ = process.Process.Kill()
+		_ = process.Wait()
+	})
+
+	// No process owns or references the socket, so the live stored PID is a
+	// recycled number: shutdown must not signal it. Any returned error comes
+	// from the unreachable control socket, not from ownership resolution.
+	pid := process.Process.Pid
+	m := &manager{}
+	err := m.shutdownHypervisor(context.Background(), &Instance{
+		StoredMetadata: StoredMetadata{
+			Id:             "shutdown-reused-pid",
+			HypervisorType: hypervisor.TypeCloudHypervisor,
+			HypervisorPID:  &pid,
+			SocketPath:     filepath.Join(t.TempDir(), "missing.sock"),
+		},
+	})
+	require.NotContains(t, fmt.Sprint(err), "confirm hypervisor ownership")
+	assert.NoError(t, syscall.Kill(pid, 0), "process with a recycled PID must not be killed")
+}
+
+func TestShutdownHypervisorFailsClosedOnUnconfirmedOwnership(t *testing.T) {
+	socketPath := filepath.Join(t.TempDir(), "test.sock")
+	require.NoError(t, os.WriteFile(socketPath, nil, 0600))
+	match := exec.Command("sh", "-c", "sleep 30", "sh", socketPath)
+	require.NoError(t, match.Start())
+	t.Cleanup(func() {
+		_ = match.Process.Kill()
+		_ = match.Wait()
+	})
+
+	stale := exec.Command("sleep", "30")
+	require.NoError(t, stale.Start())
+	t.Cleanup(func() {
+		_ = stale.Process.Kill()
+		_ = stale.Wait()
+	})
+
+	stalePID := stale.Process.Pid
+	m := &manager{}
+	err := m.shutdownHypervisor(context.Background(), &Instance{
+		StoredMetadata: StoredMetadata{
+			Id:             "shutdown-unconfirmed",
+			HypervisorType: hypervisor.TypeCloudHypervisor,
+			HypervisorPID:  &stalePID,
+			SocketPath:     socketPath,
+		},
+	})
+	require.ErrorContains(t, err, "confirm hypervisor ownership before shutdown")
+	assert.NoError(t, syscall.Kill(stalePID, 0), "stored PID must not be signaled on unconfirmed ownership")
+	assert.NoError(t, syscall.Kill(match.Process.Pid, 0), "command-line match must not be signaled")
+	_, statErr := os.Stat(socketPath)
+	assert.NoError(t, statErr, "socket must be kept as evidence for the hardened kill path")
+}
+
 func TestForceKillHypervisorProcessSucceedsWhenNoProcessOwnsSocket(t *testing.T) {
 	process := exec.Command("sleep", "30")
 	require.NoError(t, process.Start())
@@ -515,5 +574,16 @@ func TestResolveRuntimeHypervisorPIDMintsIdentityOnlyWhenConfirmed(t *testing.T)
 		assert.Equal(t, match.Process.Pid, *stored.HypervisorPID)
 		assert.Zero(t, stored.HypervisorStartTime, "unconfirmed match must not mint the identity token")
 		assert.Empty(t, stored.HypervisorBootID, "unconfirmed match must not mint the identity token")
+	})
+
+	t.Run("dead fallback with unresolvable socket stores bare PID", func(t *testing.T) {
+		stored := &StoredMetadata{SocketPath: filepath.Join(t.TempDir(), "missing.sock")}
+		pid := resolveRuntimeHypervisorPID(log, stored, deadPID)
+
+		assert.Equal(t, deadPID, pid)
+		require.NotNil(t, stored.HypervisorPID)
+		assert.Equal(t, deadPID, *stored.HypervisorPID)
+		assert.Zero(t, stored.HypervisorStartTime, "a dead fallback must not mint the identity token")
+		assert.Empty(t, stored.HypervisorBootID, "a dead fallback must not mint the identity token")
 	})
 }
