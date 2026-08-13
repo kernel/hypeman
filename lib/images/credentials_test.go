@@ -81,6 +81,41 @@ func TestCreateImageRequestCredentialsAreNotPersisted(t *testing.T) {
 	assert.Contains(t, string(data), `"borrowed_auth": true`)
 }
 
+func TestInflightPullRejectsDifferentCredentials(t *testing.T) {
+	m := &manager{
+		inflightPulls:              make(map[string]*inflightImagePull),
+		borrowedCredentialsTimeout: time.Minute,
+	}
+	const digest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	credentials := &authn.AuthConfig{Username: "AWS", Password: "token-a"}
+	inflight := m.registerInflightPull(digest, credentials)
+	t.Cleanup(m.releaseInflightPull(digest, inflight))
+
+	assert.True(t, m.inflightCredentialsMatch(digest, &authn.AuthConfig{Username: "AWS", Password: "token-a"}))
+	assert.False(t, m.inflightCredentialsMatch(digest, nil))
+	assert.False(t, m.inflightCredentialsMatch(digest, &authn.AuthConfig{Username: "AWS", Password: "token-b"}))
+}
+
+func TestBorrowedCredentialsExpireWhileQueued(t *testing.T) {
+	m := &manager{
+		inflightPulls:              make(map[string]*inflightImagePull),
+		borrowedCredentialsTimeout: time.Millisecond,
+	}
+	const digest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	inflight := m.registerInflightPull(digest, &authn.AuthConfig{Username: "AWS", Password: "secret"})
+	defer m.releaseInflightPull(digest, inflight)()
+
+	require.Eventually(t, func() bool {
+		m.createMu.Lock()
+		defer m.createMu.Unlock()
+		return m.inflightPulls[digest].credentials == nil
+	}, time.Second, time.Millisecond)
+
+	credentials, _, expired := m.borrowedAuth(digest)
+	assert.True(t, expired)
+	assert.Nil(t, credentials)
+}
+
 func TestRecoverInterruptedCredentialedPullFailsForFreshRetry(t *testing.T) {
 	p := paths.New(t.TempDir())
 	client, err := newOCIClient(p.SystemOCICache())

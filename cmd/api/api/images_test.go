@@ -95,6 +95,12 @@ func TestCreateImage_ErrorStatusMapping(t *testing.T) {
 			wantCode: "rate_limited",
 		},
 		{
+			name:     "credential conflict -> 409",
+			err:      fmt.Errorf("resolve: %w", images.ErrCredentialConflict),
+			wantType: oapi.CreateImage409JSONResponse{},
+			wantCode: "credential_conflict",
+		},
+		{
 			name:     "not found -> 404",
 			err:      fmt.Errorf("resolve: %w", images.ErrNotFound),
 			wantType: oapi.CreateImage404JSONResponse{},
@@ -129,6 +135,8 @@ func errorCodeOf(resp oapi.CreateImageResponseObject) string {
 	case oapi.CreateImage400JSONResponse:
 		return r.Code
 	case oapi.CreateImage404JSONResponse:
+		return r.Code
+	case oapi.CreateImage409JSONResponse:
 		return r.Code
 	case oapi.CreateImage429JSONResponse:
 		return r.Code

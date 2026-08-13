@@ -73,6 +73,11 @@ func (s *ApiService) CreateImage(ctx context.Context, request oapi.CreateImageRe
 				Code:    "rate_limited",
 				Message: images.RateLimitMessage,
 			}, nil
+		case errors.Is(err, images.ErrCredentialConflict):
+			return oapi.CreateImage409JSONResponse{
+				Code:    "credential_conflict",
+				Message: err.Error(),
+			}, nil
 		case errors.Is(err, images.ErrNotFound):
 			return oapi.CreateImage404JSONResponse{
 				Code:    "not_found",

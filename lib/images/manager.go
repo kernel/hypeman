@@ -2,6 +2,7 @@ package images
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -25,6 +26,8 @@ const (
 	StatusConverting = "converting"
 	StatusReady      = "ready"
 	StatusFailed     = "failed"
+
+	DefaultBorrowedCredentialsTimeout = 30 * time.Minute
 )
 
 // StatusEvent represents a terminal status change for image readiness notifications.
@@ -53,19 +56,27 @@ type Manager interface {
 	WaitForReady(ctx context.Context, name string) error
 }
 
+type inflightImagePull struct {
+	fingerprint         [32]byte
+	credentials         *authn.AuthConfig
+	credentialsExpireAt time.Time
+	timer               *time.Timer
+}
+
 type manager struct {
-	paths            *paths.Paths
-	ociClient        *ociClient
-	queue            *queue.Queue
-	createMu         sync.Mutex
-	diskUsageMu      sync.RWMutex
-	diskUsageLoaded  bool
-	readyImageBytes  int64
-	ociCacheBytes    int64
-	metrics          *Metrics
-	inflightAuth     map[string][32]byte           // keyed by digest
-	readySubscribers map[string][]chan StatusEvent // keyed by digestHex
-	subscriberMu     sync.RWMutex
+	paths                      *paths.Paths
+	ociClient                  *ociClient
+	queue                      *queue.Queue
+	createMu                   sync.Mutex
+	diskUsageMu                sync.RWMutex
+	diskUsageLoaded            bool
+	readyImageBytes            int64
+	ociCacheBytes              int64
+	metrics                    *Metrics
+	inflightPulls              map[string]*inflightImagePull // keyed by digest
+	borrowedCredentialsTimeout time.Duration
+	readySubscribers           map[string][]chan StatusEvent // keyed by digestHex
+	subscriberMu               sync.RWMutex
 }
 
 // NewManager creates a new image manager.
@@ -79,10 +90,12 @@ func NewManager(p *paths.Paths, maxConcurrentBuilds int, meter metric.Meter) (Ma
 	}
 
 	m := &manager{
-		paths:            p,
-		ociClient:        ociClient,
-		queue:            queue.New(maxConcurrentBuilds),
-		readySubscribers: make(map[string][]chan StatusEvent),
+		paths:                      p,
+		ociClient:                  ociClient,
+		queue:                      queue.New(maxConcurrentBuilds),
+		inflightPulls:              make(map[string]*inflightImagePull),
+		borrowedCredentialsTimeout: DefaultBorrowedCredentialsTimeout,
+		readySubscribers:           make(map[string][]chan StatusEvent),
 	}
 
 	// Initialize metrics if meter is provided
@@ -98,12 +111,23 @@ func NewManager(p *paths.Paths, maxConcurrentBuilds int, meter metric.Meter) (Ma
 	return m, nil
 }
 
+func credentialsPresent(credentials *authn.AuthConfig) bool {
+	return credentials != nil && (credentials.Username != "" || credentials.Password != "" || credentials.Auth != "" || credentials.IdentityToken != "" || credentials.RegistryToken != "")
+}
+
 func cloneCredentials(credentials *authn.AuthConfig) *authn.AuthConfig {
-	if credentials == nil || (credentials.Username == "" && credentials.Password == "" && credentials.RegistryToken == "") {
+	if !credentialsPresent(credentials) {
 		return nil
 	}
 	cloned := *credentials
 	return &cloned
+}
+
+func credentialFingerprint(credentials *authn.AuthConfig) [32]byte {
+	if !credentialsPresent(credentials) {
+		return [32]byte{}
+	}
+	return sha256.Sum256([]byte(credentials.Username + "\x00" + credentials.Password + "\x00" + credentials.Auth + "\x00" + credentials.IdentityToken + "\x00" + credentials.RegistryToken))
 }
 
 func (m *manager) ListImages(ctx context.Context) ([]Image, error) {
@@ -189,11 +213,16 @@ func (m *manager) CreateImage(ctx context.Context, req CreateImageRequest) (*Ima
 		} else {
 			// We have this digest already (ready, pending, pulling, or converting).
 			// last-pull-wins: repoint the tag to it (see createTagSymlink).
-			if meta.Status == StatusReady && ref.Tag() != "" {
-				createTagSymlink(m.paths, ref.Repository(), ref.Tag(), ref.DigestHex())
+			if meta.Status == StatusReady {
+				if ref.Tag() != "" {
+					createTagSymlink(m.paths, ref.Repository(), ref.Tag(), ref.DigestHex())
+				}
+				return meta.toImage(), nil
+			}
+			if !m.inflightCredentialsMatch(ref.Digest(), req.Credentials) {
+				return nil, fmt.Errorf("%w: retry after the current pull completes", ErrCredentialConflict)
 			}
 			img := meta.toImage()
-			// Add queue position if pending
 			if meta.Status == StatusPending {
 				img.QueuePosition = m.queue.GetPosition(meta.Digest)
 			}
@@ -255,6 +284,69 @@ func (m *manager) ImportLocalImage(ctx context.Context, repo, reference, digest 
 	return m.createAndQueueImage(ref, CreateImageRequest{Name: imageRef}, hostPlatform())
 }
 
+func (m *manager) inflightCredentialsMatch(digest string, credentials *authn.AuthConfig) bool {
+	inflight := m.inflightPulls[digest]
+	var existingFingerprint [32]byte
+	if inflight != nil {
+		existingFingerprint = inflight.fingerprint
+	}
+	return existingFingerprint == credentialFingerprint(credentials)
+}
+
+func (m *manager) registerInflightPull(digest string, credentials *authn.AuthConfig) *inflightImagePull {
+	if m.inflightPulls == nil {
+		m.inflightPulls = make(map[string]*inflightImagePull)
+	}
+	inflight := &inflightImagePull{
+		fingerprint: credentialFingerprint(credentials),
+		credentials: credentials,
+	}
+	m.inflightPulls[digest] = inflight
+	if credentials == nil {
+		return inflight
+	}
+	if m.borrowedCredentialsTimeout <= 0 {
+		m.borrowedCredentialsTimeout = DefaultBorrowedCredentialsTimeout
+	}
+	inflight.credentialsExpireAt = time.Now().Add(m.borrowedCredentialsTimeout)
+	inflight.timer = time.AfterFunc(m.borrowedCredentialsTimeout, func() {
+		m.createMu.Lock()
+		defer m.createMu.Unlock()
+		if m.inflightPulls[digest] == inflight {
+			inflight.credentials = nil
+		}
+	})
+	return inflight
+}
+
+func (m *manager) releaseInflightPull(digest string, inflight *inflightImagePull) func() {
+	return func() {
+		m.createMu.Lock()
+		defer m.createMu.Unlock()
+		if m.inflightPulls[digest] != inflight {
+			return
+		}
+		delete(m.inflightPulls, digest)
+		if inflight.timer != nil {
+			inflight.timer.Stop()
+		}
+		inflight.credentials = nil
+	}
+}
+
+func (m *manager) borrowedAuth(digest string) (*authn.AuthConfig, time.Time, bool) {
+	m.createMu.Lock()
+	defer m.createMu.Unlock()
+	inflight := m.inflightPulls[digest]
+	if inflight == nil || inflight.credentialsExpireAt.IsZero() {
+		return nil, time.Time{}, false
+	}
+	if inflight.credentials == nil || time.Now().After(inflight.credentialsExpireAt) {
+		return nil, inflight.credentialsExpireAt, true
+	}
+	return inflight.credentials, inflight.credentialsExpireAt, false
+}
+
 func (m *manager) createAndQueueImage(ref *ResolvedRef, req CreateImageRequest, requestedPlatform Platform) (*Image, error) {
 	// Build one request value and reuse it for both the persisted metadata and
 	// the queue entry so they never diverge.
@@ -282,10 +374,23 @@ func (m *manager) createAndQueueImage(ref *ResolvedRef, req CreateImageRequest, 
 		return nil, fmt.Errorf("write initial metadata: %w", err)
 	}
 
-	// Enqueue the build using digest as the queue key for deduplication
+	// Keep borrowed credentials outside the queued closure so their lifetime is
+	// bounded even when this job waits behind another pull.
+	inflight := m.registerInflightPull(ref.Digest(), req.Credentials)
 	queuePos := m.queue.Enqueue(ref.Digest(), func() {
-		m.buildImage(context.Background(), ref, req.Credentials)
-	}, nil)
+		credentials, deadline, expired := m.borrowedAuth(ref.Digest())
+		if expired {
+			m.updateStatusByDigest(ref, StatusFailed, ErrBorrowedCredentialsExpired)
+			return
+		}
+		ctx := context.Background()
+		if !deadline.IsZero() {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithDeadline(ctx, deadline)
+			defer cancel()
+		}
+		m.buildImage(ctx, ref, credentials)
+	}, m.releaseInflightPull(ref.Digest(), inflight))
 
 	img := meta.toImage()
 	if queuePos > 0 {

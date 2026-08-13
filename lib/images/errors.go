@@ -26,7 +26,8 @@ var (
 	// response (e.g. Docker Hub's unauthenticated pull limit). Transient and
 	// caller-actionable (retry later or authenticate), not a server fault.
 	ErrRateLimited                = errors.New("registry rate limit exceeded")
-	ErrBorrowedCredentialsExpired = errors.New("credentialed image pull was interrupted; submit POST /images again with fresh credentials")
+	ErrBorrowedCredentialsExpired = errors.New("credentialed image pull expired or was interrupted; submit POST /images again with fresh credentials")
+	ErrCredentialConflict         = errors.New("image pull already in flight with different credentials")
 )
 
 // ClassifyRegistryError classifies a raw registry/go-containerregistry error into a

@@ -2395,6 +2395,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+        409:
+          description: An image pull is already in flight with different credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         401:
           description: Unauthorized
           content:
