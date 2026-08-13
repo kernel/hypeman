@@ -3,12 +3,30 @@ package firecracker
 import (
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"syscall"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestCleanupFailedRestoreKillsProcessAndRemovesSocket(t *testing.T) {
+	cmd := exec.Command("sleep", "30")
+	require.NoError(t, cmd.Start())
+	pid := cmd.Process.Pid
+	t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
+
+	socketPath := filepath.Join(t.TempDir(), "fc.sock")
+	require.NoError(t, os.WriteFile(socketPath, nil, 0600))
+
+	cleanupFailedRestore(pid, socketPath)
+
+	_, err := os.Stat(socketPath)
+	assert.ErrorIs(t, err, os.ErrNotExist)
+	assert.ErrorIs(t, syscall.Kill(pid, 0), syscall.ESRCH)
+}
 
 func TestWithSnapshotSourceDirAlias_RestoresSourceDirOnSuccess(t *testing.T) {
 	tmp := t.TempDir()

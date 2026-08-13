@@ -13,6 +13,7 @@ import (
 	"github.com/kernel/hypeman/lib/healthcheck"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/images"
+	"github.com/kernel/hypeman/lib/paths"
 )
 
 const (
@@ -62,6 +63,9 @@ func (m *manager) ensureDirectories(id string) error {
 
 // loadMetadata loads instance metadata from disk
 func (m *manager) loadMetadata(id string) (*metadata, error) {
+	if err := paths.ValidatePathComponent(id); err != nil {
+		return nil, ErrNotFound
+	}
 	unlockAliasReaders := hypervisor.LockSnapshotSourceAliasReaders()
 	defer unlockAliasReaders()
 
@@ -85,6 +89,9 @@ func (m *manager) loadMetadata(id string) (*metadata, error) {
 
 // saveMetadata saves instance metadata to disk
 func (m *manager) saveMetadata(meta *metadata) error {
+	if err := paths.ValidatePathComponent(meta.Id); err != nil {
+		return err
+	}
 	unlockAliasReaders := hypervisor.LockSnapshotSourceAliasReaders()
 	defer unlockAliasReaders()
 
@@ -146,6 +153,9 @@ func (m *manager) createVolumeOverlayDisk(instanceID, volumeID string, sizeBytes
 
 // deleteInstanceData removes all instance data from disk
 func (m *manager) deleteInstanceData(id string) error {
+	if err := paths.ValidatePathComponent(id); err != nil {
+		return ErrNotFound
+	}
 	instDir := m.paths.InstanceDir(id)
 
 	if err := removeAllWithRetry(instDir, os.RemoveAll, time.Sleep); err != nil {

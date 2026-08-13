@@ -31,14 +31,14 @@ func TestGetVolume_NotFound(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestGetVolume_ByName(t *testing.T) {
+func TestGetVolume_ByPathLikeName(t *testing.T) {
 	t.Parallel()
 	svc := newTestService(t)
 
 	// Create a volume
 	createResp, err := svc.CreateVolume(ctx(), oapi.CreateVolumeRequestObject{
 		Body: &oapi.CreateVolumeRequest{
-			Name:   "my-data",
+			Name:   "team/data",
 			SizeGb: 1,
 		},
 	})
@@ -46,15 +46,15 @@ func TestGetVolume_ByName(t *testing.T) {
 	created := createResp.(oapi.CreateVolume201JSONResponse)
 
 	// Get by name (not ID) - use ctxWithVolume to simulate middleware
-	resp, err := svc.GetVolume(ctxWithVolume(svc, "my-data"), oapi.GetVolumeRequestObject{
-		Id: "my-data", // using name instead of ID
+	resp, err := svc.GetVolume(ctxWithVolume(svc, "team/data"), oapi.GetVolumeRequestObject{
+		Id: "team/data", // using name instead of ID
 	})
 	require.NoError(t, err)
 
 	vol, ok := resp.(oapi.GetVolume200JSONResponse)
 	require.True(t, ok, "expected 200 response")
 	assert.Equal(t, created.Id, vol.Id)
-	assert.Equal(t, "my-data", vol.Name)
+	assert.Equal(t, "team/data", vol.Name)
 }
 
 func TestDeleteVolume_ByName(t *testing.T) {
@@ -77,6 +77,24 @@ func TestDeleteVolume_ByName(t *testing.T) {
 	require.NoError(t, err)
 	_, ok := resp.(oapi.DeleteVolume204Response)
 	assert.True(t, ok, "expected 204 response")
+}
+
+func TestCreateVolume_InvalidID(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+	id := "../outside"
+
+	resp, err := svc.CreateVolume(ctx(), oapi.CreateVolumeRequestObject{Body: &oapi.CreateVolumeRequest{Name: "invalid", SizeGb: 1, Id: &id}})
+	require.NoError(t, err)
+	_, ok := resp.(oapi.CreateVolume400JSONResponse)
+	require.True(t, ok, "expected 400 for invalid ID")
+
+	archiveResp, err := svc.CreateVolumeFromArchive(ctx(), oapi.CreateVolumeFromArchiveRequestObject{
+		Params: oapi.CreateVolumeFromArchiveParams{Name: "invalid", SizeGb: 1, Id: &id},
+	})
+	require.NoError(t, err)
+	_, ok = archiveResp.(oapi.CreateVolumeFromArchive400JSONResponse)
+	require.True(t, ok, "expected 400 for invalid archive volume ID")
 }
 
 func TestCreateVolume_ReservedIDPrefix(t *testing.T) {

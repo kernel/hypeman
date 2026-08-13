@@ -48,17 +48,6 @@ func (m *Manager) StartMonitoring(ctx context.Context, meter metric.Meter, refre
 		}
 		m.monitoring.metricsRegistered = true
 	}
-	m.monitoring.mu.Unlock()
-
-	if err := m.refreshMonitoringSnapshot(ctx); err != nil {
-		return err
-	}
-
-	m.monitoring.mu.Lock()
-	if m.monitoring.started {
-		m.monitoring.mu.Unlock()
-		return nil
-	}
 	m.monitoring.started = true
 	m.monitoring.mu.Unlock()
 
@@ -75,6 +64,13 @@ func (m *Manager) StartMonitoring(ctx context.Context, meter metric.Meter, refre
 				)
 			}
 		}()
+
+		initialRefreshStarted := time.Now()
+		if err := m.refreshMonitoringSnapshot(ctx); err != nil {
+			log.WarnContext(ctx, "initial resource monitoring snapshot failed", "error", err)
+		} else {
+			log.InfoContext(ctx, "initial resource monitoring snapshot complete", "duration", time.Since(initialRefreshStarted))
+		}
 
 		ticker := time.NewTicker(refreshInterval)
 		defer ticker.Stop()

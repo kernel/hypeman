@@ -2,6 +2,26 @@ name: Test
 
 on:
   push: {}
+  workflow_dispatch:
+    inputs:
+      pr_head_repo:
+        description: "Fork repository containing the PR commit"
+        required: false
+        type: string
+      pr_head_sha:
+        description: "Exact PR commit to test"
+        required: false
+        type: string
+
+# A slash-command dispatch supplies a fork repository and immutable commit SHA.
+# Normal push runs use the upstream repository and pushed ref.
+env:
+  TEST_PR_HEAD_REPO: ${{ inputs.pr_head_repo || github.repository }}
+  TEST_SOURCE_REPO: ${{ inputs.pr_head_repo || github.repository }}
+  TEST_SOURCE_REF: ${{ inputs.pr_head_sha || github.ref }}
+
+permissions:
+  contents: read
 
 jobs:
   test:
@@ -10,6 +30,9 @@ jobs:
       - uses: actions/checkout@v4
         with:
           clean: false
+          repository: ${{ env.TEST_SOURCE_REPO }}
+          ref: ${{ env.TEST_SOURCE_REF }}
+          persist-credentials: false
 
       - name: Clean workspace (preserve binary caches)
         run: |
@@ -30,8 +53,8 @@ jobs:
 
       - name: Check UFFD pager version
         run: |
-          git fetch origin main --depth=1
-          bash scripts/check-uffd-version.sh origin/main
+          git fetch "https://github.com/${{ github.repository }}.git" main:refs/remotes/upstream/main --depth=1
+          bash scripts/check-uffd-version.sh upstream/main
       
       - name: Install dependencies
         run: |
@@ -74,8 +97,8 @@ jobs:
             sudo env "PATH=$TEST_PATH" bash -lc "command -v '$bin'"
           done
 
-      # Avoids rate limits when running the tests
-      # Tests includes pulling, then converting to disk images
+      # Slash-command runs are maintainer-approved and need authenticated pulls
+      # for images that are not covered by the prewarm cache.
       - name: Login to Docker Hub
         uses: docker/login-action@v3
         with:
@@ -85,8 +108,46 @@ jobs:
       - name: Generate OpenAPI code
         run: make oapi-generate
 
+      - name: Download Cloud Hypervisor binaries
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for version in v49.0 v51.1; do
+            for architecture in x86_64 aarch64; do
+              if [ "$architecture" = "x86_64" ]; then
+                asset="cloud-hypervisor-static"
+                file_pattern='x86-64'
+              else
+                asset="cloud-hypervisor-static-aarch64"
+                file_pattern='aarch64|ARM aarch64'
+              fi
+              destination="lib/vmm/binaries/cloud-hypervisor/$version/$architecture/cloud-hypervisor"
+              mkdir -p "$(dirname "$destination")"
+              gh release download "$version" \
+                --repo cloud-hypervisor/cloud-hypervisor \
+                --pattern "$asset" \
+                --output "$destination" \
+                --clobber
+              chmod +x "$destination"
+              file "$destination" | grep -Eiq "$file_pattern"
+            done
+          done
+
       - name: Build
-        run: make build
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          for attempt in 1 2 3; do
+            if make build; then
+              exit 0
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              echo "build failed (attempt ${attempt}/3); retrying in 10 seconds..."
+              sleep 10
+            fi
+          done
+          exit 1
 
       - name: Install UFFD pager systemd template
         run: |
@@ -113,6 +174,8 @@ jobs:
 
       - name: Prewarm test cache
         env:
+          DOCKER_CONFIG: /home/debianuser/.docker
+          GITHUB_TOKEN: ${{ github.token }}
           HYPEMAN_TEST_REGISTRY: 127.0.0.1:5001
         run: |
           # Prewarm cache must live on the same filesystem as the test TMPDIR
@@ -122,7 +185,16 @@ jobs:
           export HYPEMAN_TEST_PREWARM_DIR="/ci/prewarm/linux-amd64"
           mkdir -p "$HYPEMAN_TEST_PREWARM_DIR"
           sudo chown -R "$(id -u):$(id -g)" "$HYPEMAN_TEST_PREWARM_DIR"
-          go run ./cmd/test-prewarm
+          for attempt in 1 2 3; do
+            if go run ./cmd/test-prewarm; then
+              exit 0
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              echo "prewarm failed (attempt ${attempt}/3); retrying in 10 seconds..."
+              sleep 10
+            fi
+          done
+          exit 1
 
       - name: Check gofmt
         run: |
@@ -141,13 +213,14 @@ jobs:
       - name: Run tests
         env:
           GO_TEST_TIMEOUT: 600s
+          GITHUB_TOKEN: ${{ github.token }}
           # Docker auth for tests running as root (sudo)
           DOCKER_CONFIG: /home/debianuser/.docker
           # TLS/ACME testing (optional - tests will skip if not configured)
-          ACME_EMAIL: ${{ secrets.ACME_EMAIL }}
+          ACME_EMAIL: ${{ env.TEST_PR_HEAD_REPO == github.repository && secrets.ACME_EMAIL || '' }}
           ACME_DNS_PROVIDER: "cloudflare"
           ACME_CA: "https://acme-staging-v02.api.letsencrypt.org/directory"
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ env.TEST_PR_HEAD_REPO == github.repository && secrets.CLOUDFLARE_API_TOKEN || '' }}
           TLS_TEST_DOMAIN: "test.hypeman-development.com"
           TLS_ALLOWED_DOMAINS: '*.hypeman-development.com'
           HYPEMAN_TEST_PREWARM_STRICT: "1"
@@ -209,6 +282,10 @@ jobs:
       DATA_DIR: /tmp/hypeman-ci-${{ github.run_id }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.TEST_SOURCE_REPO }}
+          ref: ${{ env.TEST_SOURCE_REF }}
+          persist-credentials: false
       - uses: actions/setup-go@v6
         with:
           go-version: '1.25.4'
@@ -255,10 +332,13 @@ jobs:
       - name: Generate OpenAPI code
         run: make oapi-generate
       - name: Build
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: make build
 
       - name: Prewarm test cache
         env:
+          GITHUB_TOKEN: ${{ github.token }}
           HYPEMAN_TEST_REGISTRY: 127.0.0.1:5001
         run: |
           export HYPEMAN_TEST_PREWARM_DIR="$HOME/.cache/hypeman-ci/darwin-arm64"
@@ -282,6 +362,7 @@ jobs:
         env:
           GO_TEST_TIMEOUT: 600s
           DEFAULT_HYPERVISOR: vz
+          GITHUB_TOKEN: ${{ github.token }}
           JWT_SECRET: ci-test-secret
           HYPEMAN_TEST_PREWARM_STRICT: "1"
           HYPEMAN_TEST_REGISTRY: 127.0.0.1:5001
@@ -313,6 +394,10 @@ jobs:
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.TEST_SOURCE_REPO }}
+          ref: ${{ env.TEST_SOURCE_REF }}
+          persist-credentials: false
       - uses: actions/setup-go@v6
         with:
           go-version: '1.25.4'
@@ -337,9 +422,33 @@ jobs:
           # Self-hosted runners retain Docker layers across jobs. Start the
           # install E2E with deterministic headroom for its builder image.
           docker system prune --all --force --volumes
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_PASSWORD }}
+      - name: Build E2E install artifacts
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          make sign-darwin
+          cp bin/hypeman bin/hypeman-api
+          go build -o bin/hypeman-token ./cmd/gen-jwt
+          cp config.example.darwin.yaml bin/
+          docker build -t hypeman/builder:latest \
+            -f lib/builds/images/generic/Dockerfile .
       - name: Run E2E install test
-        run: bash scripts/e2e-install-test.sh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsSL --retry 5 --retry-all-errors \
+            "https://raw.githubusercontent.com/${{ github.repository }}/${{ github.sha }}/scripts/e2e-install-test.sh" \
+            -o "$RUNNER_TEMP/e2e-install-test.sh"
+          HYPEMAN_E2E_REPO_DIR="$PWD" BINARY_DIR="$PWD/bin" \
+            bash "$RUNNER_TEMP/e2e-install-test.sh"
       - name: Run E2E CLI-only install test
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           CLI_DIR="$(mktemp -d)"
           INSTALL_DIR="$CLI_DIR" bash scripts/install-cli.sh

@@ -176,12 +176,7 @@ func downloadKernelHeaders(ctx context.Context, arch, rootfsDir string) error {
 		},
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return fmt.Errorf("create request: %w", err)
-	}
-
-	resp, err := client.Do(req)
+	resp, err := doDownloadRequest(ctx, client, url)
 	if err != nil {
 		return fmt.Errorf("http get: %w", err)
 	}

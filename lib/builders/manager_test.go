@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -691,6 +692,21 @@ func TestIdleReaper_SkipsQueuedBuilds(t *testing.T) {
 
 	_, err = m.GetBuilder(context.Background(), b.ID)
 	assert.NoError(t, err, "builder with a queued build must not be reaped")
+}
+
+func TestBuilderStorageRejectsPathTraversal(t *testing.T) {
+	dataDir := filepath.Join(t.TempDir(), "data")
+	p := paths.New(dataDir)
+	require.NoError(t, os.MkdirAll(dataDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(dataDir, "metadata.json"), []byte(`{"id":"outside"}`), 0644))
+	marker := filepath.Join(dataDir, "keep")
+	require.NoError(t, os.WriteFile(marker, []byte("keep"), 0644))
+
+	_, err := loadMetadata(p, "..")
+	require.ErrorIs(t, err, ErrNotFound)
+	require.ErrorIs(t, saveMetadata(p, &storedMetadata{ID: ".."}), ErrInvalidID)
+	require.ErrorIs(t, deleteBuilderData(p, ".."), ErrNotFound)
+	require.FileExists(t, marker)
 }
 
 func TestValidateBuilderID(t *testing.T) {

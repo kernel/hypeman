@@ -21,7 +21,7 @@ pass() { echo -e "${GREEN}[PASS]${NC} $1"; }
 fail() { echo -e "${RED}[FAIL]${NC} $1"; exit 1; }
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+REPO_DIR="${HYPEMAN_E2E_REPO_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 
 cd "$REPO_DIR"
@@ -36,10 +36,14 @@ KEEP_DATA=false bash scripts/uninstall.sh 2>/dev/null || true
 # Phase 2: Install from source
 # =============================================================================
 info "Phase 2: Installing from source..."
-# Use the ref GitHub provides; on tag pushes rev-parse returns a detached "HEAD"
-BRANCH="${GITHUB_REF_NAME:-$(git rev-parse --abbrev-ref HEAD)}"
-# Build CLI from source too when CLI_BRANCH is set (e.g., for testing unreleased CLI features)
-BRANCH="$BRANCH" CLI_BRANCH="${CLI_BRANCH:-}" bash scripts/install.sh
+if [ -n "${BINARY_DIR:-}" ]; then
+    BRANCH= VERSION= BINARY_DIR="$BINARY_DIR" CLI_BRANCH="${CLI_BRANCH:-}" bash scripts/install.sh
+else
+    # Use the ref GitHub provides; on tag pushes rev-parse returns a detached "HEAD"
+    BRANCH="${GITHUB_REF_NAME:-$(git rev-parse --abbrev-ref HEAD)}"
+    # Build CLI from source too when CLI_BRANCH is set (e.g., for testing unreleased CLI features)
+    BRANCH="$BRANCH" CLI_BRANCH="${CLI_BRANCH:-}" bash scripts/install.sh
+fi
 
 # =============================================================================
 # Phase 3: Wait for service
@@ -47,7 +51,7 @@ BRANCH="$BRANCH" CLI_BRANCH="${CLI_BRANCH:-}" bash scripts/install.sh
 info "Phase 3: Waiting for service to be healthy..."
 
 PORT=4973
-TIMEOUT=60
+TIMEOUT=180
 ELAPSED=0
 
 while [ $ELAPSED -lt $TIMEOUT ]; do

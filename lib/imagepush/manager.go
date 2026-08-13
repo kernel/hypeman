@@ -25,10 +25,11 @@ type inflightPush struct {
 }
 
 type manager struct {
-	paths    *paths.Paths
-	resolver ImageResolver
-	provider registrypush.Provider
-	queue    *queue.Queue
+	paths       *paths.Paths
+	resolver    ImageResolver
+	provider    registrypush.Provider
+	queue       *queue.Queue
+	pushTimeout time.Duration
 
 	mu       sync.Mutex
 	inflight map[string]inflightPush // key = pushKey(digest, target, insecure)
@@ -37,12 +38,20 @@ type manager struct {
 	subscribers  map[string][]chan StatusEvent // keyed by push ID
 }
 
-// NewManager creates a push manager. provider may be nil, in which case
-// credentials resolve from the default Docker keychain. Interrupted pushes
-// from a previous run are re-enqueued FIFO.
+// NewManager creates a push manager using DefaultPushTimeout. provider may be
+// nil, in which case credentials resolve from the default Docker keychain.
+// Interrupted pushes from a previous run are re-enqueued FIFO.
 func NewManager(p *paths.Paths, resolver ImageResolver, provider registrypush.Provider, maxConcurrent int) (Manager, error) {
+	return NewManagerWithTimeout(p, resolver, provider, maxConcurrent, DefaultPushTimeout)
+}
+
+// NewManagerWithTimeout creates a push manager with a per-push timeout.
+func NewManagerWithTimeout(p *paths.Paths, resolver ImageResolver, provider registrypush.Provider, maxConcurrent int, timeout time.Duration) (Manager, error) {
 	if resolver == nil {
 		return nil, fmt.Errorf("image resolver is required")
+	}
+	if timeout <= 0 {
+		return nil, fmt.Errorf("push timeout must be positive")
 	}
 	if provider == nil {
 		provider = &registrypush.KeychainProvider{}
@@ -53,6 +62,7 @@ func NewManager(p *paths.Paths, resolver ImageResolver, provider registrypush.Pr
 		resolver:    resolver,
 		provider:    provider,
 		queue:       queue.New(maxConcurrent),
+		pushTimeout: timeout,
 		inflight:    make(map[string]inflightPush),
 		subscribers: make(map[string][]chan StatusEvent),
 	}
@@ -114,63 +124,55 @@ func (m *manager) CreatePush(ctx context.Context, req PushRequest) (*Push, error
 	// a concurrent request for the same digest+target cannot slip in between
 	// and create a duplicate job. The write is one small fsync'd file; keeping
 	// it under the lock is what lets the dedup path hand back a durable record,
-	// and it only briefly stalls InProgressDigests — cheap next to the registry
-	// I/O that dominates a push.
-	var meta *pushMetadata
-	for {
-		m.mu.Lock()
-		if existing, ok := m.inflight[key]; ok {
-			// Merge only when the in-flight job runs under the same credentials
-			// as the request. The manager never stores credential values, so it
-			// compares fingerprints: a request that borrowed credentials cannot
-			// merge into an anonymous in-flight push (its auth would be silently
-			// dropped), an anonymous request cannot merge into a credentialed one
-			// (it would silently inherit another caller's login), and two
-			// requests that borrowed different logins cannot merge either — one
-			// would run under the other caller's auth, and an instance can serve
-			// more than one principal. Surface the conflict instead so the caller
-			// can retry once the in-flight job completes or match its credentials.
-			if existing.credFingerprint != fingerprint {
-				m.mu.Unlock()
-				return nil, fmt.Errorf("%w: a push of %s to %s is already in flight with different credentials; retry once it completes or match its credentials", ErrCredentialConflict, img.Digest, dstRef.String())
-			}
-			id := existing.id
+	// and it only briefly stalls the GC live-digest read — cheap next to the
+	// registry I/O that dominates a push.
+	m.mu.Lock()
+	if existing, ok := m.inflight[key]; ok {
+		// Merge only when the in-flight job runs under the same credentials
+		// as the request. The manager never stores credential values, so it
+		// compares fingerprints: a request that borrowed credentials cannot
+		// merge into an anonymous in-flight push (its auth would be silently
+		// dropped), an anonymous request cannot merge into a credentialed one
+		// (it would silently inherit another caller's login), and two
+		// requests that borrowed different logins cannot merge either — one
+		// would run under the other caller's auth, and an instance can serve
+		// more than one principal. Surface the conflict instead so the caller
+		// can retry once the in-flight job completes or match its credentials.
+		if existing.credFingerprint != fingerprint {
 			m.mu.Unlock()
-			push, err := m.GetPush(ctx, id)
-			if errors.Is(err, ErrNotFound) {
-				// The job's terminal record could not be persisted and its
-				// directory was dropped; the queue completion hook releases the
-				// inflight entry moments later. Wait for that entry (not just the
-				// key) to go away, then retry the dedup: a concurrent waiter that
-				// got here first may already have registered a successor, which
-				// this retry merges into instead of surfacing a bare ErrNotFound
-				// from a create call.
-				if err := m.waitForInflightRelease(ctx, key, id); err != nil {
-					return nil, err
-				}
-				continue
-			}
-			return push, err
+			return nil, fmt.Errorf("%w: a push of %s to %s is already in flight with different credentials; retry once it completes or match its credentials", ErrCredentialConflict, img.Digest, dstRef.String())
 		}
-
-		meta = &pushMetadata{
-			ID:             cuid2.Generate(),
-			Status:         StatusQueued,
-			Image:          img.Name,
-			Digest:         img.Digest,
-			Target:         dstRef.String(),
-			Insecure:       req.Insecure,
-			HadCredentials: credsPresent(req.Credentials),
-			CreatedAt:      time.Now(),
-		}
-		if err := writeMetadata(m.paths, meta); err != nil {
-			m.mu.Unlock()
-			return nil, fmt.Errorf("write initial metadata: %w", err)
-		}
-		m.inflight[key] = inflightPush{id: meta.ID, digest: meta.Digest, credFingerprint: fingerprint}
+		id := existing.id
 		m.mu.Unlock()
-		break
+		push, err := m.GetPush(ctx, id)
+		if errors.Is(err, ErrNotFound) {
+			// The job's terminal record could not be persisted and its
+			// directory was dropped, so the in-flight entry points at nothing
+			// readable. This is a rare mid-finalization window; surface a
+			// clear retryable error rather than orchestrating this caller into
+			// a successor job that does not yet exist. A retry once the entry
+			// drops creates a fresh job.
+			return nil, fmt.Errorf("%w: push job %s is being finalized after a record write failure; retry", ErrNotFound, id)
+		}
+		return push, err
 	}
+
+	meta := &pushMetadata{
+		ID:             cuid2.Generate(),
+		Status:         StatusQueued,
+		Image:          img.Name,
+		Digest:         img.Digest,
+		Target:         dstRef.String(),
+		Insecure:       req.Insecure,
+		HadCredentials: credsPresent(req.Credentials),
+		CreatedAt:      time.Now(),
+	}
+	if err := writeMetadata(m.paths, meta); err != nil {
+		m.mu.Unlock()
+		return nil, fmt.Errorf("write initial metadata: %w", err)
+	}
+	m.inflight[key] = inflightPush{id: meta.ID, digest: meta.Digest, credFingerprint: fingerprint}
+	m.mu.Unlock()
 
 	metaCopy := *meta
 	queuePos := m.queue.Enqueue(key, func() {
@@ -185,9 +187,13 @@ func (m *manager) CreatePush(ctx context.Context, req PushRequest) (*Push, error
 }
 
 func (m *manager) executePush(ctx context.Context, meta *pushMetadata, provider registrypush.Provider) {
-	// Contain panics in the job goroutine: record a failed terminal and
-	// notify waiters instead of leaving the job stuck as pushing. The queue
-	// slot is released by its own deferred completion.
+	// Bound each export so a wedged registry cannot pin a queue slot forever.
+	ctx, cancel := context.WithTimeout(ctx, m.pushTimeout)
+	defer cancel()
+
+	// Contain panics in the job goroutine: record a failed terminal instead
+	// of leaving the job stuck as pushing. The queue slot is released by its
+	// own deferred completion.
 	defer func() {
 		if r := recover(); r != nil {
 			fmt.Fprintf(os.Stderr, "Warning: push %s to %s panicked: %v\n", meta.ID, meta.Target, r)
@@ -196,10 +202,12 @@ func (m *manager) executePush(ctx context.Context, meta *pushMetadata, provider 
 			meta.Status = StatusFailed
 			meta.Error = &errorMsg
 			meta.CompletedAt = &now
-			if err := m.writeTerminal(meta); err != nil {
-				os.RemoveAll(m.paths.PushDir(meta.ID))
+			panicErr := fmt.Errorf("push panicked: %v", r)
+			if err := m.persistTerminal(meta); err != nil {
+				m.notify(meta.ID, StatusFailed, err)
+			} else {
+				m.notify(meta.ID, StatusFailed, panicErr)
 			}
-			m.notify(meta.ID, StatusFailed, fmt.Errorf("push panicked: %v", r))
 		}
 	}()
 
@@ -225,26 +233,32 @@ func (m *manager) executePush(ctx context.Context, meta *pushMetadata, provider 
 	}
 	meta.CompletedAt = &now
 
-	if err := m.writeTerminal(meta); err != nil {
-		// The outcome cannot be recorded: drop the record and report the job
-		// as failed with the persistence problem, so WaitForPush and GetPush
-		// agree instead of diverging into success-then-not-found. The actual
-		// push outcome goes to the log.
-		fmt.Fprintf(os.Stderr, "Warning: push %s to %s finished as %s but the job record could not be persisted: %v\n", meta.ID, meta.Target, strings.ToLower(meta.Status), err)
-		os.RemoveAll(m.paths.PushDir(meta.ID))
-		persistErr := fmt.Errorf("job record could not be persisted: %w", err)
-		errorMsg := persistErr.Error()
-		meta.Status = StatusFailed
-		meta.Error = &errorMsg
-		m.notify(meta.ID, StatusFailed, persistErr)
+	if err := m.persistTerminal(meta); err != nil {
+		m.notify(meta.ID, StatusFailed, err)
 		return
 	}
-
 	if pushErr != nil {
 		m.notify(meta.ID, StatusFailed, pushErr)
 	} else {
 		m.notify(meta.ID, StatusPushed, nil)
 	}
+}
+
+// persistTerminal writes a terminal status and, if that write fails, drops the
+// record so GetPush/ListPushes do not surface a half-written job. Both the
+// normal completion path and the panic handler use it so they agree on what
+// "couldn't persist" means.
+func (m *manager) persistTerminal(meta *pushMetadata) error {
+	if err := m.writeTerminal(meta); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: push %s to %s finished as %s but the job record could not be persisted: %v\n", meta.ID, meta.Target, strings.ToLower(meta.Status), err)
+		removePushData(m.paths, meta.ID)
+		persistErr := fmt.Errorf("job record could not be persisted: %w", err)
+		errorMsg := persistErr.Error()
+		meta.Status = StatusFailed
+		meta.Error = &errorMsg
+		return persistErr
+	}
+	return nil
 }
 
 // writeTerminal persists a terminal status, retrying once.
@@ -272,30 +286,6 @@ func (m *manager) releaseInflight(key string) func() {
 	}
 }
 
-// waitForInflightRelease blocks until the key's torn-down inflight entry is
-// dropped — or replaced by a successor job a concurrent create registered
-// first, which the caller then merges into by retrying the dedup. Waiting on
-// the entry's id rather than the key's absence is what keeps a second waiter
-// from parking until the successor finishes and then starting a duplicate
-// push. The queue releases the key's active slot before it runs the
-// completion hook, so once the torn-down entry is gone a fresh Enqueue for
-// the key starts immediately. The caller's context bounds the wait.
-func (m *manager) waitForInflightRelease(ctx context.Context, key, tornDownID string) error {
-	for {
-		m.mu.Lock()
-		existing, ok := m.inflight[key]
-		m.mu.Unlock()
-		if !ok || existing.id != tornDownID {
-			return nil
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(5 * time.Millisecond):
-		}
-	}
-}
-
 func (m *manager) GetPush(ctx context.Context, id string) (*Push, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -305,10 +295,7 @@ func (m *manager) GetPush(ctx context.Context, id string) (*Push, error) {
 		return nil, err
 	}
 
-	push := meta.toPush()
-	if meta.Status == StatusQueued {
-		push.QueuePosition = m.queue.GetPosition(pushKey(meta.Digest, meta.Target, meta.Insecure))
-	}
+	push := m.toPushWithPosition(meta)
 	return push, nil
 }
 
@@ -323,17 +310,14 @@ func (m *manager) ListPushes(ctx context.Context) ([]Push, error) {
 
 	pushes := make([]Push, 0, len(metas))
 	for _, meta := range metas {
-		push := meta.toPush()
-		if meta.Status == StatusQueued {
-			push.QueuePosition = m.queue.GetPosition(pushKey(meta.Digest, meta.Target, meta.Insecure))
-		}
-		pushes = append(pushes, *push)
+		pushes = append(pushes, *m.toPushWithPosition(meta))
 	}
 	return pushes, nil
 }
 
 // WaitForPush blocks until the push reaches a terminal state (pushed or
-// failed) or the context is cancelled.
+// failed) or the context is cancelled. The HTTP API currently polls the
+// persisted job instead; this remains available to in-process callers.
 func (m *manager) WaitForPush(ctx context.Context, id string) error {
 	push, err := m.GetPush(ctx, id)
 	if err != nil {
@@ -384,7 +368,20 @@ func pushError(push *Push) error {
 	return fmt.Errorf("push failed")
 }
 
-func (m *manager) InProgressDigests() []string {
+// toPushWithPosition projects a stored record to its domain form and, for a
+// queued job, enriches it with the live pending-queue position. GetPush and
+// ListPushes share this so the projection cannot drift between them.
+func (m *manager) toPushWithPosition(meta *pushMetadata) *Push {
+	push := meta.toPush()
+	if meta.Status == StatusQueued {
+		push.QueuePosition = m.queue.GetPosition(pushKey(meta.Digest, meta.Target, meta.Insecure))
+	}
+	return push
+}
+
+// LiveCacheManifestDigests implements ocicachegc.RootsProvider so in-flight
+// push digests are treated as live alongside the OCI layout index.
+func (m *manager) LiveCacheManifestDigests() []string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -462,7 +459,7 @@ func (m *manager) failRecovered(meta *pushMetadata, reason string) {
 	meta.CompletedAt = &now
 	if err := m.writeTerminal(meta); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: dropping unrecoverable push record %s: %v\n", meta.ID, err)
-		os.RemoveAll(m.paths.PushDir(meta.ID))
+		removePushData(m.paths, meta.ID)
 	}
 	m.notify(meta.ID, StatusFailed, errors.New(reason))
 }

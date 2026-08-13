@@ -223,6 +223,17 @@ resources:
       cancel: delete /builds/{id}
       events: get /builds/{id}/events
 
+  pushes:
+    models:
+      push: "#/components/schemas/Push"
+      push_status: "#/components/schemas/PushStatus"
+      push_credentials: "#/components/schemas/PushCredentials"
+      create_push_request: "#/components/schemas/CreatePushRequest"
+    methods:
+      list: get /pushes
+      create: post /pushes
+      get: get /pushes/{id}
+
 settings:
   # All generated integration tests that hit the prism mock http server are marked
   # as skipped. Removing this setting or setting it to false enables tests, but
