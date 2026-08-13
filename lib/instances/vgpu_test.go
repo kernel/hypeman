@@ -57,6 +57,8 @@ func TestCleanupFailedCreateRetainsVGPUAssignment(t *testing.T) {
 	assert.False(t, retained.NetworkEnabled)
 	assert.Empty(t, retained.IP)
 	assert.Empty(t, retained.Volumes)
+	// The stub has no boot configuration, so it is marked delete-only.
+	assert.True(t, retained.GPURetainedForCleanup)
 }
 
 func TestCleanupFailedCreateDeletesDataWithoutRetainedVGPU(t *testing.T) {

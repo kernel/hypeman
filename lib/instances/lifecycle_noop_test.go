@@ -324,6 +324,26 @@ func TestStartPersistsStaleVGPUReleaseImmediately(t *testing.T) {
 	assert.Equal(t, "NVIDIA L40S-2Q", stored.GPUProfile, "profile is kept for the next start")
 }
 
+func TestStartRejectsVGPURetentionRecord(t *testing.T) {
+	m, id := newLifecycleNoopManagerWithInstance(t, StateStopped, time.Now().UTC())
+	meta, err := m.loadMetadata(id)
+	require.NoError(t, err)
+	meta.GPUProfile = "NVIDIA L40S-2Q"
+	meta.GPUFramework = devices.VGPUFrameworkNone
+	meta.GPUDevicePath = "/sys/bus/pci/devices/0000:82:00.4"
+	meta.GPURetainedForCleanup = true
+	require.NoError(t, m.saveMetadata(meta))
+
+	_, err = m.StartInstance(context.Background(), id, StartInstanceRequest{})
+	require.ErrorIs(t, err, ErrInvalidState)
+	require.ErrorContains(t, err, "delete it to release the assignment")
+
+	// The retained assignment must survive the rejected start for delete.
+	stored, err := m.loadMetadata(id)
+	require.NoError(t, err)
+	assert.Equal(t, "/sys/bus/pci/devices/0000:82:00.4", stored.GPUDevicePath)
+}
+
 func TestStopStoppedInstanceReleasesRetainedVGPU(t *testing.T) {
 	m, id := newLifecycleNoopManagerWithInstance(t, StateStopped, time.Now().UTC())
 	meta, err := m.loadMetadata(id)
