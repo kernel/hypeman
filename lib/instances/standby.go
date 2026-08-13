@@ -357,6 +357,16 @@ func restoreRetainedSnapshotBase(snapshotDir string, retainedBaseDir string) err
 // shutdownHypervisor gracefully shuts down the hypervisor process via API
 func (m *manager) shutdownHypervisor(ctx context.Context, inst *Instance) error {
 	log := logger.FromContext(ctx)
+
+	// Resolve the live owner before any teardown: the stored PID may be stale
+	// or recycled, and signaling it raw would bypass the ownership checks the
+	// kill paths enforce. Failing closed here also keeps the control socket in
+	// place as evidence for a later hardened kill.
+	pid, err := resolveLiveHypervisorPID(inst.HypervisorPID, inst.HypervisorStartTime, inst.HypervisorBootID, inst.SocketPath)
+	if err != nil {
+		return fmt.Errorf("confirm hypervisor ownership before shutdown: %w", err)
+	}
+
 	defer func() {
 		// Clean stale sockets even if graceful shutdown fails.
 		_ = os.Remove(inst.SocketPath)
@@ -387,8 +397,7 @@ func (m *manager) shutdownHypervisor(ctx context.Context, inst *Instance) error 
 	_ = os.Remove(inst.SocketPath)
 
 	// Wait for process to exit
-	if inst.HypervisorPID != nil {
-		pid := *inst.HypervisorPID
+	if pid > 0 {
 		shouldWaitForGracefulExit := caps.SupportsGracefulVMMShutdown && shutdownErr != hypervisor.ErrNotSupported
 		if shouldWaitForGracefulExit {
 			if WaitForProcessExit(pid, 2*time.Second) {
