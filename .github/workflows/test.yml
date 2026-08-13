@@ -53,7 +53,7 @@ jobs:
 
       - name: Check UFFD pager version
         run: |
-          git fetch "https://github.com/${{ github.repository }}.git" main:refs/remotes/upstream/main --depth=1
+          git fetch "https://github.com/${{ github.repository }}.git" +main:refs/remotes/upstream/main --depth=1
           bash scripts/check-uffd-version.sh upstream/main
       
       - name: Install dependencies
