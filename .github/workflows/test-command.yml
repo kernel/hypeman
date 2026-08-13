@@ -9,7 +9,7 @@ permissions:
   checks: read
   contents: read
   issues: write
-  pull-requests: write
+  pull-requests: read
 
 jobs:
   dispatch:
@@ -147,4 +147,5 @@ jobs:
             --field body="Test workflow dispatched for commit ${HEAD_SHA:0:12}. Results: https://github.com/$REPO/actions/workflows/test.yml" 2>&1)"; then
             echo "$response"
             echo "::warning::tests were dispatched, but the confirmation comment could not be posted"
+            echo "Tests were dispatched for commit ${HEAD_SHA:0:12}, but the confirmation comment could not be posted." >> "$GITHUB_STEP_SUMMARY"
           fi
