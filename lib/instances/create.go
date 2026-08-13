@@ -687,21 +687,22 @@ func (m *manager) cleanupFailedCreate(ctx context.Context, id string, retainedVG
 	// deletable record rather than a nameless phantom, but drop resource
 	// claims (network, volumes, devices) that rollback already released.
 	retained := StoredMetadata{
-		Id:                id,
-		Name:              retainedVGPU.Name,
-		Image:             retainedVGPU.Image,
-		ResolvedImage:     retainedVGPU.ResolvedImage,
-		Platform:          retainedVGPU.Platform,
-		CreatedAt:         retainedVGPU.CreatedAt,
-		HypervisorType:    retainedVGPU.HypervisorType,
-		HypervisorVersion: retainedVGPU.HypervisorVersion,
-		SocketPath:        retainedVGPU.SocketPath,
-		DataDir:           retainedVGPU.DataDir,
-		GPUProfile:        retainedVGPU.GPUProfile,
-		GPUFramework:      retainedVGPU.GPUFramework,
-		GPUDevicePath:     retainedVGPU.GPUDevicePath,
-		GPUMdevUUID:       retainedVGPU.GPUMdevUUID,
-		GPUAssignedAt:     retainedVGPU.GPUAssignedAt,
+		Id:                    id,
+		Name:                  retainedVGPU.Name,
+		Image:                 retainedVGPU.Image,
+		ResolvedImage:         retainedVGPU.ResolvedImage,
+		Platform:              retainedVGPU.Platform,
+		CreatedAt:             retainedVGPU.CreatedAt,
+		HypervisorType:        retainedVGPU.HypervisorType,
+		HypervisorVersion:     retainedVGPU.HypervisorVersion,
+		SocketPath:            retainedVGPU.SocketPath,
+		DataDir:               retainedVGPU.DataDir,
+		GPUProfile:            retainedVGPU.GPUProfile,
+		GPUFramework:          retainedVGPU.GPUFramework,
+		GPUDevicePath:         retainedVGPU.GPUDevicePath,
+		GPUMdevUUID:           retainedVGPU.GPUMdevUUID,
+		GPUAssignedAt:         retainedVGPU.GPUAssignedAt,
+		GPURetainedForCleanup: true,
 	}
 	if err := m.saveMetadata(&metadata{StoredMetadata: retained}); err != nil {
 		log.ErrorContext(ctx, "failed to retain vGPU assignment metadata after cleanup failure", "instance_id", id, "error", err)
