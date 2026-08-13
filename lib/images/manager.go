@@ -596,29 +596,24 @@ func (m *manager) RecoverInterruptedBuilds() {
 	})
 
 	for _, meta := range metas {
-		switch meta.Status {
-		case StatusPending, StatusPulling, StatusConverting:
-			if meta.BorrowedAuth {
-				normalized, parseErr := ParseNormalizedRef(meta.Name)
-				if parseErr == nil {
-					ref := NewResolvedRef(normalized, meta.Digest)
-					m.updateStatusByDigest(ref, StatusFailed, ErrBorrowedCredentialsExpired)
-				}
-				continue
-			}
-			if meta.Request != nil && meta.Digest != "" {
-				metaCopy := meta
-				normalized, err := ParseNormalizedRef(metaCopy.Name)
-				if err != nil {
-					continue
-				}
-				// Create a ResolvedRef since we already have the digest from metadata
-				ref := NewResolvedRef(normalized, metaCopy.Digest)
-				m.queue.Enqueue(metaCopy.Digest, func() {
-					m.buildImage(context.Background(), ref, nil)
-				}, nil)
-			}
+		if meta.Status != StatusPending && meta.Status != StatusPulling && meta.Status != StatusConverting {
+			continue
 		}
+		if meta.Request == nil || meta.Digest == "" {
+			continue
+		}
+		normalized, err := ParseNormalizedRef(meta.Name)
+		if err != nil {
+			continue
+		}
+		ref := NewResolvedRef(normalized, meta.Digest)
+		if meta.BorrowedAuth && (meta.Status != StatusConverting || !m.ociClient.existsInLayout(digestToLayoutTag(meta.Digest))) {
+			m.updateStatusByDigest(ref, StatusFailed, ErrBorrowedCredentialsExpired)
+			continue
+		}
+		m.queue.Enqueue(meta.Digest, func() {
+			m.buildImage(context.Background(), ref, nil)
+		}, nil)
 	}
 }
 

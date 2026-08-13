@@ -13,6 +13,8 @@ import (
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/registry"
+	"github.com/google/go-containerregistry/pkg/v1/empty"
+	"github.com/google/go-containerregistry/pkg/v1/layout"
 	"github.com/google/go-containerregistry/pkg/v1/random"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/kernel/hypeman/lib/paths"
@@ -114,6 +116,40 @@ func TestBorrowedCredentialsExpireWhileQueued(t *testing.T) {
 	credentials, _, expired := m.borrowedAuth(digest)
 	assert.True(t, expired)
 	assert.Nil(t, credentials)
+}
+
+func TestRecoverInterruptedCredentialedConversionFromCache(t *testing.T) {
+	p := paths.New(t.TempDir())
+	img := createTestDockerImage(t)
+	digest, err := img.Digest()
+	require.NoError(t, err)
+	digestString := digest.String()
+
+	require.NoError(t, os.MkdirAll(p.SystemOCICache(), 0o755))
+	cache, err := layout.Write(p.SystemOCICache(), empty.Index)
+	require.NoError(t, err)
+	require.NoError(t, cache.AppendImage(img, layout.WithAnnotations(map[string]string{
+		"org.opencontainers.image.ref.name": digestToLayoutTag(digestString),
+	})))
+
+	const repository = "registry.example/private/image"
+	meta := &imageMetadata{
+		Name:         repository + ":latest",
+		Digest:       digestString,
+		Status:       StatusConverting,
+		BorrowedAuth: true,
+		Request:      &CreateImageRequest{Name: repository + ":latest"},
+		CreatedAt:    time.Now(),
+	}
+	require.NoError(t, writeMetadata(p, repository, strings.TrimPrefix(digestString, "sha256:"), meta))
+
+	mgr, err := NewManager(p, 1, nil)
+	require.NoError(t, err)
+	waitForReady(t, mgr, context.Background(), meta.Name)
+
+	recovered, err := mgr.GetImage(context.Background(), meta.Name)
+	require.NoError(t, err)
+	assert.Equal(t, StatusReady, recovered.Status)
 }
 
 func TestRecoverInterruptedCredentialedPullFailsForFreshRetry(t *testing.T) {
