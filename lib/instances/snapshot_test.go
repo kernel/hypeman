@@ -52,6 +52,31 @@ func TestForkSnapshotClearsVGPUAssignment(t *testing.T) {
 	assert.Equal(t, "/sys/bus/pci/devices/0000:82:00.4", source.GPUDevicePath)
 }
 
+func TestCreateSnapshotRejectsVGPURetentionRecord(t *testing.T) {
+	mgr, _ := setupTestManager(t)
+	ctx := context.Background()
+
+	sourceID := "snapshot-vgpu-retention"
+	createStoppedSnapshotSourceFixture(t, mgr, sourceID, sourceID, mgr.defaultHypervisor)
+
+	meta, err := mgr.loadMetadata(sourceID)
+	require.NoError(t, err)
+	meta.GPUProfile = "NVIDIA L40S-2Q"
+	meta.GPUFramework = devices.VGPUFramework("future-framework")
+	meta.GPUDevicePath = "/sys/bus/pci/devices/0000:82:00.4"
+	meta.GPURetainedForCleanup = true
+	require.NoError(t, mgr.saveMetadata(meta))
+
+	// The delete-only retention stub has no boot configuration, so a snapshot
+	// of it could never be restored or forked into a bootable instance.
+	_, err = mgr.CreateSnapshot(ctx, sourceID, CreateSnapshotRequest{
+		Kind: SnapshotKindStopped,
+		Name: "snapshot-vgpu-retention",
+	})
+	require.ErrorIs(t, err, ErrInvalidState)
+	require.ErrorContains(t, err, "delete it to release the assignment")
+}
+
 func TestRestoreSnapshotDoesNotResurrectStaleVGPUAssignment(t *testing.T) {
 	mgr, _ := setupTestManager(t)
 	ctx := context.Background()
