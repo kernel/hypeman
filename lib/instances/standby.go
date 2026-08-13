@@ -375,6 +375,13 @@ func (m *manager) shutdownHypervisor(ctx context.Context, inst *Instance) error 
 	// Try to connect to hypervisor
 	hv, err := m.getHypervisor(inst.SocketPath, inst.HypervisorType)
 	if err != nil {
+		if pid > 0 {
+			// The control client cannot be built but the resolved owner is
+			// alive; teardown is committed, so kill it rather than report a
+			// completed shutdown for a VMM that is still running.
+			log.WarnContext(ctx, "could not connect to hypervisor, force killing resolved owner", "instance_id", inst.Id, "pid", pid, "error", err)
+			return forceKillHypervisorPID(pid)
+		}
 		// Can't connect - hypervisor might already be stopped
 		log.DebugContext(ctx, "could not connect to hypervisor, may already be stopped", "instance_id", inst.Id)
 		return nil
