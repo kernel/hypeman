@@ -1,0 +1,147 @@
+name: Test command
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: write
+  checks: read
+  contents: read
+  issues: write
+  pull-requests: read
+
+jobs:
+  dispatch:
+    if: ${{ github.event.issue.pull_request }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check command
+        id: command
+        env:
+          BODY: ${{ github.event.comment.body }}
+        run: |
+          set -euo pipefail
+          if [[ "$BODY" != "/test" && "$BODY" != "/run-tests" ]]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "run=true" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout command configuration
+        if: steps.command.outputs.run == 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Check maintainer authorization
+        if: steps.command.outputs.run == 'true'
+        env:
+          AUTHOR: ${{ github.event.comment.user.login }}
+        run: |
+          set -euo pipefail
+          if ! grep -Fxq "$AUTHOR" .github/test-command-maintainers; then
+            echo "::error::$AUTHOR is not authorized to run public contribution tests"
+            exit 1
+          fi
+
+      - name: Resolve pull request head
+        if: steps.command.outputs.run == 'true'
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$REPO/pulls/$PR_NUMBER" \
+            --jq '[.state, .base.ref, .head.repo.full_name, .head.sha] | @tsv' > "$RUNNER_TEMP/pr.tsv"
+          read -r state base_repo head_repo head_sha < "$RUNNER_TEMP/pr.tsv"
+          if [ "$state" != "open" ] || [ "$base_repo" != "main" ] || [ -z "$head_repo" ]; then
+            echo "::error::only open pull requests targeting main can be tested"
+            exit 1
+          fi
+          {
+            echo "head_repo=$head_repo"
+            echo "head_sha=$head_sha"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Reject commits pushed after the command
+        if: steps.command.outputs.run == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+          COMMENT_CREATED_AT: ${{ github.event.comment.created_at }}
+        run: |
+          set -euo pipefail
+          first_seen_at="$(gh api --paginate "repos/$REPO/commits/$HEAD_SHA/check-suites?per_page=100" \
+            --jq '.check_suites[].created_at' | sort | head -n1)"
+          if [ -z "$first_seen_at" ]; then
+            echo "::error::cannot verify when GitHub first saw commit $HEAD_SHA"
+            exit 1
+          fi
+
+          first_seen_epoch="$(jq -nr --arg timestamp "$first_seen_at" '$timestamp | fromdateiso8601')"
+          comment_epoch="$(jq -nr --arg timestamp "$COMMENT_CREATED_AT" '$timestamp | fromdateiso8601')"
+          if [ "$first_seen_epoch" -ge "$comment_epoch" ]; then
+            gh api "repos/$REPO/issues/$PR_NUMBER/comments" \
+              --field body="Tests were not dispatched because the current commit was pushed after the /test command. Review the latest changes and comment /test again."
+            echo "::error::commit $HEAD_SHA was first seen at $first_seen_at, not before the command at $COMMENT_CREATED_AT"
+            exit 1
+          fi
+
+      - name: Reject dependency changes
+        if: steps.command.outputs.run == 'true' && steps.pr.outputs.head_repo != github.repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          dependency_files="$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" \
+            --jq '.[] | select(.filename == "go.mod" or .filename == "go.sum") | .filename')"
+          if [ -n "$dependency_files" ]; then
+            gh api "repos/$REPO/issues/$PR_NUMBER/comments" \
+              --field body="Tests were not dispatched because public contributions cannot change go.mod or go.sum."
+            echo "::error::public contribution changes dependency files: $dependency_files"
+            exit 1
+          fi
+
+      - name: Dispatch tests
+        if: steps.command.outputs.run == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+          HEAD_REPO: ${{ steps.pr.outputs.head_repo }}
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          current_head_sha="$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.head.sha')"
+          if [ "$current_head_sha" != "$HEAD_SHA" ]; then
+            gh api "repos/$REPO/issues/$PR_NUMBER/comments" \
+              --field body="Tests were not dispatched because the pull request changed after the /test command. Review the latest changes and comment /test again."
+            echo "::error::pull request head changed from $HEAD_SHA to $current_head_sha"
+            exit 1
+          fi
+
+          gh workflow run test.yml \
+            --repo "$REPO" \
+            --ref main \
+            --field pr_head_repo="$HEAD_REPO" \
+            --field pr_head_sha="$HEAD_SHA"
+
+      - name: Report dispatch
+        if: steps.command.outputs.run == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$REPO/issues/$PR_NUMBER/comments" \
+            --field body="Test workflow dispatched for commit ${HEAD_SHA:0:12}. Results: https://github.com/$REPO/actions/workflows/test.yml"
