@@ -818,8 +818,14 @@ func resolveRuntimeHypervisorPID(log *slog.Logger, stored *StoredMetadata, fallb
 	}
 	pid, confirmed, err := hypervisor.ResolveProcessPID(stored.SocketPath)
 	if err != nil {
+		// The fallback PID was just proven dead, so it gets no identity
+		// token: minting one would stamp the current boot ID (and, if the
+		// PID is recycled mid-call, a live start time) onto a process that
+		// is not the hypervisor.
 		log.Debug("using fallback hypervisor pid", "socket_path", stored.SocketPath, "pid", fallbackPID, "error", err)
-		setHypervisorProcessIdentity(stored, fallbackPID)
+		stored.HypervisorPID = &fallbackPID
+		stored.HypervisorStartTime = 0
+		stored.HypervisorBootID = ""
 		return fallbackPID
 	}
 	if confirmed {
