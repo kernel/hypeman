@@ -96,31 +96,6 @@ func (m *manager) tryGracefulGuestShutdown(ctx context.Context, inst *Instance, 
 	return false
 }
 
-// forceKillHypervisorProcess sends SIGKILL to the hypervisor process if it's still running
-// and waits briefly for it to exit.
-func (m *manager) forceKillHypervisorProcess(ctx context.Context, inst *Instance) error {
-	log := logger.FromContext(ctx)
-
-	if inst.HypervisorPID == nil && inst.SocketPath == "" {
-		return nil
-	}
-	pid, err := resolveLiveHypervisorPID(inst.HypervisorProcessIdentity, inst.SocketPath)
-	if err != nil {
-		return err
-	}
-	if pid == 0 {
-		return nil
-	}
-
-	log.WarnContext(ctx, "hypervisor still running after shutdown fallback, sending SIGKILL", "instance_id", inst.Id, "pid", pid)
-	if err := killProcessAndWait(pid); err != nil {
-		return err
-	}
-
-	log.DebugContext(ctx, "hypervisor process force-killed", "instance_id", inst.Id, "pid", pid)
-	return nil
-}
-
 // stopInstance gracefully stops an active instance.
 // Flow: send Shutdown RPC -> wait for VM to power off ->
 // fall back to hypervisor shutdown -> final SIGKILL if still alive.
@@ -205,7 +180,7 @@ func (m *manager) stopInstance(
 			attribute.String("hypervisor", string(stored.HypervisorType)),
 			attribute.String("operation", "force_kill_hypervisor"),
 		)
-		if err := m.forceKillHypervisorProcess(killCtx, &inst); err != nil {
+		if err := m.killHypervisor(killCtx, &inst); err != nil {
 			killSpanEnd(err)
 			log.ErrorContext(ctx, "failed to force-kill hypervisor process", "instance_id", id, "error", err)
 			return nil, err
