@@ -7,6 +7,14 @@ import (
 	"github.com/kernel/hypeman/lib/logger"
 )
 
+type backfillResult int
+
+const (
+	backfillDone backfillResult = iota
+	backfillSkipped
+	backfillFailed
+)
+
 // BackfillHypervisorProcessIdentities persists process identity for instances
 // recorded before identity tokens existed, avoiding full /proc scans during
 // later state derivation.
@@ -19,6 +27,7 @@ func (m *manager) BackfillHypervisorProcessIdentities(ctx context.Context) {
 		return
 	}
 
+	var backfilled, skipped, failed int
 	for _, file := range files {
 		id := filepath.Base(filepath.Dir(file))
 		meta, err := m.loadMetadata(id)
@@ -28,8 +37,17 @@ func (m *manager) BackfillHypervisorProcessIdentities(ctx context.Context) {
 		if !needsHypervisorIdentityBackfill(&meta.StoredMetadata) {
 			continue
 		}
-		m.backfillInstanceHypervisorProcessIdentity(ctx, id)
+		switch m.backfillInstanceHypervisorProcessIdentity(ctx, id) {
+		case backfillDone:
+			backfilled++
+		case backfillSkipped:
+			skipped++
+		case backfillFailed:
+			failed++
+		}
 	}
+	log.InfoContext(ctx, "hypervisor identity backfill complete",
+		"backfilled", backfilled, "skipped", skipped, "failed", failed)
 }
 
 func needsHypervisorIdentityBackfill(stored *StoredMetadata) bool {
@@ -42,7 +60,7 @@ func needsHypervisorIdentityBackfill(stored *StoredMetadata) bool {
 	return ProcessExists(*stored.HypervisorPID)
 }
 
-func (m *manager) backfillInstanceHypervisorProcessIdentity(ctx context.Context, id string) {
+func (m *manager) backfillInstanceHypervisorProcessIdentity(ctx context.Context, id string) backfillResult {
 	log := logger.FromContext(ctx)
 	lock := m.getInstanceLock(id)
 	lock.Lock()
@@ -50,22 +68,23 @@ func (m *manager) backfillInstanceHypervisorProcessIdentity(ctx context.Context,
 
 	meta, err := m.loadMetadata(id)
 	if err != nil {
-		return
+		return backfillFailed
 	}
 	if !needsHypervisorIdentityBackfill(&meta.StoredMetadata) {
-		return
+		return backfillSkipped
 	}
 
 	pid, err := resolveLiveHypervisorPID(meta.HypervisorProcessIdentity, meta.SocketPath)
 	if err != nil || pid <= 0 {
 		log.DebugContext(ctx, "skipping hypervisor identity backfill", "instance_id", id, "error", err)
-		return
+		return backfillSkipped
 	}
 
 	meta.HypervisorProcessIdentity.Set(pid)
 	if err := m.saveMetadata(meta); err != nil {
 		log.WarnContext(ctx, "failed to persist hypervisor process identity", "instance_id", id, "error", err)
-		return
+		return backfillFailed
 	}
 	log.DebugContext(ctx, "persisted hypervisor process identity", "instance_id", id, "pid", pid)
+	return backfillDone
 }
