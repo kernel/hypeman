@@ -362,8 +362,8 @@ func TestLiveInstanceVGPUDevicePathsBoundsStartupProtection(t *testing.T) {
 		{StoredMetadata: instances.StoredMetadata{Id: "booting", GPUDevicePath: "/sys/bus/pci/devices/0000:82:00.4", GPUAssignedAt: &recent}},
 		{StoredMetadata: instances.StoredMetadata{Id: "orphaned", GPUDevicePath: "/sys/bus/pci/devices/0000:82:00.5", GPUAssignedAt: &stale}},
 		{StoredMetadata: instances.StoredMetadata{Id: "legacy", GPUDevicePath: "/sys/bus/pci/devices/0000:82:00.6"}},
-		{StoredMetadata: instances.StoredMetadata{Id: "dead", GPUDevicePath: "/sys/bus/pci/devices/0000:82:00.7", HypervisorPID: &deadPID}},
-		{StoredMetadata: instances.StoredMetadata{Id: "stale-pid-booting", GPUDevicePath: "/sys/bus/pci/devices/0000:82:00.8", HypervisorPID: &deadPID, GPUAssignedAt: &recent}},
+		{StoredMetadata: instances.StoredMetadata{Id: "dead", GPUDevicePath: "/sys/bus/pci/devices/0000:82:00.7", HypervisorProcessIdentity: instances.HypervisorProcessIdentity{HypervisorPID: &deadPID}}},
+		{StoredMetadata: instances.StoredMetadata{Id: "stale-pid-booting", GPUDevicePath: "/sys/bus/pci/devices/0000:82:00.8", HypervisorProcessIdentity: instances.HypervisorProcessIdentity{HypervisorPID: &deadPID}, GPUAssignedAt: &recent}},
 	}}
 
 	protected, retryAfter, err := liveInstanceVGPUDevicePaths(context.Background(), manager)
