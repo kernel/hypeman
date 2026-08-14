@@ -113,7 +113,7 @@ func (m *manager) forceKillHypervisorProcess(ctx context.Context, inst *Instance
 	}
 
 	log.WarnContext(ctx, "hypervisor still running after shutdown fallback, sending SIGKILL", "instance_id", inst.Id, "pid", pid)
-	if err := killProcessAndWait(pid, hypervisorSIGKILLWaitTimeout); err != nil {
+	if err := killProcessAndWait(pid); err != nil {
 		return err
 	}
 

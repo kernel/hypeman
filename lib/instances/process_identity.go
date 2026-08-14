@@ -22,32 +22,27 @@ const linuxBootIDPath = "/proc/sys/kernel/random/boot_id"
 // hypervisorSIGKILLWaitTimeout bounds how long stop and delete wait for the
 // hypervisor to exit after SIGKILL before reporting it still alive. A process
 // that survives SIGKILL is stuck in uninterruptible sleep, and waiting longer
-// does not unstick it, so the wait is short to keep stop and delete fast;
-// killProcessAndWait escalates to the process group after it.
+// does not unstick it, so the wait is short to keep stop and delete fast.
 const hypervisorSIGKILLWaitTimeout = 2 * time.Second
-
-// killEscalationWait is the grace period after escalating a SIGKILL to the
-// process group.
-const killEscalationWait = 2 * time.Second
 
 // killProcessAndWait SIGKILLs pid and waits for it to exit. A process that
 // survives the first wait gets its process group killed too (the hypervisor
 // may have spawned children in its own group) and a short grace period. An
 // error means the process may still be running, so callers must not tear down
 // instance resources.
-func killProcessAndWait(pid int, wait time.Duration) error {
+func killProcessAndWait(pid int) error {
 	if err := syscall.Kill(pid, syscall.SIGKILL); err != nil {
 		if err == syscall.ESRCH {
 			return nil
 		}
 		return fmt.Errorf("kill hypervisor process %d: %w", pid, err)
 	}
-	if WaitForProcessExit(pid, wait) {
+	if WaitForProcessExit(pid, hypervisorSIGKILLWaitTimeout) {
 		return nil
 	}
 	// The process may have spawned children in its own process group.
 	_ = syscall.Kill(-pid, syscall.SIGKILL)
-	if !WaitForProcessExit(pid, killEscalationWait) {
+	if !WaitForProcessExit(pid, hypervisorSIGKILLWaitTimeout) {
 		return fmt.Errorf("hypervisor pid %d did not exit after SIGKILL", pid)
 	}
 	return nil
@@ -189,48 +184,6 @@ func classifyResolvedHypervisorOwner(socketPath string, stored, resolved int, co
 		return 0, nil
 	}
 	return 0, fmt.Errorf("cannot confirm ownership of socket %s for stored hypervisor PID %d: %w", socketPath, stored, err)
-}
-
-// HypervisorProcessIdentityExists reports whether pid still identifies the
-// recorded hypervisor process. A matching start time is sufficient while its
-// control socket is still being created, but only during the recorded host boot.
-func HypervisorProcessIdentityExists(pid int, startTime uint64, bootID, socketPath string) bool {
-	if !ProcessExists(pid) {
-		return false
-	}
-	if startTime != 0 && bootID != "" {
-		currentBootID := hostBootID()
-		if currentBootID == "" {
-			return HypervisorProcessExists(pid, socketPath)
-		}
-		if currentBootID != bootID {
-			return false
-		}
-		currentStartTime := processStartTime(pid)
-		if currentStartTime == 0 {
-			return true
-		}
-		return currentStartTime == startTime
-	}
-	return HypervisorProcessExists(pid, socketPath)
-}
-
-// HypervisorProcessExists reports whether pid owns the instance's hypervisor
-// socket. It fails open: when ownership cannot be resolved it returns true,
-// which is the safe direction for its callers (reconcile protection and claim
-// checks, where true means "protect"). Do not use it to authorize teardown.
-func HypervisorProcessExists(pid int, socketPath string) bool {
-	if !ProcessExists(pid) {
-		return false
-	}
-	if runtime.GOOS != "linux" || socketPath == "" {
-		return true
-	}
-	resolvedPID, confirmed, err := hypervisor.ResolveProcessPIDForOwner(socketPath, pid)
-	if err != nil || !confirmed || resolvedPID == pid {
-		return true
-	}
-	return !ProcessExists(resolvedPID)
 }
 
 // ProcessExists reports whether pid belongs to a live, non-zombie process.
