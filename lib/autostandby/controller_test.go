@@ -14,18 +14,19 @@ import (
 )
 
 type fakeInstanceStore struct {
-	mu                sync.Mutex
-	instances         []Instance
-	standbyIDs        []string
-	persistedRuntime  map[string]*Runtime
-	events            chan InstanceEvent
-	standbyErr        error
-	listErr           error
-	setRuntimeErr     error
-	setRuntimeStarted chan string
-	setRuntimeRelease chan struct{}
-	standbyStarted    chan string
-	standbyRelease    chan struct{}
+	mu                    sync.Mutex
+	instances             []Instance
+	standbyIDs            []string
+	persistedRuntime      map[string]*Runtime
+	events                chan InstanceEvent
+	standbyErr            error
+	listErr               error
+	setRuntimeErr         error
+	setRuntimeStarted     chan string
+	setRuntimeRelease     chan struct{}
+	setRuntimeReleaseByID map[string]chan struct{}
+	standbyStarted        chan string
+	standbyRelease        chan struct{}
 }
 
 func newFakeInstanceStore(instances []Instance) *fakeInstanceStore {
@@ -72,8 +73,12 @@ func (f *fakeInstanceStore) SetRuntime(_ context.Context, id string, runtime *Ru
 	if f.setRuntimeStarted != nil {
 		f.setRuntimeStarted <- id
 	}
-	if f.setRuntimeRelease != nil {
-		<-f.setRuntimeRelease
+	release := f.setRuntimeRelease
+	if f.setRuntimeReleaseByID != nil {
+		release = f.setRuntimeReleaseByID[id]
+	}
+	if release != nil {
+		<-release
 	}
 
 	f.mu.Lock()
@@ -1355,6 +1360,112 @@ func TestRefreshPersistFailureStillArmsIdleTimer(t *testing.T) {
 	assert.NotNil(t, state.nextStandbyAt)
 	assert.NotNil(t, state.idleSince)
 	controller.mu.RUnlock()
+}
+
+func TestRuntimePersistenceDoesNotBlockOtherInstances(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 6, 10, 55, 0, 0, time.UTC)
+	first := Instance{
+		ID:             "inst-persist-first",
+		Name:           "inst-persist-first",
+		State:          StateRunning,
+		NetworkEnabled: true,
+		IP:             "192.168.100.110",
+		AutoStandby:    &Policy{Enabled: true, IdleTimeout: "1m"},
+	}
+	second := first
+	second.ID = "inst-persist-second"
+	second.Name = second.ID
+	second.IP = "192.168.100.111"
+	conns := []Connection{
+		{
+			OriginalSourceIP:        mustAddr("1.2.3.4"),
+			OriginalSourcePort:      50010,
+			OriginalDestinationIP:   mustAddr(first.IP),
+			OriginalDestinationPort: 8080,
+			TCPState:                TCPStateEstablished,
+		},
+		{
+			OriginalSourceIP:        mustAddr("1.2.3.4"),
+			OriginalSourcePort:      50011,
+			OriginalDestinationIP:   mustAddr(second.IP),
+			OriginalDestinationPort: 8080,
+			TCPState:                TCPStateEstablished,
+		},
+	}
+	firstRelease := make(chan struct{})
+	store := newFakeInstanceStore([]Instance{first, second})
+	store.setRuntimeStarted = make(chan string, 2)
+	store.setRuntimeReleaseByID = map[string]chan struct{}{first.ID: firstRelease}
+	controller := NewController(store, &fakeConnectionSource{}, ControllerOptions{
+		Now: func() time.Time { return now },
+	})
+
+	firstDone := make(chan error, 1)
+	go func() {
+		firstDone <- controller.seedInstanceState(context.Background(), first, conns, now)
+	}()
+	require.Equal(t, first.ID, <-store.setRuntimeStarted)
+
+	secondDone := make(chan error, 1)
+	go func() {
+		secondDone <- controller.seedInstanceState(context.Background(), second, conns, now)
+	}()
+
+	select {
+	case id := <-store.setRuntimeStarted:
+		require.Equal(t, second.ID, id)
+	case <-time.After(time.Second):
+		close(firstRelease)
+		require.FailNow(t, "runtime persistence waited on another instance")
+	}
+	select {
+	case err := <-secondDone:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		close(firstRelease)
+		require.FailNow(t, "runtime persistence did not complete for another instance")
+	}
+
+	close(firstRelease)
+	require.NoError(t, <-firstDone)
+}
+
+func TestRuntimePersistenceKeepsLatestGeneration(t *testing.T) {
+	t.Parallel()
+
+	store := newFakeInstanceStore(nil)
+	controller := NewController(store, &fakeConnectionSource{}, ControllerOptions{})
+	firstTime := time.Date(2026, 4, 6, 10, 55, 0, 0, time.UTC)
+	secondTime := firstTime.Add(time.Second)
+
+	controller.mu.Lock()
+	first := controller.prepareRuntimePersistenceLocked("inst-persist-order", &Runtime{IdleSince: &firstTime}, runtimePersistencePropagate, "test first generation")
+	second := controller.prepareRuntimePersistenceLocked("inst-persist-order", &Runtime{IdleSince: &secondTime}, runtimePersistencePropagate, "test second generation")
+	controller.mu.Unlock()
+
+	require.NoError(t, controller.persistRuntime(context.Background(), first))
+	assert.NotContains(t, store.persistedRuntime, "inst-persist-order")
+	require.NoError(t, controller.persistRuntime(context.Background(), second))
+	require.NotNil(t, store.persistedRuntime["inst-persist-order"])
+	assert.Equal(t, secondTime, *store.persistedRuntime["inst-persist-order"].IdleSince)
+}
+
+func TestRuntimePersistenceSkipsDeletedInstance(t *testing.T) {
+	t.Parallel()
+
+	store := newFakeInstanceStore(nil)
+	controller := NewController(store, &fakeConnectionSource{}, ControllerOptions{})
+	now := time.Date(2026, 4, 6, 10, 55, 0, 0, time.UTC)
+
+	controller.mu.Lock()
+	persistence := controller.prepareRuntimePersistenceLocked("inst-persist-deleted", &Runtime{IdleSince: &now}, runtimePersistencePropagate, "test deleted instance")
+	controller.removeStateLocked("inst-persist-deleted")
+	controller.mu.Unlock()
+
+	require.NoError(t, controller.persistRuntime(context.Background(), persistence))
+	assert.NotContains(t, store.persistedRuntime, "inst-persist-deleted")
 }
 
 func TestHoldStandbyDoesNotWaitForRuntimePersistence(t *testing.T) {
