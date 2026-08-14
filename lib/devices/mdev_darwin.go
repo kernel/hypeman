@@ -52,9 +52,9 @@ func IsMdevInUse(mdevUUID string) bool {
 	return false
 }
 
-func DestroyVGPU(ctx context.Context, framework VGPUFramework, devicePath, mdevUUID string) error {
-	if framework != VGPUFrameworkNone && framework != VGPUFrameworkMdev {
-		return fmt.Errorf("unknown vGPU framework %q", framework)
+func DestroyVGPU(ctx context.Context, assignment VGPUAssignment) error {
+	if assignment.Framework != VGPUFrameworkNone && assignment.Framework != VGPUFrameworkMdev {
+		return fmt.Errorf("unknown vGPU framework %q", assignment.Framework)
 	}
 	return nil
 }

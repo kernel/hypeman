@@ -81,6 +81,13 @@ type VirtualFunction struct {
 	Allocated  bool   `json:"allocated"`   // true if a vGPU is assigned to this VF
 }
 
+// VGPUAssignment identifies an existing vGPU assignment to release.
+type VGPUAssignment struct {
+	Framework  VGPUFramework
+	DevicePath string
+	MdevUUID   string
+}
+
 type VGPUDevice struct {
 	Framework   VGPUFramework
 	VFAddress   string
