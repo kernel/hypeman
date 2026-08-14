@@ -171,6 +171,16 @@ func classifyResolvedHypervisorOwner(socketPath string, stored, resolved int, er
 	return 0, fmt.Errorf("cannot confirm ownership of socket %s: %w", socketPath, err)
 }
 
+// HypervisorMayBeAlive reports whether the recorded hypervisor process may
+// still be running. It fails open: when ownership cannot be resolved it
+// returns true, which is the safe direction for its callers (reconcile
+// protection and claim checks, where true means "protect"). Do not use it to
+// authorize teardown.
+func HypervisorMayBeAlive(id HypervisorProcessIdentity, socketPath string) bool {
+	pid, err := resolveLiveHypervisorPID(id, socketPath)
+	return err != nil || pid > 0
+}
+
 // ProcessExists reports whether pid belongs to a live, non-zombie process.
 func ProcessExists(pid int) bool {
 	if pid <= 0 {

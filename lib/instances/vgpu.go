@@ -201,7 +201,7 @@ func (m *manager) vgpuAssignmentClaimedByLiveInstance(ctx context.Context, exclu
 			}
 			return false, fmt.Errorf("cannot confirm liveness of recent vGPU claimant %s on %s: no persisted hypervisor PID", id, devicePath)
 		}
-		pid, err := resolveLiveHypervisorPID(stored.HypervisorPID, stored.HypervisorStartTime, stored.HypervisorBootID, stored.SocketPath)
+		pid, err := resolveLiveHypervisorPID(stored.HypervisorProcessIdentity, stored.SocketPath)
 		if err != nil {
 			return false, fmt.Errorf("cannot confirm liveness of vGPU claimant %s on %s: %w", id, devicePath, err)
 		}
