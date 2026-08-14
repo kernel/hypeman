@@ -40,41 +40,29 @@ func TestBackfillHypervisorProcessIdentitiesPersistsConfirmedOwnership(t *testin
 	assert.Equal(t, hostBootID(), meta.HypervisorBootID)
 }
 
-func TestBackfillHypervisorProcessIdentitiesSkipsDeadPID(t *testing.T) {
-	mgr := &manager{paths: paths.New(t.TempDir())}
+func TestNeedsHypervisorIdentityBackfill(t *testing.T) {
+	selfPID := os.Getpid()
 	dead := exec.Command("true")
 	require.NoError(t, dead.Run())
 	deadPID := dead.Process.Pid
+	socketPath := filepath.Join(t.TempDir(), "missing.sock")
 
-	seedInstance(t, mgr, StoredMetadata{
-		Id:                        "inst-dead",
-		HypervisorProcessIdentity: HypervisorProcessIdentity{HypervisorPID: &deadPID},
-		SocketPath:                filepath.Join(t.TempDir(), "missing.sock"),
-	})
-	before := instanceMetadataBytes(t, mgr, "inst-dead")
-
-	mgr.BackfillHypervisorProcessIdentities(context.Background())
-
-	assert.Equal(t, before, instanceMetadataBytes(t, mgr, "inst-dead"))
-}
-
-func TestBackfillHypervisorProcessIdentitiesSkipsAlreadyStamped(t *testing.T) {
-	mgr := &manager{paths: paths.New(t.TempDir())}
-	selfPID := os.Getpid()
-	seedInstance(t, mgr, StoredMetadata{
-		Id: "inst-stamped",
-		HypervisorProcessIdentity: HypervisorProcessIdentity{
-			HypervisorPID:       &selfPID,
-			HypervisorStartTime: processStartTime(selfPID),
-			HypervisorBootID:    hostBootID(),
-		},
-		SocketPath: filepath.Join(t.TempDir(), "missing.sock"),
-	})
-	before := instanceMetadataBytes(t, mgr, "inst-stamped")
-
-	mgr.BackfillHypervisorProcessIdentities(context.Background())
-
-	assert.Equal(t, before, instanceMetadataBytes(t, mgr, "inst-stamped"))
+	for _, tc := range []struct {
+		name   string
+		stored *StoredMetadata
+		want   bool
+	}{
+		{"nil", nil, false},
+		{"no PID", &StoredMetadata{SocketPath: socketPath}, false},
+		{"no socket", &StoredMetadata{HypervisorProcessIdentity: HypervisorProcessIdentity{HypervisorPID: &selfPID}}, false},
+		{"dead PID", &StoredMetadata{HypervisorProcessIdentity: HypervisorProcessIdentity{HypervisorPID: &deadPID}, SocketPath: socketPath}, false},
+		{"already stamped", &StoredMetadata{HypervisorProcessIdentity: HypervisorProcessIdentity{HypervisorPID: &selfPID, HypervisorStartTime: processStartTime(selfPID), HypervisorBootID: hostBootID()}, SocketPath: socketPath}, false},
+		{"live untokened PID", &StoredMetadata{HypervisorProcessIdentity: HypervisorProcessIdentity{HypervisorPID: &selfPID}, SocketPath: socketPath}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, needsHypervisorIdentityBackfill(tc.stored))
+		})
+	}
 }
 
 func TestBackfillHypervisorProcessIdentitiesSkipsMissingSocketOwner(t *testing.T) {
@@ -117,26 +105,6 @@ func TestBackfillHypervisorProcessIdentitiesSkipsUnconfirmedCommandLineMatch(t *
 	assert.Equal(t, before, instanceMetadataBytes(t, mgr, "inst-cmdline"))
 	assert.NoError(t, syscall.Kill(stalePID, 0), "stored process must not be killed")
 	assert.NoError(t, syscall.Kill(match.Process.Pid, 0), "command-line match must not be killed")
-}
-
-func TestBackfillHypervisorProcessIdentitiesSkipsMissingPIDOrSocket(t *testing.T) {
-	mgr := &manager{paths: paths.New(t.TempDir())}
-	selfPID := os.Getpid()
-	seedInstance(t, mgr, StoredMetadata{
-		Id:         "inst-no-pid",
-		SocketPath: filepath.Join(t.TempDir(), "missing.sock"),
-	})
-	seedInstance(t, mgr, StoredMetadata{
-		Id:                        "inst-no-socket",
-		HypervisorProcessIdentity: HypervisorProcessIdentity{HypervisorPID: &selfPID},
-	})
-	beforeNoPID := instanceMetadataBytes(t, mgr, "inst-no-pid")
-	beforeNoSocket := instanceMetadataBytes(t, mgr, "inst-no-socket")
-
-	mgr.BackfillHypervisorProcessIdentities(context.Background())
-
-	assert.Equal(t, beforeNoPID, instanceMetadataBytes(t, mgr, "inst-no-pid"))
-	assert.Equal(t, beforeNoSocket, instanceMetadataBytes(t, mgr, "inst-no-socket"))
 }
 
 func TestBackfillHypervisorProcessIdentitiesAdoptsConfirmedSocketOwner(t *testing.T) {
