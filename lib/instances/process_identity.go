@@ -1,0 +1,248 @@
+package instances
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strconv"
+	"strings"
+	"sync"
+	"syscall"
+
+	"github.com/kernel/hypeman/lib/hypervisor"
+)
+
+// linuxBootIDPath is the kernel-provided boot ID used to scope process
+// identities to a single host boot.
+const linuxBootIDPath = "/proc/sys/kernel/random/boot_id"
+
+// refreshHypervisorPID refreshes the stored PID for display and other
+// non-destructive callers. It trusts a live stored PID without confirming
+// socket ownership: hydration runs on every list/get, and its answer never
+// authorizes teardown — stop, delete, standby, and the vGPU release guards
+// all re-resolve identity through resolveLiveHypervisorPID before acting.
+func refreshHypervisorPID(stored *StoredMetadata, state State) {
+	if !state.RequiresVMM() && state != StateUnknown {
+		return
+	}
+	if stored.HypervisorPID != nil && ProcessExists(*stored.HypervisorPID) {
+		return
+	}
+	if stored.SocketPath == "" {
+		return
+	}
+	pid, confirmed, err := hypervisor.ResolveProcessPID(stored.SocketPath)
+	if err != nil {
+		return
+	}
+	if confirmed {
+		setHypervisorProcessIdentity(stored, pid)
+		return
+	}
+	// Command-line-only match: record the bare PID without the identity
+	// token, same rule as resolveRuntimeHypervisorPID.
+	stored.HypervisorPID = &pid
+	stored.HypervisorStartTime = 0
+	stored.HypervisorBootID = ""
+}
+
+// resolveLiveHypervisorPID returns the PID of the live hypervisor that owns
+// the instance socket, or 0 when no live hypervisor is found. A live stored PID
+// whose recorded boot ID and start time match is returned without socket
+// confirmation. It returns an error when socket ownership cannot be confirmed:
+// a live process matches the socket path by command line only, or a live stored
+// PID's ownership cannot be verified.
+func resolveLiveHypervisorPID(storedPID *int, storedStartTime uint64, storedBootID, socketPath string) (int, error) {
+	stored := 0
+	if storedPID != nil && ProcessExists(*storedPID) {
+		stored = *storedPID
+	}
+	if runtime.GOOS != "linux" || socketPath == "" {
+		return stored, nil
+	}
+	bootID := hostBootID()
+	if stored != 0 && storedBootID != "" && bootID != "" && storedBootID != bootID {
+		// The recorded identity is scoped to a previous host boot, so whatever
+		// process wears the stored PID now is provably not the recorded
+		// hypervisor. Treat the stored PID as dead rather than failing closed.
+		stored = 0
+	}
+	if stored != 0 && storedStartTime != 0 && storedBootID != "" && bootID != "" && storedBootID == bootID && processStartTime(stored) == storedStartTime {
+		return stored, nil
+	}
+	var resolved int
+	var confirmed bool
+	var err error
+	if stored != 0 && storedStartTime == 0 {
+		resolved, confirmed, err = hypervisor.ResolveProcessPIDForOwner(socketPath, stored)
+	} else {
+		resolved, confirmed, err = hypervisor.ResolveProcessPID(socketPath)
+	}
+	return classifyResolvedHypervisorOwner(socketPath, stored, resolved, confirmed, err)
+}
+
+// classifyResolvedHypervisorOwner interprets a socket resolution result for
+// resolveLiveHypervisorPID: which live PID, if any, is the recorded
+// hypervisor, and whether the ambiguity must fail closed.
+func classifyResolvedHypervisorOwner(socketPath string, stored, resolved int, confirmed bool, err error) (int, error) {
+	switch {
+	case err == nil && confirmed && ProcessExists(resolved):
+		return resolved, nil
+	case err == nil && confirmed:
+		return 0, nil
+	case err == nil && !confirmed && ProcessExists(resolved):
+		if stored != 0 {
+			return 0, fmt.Errorf("cannot confirm ownership of socket %s for stored hypervisor PID %d: process %d matched by command line only", socketPath, stored, resolved)
+		}
+		return 0, fmt.Errorf("cannot confirm ownership of socket %s: process %d matched by command line only", socketPath, resolved)
+	case err == nil:
+		// The only match was by command line and that process is already
+		// gone: the socket-owner scan found nothing and no live process
+		// matches the command line, the same provable-death conclusion as
+		// ErrNoOwningProcess below.
+		return 0, nil
+	}
+	if stored == 0 {
+		if !errors.Is(err, hypervisor.ErrNoOwningProcess) {
+			return 0, fmt.Errorf("cannot confirm ownership of socket %s: %w", socketPath, err)
+		}
+		return 0, nil
+	}
+	if errors.Is(err, hypervisor.ErrNoOwningProcess) {
+		// Neither the socket-owner scan nor the full command-line scan
+		// found any process tied to the socket. A live hypervisor always
+		// holds its control-socket listener, so the recorded hypervisor is
+		// gone and the live stored PID is a recycled number — the same
+		// conclusion already drawn above when the stored PID is dead.
+		// Without this, legacy metadata carrying no boot-scoped identity
+		// wedges stop and delete forever once its PID is reused.
+		return 0, nil
+	}
+	return 0, fmt.Errorf("cannot confirm ownership of socket %s for stored hypervisor PID %d: %w", socketPath, stored, err)
+}
+
+// HypervisorProcessIdentityExists reports whether pid still identifies the
+// recorded hypervisor process. A matching start time is sufficient while its
+// control socket is still being created, but only during the recorded host boot.
+func HypervisorProcessIdentityExists(pid int, startTime uint64, bootID, socketPath string) bool {
+	if !ProcessExists(pid) {
+		return false
+	}
+	if startTime != 0 && bootID != "" {
+		currentBootID := hostBootID()
+		if currentBootID == "" {
+			return HypervisorProcessExists(pid, socketPath)
+		}
+		if currentBootID != bootID {
+			return false
+		}
+		currentStartTime := processStartTime(pid)
+		if currentStartTime == 0 {
+			return true
+		}
+		return currentStartTime == startTime
+	}
+	return HypervisorProcessExists(pid, socketPath)
+}
+
+// HypervisorProcessExists reports whether pid owns the instance's hypervisor
+// socket. It fails open: when ownership cannot be resolved it returns true,
+// which is the safe direction for its callers (reconcile protection and claim
+// checks, where true means "protect"). Do not use it to authorize teardown.
+func HypervisorProcessExists(pid int, socketPath string) bool {
+	if !ProcessExists(pid) {
+		return false
+	}
+	if runtime.GOOS != "linux" || socketPath == "" {
+		return true
+	}
+	resolvedPID, confirmed, err := hypervisor.ResolveProcessPIDForOwner(socketPath, pid)
+	if err != nil || !confirmed || resolvedPID == pid {
+		return true
+	}
+	return !ProcessExists(resolvedPID)
+}
+
+// ProcessExists reports whether pid belongs to a live, non-zombie process.
+func ProcessExists(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	err := syscall.Kill(pid, 0)
+	if err != nil && err != syscall.EPERM {
+		return false
+	}
+	if runtime.GOOS != "linux" {
+		return true
+	}
+	state, err := readLinuxProcessState(pid)
+	if err != nil {
+		return true
+	}
+	return state != "Z"
+}
+
+func readLinuxProcessState(pid int) (string, error) {
+	statusPath := filepath.Join("/proc", strconv.Itoa(pid), "status")
+	data, err := os.ReadFile(statusPath)
+	if err != nil {
+		return "", err
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if !strings.HasPrefix(line, "State:") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			return "", fmt.Errorf("malformed process state in %s", statusPath)
+		}
+		return fields[1], nil
+	}
+	return "", fmt.Errorf("process state missing from %s", statusPath)
+}
+
+var hostBootID = sync.OnceValue(readHostBootID)
+
+func readHostBootID() string {
+	if runtime.GOOS != "linux" {
+		return ""
+	}
+	data, err := os.ReadFile(linuxBootIDPath)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
+func setHypervisorProcessIdentity(stored *StoredMetadata, pid int) {
+	stored.HypervisorPID = &pid
+	stored.HypervisorStartTime = processStartTime(pid)
+	stored.HypervisorBootID = hostBootID()
+}
+
+// processStartTime returns the start time (field 22 of /proc/<pid>/stat, clock
+// ticks since boot) of pid, or 0 when it cannot be read.
+func processStartTime(pid int) uint64 {
+	if runtime.GOOS != "linux" || pid <= 0 {
+		return 0
+	}
+	data, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "stat"))
+	if err != nil {
+		return 0
+	}
+	closingParen := strings.LastIndexByte(string(data), ')')
+	if closingParen == -1 {
+		return 0
+	}
+	fields := strings.Fields(string(data[closingParen+1:]))
+	if len(fields) <= 19 {
+		return 0
+	}
+	startTime, err := strconv.ParseUint(fields[19], 10, 64)
+	if err != nil {
+		return 0
+	}
+	return startTime
+}
