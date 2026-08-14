@@ -814,6 +814,10 @@ func (m *manager) listInstances(ctx context.Context) ([]Instance, error) {
 			hydrateSpan.End()
 			continue
 		}
+		if meta.PendingDeleteAt != nil {
+			hydrateSpan.End()
+			continue
+		}
 
 		inst := m.toInstance(hydrateCtx, meta)
 		result = append(result, inst)
@@ -843,7 +847,7 @@ func (m *manager) findInstanceMetadataByExactName(ctx context.Context, name stri
 		id := filepath.Base(filepath.Dir(file))
 		scanned++
 		meta, err := m.loadMetadata(id)
-		if err != nil {
+		if err != nil || meta.PendingDeleteAt != nil {
 			continue
 		}
 		if meta.Name == name {
@@ -878,7 +882,7 @@ func (m *manager) findInstanceMetadataByNameOrIDPrefix(idOrName string, minPrefi
 	for _, file := range files {
 		id := filepath.Base(filepath.Dir(file))
 		meta, err := m.loadMetadata(id)
-		if err != nil {
+		if err != nil || meta.PendingDeleteAt != nil {
 			continue
 		}
 
@@ -943,6 +947,10 @@ func (m *manager) getInstance(ctx context.Context, id string) (*Instance, error)
 	if err != nil {
 		log.DebugContext(ctx, "failed to load instance metadata", "lookup", id, "error", err)
 		return nil, err
+	}
+	if meta.PendingDeleteAt != nil {
+		log.DebugContext(ctx, "instance is pending delete", "lookup", id)
+		return nil, ErrNotFound
 	}
 
 	inst := m.toInstance(ctx, meta)
