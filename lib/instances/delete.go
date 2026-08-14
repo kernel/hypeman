@@ -171,11 +171,11 @@ func (m *manager) deleteInstanceWithOptions(
 	}
 
 	// 7c. Release the vGPU assignment if present.
-	if storedVGPUDevicePath(stored) != "" {
-		log.InfoContext(ctx, "destroying vGPU", "instance_id", id, "uuid", stored.GPUMdevUUID)
+	if path := storedVGPUDevicePath(stored); path != "" {
+		log.InfoContext(ctx, "destroying vGPU", "instance_id", id, "device_path", path)
 		if err := releaseStoredVGPU(ctx, stored); err != nil {
 			// Log error but continue with cleanup
-			log.WarnContext(ctx, "failed to destroy vGPU, continuing with cleanup", "instance_id", id, "uuid", stored.GPUMdevUUID, "error", err)
+			log.WarnContext(ctx, "failed to destroy vGPU, continuing with cleanup", "instance_id", id, "device_path", path, "error", err)
 		}
 	}
 
