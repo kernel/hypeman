@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"syscall"
 	"time"
 
 	"github.com/kernel/hypeman/lib/guest"
@@ -378,7 +377,7 @@ func (m *manager) shutdownHypervisor(ctx context.Context, inst *Instance) error 
 			// alive; teardown is committed, so kill it rather than report a
 			// completed shutdown for a VMM that is still running.
 			log.WarnContext(ctx, "could not connect to hypervisor, force killing resolved owner", "instance_id", inst.Id, "pid", pid, "error", err)
-			return forceKillHypervisorPID(pid)
+			return killProcessAndWait(pid, killEscalationWait)
 		}
 		// Can't connect - hypervisor might already be stopped
 		log.DebugContext(ctx, "could not connect to hypervisor, may already be stopped", "instance_id", inst.Id)
@@ -409,13 +408,13 @@ func (m *manager) shutdownHypervisor(ctx context.Context, inst *Instance) error 
 				log.DebugContext(ctx, "hypervisor shutdown gracefully", "instance_id", inst.Id, "pid", pid)
 			} else {
 				log.WarnContext(ctx, "hypervisor did not exit gracefully in time, force killing process", "instance_id", inst.Id, "pid", pid)
-				if err := forceKillHypervisorPID(pid); err != nil {
+				if err := killProcessAndWait(pid, killEscalationWait); err != nil {
 					return err
 				}
 			}
 		} else {
 			log.DebugContext(ctx, "skipping graceful exit wait; force killing hypervisor process", "instance_id", inst.Id, "pid", pid)
-			if err := forceKillHypervisorPID(pid); err != nil {
+			if err := killProcessAndWait(pid, killEscalationWait); err != nil {
 				return err
 			}
 		}
@@ -425,24 +424,5 @@ func (m *manager) shutdownHypervisor(ctx context.Context, inst *Instance) error 
 		return fmt.Errorf("graceful hypervisor shutdown failed: %w", shutdownErr)
 	}
 
-	return nil
-}
-
-func forceKillHypervisorPID(pid int) error {
-	if err := syscall.Kill(pid, syscall.SIGKILL); err != nil {
-		if err == syscall.ESRCH {
-			return nil
-		}
-		return fmt.Errorf("force kill hypervisor pid %d: %w", pid, err)
-	}
-	if WaitForProcessExit(pid, 2*time.Second) {
-		return nil
-	}
-
-	// The process may have spawned children in its own process group.
-	_ = syscall.Kill(-pid, syscall.SIGKILL)
-	if !WaitForProcessExit(pid, 2*time.Second) {
-		return fmt.Errorf("hypervisor pid %d did not exit after SIGKILL", pid)
-	}
 	return nil
 }
