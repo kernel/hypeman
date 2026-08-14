@@ -104,7 +104,11 @@ func TestKillHypervisorUsesMatchingStartTimeWhenSocketIsGone(t *testing.T) {
 	assert.True(t, os.IsNotExist(statErr), "instance socket should be removed")
 }
 
-func TestKillHypervisorSucceedsOnIdentityFromDifferentBoot(t *testing.T) {
+// TestResolveLiveHypervisorPIDTreatsDisprovenIdentityAsDead covers the
+// disproof branches: an identity token that cannot belong to the live PID
+// holder, plus no socket owner, resolves to "provably dead" (0, nil) so
+// stop/delete proceed without signaling the recycled PID.
+func TestResolveLiveHypervisorPIDTreatsDisprovenIdentityAsDead(t *testing.T) {
 	process := exec.Command("sleep", "30")
 	require.NoError(t, process.Start())
 	t.Cleanup(func() {
@@ -116,52 +120,17 @@ func TestKillHypervisorSucceedsOnIdentityFromDifferentBoot(t *testing.T) {
 	startTime := processStartTime(pid)
 	require.NotZero(t, startTime)
 
-	// An identity recorded under a different host boot proves the recorded
-	// hypervisor is gone: the kill must succeed as a no-op so delete can
-	// proceed, without signaling whatever process wears the PID now.
-	m := &manager{}
-	require.NoError(t, m.killHypervisor(context.Background(), &Instance{
-		StoredMetadata: StoredMetadata{
-			Id: "kill-test",
-			HypervisorProcessIdentity: HypervisorProcessIdentity{
-				HypervisorPID:       &pid,
-				HypervisorStartTime: startTime,
-				HypervisorBootID:    "different-boot",
-			},
-			SocketPath: filepath.Join(t.TempDir(), "missing.sock"),
-		},
-	}))
-	assert.NoError(t, syscall.Kill(pid, 0), "process identity from a different boot must not be killed")
-}
-
-func TestKillHypervisorSucceedsOnMismatchedStartTimeWithNoSocketOwner(t *testing.T) {
-	process := exec.Command("sleep", "30")
-	require.NoError(t, process.Start())
-	t.Cleanup(func() {
-		_ = process.Process.Kill()
-		_ = process.Wait()
-	})
-
-	pid := process.Process.Pid
-	startTime := processStartTime(pid)
-	require.NotZero(t, startTime)
-
-	// The identity token disproves the live PID holder is the recorded
-	// hypervisor, and no process owns or references the socket: the kill
-	// succeeds as a no-op and must leave the PID holder untouched.
-	m := &manager{}
-	require.NoError(t, m.killHypervisor(context.Background(), &Instance{
-		StoredMetadata: StoredMetadata{
-			Id: "kill-test",
-			HypervisorProcessIdentity: HypervisorProcessIdentity{
-				HypervisorPID:       &pid,
-				HypervisorStartTime: startTime + 1,
-				HypervisorBootID:    hostBootID(),
-			},
-			SocketPath: filepath.Join(t.TempDir(), "missing.sock"),
-		},
-	}))
-	assert.NoError(t, syscall.Kill(pid, 0), "process with a mismatched identity token must not be killed")
+	for name, id := range map[string]HypervisorProcessIdentity{
+		"different boot":        {HypervisorPID: &pid, HypervisorStartTime: startTime, HypervisorBootID: "different-boot"},
+		"mismatched start time": {HypervisorPID: &pid, HypervisorStartTime: startTime + 1, HypervisorBootID: hostBootID()},
+	} {
+		t.Run(name, func(t *testing.T) {
+			resolved, err := resolveLiveHypervisorPID(id, filepath.Join(t.TempDir(), "missing.sock"))
+			require.NoError(t, err)
+			assert.Zero(t, resolved)
+			assert.NoError(t, syscall.Kill(pid, 0), "disproven identity must not signal the PID holder")
+		})
+	}
 }
 
 func TestSocketListenerHelper(t *testing.T) {
@@ -274,7 +243,7 @@ func TestShutdownHypervisorSparesReusedPIDWhenNoProcessOwnsSocket(t *testing.T) 
 	assert.NoError(t, syscall.Kill(pid, 0), "process with a recycled PID must not be killed")
 }
 
-func TestClassifyResolvedHypervisorOwnerTreatsDeadCmdlineMatchAsDeath(t *testing.T) {
+func TestClassifyResolvedHypervisorOwner(t *testing.T) {
 	const deadPID = 1<<22 - 1
 	require.False(t, ProcessExists(deadPID))
 
@@ -284,18 +253,33 @@ func TestClassifyResolvedHypervisorOwnerTreatsDeadCmdlineMatchAsDeath(t *testing
 		_ = live.Process.Kill()
 		_ = live.Wait()
 	})
+	livePID := live.Process.Pid
 
-	// The resolver's command-line match exited between the scan and the
-	// liveness check: no live process owns or references the socket, so the
-	// recorded hypervisor is provably gone even with a live stored PID,
-	// matching the ErrNoOwningProcess conclusion instead of failing closed.
-	pid, err := classifyResolvedHypervisorOwner("/fake.sock", live.Process.Pid, deadPID, false, nil)
-	require.NoError(t, err)
-	assert.Zero(t, pid)
-
-	pid, err = classifyResolvedHypervisorOwner("/fake.sock", 0, deadPID, false, nil)
-	require.NoError(t, err)
-	assert.Zero(t, pid)
+	// A command-line match that exited between the scan and the liveness
+	// check means no live process owns or references the socket: provably
+	// dead, same conclusion as ErrNoOwningProcess, even with a live stored
+	// PID. A live command-line-only match is genuinely ambiguous and fails
+	// closed whether or not a stored PID exists.
+	for _, tc := range []struct {
+		name             string
+		stored, resolved int
+		wantErr          bool
+	}{
+		{"dead cmdline match with live stored PID", livePID, deadPID, false},
+		{"dead cmdline match without stored PID", 0, deadPID, false},
+		{"live cmdline match with stored PID", livePID, livePID, true},
+		{"live cmdline match without stored PID", 0, livePID, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pid, err := classifyResolvedHypervisorOwner("/fake.sock", tc.stored, tc.resolved, false, nil)
+			if tc.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Zero(t, pid)
+		})
+	}
 }
 
 func TestShutdownHypervisorKillsResolvedOwnerWhenClientUnavailable(t *testing.T) {
@@ -509,23 +493,6 @@ func TestKillHypervisorFailsOnUnconfirmedCommandLineMatch(t *testing.T) {
 	}), "a command-line match must not satisfy destructive ownership verification")
 
 	assert.NoError(t, syscall.Kill(matchPID, 0), "process matched only by command line must not be killed")
-}
-
-func TestKillHypervisorFailsOnCommandLineMatchWithNilStoredPID(t *testing.T) {
-	socketPath := filepath.Join(t.TempDir(), "test.sock")
-	match := exec.Command("sh", "-c", "sleep 30", "sh", socketPath)
-	require.NoError(t, match.Start())
-	t.Cleanup(func() {
-		_ = match.Process.Kill()
-		_ = match.Wait()
-	})
-
-	m := &manager{}
-	require.Error(t, m.killHypervisor(context.Background(), &Instance{
-		StoredMetadata: StoredMetadata{Id: "kill-test", SocketPath: socketPath},
-	}), "a command-line match must fail closed without a stored PID")
-
-	assert.NoError(t, syscall.Kill(match.Process.Pid, 0), "process matched only by command line must not be killed")
 }
 
 func TestResolveRuntimeHypervisorPIDMintsIdentityOnlyWhenConfirmed(t *testing.T) {
