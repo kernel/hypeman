@@ -27,6 +27,9 @@ import (
 
 type Manager interface {
 	ListInstances(ctx context.Context, filter *ListInstancesFilter) ([]Instance, error)
+	// DefaultHypervisor returns the effective default hypervisor type used for
+	// launches that do not specify one.
+	DefaultHypervisor() hypervisor.Type
 	ListSnapshots(ctx context.Context, filter *ListSnapshotsFilter) ([]Snapshot, error)
 	GetSnapshot(ctx context.Context, snapshotID string) (*Snapshot, error)
 	CreateInstance(ctx context.Context, req CreateInstanceRequest) (*Instance, error)
@@ -688,6 +691,12 @@ func (m *manager) UpdateInstance(ctx context.Context, id string, req UpdateInsta
 		m.notifyLifecycleEvent(ctx, LifecycleEventUpdate, inst)
 	}
 	return inst, err
+}
+
+// DefaultHypervisor returns the effective default hypervisor type used for
+// launches that do not specify one.
+func (m *manager) DefaultHypervisor() hypervisor.Type {
+	return m.defaultHypervisor
 }
 
 // ListInstances returns instances, optionally filtered by the given criteria.

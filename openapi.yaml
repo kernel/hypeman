@@ -1425,6 +1425,145 @@ components:
           type: string
           enum: [ok]
           example: ok
+
+    Capabilities:
+      type: object
+      required: [server, host, runtime, network, images, features]
+      properties:
+        server:
+          $ref: "#/components/schemas/CapabilitiesServer"
+        host:
+          $ref: "#/components/schemas/CapabilitiesHost"
+        runtime:
+          $ref: "#/components/schemas/CapabilitiesRuntime"
+        network:
+          $ref: "#/components/schemas/CapabilitiesNetwork"
+        images:
+          $ref: "#/components/schemas/CapabilitiesImages"
+        features:
+          type: array
+          items:
+            type: string
+          description: |
+            Stable feature IDs clients can gate behavior on. Base IDs are always
+            present: "instances", "images", "builds", "volumes", "ingress",
+            "exec", "logs". Conditional IDs reflect the effective default
+            runtime and host platform: "standby", "snapshots", "fork",
+            "pause", "hotplug-memory", "balloon-control", "vsock",
+            "gpu-passthrough", "disk-io-limit", "disk-resize", "devices",
+            "rosetta-emulation".
+
+    CapabilitiesServer:
+      type: object
+      required: [version, api_version]
+      properties:
+        version:
+          type: string
+          description: Server build version (short git revision, with "-dirty" suffix for uncommitted builds, or "unknown")
+          example: 76a2fdb3
+        api_version:
+          type: string
+          description: API contract version (matches the OpenAPI document info version)
+          example: 0.2.0
+
+    CapabilitiesHost:
+      type: object
+      required: [os, arch]
+      properties:
+        os:
+          type: string
+          description: Host operating system
+          example: linux
+        arch:
+          type: string
+          description: Host CPU architecture
+          example: arm64
+
+    CapabilitiesRuntime:
+      type: object
+      required: [default, supported, snapshot, standby, pause, hotplug_memory, balloon_control, vsock, gpu_passthrough, disk_io_limit, disk_resize]
+      properties:
+        default:
+          type: string
+          description: |
+            Effective default runtime used for launches that do not name one.
+            Reported as a capability-bearing runtime identifier; clients should
+            gate behavior on the boolean features below rather than this value.
+          example: cloud-hypervisor
+        supported:
+          type: array
+          items:
+            type: string
+          description: Runtime identifiers that can run on this host platform
+          example: [cloud-hypervisor, firecracker, qemu]
+        snapshot:
+          type: boolean
+          description: Snapshot/restore is supported by the effective default runtime on this host
+        standby:
+          type: boolean
+          description: Standby (pause + memory snapshot) and restore are supported on this host
+        pause:
+          type: boolean
+          description: Pause/resume is supported by the effective default runtime
+        hotplug_memory:
+          type: boolean
+          description: Live memory hotplug resize is supported by the effective default runtime
+        balloon_control:
+          type: boolean
+          description: Runtime memory balloon control is supported by the effective default runtime
+        vsock:
+          type: boolean
+          description: Vsock guest communication is supported by the effective default runtime
+        gpu_passthrough:
+          type: boolean
+          description: GPU/PCI device passthrough is supported by the effective default runtime
+        disk_io_limit:
+          type: boolean
+          description: Disk I/O rate limiting is supported by the effective default runtime
+        disk_resize:
+          type: boolean
+          description: Live disk resize is supported by the effective default runtime
+
+    CapabilitiesNetwork:
+      type: object
+      required: [model, gateway, guest_to_guest]
+      properties:
+        model:
+          type: string
+          enum: [bridge, nat]
+          description: |
+            Guest networking model. "bridge" is a Linux bridge with per-VM TAP
+            devices; "nat" is hypervisor-provided NAT (macOS).
+        gateway:
+          type: string
+          description: |
+            Guest-visible host gateway IP. Guests reach host services (including
+            host ingress) through this address.
+          example: 10.100.0.1
+        subnet:
+          type: string
+          description: Guest subnet CIDR
+          example: 10.100.0.0/16
+        guest_to_guest:
+          type: boolean
+          description: Whether direct VM-to-VM traffic is permitted on the default network
+
+    CapabilitiesImages:
+      type: object
+      required: [platforms, default_platform]
+      properties:
+        platforms:
+          type: array
+          items:
+            type: string
+          description: |
+            Image platforms (os/arch) this host can run. Includes emulated
+            platforms (e.g. linux/amd64 via Rosetta on Apple Silicon macOS).
+          example: [linux/arm64, linux/amd64]
+        default_platform:
+          type: string
+          description: Image platform selected when a create request omits one
+          example: linux/arm64
     
     IngressMatch:
       type: object
@@ -2263,6 +2402,35 @@ paths:
               schema:
                 $ref: "#/components/schemas/Health"
   
+  /capabilities:
+    get:
+      summary: Get host capabilities
+      description: |
+        Returns machine-readable host capabilities: server and API version, host
+        OS/architecture, effective default-runtime features, guest networking model
+        and host gateway, supported image platforms, and stable feature IDs.
+
+        Runtime-derived values reflect the actual host (for example, snapshot and
+        standby support on macOS is gated on the host OS version), so clients can
+        gate behavior on capabilities without selecting or naming a concrete
+        hypervisor.
+      operationId: getCapabilities
+      security:
+        - bearerAuth: []
+      responses:
+        200:
+          description: Host capabilities
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Capabilities"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /resources:
     get:
       summary: Get host resource capacity and allocations

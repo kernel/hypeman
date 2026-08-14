@@ -28,6 +28,10 @@ func (s *stubManager) GetInstance(ctx context.Context, id string) (*Instance, er
 	return nil, ErrNotFound
 }
 
+func (s *stubManager) DefaultHypervisor() hypervisor.Type {
+	return hypervisor.TypeCloudHypervisor
+}
+
 // Unused interface methods — only GetInstance and SubscribeLifecycleEvents are needed.
 func (s *stubManager) ListInstances(context.Context, *ListInstancesFilter) ([]Instance, error) {
 	return nil, nil

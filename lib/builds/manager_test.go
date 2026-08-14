@@ -75,6 +75,10 @@ func (m *mockInstanceManager) CreateInstance(ctx context.Context, req instances.
 	return inst, nil
 }
 
+func (m *mockInstanceManager) DefaultHypervisor() hypervisor.Type {
+	return hypervisor.TypeCloudHypervisor
+}
+
 func (m *mockInstanceManager) GetInstance(ctx context.Context, id string) (*instances.Instance, error) {
 	if m.getFunc != nil {
 		return m.getFunc(ctx, id)

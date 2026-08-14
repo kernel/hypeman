@@ -75,6 +75,17 @@ resources:
     methods:
       check: get /health
 
+  capabilities:
+    models:
+      capabilities: "#/components/schemas/Capabilities"
+      capabilities_server: "#/components/schemas/CapabilitiesServer"
+      capabilities_host: "#/components/schemas/CapabilitiesHost"
+      capabilities_runtime: "#/components/schemas/CapabilitiesRuntime"
+      capabilities_network: "#/components/schemas/CapabilitiesNetwork"
+      capabilities_images: "#/components/schemas/CapabilitiesImages"
+    methods:
+      get: get /capabilities
+
   images:
     # Configure the models--named types--defined in the resource. Each key in the
     # object is the name of the model and the value is either the name of a schema in

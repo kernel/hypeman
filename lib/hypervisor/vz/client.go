@@ -10,7 +10,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"runtime"
 	"time"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
@@ -84,7 +83,10 @@ func (c *Client) Capabilities() hypervisor.Capabilities {
 
 func capabilities() hypervisor.Capabilities {
 	return hypervisor.Capabilities{
-		SupportsSnapshot:            runtime.GOARCH == "arm64",
+		// Snapshot/standby support is runtime-derived: it requires Apple
+		// Silicon AND macOS 14+. An arm64-only check would overstate
+		// support on macOS 13 hosts.
+		SupportsSnapshot:            saveRestoreSupported(),
 		SupportsHotplugMemory:       false,
 		SupportsBalloonControl:      true,
 		SupportsPause:               true,
