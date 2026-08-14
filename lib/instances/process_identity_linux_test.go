@@ -426,11 +426,11 @@ func TestForceKillHypervisorProcessSucceedsWhenNoProcessOwnsSocket(t *testing.T)
 	assert.NoError(t, syscall.Kill(pid, 0), "process with a recycled PID must not be killed")
 }
 
-func TestSendSIGKILLIgnoresExitedProcess(t *testing.T) {
+func TestKillProcessAndWaitIgnoresExitedProcess(t *testing.T) {
 	process := exec.Command("true")
 	require.NoError(t, process.Run())
 
-	require.NoError(t, sendSIGKILL(process.Process.Pid))
+	require.NoError(t, killProcessAndWait(process.Process.Pid, killEscalationWait))
 }
 
 func TestRefreshHypervisorPIDTrustsLiveStoredPID(t *testing.T) {

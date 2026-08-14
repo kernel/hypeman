@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
 )
@@ -17,6 +18,37 @@ import (
 // linuxBootIDPath is the kernel-provided boot ID used to scope process
 // identities to a single host boot.
 const linuxBootIDPath = "/proc/sys/kernel/random/boot_id"
+
+// hypervisorSIGKILLWaitTimeout bounds how long stop and delete wait for the
+// hypervisor to exit after SIGKILL before reporting it still alive.
+const hypervisorSIGKILLWaitTimeout = 30 * time.Second
+
+// killEscalationWait is the grace period after escalating a SIGKILL to the
+// process group.
+const killEscalationWait = 2 * time.Second
+
+// killProcessAndWait SIGKILLs pid and waits for it to exit. A process that
+// survives the first wait gets its process group killed too (the hypervisor
+// may have spawned children in its own group) and a short grace period. An
+// error means the process may still be running, so callers must not tear down
+// instance resources.
+func killProcessAndWait(pid int, wait time.Duration) error {
+	if err := syscall.Kill(pid, syscall.SIGKILL); err != nil {
+		if err == syscall.ESRCH {
+			return nil
+		}
+		return fmt.Errorf("kill hypervisor process %d: %w", pid, err)
+	}
+	if WaitForProcessExit(pid, wait) {
+		return nil
+	}
+	// The process may have spawned children in its own process group.
+	_ = syscall.Kill(-pid, syscall.SIGKILL)
+	if !WaitForProcessExit(pid, killEscalationWait) {
+		return fmt.Errorf("hypervisor pid %d did not exit after SIGKILL", pid)
+	}
+	return nil
+}
 
 // HypervisorProcessIdentity identifies a specific hypervisor process across
 // PID reuse and host reboots. The zero value means no recorded identity.
