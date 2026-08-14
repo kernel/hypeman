@@ -512,7 +512,7 @@ func TestRefreshHypervisorPIDResolvesSocketOwnerWhenStoredPIDIsDead(t *testing.T
 
 func TestVGPUAssignmentClaimedByLiveInstanceProtectsReusedPIDClaim(t *testing.T) {
 	socketPath := filepath.Join(t.TempDir(), "test.sock")
-	owner := exec.Command(os.Args[0], "-test.run=^TestHypervisorProcessExistsWithReboundSocketPathHelper$")
+	owner := exec.Command(os.Args[0], "-test.run=^TestSocketListenerHelper$")
 	owner.Env = append(os.Environ(), "HYPERVISOR_SOCKET_HELPER=1", "HYPERVISOR_SOCKET_PATH="+socketPath)
 	stdin, err := owner.StdinPipe()
 	require.NoError(t, err)
@@ -539,11 +539,11 @@ func TestVGPUAssignmentClaimedByLiveInstanceProtectsReusedPIDClaim(t *testing.T)
 	stalePID := stale.Process.Pid
 	require.NoError(t, m.ensureDirectories("live-claimant"))
 	require.NoError(t, m.saveMetadata(&metadata{StoredMetadata: StoredMetadata{
-		Id:            "live-claimant",
-		GPUFramework:  devices.VGPUFrameworkVendorVFIO,
-		GPUDevicePath: devicePath,
-		HypervisorPID: &stalePID,
-		SocketPath:    socketPath,
+		Id:                        "live-claimant",
+		GPUFramework:              devices.VGPUFrameworkVendorVFIO,
+		GPUDevicePath:             devicePath,
+		HypervisorProcessIdentity: HypervisorProcessIdentity{HypervisorPID: &stalePID},
+		SocketPath:                socketPath,
 	}}))
 
 	claimed, err := m.vgpuAssignmentClaimedByLiveInstance(context.Background(), "other-instance", devicePath)
