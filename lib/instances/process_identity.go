@@ -20,8 +20,11 @@ import (
 const linuxBootIDPath = "/proc/sys/kernel/random/boot_id"
 
 // hypervisorSIGKILLWaitTimeout bounds how long stop and delete wait for the
-// hypervisor to exit after SIGKILL before reporting it still alive.
-const hypervisorSIGKILLWaitTimeout = 30 * time.Second
+// hypervisor to exit after SIGKILL before reporting it still alive. A process
+// that survives SIGKILL is stuck in uninterruptible sleep, and waiting longer
+// does not unstick it, so the wait is short to keep stop and delete fast;
+// killProcessAndWait escalates to the process group after it.
+const hypervisorSIGKILLWaitTimeout = 2 * time.Second
 
 // killEscalationWait is the grace period after escalating a SIGKILL to the
 // process group.
