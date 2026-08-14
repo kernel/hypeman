@@ -602,6 +602,78 @@ func TestImportLocalImageFromOCICache(t *testing.T) {
 	t.Logf("Disk path verified: %s (%d bytes)", diskPath, diskStat.Size())
 }
 
+func TestDeleteAndRecreateDuringBuildTail(t *testing.T) {
+	origFormat := DefaultImageFormat
+	DefaultImageFormat = FormatCpio
+	defer func() { DefaultImageFormat = origFormat }()
+
+	dataDir := t.TempDir()
+	p := paths.New(dataDir)
+	mgr, err := NewManager(p, 1, nil)
+	require.NoError(t, err)
+	m := mgr.(*manager)
+
+	ctx := context.Background()
+	const repo = "kernel.local/test/recreate-race"
+	const tag = "v1"
+
+	testImg := createTestDockerImage(t)
+	imgDigest, err := testImg.Digest()
+	require.NoError(t, err)
+	digestStr := imgDigest.String()
+
+	cacheDir := p.SystemOCICache()
+	layoutPath, err := layout.Write(cacheDir, empty.Index)
+	require.NoError(t, err)
+	require.NoError(t, layoutPath.AppendImage(testImg, layout.WithAnnotations(map[string]string{
+		"org.opencontainers.image.ref.name": digestToLayoutTag(digestStr),
+	})))
+
+	digestHex := digestToLayoutTag(digestStr)
+	events := make(chan StatusEvent, 2)
+	m.subscribeToReady(digestHex, events)
+	defer m.unsubscribeFromReady(digestHex, events)
+
+	_, err = m.ImportLocalImage(ctx, repo, tag, digestStr)
+	require.NoError(t, err)
+	select {
+	case event := <-events:
+		require.Equal(t, StatusReady, event.Status)
+	case <-time.After(30 * time.Second):
+		t.Fatal("first build did not become ready")
+	}
+
+	slotHeld := make(chan struct{})
+	releaseSlot := make(chan struct{})
+	m.queue.EnqueueSuccessor(digestStr, func() {
+		close(slotHeld)
+		<-releaseSlot
+	}, nil)
+	select {
+	case <-slotHeld:
+	case <-time.After(5 * time.Second):
+		t.Fatal("queue slot was not held")
+	}
+
+	// Delete by digest so the test does not depend on the tag symlink being
+	// created after the ready notification.
+	require.NoError(t, m.DeleteImage(ctx, repo+"@"+digestStr))
+	recreated, err := m.ImportLocalImage(ctx, repo, tag, digestStr)
+	require.NoError(t, err)
+	require.Equal(t, StatusPending, recreated.Status)
+	require.NotNil(t, recreated.QueuePosition)
+	require.Equal(t, 1, *recreated.QueuePosition)
+
+	close(releaseSlot)
+	select {
+	case event := <-events:
+		require.Equal(t, StatusReady, event.Status)
+	case <-time.After(30 * time.Second):
+		t.Fatal("recreated image did not become ready")
+	}
+	waitForReady(t, m, ctx, repo+":"+tag)
+}
+
 // waitForReady waits for an image build to complete
 func waitForReady(t *testing.T, mgr Manager, ctx context.Context, imageName string) {
 	for i := 0; i < 600; i++ {

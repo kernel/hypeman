@@ -103,6 +103,87 @@ func TestDedupesByKey(t *testing.T) {
 	}
 }
 
+// TestEnqueueSuccessor queues a replacement behind an active job without
+// changing the normal active-key deduplication behavior.
+func TestEnqueueSuccessor(t *testing.T) {
+	q := New(1)
+	release := make(chan struct{})
+	started := make(chan struct{}, 1)
+	var ran int64
+
+	q.Enqueue("same", func() {
+		started <- struct{}{}
+		<-release
+	}, nil)
+	<-started
+
+	pos := q.EnqueueSuccessor("same", func() {
+		atomic.AddInt64(&ran, 1)
+	}, nil)
+	if pos != 1 {
+		t.Fatalf("successor position = %d, want 1", pos)
+	}
+	if pos := q.GetPosition("same"); pos == nil || *pos != 1 {
+		t.Fatalf("GetPosition(same) = %v, want 1", pos)
+	}
+
+	duplicatePos := q.EnqueueSuccessor("same", func() {
+		atomic.AddInt64(&ran, 1)
+	}, nil)
+	if duplicatePos != 1 {
+		t.Fatalf("duplicate successor position = %d, want 1", duplicatePos)
+	}
+
+	close(release)
+	deadline := time.Now().Add(5 * time.Second)
+	for atomic.LoadInt64(&ran) != 1 || q.QueueLength() != 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("successor did not run after active job completed")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func TestEnqueueSuccessorSkipsActiveKey(t *testing.T) {
+	q := New(2)
+	releaseA := make(chan struct{})
+	releaseB := make(chan struct{})
+	startedA := make(chan struct{}, 1)
+	startedB := make(chan struct{}, 1)
+	startedC := make(chan struct{}, 1)
+
+	q.Enqueue("a", func() {
+		startedA <- struct{}{}
+		<-releaseA
+	}, nil)
+	<-startedA
+	q.EnqueueSuccessor("a", func() {}, nil)
+	q.Enqueue("b", func() {
+		startedB <- struct{}{}
+		<-releaseB
+	}, nil)
+	<-startedB
+	q.Enqueue("c", func() {
+		startedC <- struct{}{}
+	}, nil)
+
+	close(releaseB)
+	select {
+	case <-startedC:
+	case <-time.After(5 * time.Second):
+		t.Fatal("unblocked pending job did not start")
+	}
+	close(releaseA)
+
+	deadline := time.Now().Add(5 * time.Second)
+	for q.QueueLength() != 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("successor did not run after its active job completed")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 // TestDoneRunsAfterKeyReleased guards the completion-hook ordering: done must
 // fire only after the key has left the active set, otherwise a caller's
 // "job finished" bookkeeping would race a concurrent re-enqueue of the key.

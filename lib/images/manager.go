@@ -377,7 +377,7 @@ func (m *manager) createAndQueueImage(ref *ResolvedRef, req CreateImageRequest, 
 	// Keep borrowed credentials outside the queued closure so their lifetime is
 	// bounded even when this job waits behind another pull.
 	inflight := m.registerInflightPull(ref.Digest(), req.Credentials)
-	queuePos := m.queue.Enqueue(ref.Digest(), func() {
+	queuePos := m.queue.EnqueueSuccessor(ref.Digest(), func() {
 		credentials, deadline, expired := m.borrowedAuth(ref.Digest())
 		if expired {
 			m.updateStatusByDigest(ref, StatusFailed, ErrBorrowedCredentialsExpired)

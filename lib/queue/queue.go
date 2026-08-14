@@ -39,10 +39,22 @@ func New(maxConcurrent int) *Queue {
 // is torn down only once the queue is done with it), but only when this call
 // actually started the job — a dedup'd enqueue does not run it.
 func (q *Queue) Enqueue(key string, startFn func(), done func()) int {
+	return q.enqueue(key, startFn, done, false)
+}
+
+// EnqueueSuccessor queues a new job behind an active job with the same key.
+// Pending jobs with the same key are still deduplicated. This is useful when
+// the caller has replaced the persisted work for a key while the previous job
+// is finishing.
+func (q *Queue) EnqueueSuccessor(key string, startFn func(), done func()) int {
+	return q.enqueue(key, startFn, done, true)
+}
+
+func (q *Queue) enqueue(key string, startFn func(), done func(), allowActive bool) int {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
-	if q.active[key] {
+	if q.active[key] && !allowActive {
 		return 0
 	}
 	for i, j := range q.pending {
@@ -61,7 +73,7 @@ func (q *Queue) Enqueue(key string, startFn func(), done func()) int {
 		startFn()
 	}
 
-	if len(q.active) < q.maxConcurrent {
+	if len(q.active) < q.maxConcurrent && !q.active[key] {
 		q.active[key] = true
 		// The key enters the active set before the goroutine launches, both
 		// under the lock, so a concurrent Enqueue always observes the slot and
@@ -77,17 +89,23 @@ func (q *Queue) Enqueue(key string, startFn func(), done func()) int {
 }
 
 // complete removes the key from the active set and starts the next pending
-// job if there is capacity.
+// job if there is capacity. Pending successors for an active key are skipped
+// until that key completes.
 func (q *Queue) complete(key string) {
 	q.mu.Lock()
 	delete(q.active, key)
 
 	var next *job
-	if len(q.pending) > 0 && len(q.active) < q.maxConcurrent {
-		nextJob := q.pending[0]
-		q.pending = q.pending[1:]
-		q.active[nextJob.key] = true
-		next = &nextJob
+	if len(q.active) < q.maxConcurrent {
+		for i, pending := range q.pending {
+			if q.active[pending.key] {
+				continue
+			}
+			q.pending = append(q.pending[:i], q.pending[i+1:]...)
+			q.active[pending.key] = true
+			next = &pending
+			break
+		}
 	}
 	q.mu.Unlock()
 
@@ -96,15 +114,12 @@ func (q *Queue) complete(key string) {
 	}
 }
 
-// GetPosition returns nil if the key is active or unknown, otherwise its
-// 1-based position in the pending queue.
+// GetPosition returns nil if the key is unknown or active without a
+// successor, otherwise its 1-based position in the pending queue.
 func (q *Queue) GetPosition(key string) *int {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
-	if q.active[key] {
-		return nil
-	}
 	for i, j := range q.pending {
 		if j.key == key {
 			pos := i + 1
