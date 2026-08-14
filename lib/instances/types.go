@@ -186,14 +186,6 @@ type StoredMetadata struct {
 	RestartPolicy *restartpolicy.Policy
 	RestartStatus restartpolicy.Status
 
-	// PendingDeleteAt, when set, marks an instance whose delete was accepted
-	// but whose teardown could not finish synchronously (the hypervisor could
-	// not be confirmed dead, or instance data removal failed). The instance is
-	// hidden from list, get, and name lookups; the delete finalizer retries
-	// teardown until it completes. Admission accounting still counts the
-	// instance because the stuck hypervisor may still hold its resources.
-	PendingDeleteAt *time.Time `json:",omitempty"`
-
 	// Shutdown configuration
 	StopTimeout int // Grace period in seconds for graceful stop (0 = use default 5s)
 
