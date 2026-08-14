@@ -427,7 +427,7 @@ func TestSendSIGKILLIgnoresExitedProcess(t *testing.T) {
 	require.NoError(t, sendSIGKILL(process.Process.Pid))
 }
 
-func TestRefreshHypervisorPIDPrefersSocketOwnerOverLiveStoredPID(t *testing.T) {
+func TestRefreshHypervisorPIDTrustsLiveStoredPID(t *testing.T) {
 	socketPath := filepath.Join(t.TempDir(), "test.sock")
 	owner := exec.Command(os.Args[0], "-test.run=^TestHypervisorProcessExistsWithReboundSocketPathHelper$")
 	owner.Env = append(os.Environ(), "HYPERVISOR_SOCKET_HELPER=1", "HYPERVISOR_SOCKET_PATH="+socketPath)
@@ -451,25 +451,31 @@ func TestRefreshHypervisorPIDPrefersSocketOwnerOverLiveStoredPID(t *testing.T) {
 		_ = stale.Wait()
 	})
 
+	// Hydration is display-only and must stay cheap: a live stored PID is
+	// trusted without resolving the socket, even when another process owns
+	// it. Destructive paths re-resolve through resolveLiveHypervisorPID.
 	stalePID := stale.Process.Pid
 	stored := StoredMetadata{HypervisorPID: &stalePID, SocketPath: socketPath}
 	refreshHypervisorPID(&stored, StateRunning)
 	require.NotNil(t, stored.HypervisorPID)
-	assert.Equal(t, owner.Process.Pid, *stored.HypervisorPID)
+	assert.Equal(t, stalePID, *stored.HypervisorPID)
 }
 
-func TestRefreshHypervisorPIDBackfillsStartTime(t *testing.T) {
+func TestRefreshHypervisorPIDResolvesSocketOwnerWhenStoredPIDIsDead(t *testing.T) {
 	socketPath := filepath.Join(t.TempDir(), "test.sock")
 	listener, err := net.Listen("unix", socketPath)
 	require.NoError(t, err)
 	defer listener.Close()
 
-	pid := os.Getpid()
-	stored := StoredMetadata{HypervisorPID: &pid, SocketPath: socketPath}
+	const deadPID = 1<<22 - 1
+	require.False(t, ProcessExists(deadPID))
+	storedPID := deadPID
+	stored := StoredMetadata{HypervisorPID: &storedPID, SocketPath: socketPath}
 	refreshHypervisorPID(&stored, StateRunning)
 
-	require.NotZero(t, stored.HypervisorStartTime)
-	assert.Equal(t, processStartTime(pid), stored.HypervisorStartTime)
+	require.NotNil(t, stored.HypervisorPID)
+	assert.Equal(t, os.Getpid(), *stored.HypervisorPID)
+	assert.NotZero(t, stored.HypervisorStartTime, "confirmed socket owner mints the identity token")
 	assert.Equal(t, hostBootID(), stored.HypervisorBootID)
 }
 

@@ -574,17 +574,34 @@ func (m *manager) toInstanceWithStateDerivation(ctx context.Context, meta *metad
 	return inst
 }
 
+// refreshHypervisorPID refreshes the stored PID for display and other
+// non-destructive callers. It trusts a live stored PID without confirming
+// socket ownership: hydration runs on every list/get, and its answer never
+// authorizes teardown — stop, delete, standby, and the vGPU release guards
+// all re-resolve identity through resolveLiveHypervisorPID before acting.
 func refreshHypervisorPID(stored *StoredMetadata, state State) {
 	if !state.RequiresVMM() && state != StateUnknown {
 		return
 	}
-	if pid, err := resolveLiveHypervisorPID(stored.HypervisorPID, stored.HypervisorStartTime, stored.HypervisorBootID, stored.SocketPath); err == nil && pid > 0 {
-		if stored.HypervisorPID == nil || pid != *stored.HypervisorPID || stored.HypervisorStartTime == 0 || stored.HypervisorBootID == "" {
-			setHypervisorProcessIdentity(stored, pid)
-		} else {
-			stored.HypervisorPID = &pid
-		}
+	if stored.HypervisorPID != nil && ProcessExists(*stored.HypervisorPID) {
+		return
 	}
+	if stored.SocketPath == "" {
+		return
+	}
+	pid, confirmed, err := hypervisor.ResolveProcessPID(stored.SocketPath)
+	if err != nil {
+		return
+	}
+	if confirmed {
+		setHypervisorProcessIdentity(stored, pid)
+		return
+	}
+	// Command-line-only match: record the bare PID without the identity
+	// token, same rule as resolveRuntimeHypervisorPID.
+	stored.HypervisorPID = &pid
+	stored.HypervisorStartTime = 0
+	stored.HypervisorBootID = ""
 }
 
 // resolveLiveHypervisorPID returns the PID of the live hypervisor that owns
