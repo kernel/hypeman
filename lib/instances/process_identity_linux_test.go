@@ -243,6 +243,25 @@ func TestShutdownHypervisorSparesReusedPIDWhenNoProcessOwnsSocket(t *testing.T) 
 	assert.NoError(t, syscall.Kill(pid, 0), "process with a recycled PID must not be killed")
 }
 
+func TestShutdownHypervisorRemovesStaleSocketWhenNoLiveOwner(t *testing.T) {
+	socketPath := filepath.Join(t.TempDir(), "stale.sock")
+	require.NoError(t, os.WriteFile(socketPath, nil, 0600))
+
+	// No process owns or references the socket and no client factory exists
+	// for this hypervisor type: the hypervisor is provably gone, so shutdown
+	// must report success and remove the stale socket file.
+	m := &manager{}
+	require.NoError(t, m.shutdownHypervisor(context.Background(), &Instance{
+		StoredMetadata: StoredMetadata{
+			Id:             "shutdown-stale-socket",
+			HypervisorType: hypervisor.Type("unregistered-stale-socket-test"),
+			SocketPath:     socketPath,
+		},
+	}))
+	_, statErr := os.Stat(socketPath)
+	assert.True(t, os.IsNotExist(statErr), "stale socket should be removed once the hypervisor is provably gone")
+}
+
 func TestClassifyResolvedHypervisorOwner(t *testing.T) {
 	const deadPID = 1<<22 - 1
 	require.False(t, ProcessExists(deadPID))
