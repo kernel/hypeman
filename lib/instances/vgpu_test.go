@@ -483,10 +483,10 @@ func TestVGPUAssignmentClaimedByLiveInstanceNormalizesLegacyMdevPath(t *testing.
 	require.NoError(t, m.ensureDirectories("legacy-claimant"))
 	pid := os.Getpid()
 	require.NoError(t, m.saveMetadata(&metadata{StoredMetadata: StoredMetadata{
-		Id:            "legacy-claimant",
-		Name:          "legacy-claimant",
-		GPUMdevUUID:   "legacy-uuid",
-		HypervisorPID: &pid,
+		Id:                        "legacy-claimant",
+		Name:                      "legacy-claimant",
+		GPUMdevUUID:               "legacy-uuid",
+		HypervisorProcessIdentity: HypervisorProcessIdentity{HypervisorPID: &pid},
 	}}))
 
 	claimed, err := m.vgpuAssignmentClaimedByLiveInstance(context.Background(), "other-instance", "/sys/bus/mdev/devices/legacy-uuid")
@@ -538,11 +538,11 @@ func TestVGPUAssignmentClaimedByLiveInstanceGracesRecentDeadPIDClaim(t *testing.
 	require.False(t, ProcessExists(deadPID))
 	assignedAt := time.Now().UTC()
 	require.NoError(t, m.saveMetadata(&metadata{StoredMetadata: StoredMetadata{
-		Id:            claimantID,
-		HypervisorPID: &deadPID,
-		GPUFramework:  devices.VGPUFrameworkVendorVFIO,
-		GPUDevicePath: "/sys/bus/pci/devices/0000:82:00.4",
-		GPUAssignedAt: &assignedAt,
+		Id:                        claimantID,
+		HypervisorProcessIdentity: HypervisorProcessIdentity{HypervisorPID: &deadPID},
+		GPUFramework:              devices.VGPUFrameworkVendorVFIO,
+		GPUDevicePath:             "/sys/bus/pci/devices/0000:82:00.4",
+		GPUAssignedAt:             &assignedAt,
 	}}))
 
 	// Same bounded grace as startup reconcile: a recent claim whose PID is
@@ -569,10 +569,10 @@ func TestVGPUAssignmentClaimedByLiveInstanceIgnoresDeadClaim(t *testing.T) {
 	require.NoError(t, m.ensureDirectories("dead-claimant"))
 	deadPID := 1 << 30
 	require.NoError(t, m.saveMetadata(&metadata{StoredMetadata: StoredMetadata{
-		Id:            "dead-claimant",
-		Name:          "dead-claimant",
-		GPUDevicePath: "/sys/bus/pci/devices/0000:82:00.4",
-		HypervisorPID: &deadPID,
+		Id:                        "dead-claimant",
+		Name:                      "dead-claimant",
+		GPUDevicePath:             "/sys/bus/pci/devices/0000:82:00.4",
+		HypervisorProcessIdentity: HypervisorProcessIdentity{HypervisorPID: &deadPID},
 	}}))
 
 	claimed, err := m.vgpuAssignmentClaimedByLiveInstance(context.Background(), "other-instance", "/sys/bus/pci/devices/0000:82:00.4")

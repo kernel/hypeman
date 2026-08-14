@@ -258,17 +258,17 @@ func TestDeleteDropsStaleVGPUClaimedByLiveInstance(t *testing.T) {
 	require.NoError(t, err)
 	defer listener.Close()
 	require.NoError(t, m.saveMetadata(&metadata{StoredMetadata: StoredMetadata{
-		Id:             claimantID,
-		Name:           claimantID,
-		Image:          "test-image",
-		CreatedAt:      now,
-		HypervisorType: lifecycleNoopHypervisorType,
-		HypervisorPID:  &pid,
-		SocketPath:     socketPath,
-		DataDir:        m.paths.InstanceDir(claimantID),
-		GPUProfile:     "NVIDIA L40S-2Q",
-		GPUFramework:   devices.VGPUFrameworkVendorVFIO,
-		GPUDevicePath:  "/sys/bus/pci/devices/0000:82:00.4",
+		Id:                        claimantID,
+		Name:                      claimantID,
+		Image:                     "test-image",
+		CreatedAt:                 now,
+		HypervisorType:            lifecycleNoopHypervisorType,
+		HypervisorProcessIdentity: HypervisorProcessIdentity{HypervisorPID: &pid},
+		SocketPath:                socketPath,
+		DataDir:                   m.paths.InstanceDir(claimantID),
+		GPUProfile:                "NVIDIA L40S-2Q",
+		GPUFramework:              devices.VGPUFrameworkVendorVFIO,
+		GPUDevicePath:             "/sys/bus/pci/devices/0000:82:00.4",
 	}}))
 
 	require.NoError(t, m.DeleteInstance(context.Background(), id))
