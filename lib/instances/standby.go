@@ -368,11 +368,6 @@ func (m *manager) shutdownHypervisor(ctx context.Context, inst *Instance) error 
 		return fmt.Errorf("confirm hypervisor ownership before shutdown: %w", err)
 	}
 
-	defer func() {
-		// Clean stale sockets even if graceful shutdown fails.
-		_ = os.Remove(inst.SocketPath)
-	}()
-
 	// Try to connect to hypervisor
 	hv, err := m.getHypervisor(inst.SocketPath, inst.HypervisorType)
 	if err != nil {
@@ -381,10 +376,13 @@ func (m *manager) shutdownHypervisor(ctx context.Context, inst *Instance) error 
 			// alive; teardown is committed, so kill it rather than report a
 			// completed shutdown for a VMM that is still running.
 			log.WarnContext(ctx, "could not connect to hypervisor, force killing resolved owner", "instance_id", inst.Id, "pid", pid, "error", err)
-			return killProcessAndWait(pid)
+			if err := killProcessAndWait(pid); err != nil {
+				return err
+			}
 		}
-		// Can't connect - hypervisor might already be stopped
-		log.DebugContext(ctx, "could not connect to hypervisor, may already be stopped", "instance_id", inst.Id)
+		// The hypervisor is confirmed gone (killed above or no live owner);
+		// remove its stale socket.
+		_ = os.Remove(inst.SocketPath)
 		return nil
 	}
 
@@ -398,11 +396,6 @@ func (m *manager) shutdownHypervisor(ctx context.Context, inst *Instance) error 
 		log.DebugContext(ctx, "sending shutdown command to hypervisor", "instance_id", inst.Id)
 		shutdownErr = hv.Shutdown(ctx)
 	}
-
-	// Teardown is committed; prevent new control-socket clients while the
-	// hypervisor exits. The deferred remove remains as a fallback for early
-	// returns above.
-	_ = os.Remove(inst.SocketPath)
 
 	// Wait for process to exit
 	if pid > 0 {
@@ -425,8 +418,13 @@ func (m *manager) shutdownHypervisor(ctx context.Context, inst *Instance) error 
 	}
 
 	// The hypervisor is confirmed gone (graceful exit, force kill, or no live
-	// owner). A graceful-API error at this point is not a failure: an error
-	// from this function means the hypervisor may still be running.
+	// owner), so its socket is stale now. Removing it any earlier would unlink
+	// the control socket of a VMM that survives the kill and gets resumed,
+	// leaving that VM unreachable for a later graceful standby or stop.
+	_ = os.Remove(inst.SocketPath)
+
+	// A graceful-API error at this point is not a failure: an error from this
+	// function means the hypervisor may still be running.
 	if shutdownErr != nil && shutdownErr != hypervisor.ErrNotSupported {
 		log.WarnContext(ctx, "graceful hypervisor shutdown failed, process force killed", "instance_id", inst.Id, "error", shutdownErr)
 	}
