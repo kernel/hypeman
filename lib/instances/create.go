@@ -855,7 +855,7 @@ func (m *manager) startAndBootVM(
 // confirm socket ownership before trusting it.
 func resolveRuntimeHypervisorPID(log *slog.Logger, stored *StoredMetadata, fallbackPID int) int {
 	if ProcessExists(fallbackPID) {
-		setHypervisorProcessIdentity(stored, fallbackPID)
+		stored.HypervisorProcessIdentity.Set(fallbackPID)
 		return fallbackPID
 	}
 	pid, confirmed, err := hypervisor.ResolveProcessPID(stored.SocketPath)
@@ -865,18 +865,14 @@ func resolveRuntimeHypervisorPID(log *slog.Logger, stored *StoredMetadata, fallb
 		// PID is recycled mid-call, a live start time) onto a process that
 		// is not the hypervisor.
 		log.Debug("using fallback hypervisor pid", "socket_path", stored.SocketPath, "pid", fallbackPID, "error", err)
-		stored.HypervisorPID = &fallbackPID
-		stored.HypervisorStartTime = 0
-		stored.HypervisorBootID = ""
+		stored.HypervisorProcessIdentity.SetUnconfirmed(fallbackPID)
 		return fallbackPID
 	}
 	if confirmed {
-		setHypervisorProcessIdentity(stored, pid)
+		stored.HypervisorProcessIdentity.Set(pid)
 		return pid
 	}
-	stored.HypervisorPID = &pid
-	stored.HypervisorStartTime = 0
-	stored.HypervisorBootID = ""
+	stored.HypervisorProcessIdentity.SetUnconfirmed(pid)
 	return pid
 }
 

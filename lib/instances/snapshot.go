@@ -301,9 +301,7 @@ func (m *manager) restoreSnapshot(ctx context.Context, id string, snapshotID str
 	restored.Name = sourceMeta.Name
 	restored.ExpiresAt = sourceMeta.ExpiresAt
 	restored.DataDir = m.paths.InstanceDir(id)
-	restored.HypervisorPID = nil
-	restored.HypervisorStartTime = 0
-	restored.HypervisorBootID = ""
+	restored.HypervisorProcessIdentity.Clear()
 	restored.StartedAt = nil
 	restored.StoppedAt = nil
 	restored.ExitCode = nil
@@ -434,9 +432,7 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 	forkMeta.ExpiresAt = nil
 	forkMeta.StartedAt = nil
 	forkMeta.StoppedAt = nil
-	forkMeta.HypervisorPID = nil
-	forkMeta.HypervisorStartTime = 0
-	forkMeta.HypervisorBootID = ""
+	forkMeta.HypervisorProcessIdentity.Clear()
 	forkMeta.DataDir = dstDir
 	forkMeta.HypervisorType = targetHypervisor
 	forkMeta.HypervisorVersion = targetHypervisorVersion

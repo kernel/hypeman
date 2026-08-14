@@ -229,9 +229,7 @@ func (m *manager) standbyInstance(
 	// 10. Update timestamp and clear PID (hypervisor no longer running)
 	now := time.Now().UTC()
 	stored.StoppedAt = &now
-	stored.HypervisorPID = nil
-	stored.HypervisorStartTime = 0
-	stored.HypervisorBootID = ""
+	stored.HypervisorProcessIdentity.Clear()
 	stored.PendingStandbyCompression = nil
 	clearFirecrackerUFFDRestoreState(stored)
 	if err := m.refreshFirecrackerSnapshotCacheKey(stored, snapshotDir); err != nil {
@@ -362,7 +360,7 @@ func (m *manager) shutdownHypervisor(ctx context.Context, inst *Instance) error 
 	// or recycled, and signaling it raw would bypass the ownership checks the
 	// kill paths enforce. Failing closed here also keeps the control socket in
 	// place as evidence for a later hardened kill.
-	pid, err := resolveLiveHypervisorPID(inst.HypervisorPID, inst.HypervisorStartTime, inst.HypervisorBootID, inst.SocketPath)
+	pid, err := resolveLiveHypervisorPID(inst.HypervisorProcessIdentity, inst.SocketPath)
 	if err != nil {
 		return fmt.Errorf("confirm hypervisor ownership before shutdown: %w", err)
 	}
