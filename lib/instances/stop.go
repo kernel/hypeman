@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"syscall"
 	"time"
 
 	"github.com/kernel/hypeman/lib/guest"
@@ -114,21 +113,11 @@ func (m *manager) forceKillHypervisorProcess(ctx context.Context, inst *Instance
 	}
 
 	log.WarnContext(ctx, "hypervisor still running after shutdown fallback, sending SIGKILL", "instance_id", inst.Id, "pid", pid)
-	if err := sendSIGKILL(pid); err != nil {
-		return fmt.Errorf("sigkill hypervisor pid %d: %w", pid, err)
-	}
-	if !WaitForProcessExit(pid, 30*time.Second) {
-		return fmt.Errorf("hypervisor pid %d still alive after SIGKILL", pid)
+	if err := killProcessAndWait(pid, hypervisorSIGKILLWaitTimeout); err != nil {
+		return err
 	}
 
 	log.DebugContext(ctx, "hypervisor process force-killed", "instance_id", inst.Id, "pid", pid)
-	return nil
-}
-
-func sendSIGKILL(pid int) error {
-	if err := syscall.Kill(pid, syscall.SIGKILL); err != nil && err != syscall.ESRCH {
-		return err
-	}
 	return nil
 }
 
