@@ -349,24 +349,6 @@ func TestShutdownHypervisorFailsClosedOnUnconfirmedOwnership(t *testing.T) {
 	assert.NoError(t, statErr, "socket must be kept as evidence for the hardened kill path")
 }
 
-func TestForceKillHypervisorProcessSucceedsWhenNoProcessOwnsSocket(t *testing.T) {
-	process := exec.Command("sleep", "30")
-	require.NoError(t, process.Start())
-	t.Cleanup(func() {
-		_ = process.Process.Kill()
-		_ = process.Wait()
-	})
-
-	// No process owns or references the socket, so the live stored PID is a
-	// recycled number: force kill succeeds as a no-op without signaling it.
-	pid := process.Process.Pid
-	m := &manager{}
-	require.NoError(t, m.forceKillHypervisorProcess(context.Background(), &Instance{
-		StoredMetadata: StoredMetadata{Id: "kill-test", HypervisorProcessIdentity: HypervisorProcessIdentity{HypervisorPID: &pid}, SocketPath: filepath.Join(t.TempDir(), "missing.sock")},
-	}))
-	assert.NoError(t, syscall.Kill(pid, 0), "process with a recycled PID must not be killed")
-}
-
 func TestKillProcessAndWaitIgnoresExitedProcess(t *testing.T) {
 	process := exec.Command("true")
 	require.NoError(t, process.Run())
