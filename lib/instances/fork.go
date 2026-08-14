@@ -561,7 +561,7 @@ func (m *manager) cleanupForkInstanceOnError(ctx context.Context, forkID string)
 	defer lock.Unlock()
 
 	err := m.deleteInstance(ctx, forkID)
-	if err == nil || errors.Is(err, ErrNotFound) || errors.Is(err, errDeleteDeferred) {
+	if err == nil || errors.Is(err, ErrNotFound) {
 		m.instanceLocks.Delete(forkID)
 		return nil
 	}

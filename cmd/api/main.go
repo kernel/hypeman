@@ -301,11 +301,6 @@ func run() error {
 	}); ok {
 		go backfiller.BackfillHypervisorProcessIdentities(ctx)
 	}
-	if finalizer, ok := app.InstanceManager.(interface {
-		StartDeleteFinalizer(context.Context)
-	}); ok {
-		finalizer.StartDeleteFinalizer(ctx)
-	}
 
 	// Log OTel status
 	if cfg.Otel.Enabled {
