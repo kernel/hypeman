@@ -14,16 +14,18 @@ import (
 )
 
 type fakeInstanceStore struct {
-	mu               sync.Mutex
-	instances        []Instance
-	standbyIDs       []string
-	persistedRuntime map[string]*Runtime
-	events           chan InstanceEvent
-	standbyErr       error
-	listErr          error
-	setRuntimeErr    error
-	standbyStarted   chan string
-	standbyRelease   chan struct{}
+	mu                sync.Mutex
+	instances         []Instance
+	standbyIDs        []string
+	persistedRuntime  map[string]*Runtime
+	events            chan InstanceEvent
+	standbyErr        error
+	listErr           error
+	setRuntimeErr     error
+	setRuntimeStarted chan string
+	setRuntimeRelease chan struct{}
+	standbyStarted    chan string
+	standbyRelease    chan struct{}
 }
 
 func newFakeInstanceStore(instances []Instance) *fakeInstanceStore {
@@ -67,6 +69,13 @@ func (f *fakeInstanceStore) standbyCalls() []string {
 }
 
 func (f *fakeInstanceStore) SetRuntime(_ context.Context, id string, runtime *Runtime) error {
+	if f.setRuntimeStarted != nil {
+		f.setRuntimeStarted <- id
+	}
+	if f.setRuntimeRelease != nil {
+		<-f.setRuntimeRelease
+	}
+
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.setRuntimeErr != nil {
@@ -1346,6 +1355,56 @@ func TestRefreshPersistFailureStillArmsIdleTimer(t *testing.T) {
 	assert.NotNil(t, state.nextStandbyAt)
 	assert.NotNil(t, state.idleSince)
 	controller.mu.RUnlock()
+}
+
+func TestHoldStandbyDoesNotWaitForRuntimePersistence(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 6, 10, 55, 0, 0, time.UTC)
+	inst := Instance{
+		ID:             "inst-hold-during-persist",
+		Name:           "inst-hold-during-persist",
+		State:          StateRunning,
+		NetworkEnabled: true,
+		IP:             "192.168.100.100",
+		AutoStandby:    &Policy{Enabled: true, IdleTimeout: "1m"},
+	}
+	conn := Connection{
+		OriginalSourceIP:        mustAddr("1.2.3.4"),
+		OriginalSourcePort:      50010,
+		OriginalDestinationIP:   mustAddr(inst.IP),
+		OriginalDestinationPort: 8080,
+		TCPState:                TCPStateEstablished,
+	}
+	store := newFakeInstanceStore([]Instance{inst})
+	store.setRuntimeStarted = make(chan string, 1)
+	store.setRuntimeRelease = make(chan struct{})
+	controller := NewController(store, &fakeConnectionSource{connections: []Connection{conn}}, ControllerOptions{
+		Now: func() time.Time { return now },
+	})
+
+	resyncDone := make(chan error, 1)
+	go func() {
+		resyncDone <- controller.startupResync(context.Background())
+	}()
+	require.Equal(t, inst.ID, <-store.setRuntimeStarted)
+
+	holdDone := make(chan error, 1)
+	go func() {
+		_, err := controller.HoldStandby(context.Background(), inst)
+		holdDone <- err
+	}()
+
+	select {
+	case err := <-holdDone:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		close(store.setRuntimeRelease)
+		require.FailNow(t, "hold waited for runtime persistence")
+	}
+
+	close(store.setRuntimeRelease)
+	require.NoError(t, <-resyncDone)
 }
 
 func TestHoldStandbyExtendsArmedCountdown(t *testing.T) {
