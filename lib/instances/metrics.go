@@ -288,6 +288,14 @@ func newInstanceMetrics(meter metric.Meter, tracer trace.Tracer, m *manager) (*M
 		return nil, err
 	}
 
+	pendingDeleteTotal, err := meter.Int64ObservableGauge(
+		"hypeman_instances_pending_delete_total",
+		metric.WithDescription("Instances whose delete was accepted but whose teardown is deferred to the background finalizer"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
 	snapshotCompressionActiveTotal, err := meter.Int64ObservableGauge(
 		"hypeman_snapshot_compression_active_total",
 		metric.WithDescription("Total number of actively running snapshot compression jobs"),
@@ -359,10 +367,16 @@ func newInstanceMetrics(meter metric.Meter, tracer trace.Tracer, m *manager) (*M
 				o.ObserveInt64(instancesTotal, count, metric.WithAttributes(attrs...))
 				o.ObserveFloat64(oldestInStateSeconds, oldestAgeSeconds[key], metric.WithAttributes(attrs...))
 			}
+			// Pending-delete instances are excluded from listInstances, so a
+			// wedged teardown is invisible above; expose it separately.
+			if ids, err := m.pendingDeleteInstanceIDs(); err == nil {
+				o.ObserveInt64(pendingDeleteTotal, int64(len(ids)))
+			}
 			return nil
 		},
 		instancesTotal,
 		oldestInStateSeconds,
+		pendingDeleteTotal,
 	)
 	if err != nil {
 		return nil, err
