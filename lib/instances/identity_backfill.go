@@ -56,13 +56,13 @@ func (m *manager) backfillInstanceHypervisorProcessIdentity(ctx context.Context,
 		return
 	}
 
-	pid, err := resolveLiveHypervisorPID(meta.HypervisorPID, meta.HypervisorStartTime, meta.HypervisorBootID, meta.SocketPath)
+	pid, err := resolveLiveHypervisorPID(meta.HypervisorProcessIdentity, meta.SocketPath)
 	if err != nil || pid <= 0 {
 		log.DebugContext(ctx, "skipping hypervisor identity backfill", "instance_id", id, "error", err)
 		return
 	}
 
-	setHypervisorProcessIdentity(&meta.StoredMetadata, pid)
+	meta.HypervisorProcessIdentity.Set(pid)
 	if err := m.saveMetadata(meta); err != nil {
 		log.WarnContext(ctx, "failed to persist hypervisor process identity", "instance_id", id, "error", err)
 		return
