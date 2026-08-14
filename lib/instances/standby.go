@@ -184,11 +184,15 @@ func (m *manager) standbyInstance(
 	)
 	if err := m.shutdownHypervisor(shutdownCtx, &inst); err != nil {
 		shutdownSpanEnd(err)
-		// Log but continue - snapshot was created successfully
-		log.WarnContext(ctx, "failed to shutdown hypervisor gracefully, snapshot still valid", "instance_id", id, "error", err)
-	} else {
-		shutdownSpanEnd(nil)
+		// The hypervisor may still be running: releasing its TAP or clearing
+		// its identity now would orphan a live VMM. The snapshot on disk is
+		// harmless and a retried standby redoes it.
+		if resumeErr := hv.Resume(ctx); resumeErr != nil {
+			log.ErrorContext(ctx, "failed to resume VM after shutdown error", "instance_id", id, "error", resumeErr)
+		}
+		return nil, fmt.Errorf("shutdown hypervisor: %w", err)
 	}
+	shutdownSpanEnd(nil)
 
 	// Firecracker vsock sockets can persist across standby/restore if the process
 	// exits ungracefully. Remove stale sockets before restore attempts.
@@ -420,8 +424,11 @@ func (m *manager) shutdownHypervisor(ctx context.Context, inst *Instance) error 
 		}
 	}
 
+	// The hypervisor is confirmed gone (graceful exit, force kill, or no live
+	// owner). A graceful-API error at this point is not a failure: an error
+	// from this function means the hypervisor may still be running.
 	if shutdownErr != nil && shutdownErr != hypervisor.ErrNotSupported {
-		return fmt.Errorf("graceful hypervisor shutdown failed: %w", shutdownErr)
+		log.WarnContext(ctx, "graceful hypervisor shutdown failed, process force killed", "instance_id", inst.Id, "error", shutdownErr)
 	}
 
 	return nil
