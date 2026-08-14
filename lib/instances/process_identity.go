@@ -18,6 +18,41 @@ import (
 // identities to a single host boot.
 const linuxBootIDPath = "/proc/sys/kernel/random/boot_id"
 
+// HypervisorProcessIdentity identifies a specific hypervisor process across
+// PID reuse and host reboots. The zero value means no recorded identity.
+// It is embedded anonymously in StoredMetadata so the persisted JSON keys
+// (and on-disk metadata format) are unchanged.
+type HypervisorProcessIdentity struct {
+	HypervisorPID       *int   // Hypervisor process ID (may be stale after host restart)
+	HypervisorStartTime uint64 // Start time of HypervisorPID from /proc/<pid>/stat (clock ticks since boot). 0 = unknown.
+	HypervisorBootID    string // Linux boot ID recorded with HypervisorStartTime; scopes the process identity across host reboots.
+}
+
+// Set records pid's boot-scoped identity as the instance's hypervisor.
+func (h *HypervisorProcessIdentity) Set(pid int) {
+	h.HypervisorPID = &pid
+	h.HypervisorStartTime = processStartTime(pid)
+	h.HypervisorBootID = hostBootID()
+}
+
+// SetUnconfirmed records a bare PID without the boot-scoped identity token.
+// Used when the PID matched the socket by command line only or was just
+// proven dead: minting a token would stamp the current boot ID (and, if the
+// PID is recycled mid-call, a live start time) onto a process that is not the
+// hypervisor. Destructive paths must confirm socket ownership before trusting
+// an unconfirmed PID.
+func (h *HypervisorProcessIdentity) SetUnconfirmed(pid int) {
+	h.HypervisorPID = &pid
+	h.HypervisorStartTime = 0
+	h.HypervisorBootID = ""
+}
+
+// Clear erases the recorded identity. Call whenever the recorded hypervisor
+// is known gone or a snapshot/fork must not inherit it.
+func (h *HypervisorProcessIdentity) Clear() {
+	*h = HypervisorProcessIdentity{}
+}
+
 // refreshHypervisorPID refreshes the stored PID for display and other
 // non-destructive callers. It trusts a live stored PID without confirming
 // socket ownership: hydration runs on every list/get, and its answer never
@@ -38,14 +73,12 @@ func refreshHypervisorPID(stored *StoredMetadata, state State) {
 		return
 	}
 	if confirmed {
-		setHypervisorProcessIdentity(stored, pid)
+		stored.HypervisorProcessIdentity.Set(pid)
 		return
 	}
 	// Command-line-only match: record the bare PID without the identity
 	// token, same rule as resolveRuntimeHypervisorPID.
-	stored.HypervisorPID = &pid
-	stored.HypervisorStartTime = 0
-	stored.HypervisorBootID = ""
+	stored.HypervisorProcessIdentity.SetUnconfirmed(pid)
 }
 
 // resolveLiveHypervisorPID returns the PID of the live hypervisor that owns
@@ -54,28 +87,28 @@ func refreshHypervisorPID(stored *StoredMetadata, state State) {
 // confirmation. It returns an error when socket ownership cannot be confirmed:
 // a live process matches the socket path by command line only, or a live stored
 // PID's ownership cannot be verified.
-func resolveLiveHypervisorPID(storedPID *int, storedStartTime uint64, storedBootID, socketPath string) (int, error) {
+func resolveLiveHypervisorPID(id HypervisorProcessIdentity, socketPath string) (int, error) {
 	stored := 0
-	if storedPID != nil && ProcessExists(*storedPID) {
-		stored = *storedPID
+	if id.HypervisorPID != nil && ProcessExists(*id.HypervisorPID) {
+		stored = *id.HypervisorPID
 	}
 	if runtime.GOOS != "linux" || socketPath == "" {
 		return stored, nil
 	}
 	bootID := hostBootID()
-	if stored != 0 && storedBootID != "" && bootID != "" && storedBootID != bootID {
+	if stored != 0 && id.HypervisorBootID != "" && bootID != "" && id.HypervisorBootID != bootID {
 		// The recorded identity is scoped to a previous host boot, so whatever
 		// process wears the stored PID now is provably not the recorded
 		// hypervisor. Treat the stored PID as dead rather than failing closed.
 		stored = 0
 	}
-	if stored != 0 && storedStartTime != 0 && storedBootID != "" && bootID != "" && storedBootID == bootID && processStartTime(stored) == storedStartTime {
+	if stored != 0 && id.HypervisorStartTime != 0 && id.HypervisorBootID != "" && bootID != "" && id.HypervisorBootID == bootID && processStartTime(stored) == id.HypervisorStartTime {
 		return stored, nil
 	}
 	var resolved int
 	var confirmed bool
 	var err error
-	if stored != 0 && storedStartTime == 0 {
+	if stored != 0 && id.HypervisorStartTime == 0 {
 		resolved, confirmed, err = hypervisor.ResolveProcessPIDForOwner(socketPath, stored)
 	} else {
 		resolved, confirmed, err = hypervisor.ResolveProcessPID(socketPath)
@@ -214,12 +247,6 @@ func readHostBootID() string {
 		return ""
 	}
 	return strings.TrimSpace(string(data))
-}
-
-func setHypervisorProcessIdentity(stored *StoredMetadata, pid int) {
-	stored.HypervisorPID = &pid
-	stored.HypervisorStartTime = processStartTime(pid)
-	stored.HypervisorBootID = hostBootID()
 }
 
 // processStartTime returns the start time (field 22 of /proc/<pid>/stat, clock

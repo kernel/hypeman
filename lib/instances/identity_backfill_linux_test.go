@@ -25,9 +25,9 @@ func TestBackfillHypervisorProcessIdentitiesPersistsConfirmedOwnership(t *testin
 
 	selfPID := os.Getpid()
 	seedInstance(t, mgr, StoredMetadata{
-		Id:            "inst-live",
-		HypervisorPID: &selfPID,
-		SocketPath:    socketPath,
+		Id:                        "inst-live",
+		HypervisorProcessIdentity: HypervisorProcessIdentity{HypervisorPID: &selfPID},
+		SocketPath:                socketPath,
 	})
 
 	mgr.BackfillHypervisorProcessIdentities(context.Background())
@@ -47,9 +47,9 @@ func TestBackfillHypervisorProcessIdentitiesSkipsDeadPID(t *testing.T) {
 	deadPID := dead.Process.Pid
 
 	seedInstance(t, mgr, StoredMetadata{
-		Id:            "inst-dead",
-		HypervisorPID: &deadPID,
-		SocketPath:    filepath.Join(t.TempDir(), "missing.sock"),
+		Id:                        "inst-dead",
+		HypervisorProcessIdentity: HypervisorProcessIdentity{HypervisorPID: &deadPID},
+		SocketPath:                filepath.Join(t.TempDir(), "missing.sock"),
 	})
 	before := instanceMetadataBytes(t, mgr, "inst-dead")
 
@@ -62,11 +62,13 @@ func TestBackfillHypervisorProcessIdentitiesSkipsAlreadyStamped(t *testing.T) {
 	mgr := &manager{paths: paths.New(t.TempDir())}
 	selfPID := os.Getpid()
 	seedInstance(t, mgr, StoredMetadata{
-		Id:                  "inst-stamped",
-		HypervisorPID:       &selfPID,
-		HypervisorStartTime: processStartTime(selfPID),
-		HypervisorBootID:    hostBootID(),
-		SocketPath:          filepath.Join(t.TempDir(), "missing.sock"),
+		Id: "inst-stamped",
+		HypervisorProcessIdentity: HypervisorProcessIdentity{
+			HypervisorPID:       &selfPID,
+			HypervisorStartTime: processStartTime(selfPID),
+			HypervisorBootID:    hostBootID(),
+		},
+		SocketPath: filepath.Join(t.TempDir(), "missing.sock"),
 	})
 	before := instanceMetadataBytes(t, mgr, "inst-stamped")
 
@@ -80,9 +82,9 @@ func TestBackfillHypervisorProcessIdentitiesSkipsMissingSocketOwner(t *testing.T
 	stale := startSleep(t)
 	stalePID := stale.Process.Pid
 	seedInstance(t, mgr, StoredMetadata{
-		Id:            "inst-no-owner",
-		HypervisorPID: &stalePID,
-		SocketPath:    filepath.Join(t.TempDir(), "missing.sock"),
+		Id:                        "inst-no-owner",
+		HypervisorProcessIdentity: HypervisorProcessIdentity{HypervisorPID: &stalePID},
+		SocketPath:                filepath.Join(t.TempDir(), "missing.sock"),
 	})
 	before := instanceMetadataBytes(t, mgr, "inst-no-owner")
 
@@ -104,9 +106,9 @@ func TestBackfillHypervisorProcessIdentitiesSkipsUnconfirmedCommandLineMatch(t *
 	stale := startSleep(t)
 	stalePID := stale.Process.Pid
 	seedInstance(t, mgr, StoredMetadata{
-		Id:            "inst-cmdline",
-		HypervisorPID: &stalePID,
-		SocketPath:    socketPath,
+		Id:                        "inst-cmdline",
+		HypervisorProcessIdentity: HypervisorProcessIdentity{HypervisorPID: &stalePID},
+		SocketPath:                socketPath,
 	})
 	before := instanceMetadataBytes(t, mgr, "inst-cmdline")
 
@@ -125,8 +127,8 @@ func TestBackfillHypervisorProcessIdentitiesSkipsMissingPIDOrSocket(t *testing.T
 		SocketPath: filepath.Join(t.TempDir(), "missing.sock"),
 	})
 	seedInstance(t, mgr, StoredMetadata{
-		Id:            "inst-no-socket",
-		HypervisorPID: &selfPID,
+		Id:                        "inst-no-socket",
+		HypervisorProcessIdentity: HypervisorProcessIdentity{HypervisorPID: &selfPID},
 	})
 	beforeNoPID := instanceMetadataBytes(t, mgr, "inst-no-pid")
 	beforeNoSocket := instanceMetadataBytes(t, mgr, "inst-no-socket")
@@ -147,9 +149,9 @@ func TestBackfillHypervisorProcessIdentitiesAdoptsConfirmedSocketOwner(t *testin
 	stale := startSleep(t)
 	stalePID := stale.Process.Pid
 	seedInstance(t, mgr, StoredMetadata{
-		Id:            "inst-adopt",
-		HypervisorPID: &stalePID,
-		SocketPath:    socketPath,
+		Id:                        "inst-adopt",
+		HypervisorProcessIdentity: HypervisorProcessIdentity{HypervisorPID: &stalePID},
+		SocketPath:                socketPath,
 	})
 
 	mgr.BackfillHypervisorProcessIdentities(context.Background())

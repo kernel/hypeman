@@ -23,7 +23,7 @@ import (
 
 func TestResolveLiveHypervisorPIDWithoutStoredPID(t *testing.T) {
 	t.Run("missing socket", func(t *testing.T) {
-		pid, err := resolveLiveHypervisorPID(nil, 0, "", filepath.Join(t.TempDir(), "missing.sock"))
+		pid, err := resolveLiveHypervisorPID(HypervisorProcessIdentity{}, filepath.Join(t.TempDir(), "missing.sock"))
 		require.NoError(t, err)
 		assert.Zero(t, pid)
 	})
@@ -34,7 +34,7 @@ func TestResolveLiveHypervisorPIDWithoutStoredPID(t *testing.T) {
 		require.NoError(t, err)
 		defer listener.Close()
 
-		pid, err := resolveLiveHypervisorPID(nil, 0, "", socketPath)
+		pid, err := resolveLiveHypervisorPID(HypervisorProcessIdentity{}, socketPath)
 		require.NoError(t, err)
 		assert.Equal(t, os.Getpid(), pid)
 	})
@@ -68,7 +68,7 @@ func TestResolveLiveHypervisorPIDUsesMatchingStartTime(t *testing.T) {
 	startTime := processStartTime(pid)
 	require.NotZero(t, startTime)
 
-	resolved, err := resolveLiveHypervisorPID(&pid, startTime, hostBootID(), filepath.Join(t.TempDir(), "missing.sock"))
+	resolved, err := resolveLiveHypervisorPID(HypervisorProcessIdentity{HypervisorPID: &pid, HypervisorStartTime: startTime, HypervisorBootID: hostBootID()}, filepath.Join(t.TempDir(), "missing.sock"))
 	require.NoError(t, err)
 	assert.Equal(t, pid, resolved)
 }
@@ -89,11 +89,13 @@ func TestKillHypervisorUsesMatchingStartTimeWhenSocketIsGone(t *testing.T) {
 	m := &manager{}
 	require.NoError(t, m.killHypervisor(context.Background(), &Instance{
 		StoredMetadata: StoredMetadata{
-			Id:                  "kill-test",
-			HypervisorPID:       &pid,
-			HypervisorStartTime: startTime,
-			HypervisorBootID:    hostBootID(),
-			SocketPath:          socketPath,
+			Id: "kill-test",
+			HypervisorProcessIdentity: HypervisorProcessIdentity{
+				HypervisorPID:       &pid,
+				HypervisorStartTime: startTime,
+				HypervisorBootID:    hostBootID(),
+			},
+			SocketPath: socketPath,
 		},
 	}))
 
@@ -120,11 +122,13 @@ func TestKillHypervisorSucceedsOnIdentityFromDifferentBoot(t *testing.T) {
 	m := &manager{}
 	require.NoError(t, m.killHypervisor(context.Background(), &Instance{
 		StoredMetadata: StoredMetadata{
-			Id:                  "kill-test",
-			HypervisorPID:       &pid,
-			HypervisorStartTime: startTime,
-			HypervisorBootID:    "different-boot",
-			SocketPath:          filepath.Join(t.TempDir(), "missing.sock"),
+			Id: "kill-test",
+			HypervisorProcessIdentity: HypervisorProcessIdentity{
+				HypervisorPID:       &pid,
+				HypervisorStartTime: startTime,
+				HypervisorBootID:    "different-boot",
+			},
+			SocketPath: filepath.Join(t.TempDir(), "missing.sock"),
 		},
 	}))
 	assert.NoError(t, syscall.Kill(pid, 0), "process identity from a different boot must not be killed")
@@ -148,11 +152,13 @@ func TestKillHypervisorSucceedsOnMismatchedStartTimeWithNoSocketOwner(t *testing
 	m := &manager{}
 	require.NoError(t, m.killHypervisor(context.Background(), &Instance{
 		StoredMetadata: StoredMetadata{
-			Id:                  "kill-test",
-			HypervisorPID:       &pid,
-			HypervisorStartTime: startTime + 1,
-			HypervisorBootID:    hostBootID(),
-			SocketPath:          filepath.Join(t.TempDir(), "missing.sock"),
+			Id: "kill-test",
+			HypervisorProcessIdentity: HypervisorProcessIdentity{
+				HypervisorPID:       &pid,
+				HypervisorStartTime: startTime + 1,
+				HypervisorBootID:    hostBootID(),
+			},
+			SocketPath: filepath.Join(t.TempDir(), "missing.sock"),
 		},
 	}))
 	assert.NoError(t, syscall.Kill(pid, 0), "process with a mismatched identity token must not be killed")
@@ -243,7 +249,7 @@ func TestKillHypervisorSparesReusedPIDAndKillsSocketOwner(t *testing.T) {
 	stalePID := stale.Process.Pid
 	m := &manager{}
 	require.NoError(t, m.killHypervisor(context.Background(), &Instance{
-		StoredMetadata: StoredMetadata{Id: "kill-test", HypervisorPID: &stalePID, SocketPath: socketPath},
+		StoredMetadata: StoredMetadata{Id: "kill-test", HypervisorProcessIdentity: HypervisorProcessIdentity{HypervisorPID: &stalePID}, SocketPath: socketPath},
 	}))
 
 	assert.NoError(t, syscall.Kill(stalePID, 0), "unrelated process holding the stale PID must survive delete")
@@ -273,11 +279,11 @@ func TestGracefulShutdownWaitsForSocketOwnerInsteadOfExitedStoredPID(t *testing.
 	require.NoError(t, stale.Run())
 	stalePID := stale.Process.Pid
 	inst := &Instance{StoredMetadata: StoredMetadata{
-		Id:             "graceful-stale-pid",
-		HypervisorType: hypervisor.TypeCloudHypervisor,
-		HypervisorPID:  &stalePID,
-		SocketPath:     socketPath,
-		VsockSocket:    filepath.Join(t.TempDir(), "missing-vsock.sock"),
+		Id:                        "graceful-stale-pid",
+		HypervisorType:            hypervisor.TypeCloudHypervisor,
+		HypervisorProcessIdentity: HypervisorProcessIdentity{HypervisorPID: &stalePID},
+		SocketPath:                socketPath,
+		VsockSocket:               filepath.Join(t.TempDir(), "missing-vsock.sock"),
 	}}
 
 	m := &manager{}
@@ -301,10 +307,10 @@ func TestShutdownHypervisorSparesReusedPIDWhenNoProcessOwnsSocket(t *testing.T) 
 	m := &manager{}
 	err := m.shutdownHypervisor(context.Background(), &Instance{
 		StoredMetadata: StoredMetadata{
-			Id:             "shutdown-reused-pid",
-			HypervisorType: hypervisor.TypeCloudHypervisor,
-			HypervisorPID:  &pid,
-			SocketPath:     filepath.Join(t.TempDir(), "missing.sock"),
+			Id:                        "shutdown-reused-pid",
+			HypervisorType:            hypervisor.TypeCloudHypervisor,
+			HypervisorProcessIdentity: HypervisorProcessIdentity{HypervisorPID: &pid},
+			SocketPath:                filepath.Join(t.TempDir(), "missing.sock"),
 		},
 	})
 	require.NotContains(t, fmt.Sprint(err), "confirm hypervisor ownership")
@@ -389,10 +395,10 @@ func TestShutdownHypervisorFailsClosedOnUnconfirmedOwnership(t *testing.T) {
 	m := &manager{}
 	err := m.shutdownHypervisor(context.Background(), &Instance{
 		StoredMetadata: StoredMetadata{
-			Id:             "shutdown-unconfirmed",
-			HypervisorType: hypervisor.TypeCloudHypervisor,
-			HypervisorPID:  &stalePID,
-			SocketPath:     socketPath,
+			Id:                        "shutdown-unconfirmed",
+			HypervisorType:            hypervisor.TypeCloudHypervisor,
+			HypervisorProcessIdentity: HypervisorProcessIdentity{HypervisorPID: &stalePID},
+			SocketPath:                socketPath,
 		},
 	})
 	require.ErrorContains(t, err, "confirm hypervisor ownership before shutdown")
@@ -415,7 +421,7 @@ func TestForceKillHypervisorProcessSucceedsWhenNoProcessOwnsSocket(t *testing.T)
 	pid := process.Process.Pid
 	m := &manager{}
 	require.NoError(t, m.forceKillHypervisorProcess(context.Background(), &Instance{
-		StoredMetadata: StoredMetadata{Id: "kill-test", HypervisorPID: &pid, SocketPath: filepath.Join(t.TempDir(), "missing.sock")},
+		StoredMetadata: StoredMetadata{Id: "kill-test", HypervisorProcessIdentity: HypervisorProcessIdentity{HypervisorPID: &pid}, SocketPath: filepath.Join(t.TempDir(), "missing.sock")},
 	}))
 	assert.NoError(t, syscall.Kill(pid, 0), "process with a recycled PID must not be killed")
 }
@@ -455,7 +461,7 @@ func TestRefreshHypervisorPIDTrustsLiveStoredPID(t *testing.T) {
 	// trusted without resolving the socket, even when another process owns
 	// it. Destructive paths re-resolve through resolveLiveHypervisorPID.
 	stalePID := stale.Process.Pid
-	stored := StoredMetadata{HypervisorPID: &stalePID, SocketPath: socketPath}
+	stored := StoredMetadata{HypervisorProcessIdentity: HypervisorProcessIdentity{HypervisorPID: &stalePID}, SocketPath: socketPath}
 	refreshHypervisorPID(&stored, StateRunning)
 	require.NotNil(t, stored.HypervisorPID)
 	assert.Equal(t, stalePID, *stored.HypervisorPID)
@@ -470,7 +476,7 @@ func TestRefreshHypervisorPIDResolvesSocketOwnerWhenStoredPIDIsDead(t *testing.T
 	const deadPID = 1<<22 - 1
 	require.False(t, ProcessExists(deadPID))
 	storedPID := deadPID
-	stored := StoredMetadata{HypervisorPID: &storedPID, SocketPath: socketPath}
+	stored := StoredMetadata{HypervisorProcessIdentity: HypervisorProcessIdentity{HypervisorPID: &storedPID}, SocketPath: socketPath}
 	refreshHypervisorPID(&stored, StateRunning)
 
 	require.NotNil(t, stored.HypervisorPID)
@@ -502,7 +508,7 @@ func TestKillHypervisorSurvivesConcurrentReaper(t *testing.T) {
 
 	m := &manager{}
 	require.NoError(t, m.killHypervisor(context.Background(), &Instance{
-		StoredMetadata: StoredMetadata{Id: "kill-test", HypervisorPID: &pid, SocketPath: socketPath},
+		StoredMetadata: StoredMetadata{Id: "kill-test", HypervisorProcessIdentity: HypervisorProcessIdentity{HypervisorPID: &pid}, SocketPath: socketPath},
 	}))
 }
 
@@ -522,7 +528,7 @@ func TestKillHypervisorSucceedsOnReusedPIDWhenNoProcessOwnsSocket(t *testing.T) 
 	socketPath := filepath.Join(t.TempDir(), "missing.sock")
 	m := &manager{}
 	require.NoError(t, m.killHypervisor(context.Background(), &Instance{
-		StoredMetadata: StoredMetadata{Id: "kill-test", HypervisorPID: &stalePID, SocketPath: socketPath},
+		StoredMetadata: StoredMetadata{Id: "kill-test", HypervisorProcessIdentity: HypervisorProcessIdentity{HypervisorPID: &stalePID}, SocketPath: socketPath},
 	}))
 
 	assert.NoError(t, syscall.Kill(stalePID, 0), "process with a recycled PID must not be killed")
@@ -542,7 +548,7 @@ func TestKillHypervisorFailsOnUnconfirmedCommandLineMatch(t *testing.T) {
 	matchPID := match.Process.Pid
 	m := &manager{}
 	require.Error(t, m.killHypervisor(context.Background(), &Instance{
-		StoredMetadata: StoredMetadata{Id: "kill-test", HypervisorPID: &matchPID, SocketPath: socketPath},
+		StoredMetadata: StoredMetadata{Id: "kill-test", HypervisorProcessIdentity: HypervisorProcessIdentity{HypervisorPID: &matchPID}, SocketPath: socketPath},
 	}), "a command-line match must not satisfy destructive ownership verification")
 
 	assert.NoError(t, syscall.Kill(matchPID, 0), "process matched only by command line must not be killed")

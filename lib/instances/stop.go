@@ -73,7 +73,7 @@ func (m *manager) tryGracefulGuestShutdown(ctx context.Context, inst *Instance, 
 	// Wait for the process that currently owns the hypervisor socket. The
 	// persisted PID may be stale or reused, so trusting it here could skip the
 	// fail-closed kill path while the actual VMM is still running.
-	pid, err := resolveLiveHypervisorPID(inst.HypervisorPID, inst.HypervisorStartTime, inst.HypervisorBootID, inst.SocketPath)
+	pid, err := resolveLiveHypervisorPID(inst.HypervisorProcessIdentity, inst.SocketPath)
 	if err != nil {
 		log.WarnContext(ctx, "could not confirm hypervisor ownership after graceful shutdown", "instance_id", inst.Id, "error", err)
 		return false
@@ -105,7 +105,7 @@ func (m *manager) forceKillHypervisorProcess(ctx context.Context, inst *Instance
 	if inst.HypervisorPID == nil && inst.SocketPath == "" {
 		return nil
 	}
-	pid, err := resolveLiveHypervisorPID(inst.HypervisorPID, inst.HypervisorStartTime, inst.HypervisorBootID, inst.SocketPath)
+	pid, err := resolveLiveHypervisorPID(inst.HypervisorProcessIdentity, inst.SocketPath)
 	if err != nil {
 		return err
 	}
@@ -296,9 +296,7 @@ func (m *manager) stopInstance(
 	// 10. Update metadata (clear PID, set StoppedAt)
 	now := time.Now().UTC()
 	stored.StoppedAt = &now
-	stored.HypervisorPID = nil
-	stored.HypervisorStartTime = 0
-	stored.HypervisorBootID = ""
+	stored.HypervisorProcessIdentity.Clear()
 	// Boot markers are per-boot-run and must not carry across stop/restore/start.
 	stored.ProgramStartedAt = nil
 	stored.GuestAgentReadyAt = nil
