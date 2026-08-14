@@ -9,9 +9,9 @@
 # each SDK repo and opens a do-not-merge draft PR per repo — never main, no
 # seal-back, no docs publish. See the runbook.
 # On push to main: rebuilds and pushes to each staging repo's main. The staging
-# promotion workflow fast-forwards production main, where release-please opens
-# the version + changelog PR. Merging that PR publishes the package, and
-# production releases fast-forward back into staging.
+# promotion workflow advances the public SDK's `next` branch, and release
+# automation opens or updates one versioned PR from `next` to `main`. Merging
+# that PR publishes the package, and production releases sync back to staging.
 #
 # Operator commands and recovery notes are in docs/runbooks/sdk-generation-stlc.md.
 name: Generate SDKs with stlc
