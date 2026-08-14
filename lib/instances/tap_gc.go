@@ -59,17 +59,6 @@ func (m *manager) reconcileTAPs(ctx context.Context) {
 				preserve = append(preserve, inst.Id)
 			}
 		}
-		// Pending-delete instances are hidden from ListInstances but their
-		// stuck hypervisor may still be running, so preserve their TAPs until
-		// the delete finalizer confirms the process dead and releases the
-		// network.
-		pending, pendingErr := m.pendingDeleteInstanceIDs()
-		if pendingErr != nil {
-			log.WarnContext(ctx, "TAP GC: failed to scan pending-delete instances, skipping TAP pass", "error", pendingErr)
-			err = pendingErr
-		} else {
-			preserve = append(preserve, pending...)
-		}
 	}
 
 	if err == nil {

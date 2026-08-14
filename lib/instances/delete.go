@@ -2,7 +2,6 @@ package instances
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"syscall"
@@ -16,11 +15,6 @@ import (
 )
 
 const deleteGracefulShutdownTimeout = 2
-
-// errDeleteDeferred reports that a delete was accepted but its teardown is
-// deferred to the delete finalizer. API-path callers treat it as success; the
-// finalizer uses it to see that the instance is still blocked.
-var errDeleteDeferred = errors.New("delete deferred to background finalizer")
 
 type deleteInstanceOptions struct {
 	skipGracefulShutdown bool
@@ -141,9 +135,9 @@ func (m *manager) deleteInstanceWithOptions(
 		if err != nil {
 			// The hypervisor may still be running, so tearing down its vGPU,
 			// network, and devices is unsafe. The restart policy is already
-			// blocked, so hand the teardown to the delete finalizer instead of
-			// failing the delete.
-			return m.deferDelete(ctx, meta, fmt.Errorf("kill hypervisor: %w", err))
+			// blocked and the metadata is retained, so a retried delete is safe.
+			log.ErrorContext(ctx, "failed to kill hypervisor; retaining instance metadata", "instance_id", id, "error", err)
+			return fmt.Errorf("kill hypervisor: %w", err)
 		}
 	}
 	m.closeFirecrackerUFFDSession(ctx, stored)
@@ -220,30 +214,13 @@ func (m *manager) deleteInstanceWithOptions(
 	)
 	if err := m.deleteInstanceData(id); err != nil {
 		dataSpanEnd(err)
-		return m.deferDelete(ctx, meta, fmt.Errorf("delete instance data: %w", err))
+		log.ErrorContext(ctx, "failed to delete instance data", "instance_id", id, "error", err)
+		return fmt.Errorf("delete instance data: %w", err)
 	}
 	dataSpanEnd(nil)
 
 	log.InfoContext(ctx, "instance deleted successfully", "instance_id", id)
 	return nil
-}
-
-// deferDelete persists the pending-delete marker so the delete finalizer
-// retries teardown in the background, and reports the deferral through
-// errDeleteDeferred. Persisting the marker is the one step that must succeed:
-// without it a restart would forget the instance still needs teardown, so a
-// save failure keeps the delete failing loudly.
-func (m *manager) deferDelete(ctx context.Context, meta *metadata, cause error) error {
-	if meta.PendingDeleteAt == nil {
-		now := m.nowUTC()
-		meta.PendingDeleteAt = &now
-	}
-	if err := m.saveMetadata(meta); err != nil {
-		return fmt.Errorf("persist pending-delete marker (deferring %v): %w", cause, err)
-	}
-	logger.FromContext(ctx).ErrorContext(ctx, "delete teardown deferred to background finalizer",
-		"instance_id", meta.Id, "pending_since", meta.PendingDeleteAt, "error", cause)
-	return fmt.Errorf("%w: %s", errDeleteDeferred, cause)
 }
 
 // killHypervisor force kills the hypervisor process without graceful shutdown
