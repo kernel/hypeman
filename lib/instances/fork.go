@@ -280,9 +280,7 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 	forkMeta.CreatedAt = now
 	forkMeta.StartedAt = nil
 	forkMeta.StoppedAt = nil
-	forkMeta.HypervisorPID = nil
-	forkMeta.HypervisorStartTime = 0
-	forkMeta.HypervisorBootID = ""
+	forkMeta.HypervisorProcessIdentity.Clear()
 	forkMeta.SocketPath = m.paths.InstanceSocket(forkID, starter.SocketName())
 	forkMeta.DataDir = dstDir
 	forkMeta.VsockSocket = m.paths.InstanceSocket(forkID, hypervisor.VsockSocketNameForType(forkMeta.HypervisorType))
