@@ -223,9 +223,8 @@ func (m *manager) deleteInstanceWithOptions(
 	return nil
 }
 
-// killHypervisor force kills the hypervisor process without graceful shutdown
-// Used only for delete operations where we're removing all data anyway.
-// For operations that need graceful shutdown (like standby), use the hypervisor API directly.
+// killHypervisor force kills the hypervisor process without graceful shutdown.
+// Used by delete and as stop's final fallback after graceful shutdown fails.
 // It returns an error when the hypervisor may still be running: neither process
 // identity nor socket ownership can be confirmed, SIGKILL fails with an error
 // other than ESRCH, or the process does not exit after SIGKILL. Callers must not
