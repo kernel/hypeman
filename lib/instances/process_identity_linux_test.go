@@ -164,26 +164,7 @@ func TestKillHypervisorSucceedsOnMismatchedStartTimeWithNoSocketOwner(t *testing
 	assert.NoError(t, syscall.Kill(pid, 0), "process with a mismatched identity token must not be killed")
 }
 
-func TestHypervisorProcessExistsTreatsUnresolvedSocketAsAlive(t *testing.T) {
-	t.Parallel()
-
-	assert.True(t, HypervisorProcessExists(os.Getpid(), filepath.Join(t.TempDir(), "missing.sock")))
-}
-
-func TestHypervisorProcessIdentityExistsUsesStartTime(t *testing.T) {
-	t.Parallel()
-
-	startTime := processStartTime(os.Getpid())
-	require.NotZero(t, startTime)
-	socketPath := filepath.Join(t.TempDir(), "missing.sock")
-	bootID := hostBootID()
-	require.NotEmpty(t, bootID)
-	assert.True(t, HypervisorProcessIdentityExists(os.Getpid(), startTime, bootID, socketPath))
-	assert.False(t, HypervisorProcessIdentityExists(os.Getpid(), startTime+1, bootID, socketPath))
-	assert.False(t, HypervisorProcessIdentityExists(os.Getpid(), startTime, "different-boot", socketPath))
-}
-
-func TestHypervisorProcessExistsWithReboundSocketPathHelper(t *testing.T) {
+func TestSocketListenerHelper(t *testing.T) {
 	if os.Getenv("HYPERVISOR_SOCKET_HELPER") != "1" {
 		return
 	}
@@ -198,33 +179,9 @@ func TestHypervisorProcessExistsWithReboundSocketPathHelper(t *testing.T) {
 	_, _ = os.Stdin.Read(make([]byte, 1))
 }
 
-func TestHypervisorProcessExistsTreatsReboundSocketPathAsAlive(t *testing.T) {
-	socketPath := filepath.Join(t.TempDir(), "test.sock")
-	process := exec.Command(os.Args[0], "-test.run=^TestHypervisorProcessExistsWithReboundSocketPathHelper$")
-	process.Env = append(os.Environ(), "HYPERVISOR_SOCKET_HELPER=1", "HYPERVISOR_SOCKET_PATH="+socketPath)
-	stdin, err := process.StdinPipe()
-	require.NoError(t, err)
-	stdout, err := process.StdoutPipe()
-	require.NoError(t, err)
-	require.NoError(t, process.Start())
-	t.Cleanup(func() {
-		_ = stdin.Close()
-		_ = process.Wait()
-	})
-
-	_, err = bufio.NewReader(stdout).ReadString('\n')
-	require.NoError(t, err)
-	require.NoError(t, os.Remove(socketPath))
-	listener, err := net.Listen("unix", socketPath)
-	require.NoError(t, err)
-	defer listener.Close()
-
-	assert.True(t, HypervisorProcessExists(os.Getpid(), socketPath))
-}
-
 func TestKillHypervisorSparesReusedPIDAndKillsSocketOwner(t *testing.T) {
 	socketPath := filepath.Join(t.TempDir(), "test.sock")
-	owner := exec.Command(os.Args[0], "-test.run=^TestHypervisorProcessExistsWithReboundSocketPathHelper$")
+	owner := exec.Command(os.Args[0], "-test.run=^TestSocketListenerHelper$")
 	owner.Env = append(os.Environ(), "HYPERVISOR_SOCKET_HELPER=1", "HYPERVISOR_SOCKET_PATH="+socketPath)
 	stdin, err := owner.StdinPipe()
 	require.NoError(t, err)
@@ -260,7 +217,7 @@ func TestKillHypervisorSparesReusedPIDAndKillsSocketOwner(t *testing.T) {
 
 func TestGracefulShutdownWaitsForSocketOwnerInsteadOfExitedStoredPID(t *testing.T) {
 	socketPath := filepath.Join(t.TempDir(), "test.sock")
-	owner := exec.Command(os.Args[0], "-test.run=^TestHypervisorProcessExistsWithReboundSocketPathHelper$")
+	owner := exec.Command(os.Args[0], "-test.run=^TestSocketListenerHelper$")
 	owner.Env = append(os.Environ(), "HYPERVISOR_SOCKET_HELPER=1", "HYPERVISOR_SOCKET_PATH="+socketPath)
 	stdin, err := owner.StdinPipe()
 	require.NoError(t, err)
@@ -343,7 +300,7 @@ func TestClassifyResolvedHypervisorOwnerTreatsDeadCmdlineMatchAsDeath(t *testing
 
 func TestShutdownHypervisorKillsResolvedOwnerWhenClientUnavailable(t *testing.T) {
 	socketPath := filepath.Join(t.TempDir(), "test.sock")
-	owner := exec.Command(os.Args[0], "-test.run=^TestHypervisorProcessExistsWithReboundSocketPathHelper$")
+	owner := exec.Command(os.Args[0], "-test.run=^TestSocketListenerHelper$")
 	owner.Env = append(os.Environ(), "HYPERVISOR_SOCKET_HELPER=1", "HYPERVISOR_SOCKET_PATH="+socketPath)
 	stdin, err := owner.StdinPipe()
 	require.NoError(t, err)
@@ -430,12 +387,12 @@ func TestKillProcessAndWaitIgnoresExitedProcess(t *testing.T) {
 	process := exec.Command("true")
 	require.NoError(t, process.Run())
 
-	require.NoError(t, killProcessAndWait(process.Process.Pid, killEscalationWait))
+	require.NoError(t, killProcessAndWait(process.Process.Pid))
 }
 
 func TestRefreshHypervisorPIDTrustsLiveStoredPID(t *testing.T) {
 	socketPath := filepath.Join(t.TempDir(), "test.sock")
-	owner := exec.Command(os.Args[0], "-test.run=^TestHypervisorProcessExistsWithReboundSocketPathHelper$")
+	owner := exec.Command(os.Args[0], "-test.run=^TestSocketListenerHelper$")
 	owner.Env = append(os.Environ(), "HYPERVISOR_SOCKET_HELPER=1", "HYPERVISOR_SOCKET_PATH="+socketPath)
 	stdin, err := owner.StdinPipe()
 	require.NoError(t, err)
@@ -487,7 +444,7 @@ func TestRefreshHypervisorPIDResolvesSocketOwnerWhenStoredPIDIsDead(t *testing.T
 
 func TestKillHypervisorSurvivesConcurrentReaper(t *testing.T) {
 	socketPath := filepath.Join(t.TempDir(), "test.sock")
-	process := exec.Command(os.Args[0], "-test.run=^TestHypervisorProcessExistsWithReboundSocketPathHelper$")
+	process := exec.Command(os.Args[0], "-test.run=^TestSocketListenerHelper$")
 	process.Env = append(os.Environ(), "HYPERVISOR_SOCKET_HELPER=1", "HYPERVISOR_SOCKET_PATH="+socketPath)
 	stdin, err := process.StdinPipe()
 	require.NoError(t, err)
@@ -569,22 +526,6 @@ func TestKillHypervisorFailsOnCommandLineMatchWithNilStoredPID(t *testing.T) {
 	}), "a command-line match must fail closed without a stored PID")
 
 	assert.NoError(t, syscall.Kill(match.Process.Pid, 0), "process matched only by command line must not be killed")
-}
-
-func TestHypervisorProcessExistsRejectsDifferentLiveSocketOwner(t *testing.T) {
-	socketPath := filepath.Join(t.TempDir(), "test.sock")
-	listener, err := net.Listen("unix", socketPath)
-	require.NoError(t, err)
-	defer listener.Close()
-
-	process := exec.Command("sleep", "30")
-	require.NoError(t, process.Start())
-	t.Cleanup(func() {
-		_ = process.Process.Kill()
-		_ = process.Wait()
-	})
-
-	assert.False(t, HypervisorProcessExists(process.Process.Pid, socketPath))
 }
 
 func TestResolveRuntimeHypervisorPIDMintsIdentityOnlyWhenConfirmed(t *testing.T) {

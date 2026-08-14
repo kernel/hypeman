@@ -243,7 +243,7 @@ func (m *manager) killHypervisor(ctx context.Context, inst *Instance) error {
 				"instance_id", inst.Id, "stored_pid", *inst.HypervisorPID, "owner_pid", pid)
 		}
 		log.DebugContext(ctx, "killing hypervisor process", "instance_id", inst.Id, "pid", pid)
-		if err := killProcessAndWait(pid, hypervisorSIGKILLWaitTimeout); err != nil {
+		if err := killProcessAndWait(pid); err != nil {
 			return err
 		}
 	}
