@@ -158,7 +158,12 @@ func (m *manager) startInstance(
 		// Add vGPU cleanup to stack
 		cu.Add(func() {
 			log.DebugContext(ctx, "destroying vGPU on cleanup", "instance_id", id, "uuid", device.MdevUUID)
-			if err := devices.DestroyVGPU(ctx, device.Framework, device.SysfsPath, device.MdevUUID); err != nil {
+			assignment := devices.VGPUAssignment{
+				Framework:  device.Framework,
+				DevicePath: device.SysfsPath,
+				MdevUUID:   device.MdevUUID,
+			}
+			if err := devices.DestroyVGPU(ctx, assignment); err != nil {
 				log.WarnContext(ctx, "failed to destroy vGPU on cleanup", "instance_id", id, "uuid", device.MdevUUID, "error", err)
 			}
 		})
