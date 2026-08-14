@@ -22,7 +22,12 @@ func clearStoredVGPUDevice(stored *StoredMetadata) {
 func releaseStoredVGPU(ctx context.Context, stored *StoredMetadata) error {
 	path := storedVGPUDevicePath(stored)
 	if path != "" {
-		if err := devices.DestroyVGPU(ctx, stored.GPUFramework, path, stored.GPUMdevUUID); err != nil {
+		assignment := devices.VGPUAssignment{
+			Framework:  stored.GPUFramework,
+			DevicePath: path,
+			MdevUUID:   stored.GPUMdevUUID,
+		}
+		if err := devices.DestroyVGPU(ctx, assignment); err != nil {
 			return err
 		}
 	}
