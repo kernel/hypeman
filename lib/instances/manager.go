@@ -2,6 +2,7 @@ package instances
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -204,6 +205,9 @@ type manager struct {
 
 	// Periodic TAP garbage collection reconciler.
 	tapGCOnce sync.Once
+
+	// Background finalizer for deferred (pending-delete) instance teardowns.
+	deleteFinalizerOnce sync.Once
 
 	// Hypervisor support
 	vmStarters                       map[hypervisor.Type]hypervisor.VMStarter
@@ -441,6 +445,11 @@ func (m *manager) DeleteInstance(ctx context.Context, id string) error {
 	defer lock.Unlock()
 
 	err := m.deleteInstance(ctx, id)
+	if errors.Is(err, errDeleteDeferred) {
+		// Teardown continues in the delete finalizer; from the API's view the
+		// delete succeeded and the instance is already hidden from lookups.
+		err = nil
+	}
 	if err == nil {
 		m.notifyLifecycleDelete(ctx, id)
 		// Clean up the lock after successful deletion
