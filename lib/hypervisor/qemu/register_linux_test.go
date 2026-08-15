@@ -142,8 +142,10 @@ func TestCheckLaunchPrerequisitesFor(t *testing.T) {
 		// bounded context expires instead of blocking the capability request
 		// (and leaking a subprocess) indefinitely. `exec sleep` replaces the
 		// shell so this covers the direct-child case; descendant cleanup is
-		// pinned by TestVersionFromBinaryKillsProcessGroupOnTimeout, which
-		// asserts versionFromBinary's group kill reaps the whole tree.
+		// pinned by TestVersionFromBinaryKillsProcessGroupOnTimeout (cancelled
+		// probe) and TestVersionFromBinaryKillsDescendantsWhenWrapperExitsFirst
+		// (wrapper exits first), which assert versionFromBinary reaps the
+		// whole tree on both completion paths.
 		dir := t.TempDir()
 		path := filepath.Join(dir, "qemu-system-fake")
 		require.NoError(t, os.WriteFile(path, []byte("#!/bin/sh\nexec sleep 60\n"), 0o755))

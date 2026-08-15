@@ -153,11 +153,14 @@ const versionProbeTimeout = 5 * time.Second
 // capability registry's launch check reuses it so "available" means the same
 // binary execution that launches require actually succeeds. Execution is
 // bounded by ctx (callers pass a versionProbeTimeout-derived context). The
-// probe runs in its own process group and cancellation SIGKILLs the whole
-// group: the default CommandContext cancel only signals the direct child,
-// which would orphan descendants (e.g. a wrapper script's children) past the
-// deadline. WaitDelay backstops the rare descendant that escaped the group
-// (setsid) yet still holds the output pipe.
+// probe runs in its own process group, and the whole group is SIGKILLed on
+// every completion path: the default CommandContext cancel only signals the
+// direct child (orphaning a wrapper script's children past the deadline),
+// and Cancel never fires at all when the direct child exits before the
+// deadline — a wrapper that leaves a background descendant holding the
+// output pipe would otherwise leak that descendant on every probe, with
+// WaitDelay merely unblocking Output rather than cleaning up. ESRCH from the
+// group kill means every group member already exited.
 func versionFromBinary(ctx context.Context, binaryPath string) (string, error) {
 	cmd := exec.CommandContext(ctx, binaryPath, "--version")
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -172,6 +175,14 @@ func versionFromBinary(ctx context.Context, binaryPath string) (string, error) {
 	}
 	cmd.WaitDelay = time.Second
 	output, err := cmd.Output()
+	if cmd.Process != nil {
+		// Kill the group on every completion path, not only via cmd.Cancel:
+		// Cancel never runs when the direct child exits before the context
+		// deadline, so descendants it left behind (still pinning the child's
+		// pid as their pgid) must be reaped here. A no-op ESRCH when the
+		// group is already empty.
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
 	if err != nil {
 		return "", fmt.Errorf("get qemu version: %w", err)
 	}

@@ -163,6 +163,55 @@ func TestVersionFromBinaryKillsProcessGroupOnTimeout(t *testing.T) {
 		parentPID, childPID)
 }
 
+// TestVersionFromBinaryKillsDescendantsWhenWrapperExitsFirst pins the
+// completion-path group kill. cmd.Cancel only fires on context cancellation,
+// so when the direct wrapper prints a valid version and exits immediately
+// while a background descendant keeps the inherited stdout pipe open, no
+// cancellation ever runs: Output merely unblocks after WaitDelay with
+// ErrWaitDelay and — before the fix — the descendant survived, so every
+// capability-cache refresh against such a binary leaked one process.
+func TestVersionFromBinaryKillsDescendantsWhenWrapperExitsFirst(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	childPIDFile := filepath.Join(dir, "child.pid")
+	binaryPath := filepath.Join(dir, "qemu-system-fake")
+	// The wrapper answers the probe correctly, spawns a descendant that
+	// inherits (and holds) the stdout pipe, and exits before the context
+	// deadline — the shape where cmd.Cancel never runs.
+	script := "#!/bin/sh\n" +
+		"echo 'QEMU emulator version 8.2.0'\n" +
+		"sleep 60 &\n" +
+		"echo $! > " + childPIDFile + "\n" +
+		"exit 0\n"
+	require.NoError(t, os.WriteFile(binaryPath, []byte(script), 0o755))
+
+	ctx, cancel := context.WithTimeout(context.Background(), versionProbeTimeout)
+	defer cancel()
+	start := time.Now()
+	_, err := versionFromBinary(ctx, binaryPath)
+	// The descendant holds the output pipe past WaitDelay, so the probe
+	// reports ErrWaitDelay rather than success; what must never happen is
+	// the descendant outliving the probe.
+	require.ErrorIs(t, err, exec.ErrWaitDelay,
+		"a wrapper whose descendant holds the output pipe completes via WaitDelay")
+	require.Less(t, time.Since(start), versionProbeTimeout,
+		"the wrapper exited immediately; the probe must return at WaitDelay, not the context deadline")
+
+	// The wrapper wrote the descendant's pid before exiting, and the probe
+	// cannot return before the wrapper exits, so the file is complete here.
+	data, readErr := os.ReadFile(childPIDFile)
+	require.NoError(t, readErr, "probe wrapper must have recorded its descendant's pid before exiting")
+	childPID, convErr := strconv.Atoi(strings.TrimSpace(string(data)))
+	require.NoError(t, convErr)
+
+	require.Eventually(t, func() bool {
+		return errors.Is(syscall.Kill(childPID, 0), syscall.ESRCH)
+	}, 5*time.Second, 20*time.Millisecond,
+		"background descendant (pid %d) must be killed when the probe completes, even though the wrapper exited before the context deadline",
+		childPID)
+}
+
 func TestSaveAndLoadVMConfigPreservesRestoreContract(t *testing.T) {
 	dir := t.TempDir()
 	want := savedVMConfig{
