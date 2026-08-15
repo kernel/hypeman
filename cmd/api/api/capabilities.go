@@ -51,10 +51,18 @@ type defaultHypervisorProvider interface {
 func (s *ApiService) GetCapabilities(ctx context.Context, _ oapi.GetCapabilitiesRequestObject) (oapi.GetCapabilitiesResponseObject, error) {
 	log := logger.FromContext(ctx)
 
-	// Fall back to the compile-time default when the manager does not expose
-	// its configured default — the same fallback lib/instances applies when
-	// no default hypervisor is configured.
-	defaultRuntime := hypervisor.TypeCloudHypervisor
+	// Resolve the default runtime the way launches do. Prefer the manager's
+	// own effective default via the optional accessor; when the manager does
+	// not expose it (a wrapper embedding instances.Manager hides the concrete
+	// manager's extra method), fall back to the configured default the manager
+	// was constructed from — launches still route through the wrapped manager,
+	// so a hardcoded fallback would misreport a Firecracker/QEMU default as
+	// cloud-hypervisor. Only an empty (unconfigured) value normalizes to the
+	// compile-time default, mirroring lib/instances.NewManagerWithConfigE.
+	defaultRuntime := hypervisor.Type(s.Config.Hypervisor.Default)
+	if defaultRuntime == "" {
+		defaultRuntime = hypervisor.TypeCloudHypervisor
+	}
 	if p, ok := s.InstanceManager.(defaultHypervisorProvider); ok {
 		defaultRuntime = p.DefaultHypervisor()
 	}

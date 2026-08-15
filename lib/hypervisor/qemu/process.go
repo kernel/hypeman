@@ -135,7 +135,15 @@ func (s *Starter) detectVersion(p *paths.Paths) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	return versionFromBinary(binaryPath)
+}
 
+// versionFromBinary runs the resolved QEMU binary's --version and parses the
+// installed version from its output. It is the version probe behind
+// GetVersion/ResolveVersion — every cold start persists its result — and the
+// capability registry's launch check reuses it so "available" means the same
+// binary execution that launches require actually succeeds.
+func versionFromBinary(binaryPath string) (string, error) {
 	cmd := exec.Command(binaryPath, "--version")
 	output, err := cmd.Output()
 	if err != nil {
@@ -150,6 +158,25 @@ func (s *Starter) detectVersion(p *paths.Paths) (string, error) {
 	}
 
 	return "", fmt.Errorf("could not parse QEMU version from: %s", string(output))
+}
+
+// validateExecutable rejects paths that cannot be executed as the QEMU
+// binary: missing files, directories, and files without an execute bit.
+// GetBinaryPath's fixed /usr/bin and /usr/local/bin candidates are accepted
+// on a bare os.Stat, so launch-prerequisite checks must not assume a
+// resolved path is runnable.
+func validateExecutable(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if info.IsDir() {
+		return fmt.Errorf("path is a directory")
+	}
+	if info.Mode()&0111 == 0 {
+		return fmt.Errorf("file is not executable")
+	}
+	return nil
 }
 
 // buildQMPArgs returns the base QMP socket arguments for QEMU.

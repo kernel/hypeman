@@ -232,17 +232,48 @@ func TestGetCapabilitiesDefaultNotAvailable(t *testing.T) {
 
 // TestGetCapabilitiesDefaultWithoutAccessor pins the fallback contract for
 // instance managers that do not expose the optional DefaultHypervisor
-// accessor (it is deliberately not part of instances.Manager): the handler
-// must fall back to the same cloud-hypervisor default lib/instances applies
-// when no default is configured, not fail.
+// accessor (it is deliberately not part of instances.Manager, so a wrapper
+// embedding the interface hides the concrete manager's method): the handler
+// must report the configured default — the value the wrapped manager was
+// constructed from and launches still use — normalizing only an empty
+// (unconfigured) value to the same cloud-hypervisor default lib/instances
+// applies.
 func TestGetCapabilitiesDefaultWithoutAccessor(t *testing.T) {
 	t.Parallel()
-	svc := newTestService(t)
-	svc.NetworkManager = &stubCapabilitiesNetworkManager{}
-	svc.InstanceManager = &stubOpaqueInstanceManager{}
 
-	caps := getCapabilities(t, svc)
-	require.Equal(t, string(hypervisor.TypeCloudHypervisor), caps.DefaultRuntime.Name)
+	t.Run("configured non-default runtime is reported", func(t *testing.T) {
+		t.Parallel()
+		svc := newTestService(t)
+		svc.Config.Hypervisor.Default = string(hypervisor.TypeFirecracker)
+		svc.NetworkManager = &stubCapabilitiesNetworkManager{}
+		svc.InstanceManager = &stubOpaqueInstanceManager{}
+
+		caps := getCapabilities(t, svc)
+		require.Equal(t, string(hypervisor.TypeFirecracker), caps.DefaultRuntime.Name,
+			"a wrapped manager must not misreport the configured default as cloud-hypervisor")
+	})
+
+	t.Run("unconfigured default normalizes to cloud-hypervisor", func(t *testing.T) {
+		t.Parallel()
+		svc := newTestService(t)
+		svc.NetworkManager = &stubCapabilitiesNetworkManager{}
+		svc.InstanceManager = &stubOpaqueInstanceManager{}
+
+		caps := getCapabilities(t, svc)
+		require.Equal(t, string(hypervisor.TypeCloudHypervisor), caps.DefaultRuntime.Name)
+	})
+
+	t.Run("accessor overrides the configured value", func(t *testing.T) {
+		t.Parallel()
+		svc := newTestService(t)
+		svc.Config.Hypervisor.Default = string(hypervisor.TypeFirecracker)
+		svc.NetworkManager = &stubCapabilitiesNetworkManager{}
+		svc.InstanceManager = &stubDefaultRuntimeInstanceManager{defaultRuntime: hypervisor.TypeQEMU}
+
+		caps := getCapabilities(t, svc)
+		require.Equal(t, string(hypervisor.TypeQEMU), caps.DefaultRuntime.Name,
+			"the manager's effective default is authoritative when exposed")
+	})
 }
 
 // TestGetCapabilitiesNoDefaultNetwork pins the gateway-absence contract: when

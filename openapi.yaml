@@ -1523,9 +1523,9 @@ components:
             Whether this runtime's launch prerequisites are currently met on
             this host. Listed runtimes are supported by this server build on
             this platform; available=false means a host prerequisite is
-            missing (for example qemu requires a system-installed QEMU
-            binary) and launches naming this runtime will fail until it is
-            installed.
+            missing (for example qemu requires a runnable system-installed
+            QEMU binary and the host vhost-vsock device) and launches naming
+            this runtime will fail until it is installed.
         features:
           type: array
           items:
