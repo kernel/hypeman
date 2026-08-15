@@ -51,6 +51,25 @@ func getCustomBinaryPath() string {
 	return customBinaryPath
 }
 
+// checkLaunchPrerequisites verifies the launch prerequisites that
+// platform-gated registration cannot express. The default binaries ship
+// embedded in hypeman, but a configured hypervisor.firecracker_binary_path
+// override takes precedence over them on every launch (resolveBinaryPath),
+// so a missing or non-executable override means every launch fails and the
+// runtime must not report available. Used as the capability registry's
+// LaunchCheck; it is evaluated per registry read, so an override fixed after
+// startup is reflected without a restart.
+func checkLaunchPrerequisites() error {
+	path := getCustomBinaryPath()
+	if path == "" {
+		return nil
+	}
+	if err := validateExecutable(path); err != nil {
+		return fmt.Errorf("invalid firecracker custom binary path %q: %w", path, err)
+	}
+	return nil
+}
+
 func resolveBinaryPath(p *paths.Paths, version string) (string, error) {
 	if path := getCustomBinaryPath(); path != "" {
 		if err := validateExecutable(path); err != nil {

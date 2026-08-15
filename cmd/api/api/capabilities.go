@@ -38,13 +38,25 @@ var apiVersion = sync.OnceValue(func() string {
 	return spec.Info.Version
 })
 
+// defaultHypervisorProvider is the narrow accessor this handler needs from
+// the instance manager. The concrete instances manager implements it; it is
+// type-asserted rather than added to instances.Manager so alternate Manager
+// implementations (mocks, wrappers) compiled against the public module keep
+// building without a new method.
+type defaultHypervisorProvider interface {
+	DefaultHypervisor() hypervisor.Type
+}
+
 // GetCapabilities reports host, runtime, network, and image capabilities.
 func (s *ApiService) GetCapabilities(ctx context.Context, _ oapi.GetCapabilitiesRequestObject) (oapi.GetCapabilitiesResponseObject, error) {
 	log := logger.FromContext(ctx)
 
+	// Fall back to the compile-time default when the manager does not expose
+	// its configured default — the same fallback lib/instances applies when
+	// no default hypervisor is configured.
 	defaultRuntime := hypervisor.TypeCloudHypervisor
-	if s.InstanceManager != nil {
-		defaultRuntime = s.InstanceManager.DefaultHypervisor()
+	if p, ok := s.InstanceManager.(defaultHypervisorProvider); ok {
+		defaultRuntime = p.DefaultHypervisor()
 	}
 
 	// The capability registry is platform-gated at registration time, so its
@@ -87,7 +99,7 @@ func (s *ApiService) GetCapabilities(ctx context.Context, _ oapi.GetCapabilities
 		}, nil
 	}
 
-	emulation := emulationSupported(runtime.GOOS, runtime.GOARCH)
+	emulation := emulationAvailable(runtime.GOOS, runtime.GOARCH, rosettaInstalled())
 
 	resp := oapi.Capabilities{
 		Server: oapi.CapabilitiesServer{
@@ -159,18 +171,20 @@ func oapiNetworkModel(m network.Model) oapi.CapabilitiesNetworkModel {
 	return oapi.CapabilitiesNetworkModel(m)
 }
 
-// emulationSupported reports whether the host can boot images built for the
-// other CPU architecture. Only Apple Silicon macOS hosts qualify (vz with
-// Rosetta). Rosetta installation itself is verified at instance start — a
-// launch fails with installation guidance when it is missing — so this
-// reports platform eligibility, and the OpenAPI description says so.
-func emulationSupported(goos, goarch string) bool {
-	return goos == "darwin" && goarch == "arm64"
+// emulationAvailable reports whether the host can boot images built for the
+// other CPU architecture right now. Only Apple Silicon macOS hosts qualify
+// (vz with Rosetta), and only when the Rosetta availability probe — the same
+// Virtualization.framework check the vz-shim enforces at launch — reports it
+// installed. Platform eligibility alone (darwin/arm64) is deliberately not
+// enough: a macOS 11/12 host or one without Rosetta installed would advertise
+// launches that lib/hypervisor/vz rejects.
+func emulationAvailable(goos, goarch string, rosettaInstalled bool) bool {
+	return goos == "darwin" && goarch == "arm64" && rosettaInstalled
 }
 
 // imagePlatforms returns the image platforms (os/arch) the host can run: the
 // host-native Linux guest platform, plus Rosetta-emulated linux/amd64 on
-// Apple Silicon.
+// Apple Silicon with Rosetta installed.
 func imagePlatforms(goarch string, emulation bool) []string {
 	platforms := []string{"linux/" + goarch}
 	if emulation {

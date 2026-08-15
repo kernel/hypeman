@@ -115,6 +115,21 @@ func RegisterRuntime(t Type, reg RuntimeRegistration) {
 	runtimeRegistrations[t] = reg
 }
 
+// RegisterCapabilities registers a static capability set for a hypervisor
+// type with no launch check, so registration alone implies launchability.
+//
+// Deprecated: Use RegisterRuntime, which resolves capabilities per registry
+// read (so configuration applied after init stays truthful) and supports an
+// optional LaunchCheck for host launch prerequisites. RegisterCapabilities
+// is kept so custom backends built against earlier versions of this module
+// keep compiling; it wraps RegisterRuntime with a resolver that returns the
+// given set unchanged.
+func RegisterCapabilities(t Type, caps Capabilities) {
+	RegisterRuntime(t, RuntimeRegistration{
+		Capabilities: func() Capabilities { return caps },
+	})
+}
+
 // CapabilitiesForType returns the effective capabilities for a hypervisor
 // type, resolved at call time. It reports ok=false for runtimes that cannot
 // run on the current host platform, because such runtimes never register.

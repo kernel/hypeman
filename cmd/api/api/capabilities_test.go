@@ -24,7 +24,8 @@ func (s *stubCapabilitiesNetworkManager) EffectiveDefaultNetwork() (*network.Net
 	return s.nw, s.err
 }
 
-// stubDefaultRuntimeInstanceManager overrides the configured default runtime.
+// stubDefaultRuntimeInstanceManager overrides the configured default runtime
+// via the optional defaultHypervisorProvider accessor.
 type stubDefaultRuntimeInstanceManager struct {
 	instances.Manager
 	defaultRuntime hypervisor.Type
@@ -32,6 +33,13 @@ type stubDefaultRuntimeInstanceManager struct {
 
 func (s *stubDefaultRuntimeInstanceManager) DefaultHypervisor() hypervisor.Type {
 	return s.defaultRuntime
+}
+
+// stubOpaqueInstanceManager implements instances.Manager without the optional
+// DefaultHypervisor accessor, standing in for alternate Manager
+// implementations compiled against the public module.
+type stubOpaqueInstanceManager struct {
+	instances.Manager
 }
 
 func getCapabilities(t *testing.T, svc *ApiService) oapi.Capabilities {
@@ -222,6 +230,21 @@ func TestGetCapabilitiesDefaultNotAvailable(t *testing.T) {
 		"an unavailable default must not hide the runtimes that are available")
 }
 
+// TestGetCapabilitiesDefaultWithoutAccessor pins the fallback contract for
+// instance managers that do not expose the optional DefaultHypervisor
+// accessor (it is deliberately not part of instances.Manager): the handler
+// must fall back to the same cloud-hypervisor default lib/instances applies
+// when no default is configured, not fail.
+func TestGetCapabilitiesDefaultWithoutAccessor(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+	svc.NetworkManager = &stubCapabilitiesNetworkManager{}
+	svc.InstanceManager = &stubOpaqueInstanceManager{}
+
+	caps := getCapabilities(t, svc)
+	require.Equal(t, string(hypervisor.TypeCloudHypervisor), caps.DefaultRuntime.Name)
+}
+
 // TestGetCapabilitiesNoDefaultNetwork pins the gateway-absence contract: when
 // no default network resolves, gateway and subnet are omitted rather than
 // serialized as empty strings.
@@ -255,12 +278,14 @@ func TestOapiNetworkModel(t *testing.T) {
 	require.Equal(t, oapi.Nat, oapiNetworkModel(network.ModelNAT))
 }
 
-func TestEmulationSupported(t *testing.T) {
+func TestEmulationAvailable(t *testing.T) {
 	t.Parallel()
-	require.True(t, emulationSupported("darwin", "arm64"))
-	require.False(t, emulationSupported("darwin", "amd64"))
-	require.False(t, emulationSupported("linux", "arm64"))
-	require.False(t, emulationSupported("linux", "amd64"))
+	require.True(t, emulationAvailable("darwin", "arm64", true))
+	require.False(t, emulationAvailable("darwin", "arm64", false),
+		"an Apple Silicon host without Rosetta installed must not advertise emulation")
+	require.False(t, emulationAvailable("darwin", "amd64", true))
+	require.False(t, emulationAvailable("linux", "arm64", true))
+	require.False(t, emulationAvailable("linux", "amd64", true))
 }
 
 func TestImagePlatforms(t *testing.T) {

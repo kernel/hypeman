@@ -1461,8 +1461,9 @@ components:
             "instances", "images", "builds", "volumes", "ingress", "exec",
             "logs". Host-conditional: "devices" (device passthrough
             management, Linux hosts only) and "rosetta-emulation" (Apple
-            Silicon macOS hosts). Per-runtime features are reported under each
-            runtimes[] entry.
+            Silicon macOS hosts with Rosetta currently installed, per the same
+            availability probe launches enforce). Per-runtime features are
+            reported under each runtimes[] entry.
 
     CapabilitiesServer:
       type: object
@@ -1579,9 +1580,10 @@ components:
             type: string
           description: |
             Image platforms (os/arch) this host can run. On Apple Silicon macOS
-            this includes linux/amd64, which vz runs via Rosetta; Rosetta
-            installation itself is verified at instance start, and launches
-            fail with guidance when it is missing.
+            this includes linux/amd64 only when Rosetta is currently installed
+            — probed via the same Virtualization.framework availability check
+            launches enforce — so a listed platform is launchable right now.
+            Install Rosetta (softwareupdate --install-rosetta) to enable it.
           example: [linux/arm64, linux/amd64]
         default_platform:
           type: string
