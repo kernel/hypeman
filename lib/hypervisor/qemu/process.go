@@ -4,6 +4,7 @@ package qemu
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -151,11 +152,24 @@ const versionProbeTimeout = 5 * time.Second
 // GetVersion/ResolveVersion — every cold start persists its result — and the
 // capability registry's launch check reuses it so "available" means the same
 // binary execution that launches require actually succeeds. Execution is
-// bounded by ctx (callers pass a versionProbeTimeout-derived context), and
-// WaitDelay ensures a killed probe whose descendants still hold the output
-// pipe cannot block the caller past the deadline.
+// bounded by ctx (callers pass a versionProbeTimeout-derived context). The
+// probe runs in its own process group and cancellation SIGKILLs the whole
+// group: the default CommandContext cancel only signals the direct child,
+// which would orphan descendants (e.g. a wrapper script's children) past the
+// deadline. WaitDelay backstops the rare descendant that escaped the group
+// (setsid) yet still holds the output pipe.
 func versionFromBinary(ctx context.Context, binaryPath string) (string, error) {
 	cmd := exec.CommandContext(ctx, binaryPath, "--version")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		// Setpgid makes the child's pgid its own pid; signal the group so
+		// descendants die (and get reaped by init) with the probe.
+		err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		if errors.Is(err, syscall.ESRCH) {
+			return os.ErrProcessDone
+		}
+		return err
+	}
 	cmd.WaitDelay = time.Second
 	output, err := cmd.Output()
 	if err != nil {

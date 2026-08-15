@@ -141,9 +141,9 @@ func TestCheckLaunchPrerequisitesFor(t *testing.T) {
 		// A wedged QEMU binary must fail the prerequisite check when its
 		// bounded context expires instead of blocking the capability request
 		// (and leaking a subprocess) indefinitely. `exec sleep` replaces the
-		// shell so the kill hits the sleeping process directly, and
-		// versionFromBinary's WaitDelay backstops any descendant that still
-		// holds the output pipe.
+		// shell so this covers the direct-child case; descendant cleanup is
+		// pinned by TestVersionFromBinaryKillsProcessGroupOnTimeout, which
+		// asserts versionFromBinary's group kill reaps the whole tree.
 		dir := t.TempDir()
 		path := filepath.Join(dir, "qemu-system-fake")
 		require.NoError(t, os.WriteFile(path, []byte("#!/bin/sh\nexec sleep 60\n"), 0o755))

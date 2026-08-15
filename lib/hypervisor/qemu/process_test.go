@@ -1,11 +1,15 @@
 package qemu
 
 import (
+	"context"
 	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
+	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -104,6 +108,59 @@ func TestGetVersion_ParsesVersionCorrectly(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestVersionFromBinaryKillsProcessGroupOnTimeout pins that a cancelled
+// version probe terminates its entire process tree, not just the direct
+// child. A QEMU wrapper script that spawns a descendant (`sleep 60 & wait`)
+// must leave neither the wrapper nor the descendant behind after the probe's
+// context deadline; otherwise every capability request against a wedged
+// binary would orphan a subprocess under PID 1.
+func TestVersionFromBinaryKillsProcessGroupOnTimeout(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	parentPIDFile := filepath.Join(dir, "parent.pid")
+	childPIDFile := filepath.Join(dir, "child.pid")
+	binaryPath := filepath.Join(dir, "qemu-system-fake")
+	// Write both PIDs before blocking so the test can always observe them,
+	// then hang in `wait` with a background descendant — the shape that
+	// leaks when cancellation only signals the direct child.
+	script := "#!/bin/sh\n" +
+		"echo $$ > " + parentPIDFile + "\n" +
+		"sleep 60 &\n" +
+		"echo $! > " + childPIDFile + "\n" +
+		"wait\n"
+	require.NoError(t, os.WriteFile(binaryPath, []byte(script), 0o755))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err := versionFromBinary(ctx, binaryPath)
+	require.Error(t, err, "a hung probe must fail at the deadline")
+	require.Less(t, time.Since(start), 10*time.Second,
+		"a hung probe must return at the deadline, not run to completion")
+
+	readPID := func(path string) int {
+		data, readErr := os.ReadFile(path)
+		require.NoError(t, readErr, "probe script must have recorded %s before hanging", path)
+		pid, convErr := strconv.Atoi(strings.TrimSpace(string(data)))
+		require.NoError(t, convErr)
+		return pid
+	}
+	parentPID := readPID(parentPIDFile)
+	childPID := readPID(childPIDFile)
+
+	processGone := func(pid int) bool {
+		// Signal 0 probes existence; a killed-but-unreaped descendant still
+		// answers until init reaps it, hence Eventually below.
+		return errors.Is(syscall.Kill(pid, 0), syscall.ESRCH)
+	}
+	require.Eventually(t, func() bool {
+		return processGone(parentPID) && processGone(childPID)
+	}, 5*time.Second, 20*time.Millisecond,
+		"both the probe wrapper (pid %d) and its descendant (pid %d) must be killed with the process group",
+		parentPID, childPID)
 }
 
 func TestSaveAndLoadVMConfigPreservesRestoreContract(t *testing.T) {
