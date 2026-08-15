@@ -97,7 +97,10 @@ func TestCheckLaunchPrerequisitesFor(t *testing.T) {
 
 	t.Run("working binary and device pass", func(t *testing.T) {
 		dir := t.TempDir()
-		require.NoError(t, checkLaunchPrerequisitesFor(ctx, fakeQEMUBinary(t, dir), fakeVsockDevice(t, dir)))
+		binary, vsock := fakeQEMUBinary(t, dir), fakeVsockDevice(t, dir)
+		require.NoError(t, retryingETXTBSY(t, func() error {
+			return checkLaunchPrerequisitesFor(ctx, binary, vsock)
+		}))
 	})
 
 	t.Run("missing binary fails", func(t *testing.T) {
@@ -118,7 +121,10 @@ func TestCheckLaunchPrerequisitesFor(t *testing.T) {
 		dir := t.TempDir()
 		path := filepath.Join(dir, "qemu-system-fake")
 		require.NoError(t, os.WriteFile(path, []byte("#!/bin/sh\nexit 1\n"), 0o755))
-		err := checkLaunchPrerequisitesFor(ctx, path, fakeVsockDevice(t, dir))
+		vsock := fakeVsockDevice(t, dir)
+		err := retryingETXTBSY(t, func() error {
+			return checkLaunchPrerequisitesFor(ctx, path, vsock)
+		})
 		require.ErrorContains(t, err, "not usable")
 	})
 
@@ -126,13 +132,19 @@ func TestCheckLaunchPrerequisitesFor(t *testing.T) {
 		dir := t.TempDir()
 		path := filepath.Join(dir, "qemu-system-fake")
 		require.NoError(t, os.WriteFile(path, []byte("#!/bin/sh\necho 'not qemu'\n"), 0o755))
-		err := checkLaunchPrerequisitesFor(ctx, path, fakeVsockDevice(t, dir))
+		vsock := fakeVsockDevice(t, dir)
+		err := retryingETXTBSY(t, func() error {
+			return checkLaunchPrerequisitesFor(ctx, path, vsock)
+		})
 		require.ErrorContains(t, err, "not usable")
 	})
 
 	t.Run("missing vsock device fails", func(t *testing.T) {
 		dir := t.TempDir()
-		err := checkLaunchPrerequisitesFor(ctx, fakeQEMUBinary(t, dir), filepath.Join(dir, "no-vhost-vsock"))
+		binary := fakeQEMUBinary(t, dir)
+		err := retryingETXTBSY(t, func() error {
+			return checkLaunchPrerequisitesFor(ctx, binary, filepath.Join(dir, "no-vhost-vsock"))
+		})
 		require.ErrorContains(t, err, "vsock device")
 		require.ErrorContains(t, err, "vhost_vsock")
 	})
@@ -149,10 +161,15 @@ func TestCheckLaunchPrerequisitesFor(t *testing.T) {
 		dir := t.TempDir()
 		path := filepath.Join(dir, "qemu-system-fake")
 		require.NoError(t, os.WriteFile(path, []byte("#!/bin/sh\nexec sleep 60\n"), 0o755))
-		shortCtx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
-		defer cancel()
-		start := time.Now()
-		err := checkLaunchPrerequisitesFor(shortCtx, path, fakeVsockDevice(t, dir))
+		vsock := fakeVsockDevice(t, dir)
+		var start time.Time
+		err := retryingETXTBSY(t, func() error {
+			// Fresh deadline per attempt so an ETXTBSY retry doesn't eat it.
+			shortCtx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+			defer cancel()
+			start = time.Now()
+			return checkLaunchPrerequisitesFor(shortCtx, path, vsock)
+		})
 		require.ErrorContains(t, err, "not usable")
 		require.Less(t, time.Since(start), 10*time.Second,
 			"a hung probe must return at the deadline, not run to completion")

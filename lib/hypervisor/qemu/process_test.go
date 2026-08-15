@@ -110,33 +110,65 @@ func TestGetVersion_ParsesVersionCorrectly(t *testing.T) {
 	}
 }
 
-// probeRetryingETXTBSY runs versionFromBinary against a just-written script
-// with a fresh timeout-bounded context per attempt, retrying when exec fails
-// with ETXTBSY: another parallel test's fork can transiently inherit the
-// script's write descriptor between its own fork and exec (the well-known
-// fork/exec text-file-busy race), and a retry must not consume the probe
-// deadline the caller asserts on. Returns the final attempt's start time.
-func probeRetryingETXTBSY(t *testing.T, binaryPath string, timeout time.Duration) (time.Time, error) {
+// retryingETXTBSY retries run while it fails with ETXTBSY: tests exec
+// just-written scripts, and another parallel test's fork can transiently
+// inherit a script's write descriptor between its own fork and exec (the
+// well-known fork/exec text-file-busy race), failing exec before the script
+// ever runs. Only that pre-execution error is retried, so assertions about
+// probe behavior are unaffected.
+func retryingETXTBSY(t *testing.T, run func() error) error {
 	t.Helper()
 	for attempt := 0; ; attempt++ {
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
-		start := time.Now()
-		_, err := versionFromBinary(ctx, binaryPath)
-		cancel()
+		err := run()
 		if errors.Is(err, syscall.ETXTBSY) && attempt < 100 {
 			time.Sleep(5 * time.Millisecond)
 			continue
 		}
-		return start, err
+		return err
 	}
+}
+
+// probeRetryingETXTBSY runs versionFromBinary with a fresh caller-supplied
+// context per attempt (a retry must not consume the probe deadline the
+// caller asserts on), retrying the ETXTBSY exec race. Returns the final
+// attempt's start time.
+func probeRetryingETXTBSY(t *testing.T, binaryPath string, newCtx func() (context.Context, context.CancelFunc)) (time.Time, error) {
+	t.Helper()
+	var start time.Time
+	err := retryingETXTBSY(t, func() error {
+		ctx, cancel := newCtx()
+		defer cancel()
+		start = time.Now()
+		_, err := versionFromBinary(ctx, binaryPath)
+		return err
+	})
+	return start, err
+}
+
+// probeBackstopTimeout bounds the probe in tests that cancel it explicitly
+// (or expect it to finish on its own): generous enough that slow CI runners
+// — macOS can take hundreds of milliseconds to first-exec a fresh script —
+// never hit it, but far below the scripts' 60s sleeps so a regression still
+// fails fast instead of running descendants to completion.
+const probeBackstopTimeout = 30 * time.Second
+
+// pidFileReady reports whether a probe script has fully recorded a pid:
+// `echo $$ > file` creates the file before writing, so existence alone can
+// race an empty read.
+func pidFileReady(path string) bool {
+	data, err := os.ReadFile(path)
+	return err == nil && strings.TrimSpace(string(data)) != ""
 }
 
 // TestVersionFromBinaryKillsProcessGroupOnTimeout pins that a cancelled
 // version probe terminates its entire process tree, not just the direct
 // child. A QEMU wrapper script that spawns a descendant (`sleep 60 & wait`)
 // must leave neither the wrapper nor the descendant behind after the probe's
-// context deadline; otherwise every capability request against a wedged
-// binary would orphan a subprocess under PID 1.
+// context is cancelled; otherwise every capability request against a wedged
+// binary would orphan a subprocess under PID 1. The test cancels the context
+// itself once the script has recorded both pids — a fixed short deadline
+// races slow script startup and can kill the group before the pid files
+// exist.
 func TestVersionFromBinaryKillsProcessGroupOnTimeout(t *testing.T) {
 	t.Parallel()
 
@@ -154,10 +186,26 @@ func TestVersionFromBinaryKillsProcessGroupOnTimeout(t *testing.T) {
 		"wait\n"
 	require.NoError(t, os.WriteFile(binaryPath, []byte(script), 0o755))
 
-	start, err := probeRetryingETXTBSY(t, binaryPath, 250*time.Millisecond)
-	require.Error(t, err, "a hung probe must fail at the deadline")
-	require.Less(t, time.Since(start), 10*time.Second,
-		"a hung probe must return at the deadline, not run to completion")
+	// Cancel the probe as soon as the script has demonstrably hung with its
+	// descendant running (both pids recorded), never before.
+	watchCtx, stopWatch := context.WithCancel(context.Background())
+	defer stopWatch()
+	go func() {
+		for watchCtx.Err() == nil {
+			if pidFileReady(parentPIDFile) && pidFileReady(childPIDFile) {
+				stopWatch()
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}()
+
+	start, err := probeRetryingETXTBSY(t, binaryPath, func() (context.Context, context.CancelFunc) {
+		return context.WithTimeout(watchCtx, probeBackstopTimeout)
+	})
+	require.Error(t, err, "a hung probe must fail when its context is cancelled")
+	require.Less(t, time.Since(start), probeBackstopTimeout,
+		"a hung probe must return at cancellation, not run to completion")
 
 	readPID := func(path string) int {
 		data, readErr := os.ReadFile(path)
@@ -204,13 +252,16 @@ func TestVersionFromBinaryKillsDescendantsWhenWrapperExitsFirst(t *testing.T) {
 		"exit 0\n"
 	require.NoError(t, os.WriteFile(binaryPath, []byte(script), 0o755))
 
-	start, err := probeRetryingETXTBSY(t, binaryPath, versionProbeTimeout)
+	start, err := probeRetryingETXTBSY(t, binaryPath, func() (context.Context, context.CancelFunc) {
+		return context.WithTimeout(context.Background(), probeBackstopTimeout)
+	})
 	// The descendant holds the output pipe past WaitDelay, so the probe
-	// reports ErrWaitDelay rather than success; what must never happen is
-	// the descendant outliving the probe.
+	// reports ErrWaitDelay rather than success — which also proves it did not
+	// run to the context deadline; what must never happen is the descendant
+	// outliving the probe.
 	require.ErrorIs(t, err, exec.ErrWaitDelay,
 		"a wrapper whose descendant holds the output pipe completes via WaitDelay")
-	require.Less(t, time.Since(start), versionProbeTimeout,
+	require.Less(t, time.Since(start), probeBackstopTimeout,
 		"the wrapper exited immediately; the probe must return at WaitDelay, not the context deadline")
 
 	// The wrapper wrote the descendant's pid before exiting, and the probe
