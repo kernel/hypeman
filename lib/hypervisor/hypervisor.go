@@ -49,11 +49,11 @@ var socketNames = make(map[Type]string)
 // Registered by hypervisor packages when they use socket-based vsock routing.
 var vsockSocketNames = make(map[Type]string)
 
-// capabilitiesByType maps hypervisor types to their static capabilities.
+// runtimeRegistrations maps hypervisor types to their registrations.
 // Registered by each hypervisor package's init() function. Registration is
-// platform-gated (see RegisterCapabilities), so the map's keys double as the
-// set of runtimes available on the current host.
-var capabilitiesByType = make(map[Type]Capabilities)
+// platform-gated (see RegisterRuntime), so the map's keys double as the set
+// of runtimes supported by this build on the current host platform.
+var runtimeRegistrations = make(map[Type]RuntimeRegistration)
 
 // RegisterSocketName registers the socket filename for a hypervisor type.
 // Called by each hypervisor implementation's init() function.
@@ -84,45 +84,86 @@ func VsockSocketNameForType(t Type) string {
 	return "vsock.sock"
 }
 
-// RegisterCapabilities registers static capabilities for a hypervisor type.
+// RuntimeRegistration describes how a hypervisor backend reports itself in
+// the capability registry.
+type RuntimeRegistration struct {
+	// Capabilities resolves the runtime's effective capability set. It is
+	// evaluated on every registry read — never cached at registration time —
+	// so capabilities that depend on configuration applied after package init
+	// (for example the configured cloud-hypervisor default version) stay
+	// truthful. Required.
+	Capabilities func() Capabilities
+
+	// LaunchCheck verifies host launch prerequisites that platform-gated
+	// registration cannot express, such as a required system-installed binary
+	// (QEMU). nil means registration alone implies launchability (backends
+	// that ship an embedded VMM binary). Like Capabilities, it is evaluated
+	// on every registry read so prerequisites fixed after startup are
+	// reflected without a restart.
+	LaunchCheck func() error
+}
+
+// RegisterRuntime registers a hypervisor backend in the capability registry.
 // Backends must register only on platforms where they can genuinely launch
 // VMs: the Linux backends (cloud-hypervisor, firecracker, qemu) register from
 // linux-only files, and vz registers from its darwin-only package. That keeps
 // RegisteredRuntimes truthful without a hand-maintained platform switch.
-func RegisterCapabilities(t Type, caps Capabilities) {
-	capabilitiesByType[t] = caps
+func RegisterRuntime(t Type, reg RuntimeRegistration) {
+	if reg.Capabilities == nil {
+		panic(fmt.Sprintf("hypervisor: RegisterRuntime(%s) requires a Capabilities resolver", t))
+	}
+	runtimeRegistrations[t] = reg
 }
 
-// CapabilitiesForType returns static capabilities for a hypervisor type.
-// It reports ok=false for runtimes that cannot run on the current host
-// platform, because such runtimes never register capabilities.
+// CapabilitiesForType returns the effective capabilities for a hypervisor
+// type, resolved at call time. It reports ok=false for runtimes that cannot
+// run on the current host platform, because such runtimes never register.
 func CapabilitiesForType(t Type) (Capabilities, bool) {
-	caps, ok := capabilitiesByType[t]
-	return caps, ok
+	reg, ok := runtimeRegistrations[t]
+	if !ok {
+		return Capabilities{}, false
+	}
+	return reg.Capabilities(), true
 }
 
-// RegisteredRuntime pairs a runtime identifier with its registered
-// capabilities.
+// RegisteredRuntime is one capability-registry entry resolved at read time.
 type RegisteredRuntime struct {
 	Type         Type
 	Capabilities Capabilities
+
+	// LaunchErr is non-nil when the runtime is supported by this build on
+	// this platform but its launch prerequisites are not currently met (for
+	// example QEMU registered on Linux without a system QEMU binary
+	// installed). Ordinary launches of the runtime will fail while it is
+	// non-nil.
+	LaunchErr error
 }
 
-// RegisteredRuntimes enumerates every runtime with registered capabilities,
-// sorted by type name so output is deterministic. Because capability
-// registration is platform-gated, the result is the set of runtimes the
-// linked backends can actually launch on the current host.
+// Available reports whether ordinary launches of this runtime can succeed on
+// this host: it is registered for the platform and its launch-prerequisite
+// check passed.
+func (r RegisteredRuntime) Available() bool { return r.LaunchErr == nil }
+
+// RegisteredRuntimes enumerates every registered runtime, sorted by type name
+// so output is deterministic. Because registration is platform-gated, the
+// result is the set of runtimes the linked backends support on the current
+// host; per-entry Available/LaunchErr additionally reflect whether launch
+// prerequisites are met right now.
 func RegisteredRuntimes() []RegisteredRuntime {
-	return enumerateRuntimes(capabilitiesByType)
+	return enumerateRuntimes(runtimeRegistrations)
 }
 
-// enumerateRuntimes returns the map's entries sorted by type name. Split out
-// from RegisteredRuntimes so enumeration semantics are testable without
-// mutating the global registry.
-func enumerateRuntimes(byType map[Type]Capabilities) []RegisteredRuntime {
+// enumerateRuntimes resolves the map's entries (capabilities and launch
+// checks) and sorts them by type name. Split out from RegisteredRuntimes so
+// enumeration semantics are testable without mutating the global registry.
+func enumerateRuntimes(byType map[Type]RuntimeRegistration) []RegisteredRuntime {
 	runtimes := make([]RegisteredRuntime, 0, len(byType))
-	for t, caps := range byType {
-		runtimes = append(runtimes, RegisteredRuntime{Type: t, Capabilities: caps})
+	for t, reg := range byType {
+		rt := RegisteredRuntime{Type: t, Capabilities: reg.Capabilities()}
+		if reg.LaunchCheck != nil {
+			rt.LaunchErr = reg.LaunchCheck()
+		}
+		runtimes = append(runtimes, rt)
 	}
 	slices.SortFunc(runtimes, func(a, b RegisteredRuntime) int {
 		return cmp.Compare(a.Type, b.Type)
@@ -272,6 +313,13 @@ type Hypervisor interface {
 type Capabilities struct {
 	// SupportsSnapshot indicates if Snapshot/Restore are available
 	SupportsSnapshot bool
+
+	// SupportsFork indicates if snapshot-based instance forking is available.
+	// It is explicit rather than derived from SupportsSnapshot because
+	// VMStarter.PrepareFork allows a snapshot-capable backend to return
+	// ErrNotSupported; the advertised feature must track what PrepareFork
+	// actually implements, not what snapshots imply.
+	SupportsFork bool
 
 	// SupportsHotplugMemory indicates if ResizeMemory is available
 	SupportsHotplugMemory bool

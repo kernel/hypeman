@@ -24,3 +24,28 @@ func TestMicroVMRegistrationMatchesBoardSupport(t *testing.T) {
 	require.Equal(t, boardErr == nil, microVMRegistered,
 		"qemu-microvm registration must match microvm board support on %s/%s", runtime.GOOS, runtime.GOARCH)
 }
+
+// TestQEMUAvailabilityTracksSystemBinary pins that registered QEMU runtimes
+// report availability from the same binary lookup that launches use: hypeman
+// deliberately starts without a system QEMU (cmd/api/main.go only warns), so
+// registration alone must not imply launchability.
+func TestQEMUAvailabilityTracksSystemBinary(t *testing.T) {
+	t.Parallel()
+
+	_, binErr := (&Starter{}).GetBinaryPath(nil, "")
+	checked := 0
+	for _, rt := range hypervisor.RegisteredRuntimes() {
+		if rt.Type != hypervisor.TypeQEMU && rt.Type != hypervisor.TypeQEMUMicroVM {
+			continue
+		}
+		checked++
+		require.Equal(t, binErr == nil, rt.Available(),
+			"%s availability must match the launch-path binary lookup", rt.Type)
+		if binErr != nil {
+			require.Error(t, rt.LaunchErr)
+		} else {
+			require.NoError(t, rt.LaunchErr)
+		}
+	}
+	require.GreaterOrEqual(t, checked, 1, "standard qemu must be registered on Linux")
+}

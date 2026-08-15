@@ -11,7 +11,9 @@ const (
 	FeatureSnapshots = "snapshots"
 	// FeatureStandby: pause + memory snapshot, with later restore.
 	FeatureStandby = "standby"
-	// FeatureFork: cloning an instance by restoring a snapshot of it.
+	// FeatureFork: cloning an instance by restoring a snapshot of it. Derived
+	// from the explicit SupportsFork capability, which each backend keeps
+	// aligned with its VMStarter.PrepareFork implementation.
 	FeatureFork = "fork"
 	// FeaturePause: pause/resume of a running instance.
 	FeaturePause = "pause"
@@ -36,14 +38,6 @@ func (c Capabilities) SupportsStandby() bool {
 	return c.SupportsSnapshot && c.SupportsPause
 }
 
-// SupportsFork reports whether instance fork is available. Forking a running
-// or standby instance restores a snapshot of the source into the new VM, so
-// fork tracks snapshot support rather than being assumed from the backend's
-// name.
-func (c Capabilities) SupportsFork() bool {
-	return c.SupportsSnapshot
-}
-
 // FeatureIDs returns the stable feature IDs implied by this capability set,
 // in a fixed deterministic order. Only client-visible features are included;
 // internal lifecycle hints (snapshot base reuse, pager detachability, host
@@ -58,7 +52,7 @@ func (c Capabilities) FeatureIDs() []string {
 	if c.SupportsStandby() {
 		ids = append(ids, FeatureStandby)
 	}
-	if c.SupportsFork() {
+	if c.SupportsFork {
 		ids = append(ids, FeatureFork)
 	}
 	if c.SupportsPause {

@@ -222,7 +222,11 @@ func TestForkInstanceStoppedSourceUsesReadLock(t *testing.T) {
 	manager, _ := setupTestManager(t)
 	ctx := context.Background()
 	hvType := hypervisor.Type("concurrent-fork-test")
-	hypervisor.RegisterCapabilities(hvType, hypervisor.Capabilities{SupportsConcurrentForkPrepare: true})
+	hypervisor.RegisterRuntime(hvType, hypervisor.RuntimeRegistration{
+		Capabilities: func() hypervisor.Capabilities {
+			return hypervisor.Capabilities{SupportsConcurrentForkPrepare: true}
+		},
+	})
 	manager.vmStarters[hvType] = concurrentForkPrepareTestStarter{}
 
 	sourceID := "fork-stopped-read-lock-source"
@@ -288,7 +292,11 @@ func TestForkInstanceStandbyRunningTargetSkipsSourceWriteLockWithoutAlias(t *tes
 	manager, _ := setupTestManager(t)
 	ctx := context.Background()
 	hvType := hypervisor.Type("concurrent-fork-restore-test")
-	hypervisor.RegisterCapabilities(hvType, hypervisor.Capabilities{SupportsConcurrentForkPrepare: true})
+	hypervisor.RegisterRuntime(hvType, hypervisor.RuntimeRegistration{
+		Capabilities: func() hypervisor.Capabilities {
+			return hypervisor.Capabilities{SupportsConcurrentForkPrepare: true}
+		},
+	})
 	hypervisor.RegisterClientFactory(hvType, func(string) (hypervisor.Hypervisor, error) {
 		return lifecycleNoopHypervisor{state: hypervisor.StateRunning}, nil
 	})

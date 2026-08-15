@@ -1441,10 +1441,12 @@ components:
           items:
             $ref: "#/components/schemas/CapabilitiesRuntime"
           description: |
-            Every runtime available on this host, each with its own feature
-            IDs. Hosts commonly support several runtimes at once (for example
+            Every runtime this server build supports on this host platform,
+            each with its own availability flag and feature IDs. Hosts
+            commonly support several runtimes at once (for example
             cloud-hypervisor, firecracker, qemu, and qemu-microvm on
-            linux/amd64). Entries are sorted by name.
+            linux/amd64). A listed runtime is only launchable when its
+            "available" flag is true. Entries are sorted by name.
         network:
           $ref: "#/components/schemas/CapabilitiesNetwork"
         images:
@@ -1499,18 +1501,30 @@ components:
         available:
           type: boolean
           description: |
-            Whether the default runtime is available on this host (appears in
-            runtimes). When false, launches that rely on the default will fail
-            until the server is reconfigured with an available runtime.
+            Whether the default runtime can launch on this host: it appears in
+            runtimes and its launch prerequisites are met (matches that
+            entry's "available"). When false, launches that rely on the
+            default will fail until the server is reconfigured with an
+            available runtime or the missing prerequisite (for example the
+            QEMU system binary) is installed.
 
     CapabilitiesRuntime:
       type: object
-      required: [name, features]
+      required: [name, available, features]
       properties:
         name:
           type: string
           description: Runtime identifier
           example: cloud-hypervisor
+        available:
+          type: boolean
+          description: |
+            Whether this runtime's launch prerequisites are currently met on
+            this host. Listed runtimes are supported by this server build on
+            this platform; available=false means a host prerequisite is
+            missing (for example qemu requires a system-installed QEMU
+            binary) and launches naming this runtime will fail until it is
+            installed.
         features:
           type: array
           items:
@@ -1524,9 +1538,11 @@ components:
             balloon target changes), "vsock" (guest vsock communication),
             "gpu-passthrough" (GPU/PCI device passthrough), "disk-io-limit"
             (disk I/O rate limiting), "disk-resize" (live disk resize).
-            Values are host-truthful: for example vz omits snapshots, standby,
-            and fork on macOS 13, which lacks Virtualization.framework VM
-            save/restore.
+            Values are host- and configuration-truthful: vz omits snapshots,
+            standby, and fork on macOS 13, which lacks
+            Virtualization.framework VM save/restore, and cloud-hypervisor
+            reports "disk-resize" only when the configured default version
+            supports it.
 
     CapabilitiesNetwork:
       type: object

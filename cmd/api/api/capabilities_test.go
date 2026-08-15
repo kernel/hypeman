@@ -77,18 +77,22 @@ func TestGetCapabilities(t *testing.T) {
 	require.Equal(t, runtime.GOOS, caps.Host.Os)
 	require.Equal(t, runtime.GOARCH, caps.Host.Arch)
 
-	// Every host-available runtime is reported, with its own feature IDs
-	// derived from the registered capability set — no handler-owned mapping.
+	// Every host-supported runtime is reported, with availability from its
+	// launch-prerequisite check and feature IDs derived from the registered
+	// capability set — no handler-owned mapping.
 	registered := hypervisor.RegisteredRuntimes()
 	require.Len(t, caps.Runtimes, len(registered))
 	for i, rt := range registered {
 		require.Equal(t, string(rt.Type), caps.Runtimes[i].Name)
+		require.Equal(t, rt.Available(), caps.Runtimes[i].Available,
+			"runtime %s availability must come from the registry's launch check", rt.Type)
 		require.Equal(t, rt.Capabilities.FeatureIDs(), caps.Runtimes[i].Features)
 		require.NotNil(t, caps.Runtimes[i].Features, "features must serialize as [], not null")
 	}
 
 	// The configured default identity is retained. The test-service manager
-	// defaults to cloud-hypervisor, which is available on Linux only.
+	// defaults to cloud-hypervisor, which is available on Linux only (its
+	// binaries are embedded, so registration implies launchability).
 	require.Equal(t, string(hypervisor.TypeCloudHypervisor), caps.DefaultRuntime.Name)
 	if runtime.GOOS == "linux" {
 		require.True(t, caps.DefaultRuntime.Available)
@@ -166,6 +170,34 @@ func TestGetCapabilitiesEachRuntimeIndependent(t *testing.T) {
 	} else {
 		require.NotContains(t, features, "qemu-microvm")
 	}
+}
+
+// TestGetCapabilitiesDefaultAvailabilityTracksLaunchCheck pins that the
+// default runtime's availability is the same launch-prerequisite verdict as
+// its runtimes[] entry — a registered default (e.g. qemu without a system
+// binary) must not be reported available just because it is registered.
+func TestGetCapabilitiesDefaultAvailabilityTracksLaunchCheck(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS != "linux" {
+		t.Skipf("qemu registers on Linux only (GOOS=%s)", runtime.GOOS)
+	}
+	svc := newTestService(t)
+	svc.NetworkManager = &stubCapabilitiesNetworkManager{}
+	svc.InstanceManager = &stubDefaultRuntimeInstanceManager{defaultRuntime: hypervisor.TypeQEMU}
+
+	var qemuAvailable, found bool
+	for _, rt := range hypervisor.RegisteredRuntimes() {
+		if rt.Type == hypervisor.TypeQEMU {
+			qemuAvailable = rt.Available()
+			found = true
+		}
+	}
+	require.True(t, found, "qemu must be registered on Linux")
+
+	caps := getCapabilities(t, svc)
+	require.Equal(t, string(hypervisor.TypeQEMU), caps.DefaultRuntime.Name)
+	require.Equal(t, qemuAvailable, caps.DefaultRuntime.Available,
+		"a qemu default must report the launch-prerequisite verdict, not registration")
 }
 
 // TestGetCapabilitiesDefaultNotAvailable pins the contract when the configured

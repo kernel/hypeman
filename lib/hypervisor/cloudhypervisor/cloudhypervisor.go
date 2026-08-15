@@ -48,8 +48,11 @@ func (c *CloudHypervisor) Capabilities() hypervisor.Capabilities {
 	return capabilities()
 }
 
+// capabilities resolves the effective capability set from the configured
+// default version (see GetDefaultVersion), matching what the capability
+// registry reports, rather than the compile-time vmm.DefaultVersion.
 func capabilities() hypervisor.Capabilities {
-	return CapabilitiesForVersion(vmm.DefaultVersion)
+	return CapabilitiesForVersion(GetDefaultVersion())
 }
 
 // CapabilitiesForVersion returns capabilities for a specific CH version.
@@ -57,7 +60,9 @@ func capabilities() hypervisor.Capabilities {
 // aren't supported on previous versions.
 func CapabilitiesForVersion(v vmm.CHVersion) hypervisor.Capabilities {
 	caps := hypervisor.Capabilities{
-		SupportsSnapshot:            true,
+		SupportsSnapshot: true,
+		// PrepareFork rewrites snapshot config for fork identity (fork.go).
+		SupportsFork:                true,
 		SupportsHotplugMemory:       true,
 		SupportsBalloonControl:      true,
 		SupportsPause:               true,

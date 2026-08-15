@@ -24,7 +24,12 @@ import (
 
 func init() {
 	hypervisor.RegisterSocketName(hypervisor.TypeVZ, "vz.sock")
-	hypervisor.RegisterCapabilities(hypervisor.TypeVZ, capabilities())
+	// Capabilities are resolved per registry read: snapshot/standby/fork
+	// support depends on the host macOS version probe, not on init order.
+	// No LaunchCheck: the vz-shim binary ships embedded in hypeman.
+	hypervisor.RegisterRuntime(hypervisor.TypeVZ, hypervisor.RuntimeRegistration{
+		Capabilities: capabilities,
+	})
 	hypervisor.RegisterVsockSocketName(hypervisor.TypeVZ, "vz.vsock")
 	hypervisor.RegisterVsockDialerFactory(hypervisor.TypeVZ, NewVsockDialer)
 	hypervisor.RegisterClientFactory(hypervisor.TypeVZ, func(socketPath string) (hypervisor.Hypervisor, error) {

@@ -48,18 +48,27 @@ func (s *ApiService) GetCapabilities(ctx context.Context, _ oapi.GetCapabilities
 	}
 
 	// The capability registry is platform-gated at registration time, so its
-	// contents are exactly the runtimes this host can launch — including ones
-	// added after this handler was written.
+	// contents are exactly the runtimes this build supports on this host —
+	// including ones added after this handler was written. Capabilities and
+	// launch prerequisites are resolved per request, so configuration applied
+	// after init (e.g. a pinned cloud-hypervisor version) and host state
+	// (e.g. an installed QEMU binary) are reflected without a restart.
 	registered := hypervisor.RegisteredRuntimes()
 	runtimes := make([]oapi.CapabilitiesRuntime, 0, len(registered))
 	defaultAvailable := false
 	for _, rt := range registered {
+		available := rt.Available()
 		if rt.Type == defaultRuntime {
-			defaultAvailable = true
+			defaultAvailable = available
+		}
+		if !available {
+			log.WarnContext(ctx, "runtime is registered but missing launch prerequisites",
+				"runtime", string(rt.Type), "error", rt.LaunchErr)
 		}
 		runtimes = append(runtimes, oapi.CapabilitiesRuntime{
-			Name:     string(rt.Type),
-			Features: rt.Capabilities.FeatureIDs(),
+			Name:      string(rt.Type),
+			Available: available,
+			Features:  rt.Capabilities.FeatureIDs(),
 		})
 	}
 	if !defaultAvailable {

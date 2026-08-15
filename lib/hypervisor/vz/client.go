@@ -86,7 +86,11 @@ func capabilities() hypervisor.Capabilities {
 		// Snapshot/standby support is runtime-derived: it requires Apple
 		// Silicon AND macOS 14+. An arm64-only check would overstate
 		// support on macOS 13 hosts.
-		SupportsSnapshot:            saveRestoreSupported(),
+		SupportsSnapshot: saveRestoreSupported(),
+		// PrepareFork rewrites the snapshot manifest (fork.go), but forking
+		// restores a snapshot of the source, so fork is gated by the same
+		// save/restore probe as snapshots.
+		SupportsFork:                saveRestoreSupported(),
 		SupportsHotplugMemory:       false,
 		SupportsBalloonControl:      true,
 		SupportsPause:               true,

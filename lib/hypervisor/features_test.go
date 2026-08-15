@@ -1,6 +1,7 @@
 package hypervisor
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -9,6 +10,7 @@ import (
 func fullCapabilities() Capabilities {
 	return Capabilities{
 		SupportsSnapshot:       true,
+		SupportsFork:           true,
 		SupportsHotplugMemory:  true,
 		SupportsBalloonControl: true,
 		SupportsPause:          true,
@@ -57,16 +59,25 @@ func TestFeatureIDs(t *testing.T) {
 		require.Empty(t, ids)
 	})
 
-	t.Run("snapshot without pause yields snapshots and fork but not standby", func(t *testing.T) {
-		t.Parallel()
-		ids := Capabilities{SupportsSnapshot: true}.FeatureIDs()
-		require.Equal(t, []string{FeatureSnapshots, FeatureFork}, ids)
-	})
-
 	t.Run("pause without snapshot yields pause only", func(t *testing.T) {
 		t.Parallel()
 		ids := Capabilities{SupportsPause: true}.FeatureIDs()
 		require.Equal(t, []string{FeaturePause}, ids)
+	})
+
+	t.Run("snapshot support alone must not advertise fork", func(t *testing.T) {
+		t.Parallel()
+		// A snapshot-capable backend may still reject PrepareFork with
+		// ErrNotSupported, so fork is an explicit capability — never inferred
+		// from snapshots.
+		ids := Capabilities{SupportsSnapshot: true}.FeatureIDs()
+		require.Equal(t, []string{FeatureSnapshots}, ids)
+	})
+
+	t.Run("explicit fork support yields the fork ID", func(t *testing.T) {
+		t.Parallel()
+		ids := Capabilities{SupportsSnapshot: true, SupportsFork: true}.FeatureIDs()
+		require.Equal(t, []string{FeatureSnapshots, FeatureFork}, ids)
 	})
 }
 
@@ -79,13 +90,9 @@ func TestStandbySemantics(t *testing.T) {
 	require.True(t, Capabilities{SupportsSnapshot: true, SupportsPause: true}.SupportsStandby())
 }
 
-// TestForkSemantics pins that fork tracks snapshot support: forking restores
-// a snapshot of the source instance into the new VM.
-func TestForkSemantics(t *testing.T) {
-	t.Parallel()
-	require.False(t, Capabilities{}.SupportsFork())
-	require.False(t, Capabilities{SupportsPause: true}.SupportsFork())
-	require.True(t, Capabilities{SupportsSnapshot: true}.SupportsFork())
+// staticRegistration wraps a fixed capability set for enumeration tests.
+func staticRegistration(caps Capabilities) RuntimeRegistration {
+	return RuntimeRegistration{Capabilities: func() Capabilities { return caps }}
 }
 
 // TestEnumerateRuntimes exercises registry enumeration semantics against a
@@ -95,18 +102,18 @@ func TestEnumerateRuntimes(t *testing.T) {
 
 	t.Run("empty registry yields an empty non-nil list", func(t *testing.T) {
 		t.Parallel()
-		runtimes := enumerateRuntimes(map[Type]Capabilities{})
+		runtimes := enumerateRuntimes(map[Type]RuntimeRegistration{})
 		require.NotNil(t, runtimes)
 		require.Empty(t, runtimes)
 	})
 
 	t.Run("entries are sorted by type name for deterministic output", func(t *testing.T) {
 		t.Parallel()
-		byType := map[Type]Capabilities{
-			TypeQEMU:            {SupportsPause: true},
-			TypeCloudHypervisor: {SupportsSnapshot: true},
-			TypeQEMUMicroVM:     {},
-			TypeFirecracker:     {SupportsVsock: true},
+		byType := map[Type]RuntimeRegistration{
+			TypeQEMU:            staticRegistration(Capabilities{SupportsPause: true}),
+			TypeCloudHypervisor: staticRegistration(Capabilities{SupportsSnapshot: true}),
+			TypeQEMUMicroVM:     staticRegistration(Capabilities{}),
+			TypeFirecracker:     staticRegistration(Capabilities{SupportsVsock: true}),
 		}
 		runtimes := enumerateRuntimes(byType)
 		require.Equal(t, []Type{TypeCloudHypervisor, TypeFirecracker, TypeQEMU, TypeQEMUMicroVM},
@@ -116,11 +123,58 @@ func TestEnumerateRuntimes(t *testing.T) {
 		require.True(t, runtimes[2].Capabilities.SupportsPause)
 	})
 
+	t.Run("capabilities are resolved on every enumeration, not frozen", func(t *testing.T) {
+		t.Parallel()
+		// Mirrors config applied after init, e.g. a pinned cloud-hypervisor
+		// default version changing the effective capability set.
+		effective := Capabilities{SupportsDiskResize: true}
+		byType := map[Type]RuntimeRegistration{
+			TypeCloudHypervisor: {Capabilities: func() Capabilities { return effective }},
+		}
+		require.True(t, enumerateRuntimes(byType)[0].Capabilities.SupportsDiskResize)
+		effective.SupportsDiskResize = false
+		require.False(t, enumerateRuntimes(byType)[0].Capabilities.SupportsDiskResize,
+			"enumeration must reflect the provider's current value")
+	})
+
+	t.Run("launch checks gate availability", func(t *testing.T) {
+		t.Parallel()
+		launchErr := errors.New("qemu-system-x86_64 not found")
+		byType := map[Type]RuntimeRegistration{
+			TypeCloudHypervisor: staticRegistration(Capabilities{}),
+			TypeQEMU: {
+				Capabilities: func() Capabilities { return Capabilities{} },
+				LaunchCheck:  func() error { return launchErr },
+			},
+		}
+		runtimes := enumerateRuntimes(byType)
+		require.True(t, runtimes[0].Available(), "nil LaunchCheck means registration implies launchability")
+		require.NoError(t, runtimes[0].LaunchErr)
+		require.False(t, runtimes[1].Available(), "a failing launch check must mark the runtime unavailable")
+		require.ErrorIs(t, runtimes[1].LaunchErr, launchErr)
+	})
+
+	t.Run("launch checks are re-evaluated on every enumeration", func(t *testing.T) {
+		t.Parallel()
+		// Installing the missing binary must flip availability without a
+		// server restart.
+		var launchErr error = errors.New("binary missing")
+		byType := map[Type]RuntimeRegistration{
+			TypeQEMU: {
+				Capabilities: func() Capabilities { return Capabilities{} },
+				LaunchCheck:  func() error { return launchErr },
+			},
+		}
+		require.False(t, enumerateRuntimes(byType)[0].Available())
+		launchErr = nil
+		require.True(t, enumerateRuntimes(byType)[0].Available())
+	})
+
 	t.Run("results are value copies of the registry", func(t *testing.T) {
 		t.Parallel()
-		byType := map[Type]Capabilities{TypeQEMU: {SupportsPause: true}}
+		byType := map[Type]RuntimeRegistration{TypeQEMU: staticRegistration(Capabilities{SupportsPause: true})}
 		runtimes := enumerateRuntimes(byType)
 		runtimes[0].Capabilities.SupportsPause = false
-		require.True(t, byType[TypeQEMU].SupportsPause, "mutating enumeration output must not affect the registry")
+		require.True(t, byType[TypeQEMU].Capabilities().SupportsPause, "mutating enumeration output must not affect the registry")
 	})
 }
