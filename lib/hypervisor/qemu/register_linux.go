@@ -3,6 +3,7 @@
 package qemu
 
 import (
+	"context"
 	"fmt"
 	"os"
 
@@ -29,27 +30,39 @@ const vhostVsockDevicePath = "/dev/vhost-vsock"
 func init() {
 	hypervisor.RegisterRuntime(hypervisor.TypeQEMU, hypervisor.RuntimeRegistration{
 		Capabilities: StandardProfile{}.capabilities,
-		LaunchCheck:  checkLaunchPrerequisites,
+		LaunchCheck:  launchPrereqCache.Check,
 	})
 	if _, err := microVMMachineType(); err == nil {
 		hypervisor.RegisterRuntime(hypervisor.TypeQEMUMicroVM, hypervisor.RuntimeRegistration{
 			Capabilities: MicroVMProfile{}.capabilities,
-			LaunchCheck:  checkLaunchPrerequisites,
+			LaunchCheck:  launchPrereqCache.Check,
 		})
 	}
 }
 
+// launchPrereqCache is the single shared launch-prerequisite result for both
+// QEMU boards: the standard and microvm registrations verify the same host
+// prerequisites (the same system binary and vsock device), so they share one
+// briefly-cached probe instead of each executing `qemu --version` on every
+// registry read — and concurrent capability requests coalesce onto one
+// in-flight probe. The short TTL keeps availability live: installing QEMU or
+// loading vhost_vsock flips it within launchCheckCacheTTL, no restart needed.
+var launchPrereqCache = newLaunchCheckCache(checkLaunchPrerequisites, launchCheckCacheTTL)
+
 // checkLaunchPrerequisites is the capability registry's side-effect-free
-// launch check for both QEMU boards: it resolves the system binary with the
-// same lookup launches use, then verifies the prerequisites every ordinary
-// launch needs. Evaluated per registry read, so installing QEMU or loading
-// vhost_vsock flips availability without a restart.
+// launch check for both QEMU boards (via launchPrereqCache): it resolves the
+// system binary with the same lookup launches use, then verifies the
+// prerequisites every ordinary launch needs. The version probe it runs is
+// bounded by versionProbeTimeout so a hung binary fails the check instead of
+// wedging capability requests.
 func checkLaunchPrerequisites() error {
 	binaryPath, err := (&Starter{}).GetBinaryPath(nil, "")
 	if err != nil {
 		return err
 	}
-	return checkLaunchPrerequisitesFor(binaryPath, vhostVsockDevicePath)
+	ctx, cancel := context.WithTimeout(context.Background(), versionProbeTimeout)
+	defer cancel()
+	return checkLaunchPrerequisitesFor(ctx, binaryPath, vhostVsockDevicePath)
 }
 
 // checkLaunchPrerequisitesFor verifies that a resolved QEMU binary and the
@@ -65,11 +78,11 @@ func checkLaunchPrerequisites() error {
 //
 // Split from checkLaunchPrerequisites so unavailable cases are testable with
 // fake binaries and device paths regardless of the host's QEMU install.
-func checkLaunchPrerequisitesFor(binaryPath, vsockDevicePath string) error {
+func checkLaunchPrerequisitesFor(ctx context.Context, binaryPath, vsockDevicePath string) error {
 	if err := validateExecutable(binaryPath); err != nil {
 		return fmt.Errorf("qemu binary %s is not executable: %w", binaryPath, err)
 	}
-	if _, err := versionFromBinary(binaryPath); err != nil {
+	if _, err := versionFromBinary(ctx, binaryPath); err != nil {
 		return fmt.Errorf("qemu binary %s is not usable: %w", binaryPath, err)
 	}
 	if _, err := os.Stat(vsockDevicePath); err != nil {

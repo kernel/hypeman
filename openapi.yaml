@@ -1533,17 +1533,19 @@ components:
           description: |
             Stable feature IDs supported by this runtime on this host:
             "snapshots" (snapshot/restore), "standby" (pause + memory
-            snapshot, with later restore), "fork" (clone an instance by
-            restoring a snapshot of it), "pause" (pause/resume),
-            "hotplug-memory" (live memory resize), "balloon-control" (runtime
-            balloon target changes), "vsock" (guest vsock communication),
-            "gpu-passthrough" (GPU/PCI device passthrough), "disk-io-limit"
-            (disk I/O rate limiting), "disk-resize" (live disk resize).
-            Values are host- and configuration-truthful: vz omits snapshots,
-            standby, and fork on macOS 13, which lacks
-            Virtualization.framework VM save/restore, and cloud-hypervisor
-            reports "disk-resize" only when the configured default version
-            supports it.
+            snapshot, with later restore), "fork" (clone an instance from a
+            stopped source; forking a standby or running source
+            restores/creates snapshots and additionally requires "standby"),
+            "pause" (pause/resume), "hotplug-memory" (live memory resize),
+            "balloon-control" (runtime balloon target changes), "vsock"
+            (guest vsock communication), "gpu-passthrough" (GPU/PCI device
+            passthrough), "disk-io-limit" (disk I/O rate limiting),
+            "disk-resize" (live disk resize). Values are host- and
+            configuration-truthful: vz omits snapshots and standby on macOS
+            13, which lacks Virtualization.framework VM save/restore, while
+            still advertising fork (stopped-source clones need no
+            save/restore there), and cloud-hypervisor reports "disk-resize"
+            only when the configured default version supports it.
 
     CapabilitiesNetwork:
       type: object

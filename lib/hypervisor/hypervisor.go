@@ -8,8 +8,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/kernel/hypeman/lib/paths"
@@ -53,7 +55,17 @@ var vsockSocketNames = make(map[Type]string)
 // Registered by each hypervisor package's init() function. Registration is
 // platform-gated (see RegisterRuntime), so the map's keys double as the set
 // of runtimes supported by this build on the current host platform.
-var runtimeRegistrations = make(map[Type]RuntimeRegistration)
+//
+// RegisterRuntime is public API, so custom backends may register after init
+// — including while capability requests are being served. All access
+// therefore goes through runtimeRegistrationsMu; readers snapshot the map
+// under the lock and resolve registration callbacks only after releasing it,
+// so a slow Capabilities resolver or LaunchCheck never blocks registration
+// and callbacks can safely re-enter the registry.
+var (
+	runtimeRegistrationsMu sync.RWMutex
+	runtimeRegistrations   = make(map[Type]RuntimeRegistration)
+)
 
 // RegisterSocketName registers the socket filename for a hypervisor type.
 // Called by each hypervisor implementation's init() function.
@@ -112,6 +124,8 @@ func RegisterRuntime(t Type, reg RuntimeRegistration) {
 	if reg.Capabilities == nil {
 		panic(fmt.Sprintf("hypervisor: RegisterRuntime(%s) requires a Capabilities resolver", t))
 	}
+	runtimeRegistrationsMu.Lock()
+	defer runtimeRegistrationsMu.Unlock()
 	runtimeRegistrations[t] = reg
 }
 
@@ -134,10 +148,14 @@ func RegisterCapabilities(t Type, caps Capabilities) {
 // type, resolved at call time. It reports ok=false for runtimes that cannot
 // run on the current host platform, because such runtimes never register.
 func CapabilitiesForType(t Type) (Capabilities, bool) {
+	runtimeRegistrationsMu.RLock()
 	reg, ok := runtimeRegistrations[t]
+	runtimeRegistrationsMu.RUnlock()
 	if !ok {
 		return Capabilities{}, false
 	}
+	// Resolved after releasing the lock: resolvers may be slow or re-enter
+	// the registry.
 	return reg.Capabilities(), true
 }
 
@@ -165,7 +183,14 @@ func (r RegisteredRuntime) Available() bool { return r.LaunchErr == nil }
 // host; per-entry Available/LaunchErr additionally reflect whether launch
 // prerequisites are met right now.
 func RegisteredRuntimes() []RegisteredRuntime {
-	return enumerateRuntimes(runtimeRegistrations)
+	runtimeRegistrationsMu.RLock()
+	snapshot := maps.Clone(runtimeRegistrations)
+	runtimeRegistrationsMu.RUnlock()
+	// Enumeration resolves capability and launch-check callbacks, so it runs
+	// on a snapshot taken under the lock rather than on the live map:
+	// concurrent RegisterRuntime calls must never race the iteration, and
+	// callbacks must never execute while the registry lock is held.
+	return enumerateRuntimes(snapshot)
 }
 
 // enumerateRuntimes resolves the map's entries (capabilities and launch
@@ -329,11 +354,16 @@ type Capabilities struct {
 	// SupportsSnapshot indicates if Snapshot/Restore are available
 	SupportsSnapshot bool
 
-	// SupportsFork indicates if snapshot-based instance forking is available.
-	// It is explicit rather than derived from SupportsSnapshot because
-	// VMStarter.PrepareFork allows a snapshot-capable backend to return
-	// ErrNotSupported; the advertised feature must track what PrepareFork
-	// actually implements, not what snapshots imply.
+	// SupportsFork indicates VMStarter.PrepareFork implements instance
+	// forking, which every fork source state needs. It is explicit rather
+	// than derived from SupportsSnapshot because the two are independent in
+	// both directions: a snapshot-capable backend may still reject
+	// PrepareFork with ErrNotSupported, and a backend can fork a stopped
+	// source (a disk clone, no machine-state snapshot involved) without
+	// snapshot support at all — vz does exactly that on macOS 13. Forking a
+	// standby or running source additionally restores/creates snapshots, so
+	// those operations require SupportsStandby() as well; SupportsFork alone
+	// promises only the stopped-source fork.
 	SupportsFork bool
 
 	// SupportsHotplugMemory indicates if ResizeMemory is available

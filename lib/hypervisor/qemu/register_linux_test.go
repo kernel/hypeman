@@ -3,10 +3,12 @@
 package qemu
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/stretchr/testify/require"
@@ -53,6 +55,17 @@ func TestQEMUAvailabilityTracksLaunchPrerequisites(t *testing.T) {
 	require.GreaterOrEqual(t, checked, 1, "standard qemu must be registered on Linux")
 }
 
+// TestLaunchCheckCacheSharedByRegistrations pins that both QEMU registry
+// entries resolve availability through the same shared cache instance with
+// the short production TTL, so one registry read (which checks both boards)
+// executes at most one probe per TTL window while repaired prerequisites
+// still surface promptly.
+func TestLaunchCheckCacheSharedByRegistrations(t *testing.T) {
+	t.Parallel()
+	require.NotNil(t, launchPrereqCache)
+	require.Equal(t, launchCheckCacheTTL, launchPrereqCache.ttl)
+}
+
 // fakeQEMUBinary writes an executable script that mimics `qemu --version`
 // output, standing in for a working system QEMU.
 func fakeQEMUBinary(t *testing.T, dir string) string {
@@ -80,14 +93,16 @@ func fakeVsockDevice(t *testing.T, dir string) string {
 func TestCheckLaunchPrerequisitesFor(t *testing.T) {
 	t.Parallel()
 
+	ctx := context.Background()
+
 	t.Run("working binary and device pass", func(t *testing.T) {
 		dir := t.TempDir()
-		require.NoError(t, checkLaunchPrerequisitesFor(fakeQEMUBinary(t, dir), fakeVsockDevice(t, dir)))
+		require.NoError(t, checkLaunchPrerequisitesFor(ctx, fakeQEMUBinary(t, dir), fakeVsockDevice(t, dir)))
 	})
 
 	t.Run("missing binary fails", func(t *testing.T) {
 		dir := t.TempDir()
-		err := checkLaunchPrerequisitesFor(filepath.Join(dir, "missing"), fakeVsockDevice(t, dir))
+		err := checkLaunchPrerequisitesFor(ctx, filepath.Join(dir, "missing"), fakeVsockDevice(t, dir))
 		require.ErrorContains(t, err, "not executable")
 	})
 
@@ -95,7 +110,7 @@ func TestCheckLaunchPrerequisitesFor(t *testing.T) {
 		dir := t.TempDir()
 		path := filepath.Join(dir, "qemu-system-fake")
 		require.NoError(t, os.WriteFile(path, []byte("#!/bin/sh\necho 'QEMU emulator version 8.2.0'\n"), 0o644))
-		err := checkLaunchPrerequisitesFor(path, fakeVsockDevice(t, dir))
+		err := checkLaunchPrerequisitesFor(ctx, path, fakeVsockDevice(t, dir))
 		require.ErrorContains(t, err, "not executable")
 	})
 
@@ -103,7 +118,7 @@ func TestCheckLaunchPrerequisitesFor(t *testing.T) {
 		dir := t.TempDir()
 		path := filepath.Join(dir, "qemu-system-fake")
 		require.NoError(t, os.WriteFile(path, []byte("#!/bin/sh\nexit 1\n"), 0o755))
-		err := checkLaunchPrerequisitesFor(path, fakeVsockDevice(t, dir))
+		err := checkLaunchPrerequisitesFor(ctx, path, fakeVsockDevice(t, dir))
 		require.ErrorContains(t, err, "not usable")
 	})
 
@@ -111,14 +126,33 @@ func TestCheckLaunchPrerequisitesFor(t *testing.T) {
 		dir := t.TempDir()
 		path := filepath.Join(dir, "qemu-system-fake")
 		require.NoError(t, os.WriteFile(path, []byte("#!/bin/sh\necho 'not qemu'\n"), 0o755))
-		err := checkLaunchPrerequisitesFor(path, fakeVsockDevice(t, dir))
+		err := checkLaunchPrerequisitesFor(ctx, path, fakeVsockDevice(t, dir))
 		require.ErrorContains(t, err, "not usable")
 	})
 
 	t.Run("missing vsock device fails", func(t *testing.T) {
 		dir := t.TempDir()
-		err := checkLaunchPrerequisitesFor(fakeQEMUBinary(t, dir), filepath.Join(dir, "no-vhost-vsock"))
+		err := checkLaunchPrerequisitesFor(ctx, fakeQEMUBinary(t, dir), filepath.Join(dir, "no-vhost-vsock"))
 		require.ErrorContains(t, err, "vsock device")
 		require.ErrorContains(t, err, "vhost_vsock")
+	})
+
+	t.Run("hung binary fails at the context deadline", func(t *testing.T) {
+		// A wedged QEMU binary must fail the prerequisite check when its
+		// bounded context expires instead of blocking the capability request
+		// (and leaking a subprocess) indefinitely. `exec sleep` replaces the
+		// shell so the kill hits the sleeping process directly, and
+		// versionFromBinary's WaitDelay backstops any descendant that still
+		// holds the output pipe.
+		dir := t.TempDir()
+		path := filepath.Join(dir, "qemu-system-fake")
+		require.NoError(t, os.WriteFile(path, []byte("#!/bin/sh\nexec sleep 60\n"), 0o755))
+		shortCtx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+		defer cancel()
+		start := time.Now()
+		err := checkLaunchPrerequisitesFor(shortCtx, path, fakeVsockDevice(t, dir))
+		require.ErrorContains(t, err, "not usable")
+		require.Less(t, time.Since(start), 10*time.Second,
+			"a hung probe must return at the deadline, not run to completion")
 	})
 }

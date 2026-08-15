@@ -135,16 +135,28 @@ func (s *Starter) detectVersion(p *paths.Paths) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return versionFromBinary(binaryPath)
+	ctx, cancel := context.WithTimeout(context.Background(), versionProbeTimeout)
+	defer cancel()
+	return versionFromBinary(ctx, binaryPath)
 }
+
+// versionProbeTimeout bounds a single `qemu --version` execution. The probe
+// runs on capability requests (launch checks) as well as launches, so a hung
+// or broken binary must fail the caller promptly instead of leaking
+// subprocesses and goroutines indefinitely.
+const versionProbeTimeout = 5 * time.Second
 
 // versionFromBinary runs the resolved QEMU binary's --version and parses the
 // installed version from its output. It is the version probe behind
 // GetVersion/ResolveVersion — every cold start persists its result — and the
 // capability registry's launch check reuses it so "available" means the same
-// binary execution that launches require actually succeeds.
-func versionFromBinary(binaryPath string) (string, error) {
-	cmd := exec.Command(binaryPath, "--version")
+// binary execution that launches require actually succeeds. Execution is
+// bounded by ctx (callers pass a versionProbeTimeout-derived context), and
+// WaitDelay ensures a killed probe whose descendants still hold the output
+// pipe cannot block the caller past the deadline.
+func versionFromBinary(ctx context.Context, binaryPath string) (string, error) {
+	cmd := exec.CommandContext(ctx, binaryPath, "--version")
+	cmd.WaitDelay = time.Second
 	output, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("get qemu version: %w", err)

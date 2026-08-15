@@ -16,14 +16,17 @@ func TestCapabilitiesDeriveSnapshotFromHost(t *testing.T) {
 
 	macOSProductVersion = func() string { return "13.6" }
 	require.False(t, capabilities().SupportsSnapshot, "macOS 13 must not advertise snapshot/standby support")
-	require.False(t, capabilities().SupportsFork, "fork restores a snapshot, so macOS 13 must not advertise it")
+	require.True(t, capabilities().SupportsFork,
+		"stopped-source forks clone disks without machine-state save/restore, so macOS 13 must still advertise fork")
+	require.False(t, capabilities().SupportsStandby(),
+		"macOS 13 must not advertise standby, so hot-source forks (which require standby) are not promised")
 
 	macOSProductVersion = func() string { return "14.5" }
 	require.Equal(t, saveRestoreSupported(), capabilities().SupportsSnapshot)
-	require.Equal(t, capabilities().SupportsSnapshot, capabilities().SupportsFork,
-		"vz PrepareFork rewrites snapshot manifests, so fork must track the same save/restore probe")
+	require.True(t, capabilities().SupportsFork, "vz PrepareFork is implemented for every source state")
 
 	macOSProductVersion = func() string { return "" }
 	require.False(t, capabilities().SupportsSnapshot, "failed version probe must not advertise snapshot support")
-	require.False(t, capabilities().SupportsFork, "failed version probe must not advertise fork support")
+	require.True(t, capabilities().SupportsFork,
+		"fork does not depend on the save/restore probe: stopped-source forks work regardless")
 }

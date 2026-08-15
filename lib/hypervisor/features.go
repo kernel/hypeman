@@ -11,9 +11,13 @@ const (
 	FeatureSnapshots = "snapshots"
 	// FeatureStandby: pause + memory snapshot, with later restore.
 	FeatureStandby = "standby"
-	// FeatureFork: cloning an instance by restoring a snapshot of it. Derived
-	// from the explicit SupportsFork capability, which each backend keeps
-	// aligned with its VMStarter.PrepareFork implementation.
+	// FeatureFork: cloning an instance from a stopped source. Derived from
+	// the explicit SupportsFork capability, which each backend keeps aligned
+	// with its VMStarter.PrepareFork implementation. Fork of a standby or
+	// running source additionally restores/creates snapshots, so clients
+	// must gate those operations on FeatureStandby as well — vz on macOS 13
+	// advertises fork (stopped-source clones need no machine-state
+	// save/restore) without snapshots or standby.
 	FeatureFork = "fork"
 	// FeaturePause: pause/resume of a running instance.
 	FeaturePause = "pause"

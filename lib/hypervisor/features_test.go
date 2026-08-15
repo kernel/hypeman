@@ -79,6 +79,15 @@ func TestFeatureIDs(t *testing.T) {
 		ids := Capabilities{SupportsSnapshot: true, SupportsFork: true}.FeatureIDs()
 		require.Equal(t, []string{FeatureSnapshots, FeatureFork}, ids)
 	})
+
+	t.Run("fork without snapshots is valid and yields fork alone", func(t *testing.T) {
+		t.Parallel()
+		// vz on macOS 13: stopped-source forks clone disks without
+		// machine-state save/restore, so fork is advertised while snapshots
+		// and standby are not. Clients gate hot-source forks on standby.
+		ids := Capabilities{SupportsFork: true}.FeatureIDs()
+		require.Equal(t, []string{FeatureFork}, ids)
+	})
 }
 
 // TestStandbySemantics pins that standby requires both snapshot and pause: a
