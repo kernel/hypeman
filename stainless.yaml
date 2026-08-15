@@ -80,6 +80,7 @@ resources:
       capabilities: "#/components/schemas/Capabilities"
       capabilities_server: "#/components/schemas/CapabilitiesServer"
       capabilities_host: "#/components/schemas/CapabilitiesHost"
+      capabilities_default_runtime: "#/components/schemas/CapabilitiesDefaultRuntime"
       capabilities_runtime: "#/components/schemas/CapabilitiesRuntime"
       capabilities_network: "#/components/schemas/CapabilitiesNetwork"
       capabilities_images: "#/components/schemas/CapabilitiesImages"

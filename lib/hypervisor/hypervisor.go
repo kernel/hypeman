@@ -4,10 +4,12 @@
 package hypervisor
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"net"
+	"slices"
 	"time"
 
 	"github.com/kernel/hypeman/lib/paths"
@@ -48,7 +50,9 @@ var socketNames = make(map[Type]string)
 var vsockSocketNames = make(map[Type]string)
 
 // capabilitiesByType maps hypervisor types to their static capabilities.
-// Registered by each hypervisor package's init() function.
+// Registered by each hypervisor package's init() function. Registration is
+// platform-gated (see RegisterCapabilities), so the map's keys double as the
+// set of runtimes available on the current host.
 var capabilitiesByType = make(map[Type]Capabilities)
 
 // RegisterSocketName registers the socket filename for a hypervisor type.
@@ -81,14 +85,49 @@ func VsockSocketNameForType(t Type) string {
 }
 
 // RegisterCapabilities registers static capabilities for a hypervisor type.
+// Backends must register only on platforms where they can genuinely launch
+// VMs: the Linux backends (cloud-hypervisor, firecracker, qemu) register from
+// linux-only files, and vz registers from its darwin-only package. That keeps
+// RegisteredRuntimes truthful without a hand-maintained platform switch.
 func RegisterCapabilities(t Type, caps Capabilities) {
 	capabilitiesByType[t] = caps
 }
 
 // CapabilitiesForType returns static capabilities for a hypervisor type.
+// It reports ok=false for runtimes that cannot run on the current host
+// platform, because such runtimes never register capabilities.
 func CapabilitiesForType(t Type) (Capabilities, bool) {
 	caps, ok := capabilitiesByType[t]
 	return caps, ok
+}
+
+// RegisteredRuntime pairs a runtime identifier with its registered
+// capabilities.
+type RegisteredRuntime struct {
+	Type         Type
+	Capabilities Capabilities
+}
+
+// RegisteredRuntimes enumerates every runtime with registered capabilities,
+// sorted by type name so output is deterministic. Because capability
+// registration is platform-gated, the result is the set of runtimes the
+// linked backends can actually launch on the current host.
+func RegisteredRuntimes() []RegisteredRuntime {
+	return enumerateRuntimes(capabilitiesByType)
+}
+
+// enumerateRuntimes returns the map's entries sorted by type name. Split out
+// from RegisteredRuntimes so enumeration semantics are testable without
+// mutating the global registry.
+func enumerateRuntimes(byType map[Type]Capabilities) []RegisteredRuntime {
+	runtimes := make([]RegisteredRuntime, 0, len(byType))
+	for t, caps := range byType {
+		runtimes = append(runtimes, RegisteredRuntime{Type: t, Capabilities: caps})
+	}
+	slices.SortFunc(runtimes, func(a, b RegisteredRuntime) int {
+		return cmp.Compare(a.Type, b.Type)
+	})
+	return runtimes
 }
 
 // VMStarter handles the full VM startup sequence.

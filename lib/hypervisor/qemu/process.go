@@ -49,7 +49,6 @@ func init() {
 	for _, profile := range []profile{StandardProfile{}, MicroVMProfile{}} {
 		hypervisorType := profile.hypervisorType()
 		hypervisor.RegisterSocketName(hypervisorType, "qemu.sock")
-		hypervisor.RegisterCapabilities(hypervisorType, profile.capabilities())
 		t := hypervisorType
 		hypervisor.RegisterClientFactory(t, func(socketPath string) (hypervisor.Hypervisor, error) {
 			return NewForType(socketPath, t)

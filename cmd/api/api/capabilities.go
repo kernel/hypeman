@@ -3,7 +3,6 @@ package api
 import (
 	"context"
 	"runtime"
-	"slices"
 	"sync"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
@@ -13,9 +12,10 @@ import (
 	"github.com/kernel/hypeman/lib/oapi"
 )
 
-// Stable feature IDs reported by the capabilities endpoint. Clients gate
-// behavior on these (and the structured runtime booleans) rather than on
-// hypervisor names.
+// Server-level feature IDs: API surfaces this server exposes regardless of
+// which runtime backs an instance. Per-runtime feature IDs are owned by
+// lib/hypervisor (hypervisor.Capabilities.FeatureIDs) so adding a runtime
+// capability never requires touching this handler.
 const (
 	featureInstances        = "instances"
 	featureImages           = "images"
@@ -24,16 +24,6 @@ const (
 	featureIngress          = "ingress"
 	featureExec             = "exec"
 	featureLogs             = "logs"
-	featureStandby          = "standby"
-	featureSnapshots        = "snapshots"
-	featureFork             = "fork"
-	featurePause            = "pause"
-	featureHotplugMemory    = "hotplug-memory"
-	featureBalloonControl   = "balloon-control"
-	featureVsock            = "vsock"
-	featureGPUPassthrough   = "gpu-passthrough"
-	featureDiskIOLimit      = "disk-io-limit"
-	featureDiskResize       = "disk-resize"
 	featureDevices          = "devices"
 	featureRosettaEmulation = "rosetta-emulation"
 )
@@ -56,21 +46,28 @@ func (s *ApiService) GetCapabilities(ctx context.Context, _ oapi.GetCapabilities
 	if s.InstanceManager != nil {
 		defaultRuntime = s.InstanceManager.DefaultHypervisor()
 	}
-	supported := supportedRuntimes(runtime.GOOS)
-	caps, capsKnown := hypervisor.CapabilitiesForType(defaultRuntime)
-	if capsKnown && !slices.Contains(supported, string(defaultRuntime)) {
-		// The configured default runtime cannot run on this host platform;
-		// advertising its features would overstate support.
-		capsKnown = false
-	}
-	if !capsKnown {
-		// Report zeroed features rather than guessing.
-		log.WarnContext(ctx, "default runtime is not usable on this host platform",
-			"runtime", string(defaultRuntime), "host_os", runtime.GOOS)
-		caps = hypervisor.Capabilities{}
-	}
 
-	emulation := emulationSupported(runtime.GOOS, runtime.GOARCH, supported)
+	// The capability registry is platform-gated at registration time, so its
+	// contents are exactly the runtimes this host can launch — including ones
+	// added after this handler was written.
+	registered := hypervisor.RegisteredRuntimes()
+	runtimes := make([]oapi.CapabilitiesRuntime, 0, len(registered))
+	defaultAvailable := false
+	for _, rt := range registered {
+		if rt.Type == defaultRuntime {
+			defaultAvailable = true
+		}
+		runtimes = append(runtimes, oapi.CapabilitiesRuntime{
+			Name:     string(rt.Type),
+			Features: rt.Capabilities.FeatureIDs(),
+		})
+	}
+	if !defaultAvailable {
+		// Ordinary launches use the default runtime and will fail on this
+		// host; surface that in logs as well as in the response.
+		log.WarnContext(ctx, "configured default runtime is not available on this host",
+			"runtime", string(defaultRuntime), "host_os", runtime.GOOS, "host_arch", runtime.GOARCH)
+	}
 
 	networkCaps, err := s.networkCapabilities(ctx)
 	if err != nil {
@@ -81,6 +78,8 @@ func (s *ApiService) GetCapabilities(ctx context.Context, _ oapi.GetCapabilities
 		}, nil
 	}
 
+	emulation := emulationSupported(runtime.GOOS, runtime.GOARCH)
+
 	resp := oapi.Capabilities{
 		Server: oapi.CapabilitiesServer{
 			Version:    s.Config.Version,
@@ -90,25 +89,17 @@ func (s *ApiService) GetCapabilities(ctx context.Context, _ oapi.GetCapabilities
 			Os:   runtime.GOOS,
 			Arch: runtime.GOARCH,
 		},
-		Runtime: oapi.CapabilitiesRuntime{
-			Default:        string(defaultRuntime),
-			Supported:      supported,
-			Snapshot:       caps.SupportsSnapshot,
-			Standby:        standbySupported(caps),
-			Pause:          caps.SupportsPause,
-			HotplugMemory:  caps.SupportsHotplugMemory,
-			BalloonControl: caps.SupportsBalloonControl,
-			Vsock:          caps.SupportsVsock,
-			GpuPassthrough: caps.SupportsGPUPassthrough,
-			DiskIoLimit:    caps.SupportsDiskIOLimit,
-			DiskResize:     caps.SupportsDiskResize,
+		DefaultRuntime: oapi.CapabilitiesDefaultRuntime{
+			Name:      string(defaultRuntime),
+			Available: defaultAvailable,
 		},
-		Network: *networkCaps,
+		Runtimes: runtimes,
+		Network:  *networkCaps,
 		Images: oapi.CapabilitiesImages{
 			Platforms:       imagePlatforms(runtime.GOARCH, emulation),
 			DefaultPlatform: images.HostPlatformString(),
 		},
-		Features: assembleFeatures(runtime.GOOS, caps, emulation),
+		Features: serverFeatures(runtime.GOOS, emulation),
 	}
 
 	return oapi.GetCapabilities200JSONResponse(resp), nil
@@ -116,10 +107,11 @@ func (s *ApiService) GetCapabilities(ctx context.Context, _ oapi.GetCapabilities
 
 // networkCapabilities resolves the guest networking model and the
 // guest-visible host gateway from the network manager's effective default
-// network.
+// network. Gateway and subnet are omitted (not serialized as empty strings)
+// when no default network has been resolved.
 func (s *ApiService) networkCapabilities(ctx context.Context) (*oapi.CapabilitiesNetwork, error) {
 	caps := &oapi.CapabilitiesNetwork{
-		Model:        oapi.CapabilitiesNetworkModel(network.NetworkModel()),
+		Model:        oapiNetworkModel(network.NetworkModel()),
 		GuestToGuest: false,
 	}
 	if s.NetworkManager == nil {
@@ -132,7 +124,10 @@ func (s *ApiService) networkCapabilities(ctx context.Context) (*oapi.Capabilitie
 	if nw == nil {
 		return caps, nil
 	}
-	caps.Gateway = nw.Gateway
+	if nw.Gateway != "" {
+		gateway := nw.Gateway
+		caps.Gateway = &gateway
+	}
 	if nw.Subnet != "" {
 		subnet := nw.Subnet
 		caps.Subnet = &subnet
@@ -141,61 +136,43 @@ func (s *ApiService) networkCapabilities(ctx context.Context) (*oapi.Capabilitie
 	return caps, nil
 }
 
-// standbySupported reports whether standby (pause + memory snapshot) and
-// later restore are supported. Standby requires both snapshot and pause.
-func standbySupported(caps hypervisor.Capabilities) bool {
-	return caps.SupportsSnapshot && caps.SupportsPause
-}
-
-// supportedRuntimes returns the runtime identifiers usable on a host OS.
-// This is a platform floor, not a registry listing: a runtime whose package
-// registered capabilities but that cannot run on the host (e.g. firecracker
-// on macOS) is not listed.
-func supportedRuntimes(goos string) []string {
-	switch goos {
-	case "darwin":
-		return []string{string(hypervisor.TypeVZ)}
-	default:
-		return []string{
-			string(hypervisor.TypeCloudHypervisor),
-			string(hypervisor.TypeFirecracker),
-			string(hypervisor.TypeQEMU),
-		}
+// oapiNetworkModel maps the network package's typed model onto the API enum,
+// keeping lib/network free of oapi dependencies.
+func oapiNetworkModel(m network.Model) oapi.CapabilitiesNetworkModel {
+	switch m {
+	case network.ModelBridge:
+		return oapi.Bridge
+	case network.ModelNAT:
+		return oapi.Nat
 	}
+	// A new network.Model must also be added to the OpenAPI enum; surface it
+	// verbatim rather than misreporting it as a known model.
+	return oapi.CapabilitiesNetworkModel(m)
 }
 
 // emulationSupported reports whether the host can boot images built for the
-// other CPU architecture. This is a host capability rather than a property of
-// the configured default: vz can use Rosetta on Apple Silicon whenever it is
-// available on the host.
-func emulationSupported(goos, goarch string, supported []string) bool {
-	return goos == "darwin" &&
-		goarch == "arm64" &&
-		slices.Contains(supported, string(hypervisor.TypeVZ))
+// other CPU architecture. Only Apple Silicon macOS hosts qualify (vz with
+// Rosetta). Rosetta installation itself is verified at instance start — a
+// launch fails with installation guidance when it is missing — so this
+// reports platform eligibility, and the OpenAPI description says so.
+func emulationSupported(goos, goarch string) bool {
+	return goos == "darwin" && goarch == "arm64"
 }
 
-// imagePlatforms returns the image platforms (os/arch) the host can run:
-// the host-native platform plus the emulated one when available.
+// imagePlatforms returns the image platforms (os/arch) the host can run: the
+// host-native Linux guest platform, plus Rosetta-emulated linux/amd64 on
+// Apple Silicon.
 func imagePlatforms(goarch string, emulation bool) []string {
-	if goarch == "" {
-		goarch = runtime.GOARCH
-	}
 	platforms := []string{"linux/" + goarch}
 	if emulation {
-		switch goarch {
-		case "arm64":
-			platforms = append(platforms, "linux/amd64")
-		case "amd64":
-			platforms = append(platforms, "linux/arm64")
-		}
+		platforms = append(platforms, "linux/amd64")
 	}
 	return platforms
 }
 
-// assembleFeatures builds the stable feature ID list: always-present base API
-// surfaces plus conditional entries derived from the effective default
-// runtime's capabilities and the host platform.
-func assembleFeatures(goos string, caps hypervisor.Capabilities, emulation bool) []string {
+// serverFeatures builds the server-level feature ID list: API surfaces that
+// are always present plus host-platform conditionals.
+func serverFeatures(goos string, emulation bool) []string {
 	features := []string{
 		featureInstances,
 		featureImages,
@@ -205,34 +182,7 @@ func assembleFeatures(goos string, caps hypervisor.Capabilities, emulation bool)
 		featureExec,
 		featureLogs,
 	}
-	if standbySupported(caps) {
-		features = append(features, featureStandby)
-	}
-	if caps.SupportsSnapshot {
-		features = append(features, featureSnapshots, featureFork)
-	}
-	if caps.SupportsPause {
-		features = append(features, featurePause)
-	}
-	if caps.SupportsHotplugMemory {
-		features = append(features, featureHotplugMemory)
-	}
-	if caps.SupportsBalloonControl {
-		features = append(features, featureBalloonControl)
-	}
-	if caps.SupportsVsock {
-		features = append(features, featureVsock)
-	}
-	if caps.SupportsGPUPassthrough {
-		features = append(features, featureGPUPassthrough)
-	}
-	if caps.SupportsDiskIOLimit {
-		features = append(features, featureDiskIOLimit)
-	}
-	if caps.SupportsDiskResize {
-		features = append(features, featureDiskResize)
-	}
-	// Device passthrough (GPU/PCI) is only meaningful on Linux hosts.
+	// Device (GPU/PCI) passthrough management is only available on Linux hosts.
 	if goos == "linux" {
 		features = append(features, featureDevices)
 	}
