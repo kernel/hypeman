@@ -110,6 +110,27 @@ func TestGetVersion_ParsesVersionCorrectly(t *testing.T) {
 	}
 }
 
+// probeRetryingETXTBSY runs versionFromBinary against a just-written script
+// with a fresh timeout-bounded context per attempt, retrying when exec fails
+// with ETXTBSY: another parallel test's fork can transiently inherit the
+// script's write descriptor between its own fork and exec (the well-known
+// fork/exec text-file-busy race), and a retry must not consume the probe
+// deadline the caller asserts on. Returns the final attempt's start time.
+func probeRetryingETXTBSY(t *testing.T, binaryPath string, timeout time.Duration) (time.Time, error) {
+	t.Helper()
+	for attempt := 0; ; attempt++ {
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		start := time.Now()
+		_, err := versionFromBinary(ctx, binaryPath)
+		cancel()
+		if errors.Is(err, syscall.ETXTBSY) && attempt < 100 {
+			time.Sleep(5 * time.Millisecond)
+			continue
+		}
+		return start, err
+	}
+}
+
 // TestVersionFromBinaryKillsProcessGroupOnTimeout pins that a cancelled
 // version probe terminates its entire process tree, not just the direct
 // child. A QEMU wrapper script that spawns a descendant (`sleep 60 & wait`)
@@ -133,10 +154,7 @@ func TestVersionFromBinaryKillsProcessGroupOnTimeout(t *testing.T) {
 		"wait\n"
 	require.NoError(t, os.WriteFile(binaryPath, []byte(script), 0o755))
 
-	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
-	defer cancel()
-	start := time.Now()
-	_, err := versionFromBinary(ctx, binaryPath)
+	start, err := probeRetryingETXTBSY(t, binaryPath, 250*time.Millisecond)
 	require.Error(t, err, "a hung probe must fail at the deadline")
 	require.Less(t, time.Since(start), 10*time.Second,
 		"a hung probe must return at the deadline, not run to completion")
@@ -186,10 +204,7 @@ func TestVersionFromBinaryKillsDescendantsWhenWrapperExitsFirst(t *testing.T) {
 		"exit 0\n"
 	require.NoError(t, os.WriteFile(binaryPath, []byte(script), 0o755))
 
-	ctx, cancel := context.WithTimeout(context.Background(), versionProbeTimeout)
-	defer cancel()
-	start := time.Now()
-	_, err := versionFromBinary(ctx, binaryPath)
+	start, err := probeRetryingETXTBSY(t, binaryPath, versionProbeTimeout)
 	// The descendant holds the output pipe past WaitDelay, so the probe
 	// reports ErrWaitDelay rather than success; what must never happen is
 	// the descendant outliving the probe.
