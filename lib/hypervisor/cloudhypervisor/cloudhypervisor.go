@@ -48,11 +48,11 @@ func (c *CloudHypervisor) Capabilities() hypervisor.Capabilities {
 	return capabilities()
 }
 
-// capabilities resolves the effective capability set from the configured
-// default version (see GetDefaultVersion), matching what the capability
-// registry reports, rather than the compile-time vmm.DefaultVersion.
+// capabilities preserves the legacy client behavior for clients that do not
+// carry instance-version metadata. The runtime registry separately resolves
+// capabilities for the configured default used by new launches.
 func capabilities() hypervisor.Capabilities {
-	return CapabilitiesForVersion(GetDefaultVersion())
+	return CapabilitiesForVersion(vmm.DefaultVersion)
 }
 
 // CapabilitiesForVersion returns capabilities for a specific CH version.

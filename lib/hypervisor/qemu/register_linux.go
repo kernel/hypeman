@@ -72,9 +72,9 @@ func checkLaunchPrerequisites() error {
 //     (versionFromBinary), because every cold start persists ResolveVersion's
 //     result and treats failure as fatal — a non-executable or broken binary
 //     accepted by GetBinaryPath's bare os.Stat must not report available;
-//   - the vhost-vsock host device must exist, because every created instance
-//     receives a nonzero vsock CID and buildArgs unconditionally attaches a
-//     vhost-vsock device for it.
+//   - the vhost-vsock host device must be a character device that this process
+//     can open read/write, because every created instance receives a nonzero
+//     vsock CID and buildArgs unconditionally attaches a vhost-vsock device.
 //
 // Split from checkLaunchPrerequisites so unavailable cases are testable with
 // fake binaries and device paths regardless of the host's QEMU install.
@@ -85,8 +85,23 @@ func checkLaunchPrerequisitesFor(ctx context.Context, binaryPath, vsockDevicePat
 	if _, err := versionFromBinary(ctx, binaryPath); err != nil {
 		return fmt.Errorf("qemu binary %s is not usable: %w", binaryPath, err)
 	}
-	if _, err := os.Stat(vsockDevicePath); err != nil {
-		return fmt.Errorf("vsock device %s is required for instance launches (load the vhost_vsock kernel module): %w", vsockDevicePath, err)
+	return validateVsockDevice(vsockDevicePath, os.OpenFile)
+}
+
+func validateVsockDevice(path string, openFile func(string, int, os.FileMode) (*os.File, error)) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("vsock device %s is required for instance launches (load the vhost_vsock kernel module): %w", path, err)
+	}
+	if info.Mode().Type() != os.ModeDevice|os.ModeCharDevice {
+		return fmt.Errorf("vsock device %s must be a character device (load the vhost_vsock kernel module)", path)
+	}
+	device, err := openFile(path, os.O_RDWR, 0)
+	if err != nil {
+		return fmt.Errorf("vsock device %s is not accessible read/write for instance launches: %w", path, err)
+	}
+	if err := device.Close(); err != nil {
+		return fmt.Errorf("close vsock device %s after launch check: %w", path, err)
 	}
 	return nil
 }

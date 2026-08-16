@@ -76,12 +76,15 @@ func fakeQEMUBinary(t *testing.T, dir string) string {
 	return path
 }
 
-// fakeVsockDevice creates a stand-in for /dev/vhost-vsock: the prerequisite
-// check only requires the device node to exist.
-func fakeVsockDevice(t *testing.T, dir string) string {
+// fakeVsockDevice uses a harmless character device as a stand-in for
+// /dev/vhost-vsock. The prerequisite check verifies node type and O_RDWR
+// access; it deliberately does not issue vhost ioctls during diagnostics.
+func fakeVsockDevice(t *testing.T, _ string) string {
 	t.Helper()
-	path := filepath.Join(dir, "vhost-vsock")
-	require.NoError(t, os.WriteFile(path, nil, 0o600))
+	const path = "/dev/null"
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	require.Equal(t, os.ModeDevice|os.ModeCharDevice, info.Mode().Type())
 	return path
 }
 
@@ -147,6 +150,34 @@ func TestCheckLaunchPrerequisitesFor(t *testing.T) {
 		})
 		require.ErrorContains(t, err, "vsock device")
 		require.ErrorContains(t, err, "vhost_vsock")
+	})
+
+	t.Run("regular file is not a vsock device", func(t *testing.T) {
+		dir := t.TempDir()
+		binary := fakeQEMUBinary(t, dir)
+		path := filepath.Join(dir, "vhost-vsock")
+		require.NoError(t, os.WriteFile(path, nil, 0o600))
+		err := retryingETXTBSY(t, func() error {
+			return checkLaunchPrerequisitesFor(ctx, binary, path)
+		})
+		require.ErrorContains(t, err, "must be a character device")
+	})
+
+	t.Run("directory is not a vsock device", func(t *testing.T) {
+		dir := t.TempDir()
+		binary := fakeQEMUBinary(t, dir)
+		err := retryingETXTBSY(t, func() error {
+			return checkLaunchPrerequisitesFor(ctx, binary, dir)
+		})
+		require.ErrorContains(t, err, "must be a character device")
+	})
+
+	t.Run("inaccessible character device fails", func(t *testing.T) {
+		err := validateVsockDevice("/dev/null", func(string, int, os.FileMode) (*os.File, error) {
+			return nil, os.ErrPermission
+		})
+		require.ErrorContains(t, err, "not accessible read/write")
+		require.ErrorIs(t, err, os.ErrPermission)
 	})
 
 	t.Run("hung binary fails at the context deadline", func(t *testing.T) {
