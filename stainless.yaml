@@ -29,6 +29,16 @@ targets:
         prerelease: false
     options:
       enable_v2: true
+  python:
+    package_name: hypeman
+    production_repo: kernel/hypeman-python
+    staging_repo: kernel/hypeman-python-staging
+    publish:
+      pypi: true
+      release:
+        branch: main
+        prerelease: false
+    project_name: hypeman
   typescript:
     edition: typescript.2025-10-10
     package_name: "@onkernel/hypeman"
