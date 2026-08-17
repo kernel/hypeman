@@ -75,6 +75,7 @@ func (m *manager) startInstance(
 	stored.HypervisorStartTime = 0
 	stored.HypervisorBootID = ""
 	rollbackMeta := *meta
+	rollbackMeta.Phases = meta.Phases.Clone()
 
 	// 2a. Clear stale exit info from previous run and apply command overrides
 	stored.ExitCode = nil
