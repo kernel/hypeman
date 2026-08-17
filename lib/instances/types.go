@@ -26,6 +26,18 @@ const (
 	StateUnknown      State = "Unknown"      // Failed to determine state (VMM query failed)
 )
 
+// Fork mode values reported on Instance.ForkMode (see StoredMetadata.ForkMode).
+const (
+	// ForkModeShared: the fork attaches to the source's memory copy-on-write via
+	// a shared mem-file. Firecracker forks from a Standby source (including the
+	// standby cycle of a Running-source fork).
+	ForkModeShared = "shared"
+	// ForkModeCopied: the fork was given a full private copy of the source's
+	// memory image (stopped-source forks, or hypervisors without shared-memory
+	// fork).
+	ForkModeCopied = "copied"
+)
+
 type EgressEnforcementMode string
 
 const (
@@ -136,6 +148,13 @@ type StoredMetadata struct {
 	FirecrackerUseUFFDOnNextRestore bool
 	FirecrackerUFFDSessionID        string
 	FirecrackerUFFDPagerVersion     string
+
+	// ForkMode records how this instance's memory image was produced when it
+	// was created by a fork: ForkModeShared (copy-on-write via a shared mem-file)
+	// or ForkModeCopied (a full private copy). Empty for instances that were not
+	// created by a fork. Read-only; echoed on the instance API so a caller can
+	// record the actual mode rather than infer it from the hypervisor.
+	ForkMode string
 
 	// Paths
 	SocketPath string // Path to API socket

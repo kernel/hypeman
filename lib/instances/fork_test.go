@@ -60,6 +60,9 @@ func TestForkInstance_VZStoppedSourceSupported(t *testing.T) {
 	assert.Equal(t, StateStopped, forked.State)
 	assert.Equal(t, hypervisor.TypeVZ, forked.HypervisorType)
 	assert.NotEqual(t, sourceID, forked.Id)
+	// A VZ stopped-source fork copies memory rather than sharing it, and the
+	// instance reports that measured mode (barista-046 §3.4 consumes this).
+	assert.Equal(t, ForkModeCopied, forked.ForkMode)
 }
 
 func TestResolveForkTargetState_DefaultsToSourceState(t *testing.T) {
