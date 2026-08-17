@@ -111,8 +111,17 @@ func refreshHypervisorPID(stored *StoredMetadata, state State) {
 // because the socket scan itself failed.
 func resolveLiveHypervisorPID(id HypervisorProcessIdentity, socketPath string) (int, error) {
 	stored := 0
-	if id.HypervisorPID != nil && ProcessExists(*id.HypervisorPID) {
-		stored = *id.HypervisorPID
+	if id.HypervisorPID != nil {
+		if ProcessExists(*id.HypervisorPID) {
+			stored = *id.HypervisorPID
+		} else {
+			// ProcessExists treats zombies as dead, so a direct-child VMM that
+			// exited on its own never reaches the Wait4 in WaitForProcessExit
+			// and would sit unreaped. Reap it here: WNOHANG leaves a live child
+			// untouched, and a recycled or non-child PID fails with ECHILD.
+			var status syscall.WaitStatus
+			_, _ = syscall.Wait4(*id.HypervisorPID, &status, syscall.WNOHANG, nil)
+		}
 	}
 	if runtime.GOOS != "linux" || socketPath == "" {
 		return stored, nil
