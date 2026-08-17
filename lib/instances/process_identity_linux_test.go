@@ -41,6 +41,29 @@ func TestResolveLiveHypervisorPIDWithoutStoredPID(t *testing.T) {
 	})
 }
 
+// TestResolveLiveHypervisorPIDReapsZombieChild guards against leaking one
+// zombie per direct-child VMM that exits on its own: ProcessExists treats
+// zombies as dead, so the confirmed-gone paths in stop, delete, and standby
+// never reach the Wait4 in WaitForProcessExit.
+func TestResolveLiveHypervisorPIDReapsZombieChild(t *testing.T) {
+	child := exec.Command("true")
+	require.NoError(t, child.Start())
+	pid := child.Process.Pid
+
+	require.Eventually(t, func() bool {
+		state, err := readLinuxProcessState(pid)
+		return err == nil && state == "Z"
+	}, 5*time.Second, 10*time.Millisecond, "child never became a zombie")
+
+	resolved, err := resolveLiveHypervisorPID(HypervisorProcessIdentity{HypervisorPID: &pid}, filepath.Join(t.TempDir(), "missing.sock"))
+	require.NoError(t, err)
+	assert.Zero(t, resolved)
+
+	var status syscall.WaitStatus
+	_, waitErr := syscall.Wait4(pid, &status, syscall.WNOHANG, nil)
+	assert.ErrorIs(t, waitErr, syscall.ECHILD, "zombie child was not reaped")
+}
+
 func TestHostBootIDIsStable(t *testing.T) {
 	first := hostBootID()
 	require.NotEmpty(t, first)

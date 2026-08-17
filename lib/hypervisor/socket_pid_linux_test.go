@@ -353,9 +353,11 @@ func TestResolveProcessPIDDuringProcessChurn(t *testing.T) {
 		<-done
 	}()
 
+	// Resolve without an owner hint so every iteration runs the full /proc
+	// scan; the owner fast path never exercises the churn tolerance.
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		pid, err := ResolveProcessPIDForOwner(socketPath, os.Getpid())
+		pid, err := ResolveProcessPID(socketPath)
 		require.NoError(t, err)
 		require.Equal(t, os.Getpid(), pid)
 	}
