@@ -37,8 +37,9 @@ func (s *ApiService) CreateImage(ctx context.Context, request oapi.CreateImageRe
 	log := logger.FromContext(ctx)
 
 	domainReq := images.CreateImageRequest{
-		Name: request.Body.Name,
-		Tags: toMapTags(request.Body.Tags),
+		Name:        request.Body.Name,
+		Tags:        toMapTags(request.Body.Tags),
+		Credentials: registryCredentialsToAuthn(request.Body.Credentials),
 	}
 	if request.Body.Platform != nil {
 		domainReq.Platform = *request.Body.Platform
@@ -71,6 +72,11 @@ func (s *ApiService) CreateImage(ctx context.Context, request oapi.CreateImageRe
 			return oapi.CreateImage429JSONResponse{
 				Code:    "rate_limited",
 				Message: images.RateLimitMessage,
+			}, nil
+		case errors.Is(err, images.ErrCredentialConflict):
+			return oapi.CreateImage409JSONResponse{
+				Code:    "credential_conflict",
+				Message: err.Error(),
 			}, nil
 		case errors.Is(err, images.ErrNotFound):
 			return oapi.CreateImage404JSONResponse{

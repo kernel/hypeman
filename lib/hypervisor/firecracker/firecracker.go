@@ -56,7 +56,9 @@ func (f *Firecracker) Capabilities() hypervisor.Capabilities {
 
 func capabilities() hypervisor.Capabilities {
 	return hypervisor.Capabilities{
-		SupportsSnapshot:                  true,
+		SupportsSnapshot: true,
+		// PrepareFork persists restore metadata overrides for forks (fork.go).
+		SupportsFork:                      true,
 		SupportsHotplugMemory:             false,
 		SupportsBalloonControl:            true,
 		SupportsPause:                     true,

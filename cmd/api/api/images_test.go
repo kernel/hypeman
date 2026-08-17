@@ -27,6 +27,52 @@ func (m createImageErrManager) CreateImage(context.Context, images.CreateImageRe
 	return nil, m.err
 }
 
+type captureCreateImageManager struct {
+	images.Manager
+	req images.CreateImageRequest
+}
+
+func (m *captureCreateImageManager) CreateImage(_ context.Context, req images.CreateImageRequest) (*images.Image, error) {
+	m.req = req
+	return &images.Image{Name: req.Name, Digest: "sha256:test", Status: images.StatusPending, CreatedAt: time.Now()}, nil
+}
+
+func TestCreateImage_MapsBorrowedCredentials(t *testing.T) {
+	t.Parallel()
+
+	username, password, token := "borrower", "secret", "registry-token"
+	manager := &captureCreateImageManager{}
+	svc := &ApiService{ImageManager: manager}
+
+	resp, err := svc.CreateImage(context.Background(), oapi.CreateImageRequestObject{Body: &oapi.CreateImageRequest{
+		Name: "registry.example/private/image:latest",
+		Credentials: &oapi.PushCredentials{
+			Username:      &username,
+			Password:      &password,
+			RegistryToken: &token,
+		},
+	}})
+	require.NoError(t, err)
+	require.IsType(t, oapi.CreateImage202JSONResponse{}, resp)
+	require.NotNil(t, manager.req.Credentials)
+	assert.Equal(t, username, manager.req.Credentials.Username)
+	assert.Equal(t, password, manager.req.Credentials.Password)
+	assert.Equal(t, token, manager.req.Credentials.RegistryToken)
+}
+
+func TestCreateImage_EmptyCredentialsUseServerKeychain(t *testing.T) {
+	t.Parallel()
+
+	manager := &captureCreateImageManager{}
+	svc := &ApiService{ImageManager: manager}
+	_, err := svc.CreateImage(context.Background(), oapi.CreateImageRequestObject{Body: &oapi.CreateImageRequest{
+		Name:        "docker.io/library/alpine:latest",
+		Credentials: &oapi.PushCredentials{},
+	}})
+	require.NoError(t, err)
+	assert.Nil(t, manager.req.Credentials)
+}
+
 func TestCreateImage_ErrorStatusMapping(t *testing.T) {
 	t.Parallel()
 
@@ -47,6 +93,12 @@ func TestCreateImage_ErrorStatusMapping(t *testing.T) {
 			err:      fmt.Errorf("resolve: %w", images.ErrRateLimited),
 			wantType: oapi.CreateImage429JSONResponse{},
 			wantCode: "rate_limited",
+		},
+		{
+			name:     "credential conflict -> 409",
+			err:      fmt.Errorf("resolve: %w", images.ErrCredentialConflict),
+			wantType: oapi.CreateImage409JSONResponse{},
+			wantCode: "credential_conflict",
 		},
 		{
 			name:     "not found -> 404",
@@ -83,6 +135,8 @@ func errorCodeOf(resp oapi.CreateImageResponseObject) string {
 	case oapi.CreateImage400JSONResponse:
 		return r.Code
 	case oapi.CreateImage404JSONResponse:
+		return r.Code
+	case oapi.CreateImage409JSONResponse:
 		return r.Code
 	case oapi.CreateImage429JSONResponse:
 		return r.Code

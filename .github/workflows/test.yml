@@ -53,8 +53,8 @@ jobs:
 
       - name: Check UFFD pager version
         run: |
-          git fetch "https://github.com/${{ github.repository }}.git" main:refs/remotes/upstream/main --depth=1
-          bash scripts/check-uffd-version.sh upstream/main
+          git fetch "https://github.com/${{ github.repository }}.git" main --depth=1
+          bash scripts/check-uffd-version.sh FETCH_HEAD
       
       - name: Install dependencies
         run: |
@@ -276,7 +276,7 @@ jobs:
   test-darwin:
     runs-on: [self-hosted, macos, arm64]
     concurrency:
-      group: macos-ci-test-${{ github.ref }}
+      group: macos-ci-test-${{ inputs.pr_head_sha || github.ref }}
       cancel-in-progress: true
     env:
       DATA_DIR: /tmp/hypeman-ci-${{ github.run_id }}
@@ -390,7 +390,7 @@ jobs:
     runs-on: [self-hosted, macos, arm64]
     needs: test-darwin
     concurrency:
-      group: macos-ci-e2e-${{ github.ref }}
+      group: macos-ci-e2e-${{ inputs.pr_head_sha || github.ref }}
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4

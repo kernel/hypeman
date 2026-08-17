@@ -1,11 +1,15 @@
 package qemu
 
 import (
+	"context"
 	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
+	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -104,6 +108,174 @@ func TestGetVersion_ParsesVersionCorrectly(t *testing.T) {
 			}
 		})
 	}
+}
+
+// retryingETXTBSY retries run while it fails with ETXTBSY: tests exec
+// just-written scripts, and another parallel test's fork can transiently
+// inherit a script's write descriptor between its own fork and exec (the
+// well-known fork/exec text-file-busy race), failing exec before the script
+// ever runs. Only that pre-execution error is retried, so assertions about
+// probe behavior are unaffected.
+func retryingETXTBSY(t *testing.T, run func() error) error {
+	t.Helper()
+	for attempt := 0; ; attempt++ {
+		err := run()
+		if errors.Is(err, syscall.ETXTBSY) && attempt < 100 {
+			time.Sleep(5 * time.Millisecond)
+			continue
+		}
+		return err
+	}
+}
+
+// probeRetryingETXTBSY runs versionFromBinary with a fresh caller-supplied
+// context per attempt (a retry must not consume the probe deadline the
+// caller asserts on), retrying the ETXTBSY exec race. Returns the final
+// attempt's start time.
+func probeRetryingETXTBSY(t *testing.T, binaryPath string, newCtx func() (context.Context, context.CancelFunc)) (time.Time, error) {
+	t.Helper()
+	var start time.Time
+	err := retryingETXTBSY(t, func() error {
+		ctx, cancel := newCtx()
+		defer cancel()
+		start = time.Now()
+		_, err := versionFromBinary(ctx, binaryPath)
+		return err
+	})
+	return start, err
+}
+
+// probeBackstopTimeout bounds the probe in tests that cancel it explicitly
+// (or expect it to finish on its own): generous enough that slow CI runners
+// — macOS can take hundreds of milliseconds to first-exec a fresh script —
+// never hit it, but far below the scripts' 60s sleeps so a regression still
+// fails fast instead of running descendants to completion.
+const probeBackstopTimeout = 30 * time.Second
+
+// pidFileReady reports whether a probe script has fully recorded a pid:
+// `echo $$ > file` creates the file before writing, so existence alone can
+// race an empty read.
+func pidFileReady(path string) bool {
+	data, err := os.ReadFile(path)
+	return err == nil && strings.TrimSpace(string(data)) != ""
+}
+
+// TestVersionFromBinaryKillsProcessGroupOnTimeout pins that a cancelled
+// version probe terminates its entire process tree, not just the direct
+// child. A QEMU wrapper script that spawns a descendant (`sleep 60 & wait`)
+// must leave neither the wrapper nor the descendant behind after the probe's
+// context is cancelled; otherwise every capability request against a wedged
+// binary would orphan a subprocess under PID 1. The test cancels the context
+// itself once the script has recorded both pids — a fixed short deadline
+// races slow script startup and can kill the group before the pid files
+// exist.
+func TestVersionFromBinaryKillsProcessGroupOnTimeout(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	parentPIDFile := filepath.Join(dir, "parent.pid")
+	childPIDFile := filepath.Join(dir, "child.pid")
+	binaryPath := filepath.Join(dir, "qemu-system-fake")
+	// Write both PIDs before blocking so the test can always observe them,
+	// then hang in `wait` with a background descendant — the shape that
+	// leaks when cancellation only signals the direct child.
+	script := "#!/bin/sh\n" +
+		"echo $$ > " + parentPIDFile + "\n" +
+		"sleep 60 &\n" +
+		"echo $! > " + childPIDFile + "\n" +
+		"wait\n"
+	require.NoError(t, os.WriteFile(binaryPath, []byte(script), 0o755))
+
+	// Cancel the probe as soon as the script has demonstrably hung with its
+	// descendant running (both pids recorded), never before.
+	watchCtx, stopWatch := context.WithCancel(context.Background())
+	defer stopWatch()
+	go func() {
+		for watchCtx.Err() == nil {
+			if pidFileReady(parentPIDFile) && pidFileReady(childPIDFile) {
+				stopWatch()
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}()
+
+	start, err := probeRetryingETXTBSY(t, binaryPath, func() (context.Context, context.CancelFunc) {
+		return context.WithTimeout(watchCtx, probeBackstopTimeout)
+	})
+	require.Error(t, err, "a hung probe must fail when its context is cancelled")
+	require.Less(t, time.Since(start), probeBackstopTimeout,
+		"a hung probe must return at cancellation, not run to completion")
+
+	readPID := func(path string) int {
+		data, readErr := os.ReadFile(path)
+		require.NoError(t, readErr, "probe script must have recorded %s before hanging", path)
+		pid, convErr := strconv.Atoi(strings.TrimSpace(string(data)))
+		require.NoError(t, convErr)
+		return pid
+	}
+	parentPID := readPID(parentPIDFile)
+	childPID := readPID(childPIDFile)
+
+	processGone := func(pid int) bool {
+		// Signal 0 probes existence; a killed-but-unreaped descendant still
+		// answers until init reaps it, hence Eventually below.
+		return errors.Is(syscall.Kill(pid, 0), syscall.ESRCH)
+	}
+	require.Eventually(t, func() bool {
+		return processGone(parentPID) && processGone(childPID)
+	}, 5*time.Second, 20*time.Millisecond,
+		"both the probe wrapper (pid %d) and its descendant (pid %d) must be killed with the process group",
+		parentPID, childPID)
+}
+
+// TestVersionFromBinaryKillsDescendantsWhenWrapperExitsFirst pins the
+// completion-path group kill. cmd.Cancel only fires on context cancellation,
+// so when the direct wrapper prints a valid version and exits immediately
+// while a background descendant keeps the inherited stdout pipe open, no
+// cancellation ever runs: Output merely unblocks after WaitDelay with
+// ErrWaitDelay and — before the fix — the descendant survived, so every
+// capability-cache refresh against such a binary leaked one process.
+func TestVersionFromBinaryKillsDescendantsWhenWrapperExitsFirst(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	childPIDFile := filepath.Join(dir, "child.pid")
+	binaryPath := filepath.Join(dir, "qemu-system-fake")
+	// The wrapper answers the probe correctly, spawns a descendant that
+	// inherits (and holds) the stdout pipe, and exits before the context
+	// deadline — the shape where cmd.Cancel never runs.
+	script := "#!/bin/sh\n" +
+		"echo 'QEMU emulator version 8.2.0'\n" +
+		"sleep 60 &\n" +
+		"echo $! > " + childPIDFile + "\n" +
+		"exit 0\n"
+	require.NoError(t, os.WriteFile(binaryPath, []byte(script), 0o755))
+
+	start, err := probeRetryingETXTBSY(t, binaryPath, func() (context.Context, context.CancelFunc) {
+		return context.WithTimeout(context.Background(), probeBackstopTimeout)
+	})
+	// The descendant holds the output pipe past WaitDelay, so the probe
+	// reports ErrWaitDelay rather than success — which also proves it did not
+	// run to the context deadline; what must never happen is the descendant
+	// outliving the probe.
+	require.ErrorIs(t, err, exec.ErrWaitDelay,
+		"a wrapper whose descendant holds the output pipe completes via WaitDelay")
+	require.Less(t, time.Since(start), probeBackstopTimeout,
+		"the wrapper exited immediately; the probe must return at WaitDelay, not the context deadline")
+
+	// The wrapper wrote the descendant's pid before exiting, and the probe
+	// cannot return before the wrapper exits, so the file is complete here.
+	data, readErr := os.ReadFile(childPIDFile)
+	require.NoError(t, readErr, "probe wrapper must have recorded its descendant's pid before exiting")
+	childPID, convErr := strconv.Atoi(strings.TrimSpace(string(data)))
+	require.NoError(t, convErr)
+
+	require.Eventually(t, func() bool {
+		return errors.Is(syscall.Kill(childPID, 0), syscall.ESRCH)
+	}, 5*time.Second, 20*time.Millisecond,
+		"background descendant (pid %d) must be killed when the probe completes, even though the wrapper exited before the context deadline",
+		childPID)
 }
 
 func TestSaveAndLoadVMConfigPreservesRestoreContract(t *testing.T) {
