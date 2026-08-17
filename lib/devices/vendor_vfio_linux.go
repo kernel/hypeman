@@ -292,6 +292,7 @@ func (s vendorVFIOSysfs) reconcile(ctx context.Context, protectedDevicePaths map
 			continue
 		}
 		if inUse {
+			log.WarnContext(ctx, "preserving vendor VFIO vGPU held open without a live instance claim", "vf", vf.PCIAddress)
 			continue
 		}
 		if err := s.destroyWithOpenPaths(ctx, vf.PCIAddress, "", openPaths); err != nil {
