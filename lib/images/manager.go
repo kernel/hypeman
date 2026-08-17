@@ -340,17 +340,20 @@ func (m *manager) releaseInflightPull(digest string, inflight *inflightImagePull
 	}
 }
 
-func (m *manager) borrowedAuth(digest string) (*authn.AuthConfig, time.Time, bool) {
+func (m *manager) borrowedAuth(digest string, expected *inflightImagePull) (*authn.AuthConfig, time.Time, bool, bool) {
 	m.createMu.Lock()
 	defer m.createMu.Unlock()
 	inflight := m.inflightPulls[digest]
+	if expected != nil && inflight != expected {
+		return nil, time.Time{}, false, true
+	}
 	if inflight == nil || inflight.credentialsExpireAt.IsZero() {
-		return nil, time.Time{}, false
+		return nil, time.Time{}, false, false
 	}
 	if inflight.credentials == nil || time.Now().After(inflight.credentialsExpireAt) {
-		return nil, inflight.credentialsExpireAt, true
+		return nil, inflight.credentialsExpireAt, true, false
 	}
-	return inflight.credentials, inflight.credentialsExpireAt, false
+	return inflight.credentials, inflight.credentialsExpireAt, false, false
 }
 
 func (m *manager) createAndQueueImage(ref *ResolvedRef, req CreateImageRequest, requestedPlatform Platform) (*Image, error) {
@@ -386,7 +389,10 @@ func (m *manager) createAndQueueImage(ref *ResolvedRef, req CreateImageRequest, 
 	inflight := m.registerInflightPull(ref.Digest(), req.Credentials)
 	buildID := meta.BuildID
 	queuePos := m.queue.EnqueueSuccessor(ref.Digest(), func() {
-		credentials, deadline, expired := m.borrowedAuth(ref.Digest())
+		credentials, deadline, expired, stale := m.borrowedAuth(ref.Digest(), inflight)
+		if stale {
+			return
+		}
 		if expired {
 			m.updateStatusByDigest(ref, StatusFailed, ErrBorrowedCredentialsExpired, buildID)
 			return
