@@ -150,6 +150,8 @@ type Controller struct {
 	standbySlots         chan struct{}
 	standbyWG            sync.WaitGroup
 
+	// mu guards in-memory state only and must never be held across metadata
+	// or conntrack I/O; HoldStandby latency depends on it.
 	mu                sync.RWMutex
 	states            map[string]*controllerState
 	standbyInFlight   int
@@ -448,6 +450,7 @@ func (c *Controller) Describe(inst Instance) StatusSnapshot {
 // a standby operation is executing, and is a no-op for instances that cannot
 // auto-standby at all (unconfigured, disabled, or ineligible).
 func (c *Controller) HoldStandby(_ context.Context, inst Instance) (StatusSnapshot, error) {
+	defer c.recordHoldDuration(time.Now())
 	now := c.now().UTC()
 
 	c.mu.Lock()
@@ -586,6 +589,12 @@ func (c *Controller) handleInstanceEvent(ctx context.Context, event InstanceEven
 
 func (c *Controller) refreshInstanceLocked(inst Instance, conns []Connection, now time.Time) (runtimePersistence, error) {
 	state := c.ensureStateLocked(inst.ID)
+	// A refresh built from a snapshot taken before an in-flight standby
+	// completes would re-arm the countdown and supersede the standby's runtime
+	// clear; the standby worker owns the state until it finishes.
+	if state.standbyExecuting {
+		return runtimePersistence{}, nil
+	}
 	state.instance = cloneInstance(inst)
 
 	if !eligible(inst) {

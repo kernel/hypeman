@@ -1126,6 +1126,49 @@ func idleTestInstance(id, ip string, idleSince time.Time) Instance {
 	}
 }
 
+func TestRefreshDuringExecutingStandbyDoesNotRearm(t *testing.T) {
+	t.Parallel()
+
+	idleSince := time.Date(2026, 4, 6, 10, 55, 0, 0, time.UTC)
+	now := idleSince.Add(time.Minute)
+	inst := idleTestInstance("inst-refresh-during-standby", "192.168.100.165", idleSince)
+	store := newFakeInstanceStore([]Instance{inst})
+	store.standbyStarted = make(chan string, 1)
+	store.standbyRelease = make(chan struct{})
+	controller := NewController(store, &fakeConnectionSource{}, ControllerOptions{
+		Now: func() time.Time { return now },
+	})
+	require.NoError(t, controller.startupResync(context.Background()))
+
+	controller.handleStandbyTimer(context.Background(), inst.ID)
+	require.Equal(t, inst.ID, <-store.standbyStarted)
+
+	// A resync snapshot taken before the standby completes still carries the
+	// old idle runtime; it must not re-arm the countdown or persist it.
+	stale := cloneInstance(inst)
+	require.NoError(t, controller.seedInstanceState(context.Background(), stale, nil, now))
+
+	controller.mu.RLock()
+	state := controller.states[inst.ID]
+	require.NotNil(t, state)
+	assert.True(t, state.standbyExecuting)
+	assert.Nil(t, state.nextStandbyAt)
+	controller.mu.RUnlock()
+
+	close(store.standbyRelease)
+	controller.standbyWG.Wait()
+
+	controller.mu.RLock()
+	state = controller.states[inst.ID]
+	require.NotNil(t, state)
+	assert.Nil(t, state.idleSince)
+	assert.Nil(t, state.nextStandbyAt)
+	controller.mu.RUnlock()
+	runtime, ok := store.persistedRuntime[inst.ID]
+	require.True(t, ok)
+	assert.Nil(t, runtime)
+}
+
 func TestStandbyExecutionBoundedByMaxConcurrent(t *testing.T) {
 	t.Parallel()
 
@@ -1545,6 +1588,41 @@ func TestHoldStandbyDoesNotWaitForRuntimePersistence(t *testing.T) {
 
 	close(persistenceRelease)
 	require.NoError(t, <-resyncDone)
+}
+
+func TestHoldStandbyFastWhileAnotherInstanceStandbyBlocked(t *testing.T) {
+	t.Parallel()
+
+	idleSince := time.Date(2026, 4, 6, 10, 55, 0, 0, time.UTC)
+	now := idleSince.Add(time.Minute)
+	blocked := idleTestInstance("inst-blocked-standby", "192.168.100.166", idleSince)
+	other := idleTestInstance("inst-held", "192.168.100.167", idleSince)
+	store := newFakeInstanceStore([]Instance{blocked, other})
+	store.standbyStarted = make(chan string, 1)
+	store.standbyRelease = make(chan struct{})
+	controller := NewController(store, &fakeConnectionSource{}, ControllerOptions{
+		Now: func() time.Time { return now },
+	})
+	require.NoError(t, controller.startupResync(context.Background()))
+
+	controller.handleStandbyTimer(context.Background(), blocked.ID)
+	require.Equal(t, blocked.ID, <-store.standbyStarted)
+
+	holdDone := make(chan error, 1)
+	go func() {
+		_, err := controller.HoldStandby(context.Background(), other)
+		holdDone <- err
+	}()
+	select {
+	case err := <-holdDone:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		close(store.standbyRelease)
+		require.FailNow(t, "hold blocked behind another instance's standby")
+	}
+
+	close(store.standbyRelease)
+	controller.standbyWG.Wait()
 }
 
 func TestHoldStandbyExtendsArmedCountdown(t *testing.T) {
