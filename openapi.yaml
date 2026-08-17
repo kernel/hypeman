@@ -1021,6 +1021,18 @@ components:
           description: Error message if state couldn't be determined (only set when state is Unknown)
           nullable: true
           example: "failed to query VMM: connection refused"
+        fork_mode:
+          type: string
+          readOnly: true
+          enum: [shared, copied]
+          description: >
+            How this instance's memory image was produced, when it was created by
+            a fork. "shared" means it attaches to the source's memory
+            copy-on-write (a shared mem-file; the source is frozen only if it was
+            Running at fork time); "copied" means a full private copy was made.
+            Absent for instances that were not created by a fork. Reported so a
+            caller can record the actual fork mode instead of inferring it.
+          example: shared
         size:
           type: string
           description: Base memory size (human-readable)

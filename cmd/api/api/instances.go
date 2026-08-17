@@ -1209,6 +1209,11 @@ func instanceToOAPI(inst instances.Instance) oapi.Instance {
 	if inst.Platform != "" {
 		oapiInst.Platform = lo.ToPtr(inst.Platform)
 	}
+
+	if inst.ForkMode != "" {
+		oapiInst.ForkMode = lo.ToPtr(oapi.InstanceForkMode(inst.ForkMode))
+	}
+
 	if inst.ExitMessage != "" {
 		oapiInst.ExitMessage = lo.ToPtr(inst.ExitMessage)
 	}
