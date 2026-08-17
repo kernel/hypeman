@@ -4,6 +4,7 @@ package qemu
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -49,7 +50,6 @@ func init() {
 	for _, profile := range []profile{StandardProfile{}, MicroVMProfile{}} {
 		hypervisorType := profile.hypervisorType()
 		hypervisor.RegisterSocketName(hypervisorType, "qemu.sock")
-		hypervisor.RegisterCapabilities(hypervisorType, profile.capabilities())
 		t := hypervisorType
 		hypervisor.RegisterClientFactory(t, func(socketPath string) (hypervisor.Hypervisor, error) {
 			return NewForType(socketPath, t)
@@ -136,9 +136,53 @@ func (s *Starter) detectVersion(p *paths.Paths) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), versionProbeTimeout)
+	defer cancel()
+	return versionFromBinary(ctx, binaryPath)
+}
 
-	cmd := exec.Command(binaryPath, "--version")
+// versionProbeTimeout bounds a single `qemu --version` execution. The probe
+// runs on capability requests (launch checks) as well as launches, so a hung
+// or broken binary must fail the caller promptly instead of leaking
+// subprocesses and goroutines indefinitely.
+const versionProbeTimeout = 5 * time.Second
+
+// versionFromBinary runs the resolved QEMU binary's --version and parses the
+// installed version from its output. It is the version probe behind
+// GetVersion/ResolveVersion — every cold start persists its result — and the
+// capability registry's launch check reuses it so "available" means the same
+// binary execution that launches require actually succeeds. Execution is
+// bounded by ctx (callers pass a versionProbeTimeout-derived context). The
+// probe runs in its own process group, and the whole group is SIGKILLed on
+// every completion path: the default CommandContext cancel only signals the
+// direct child (orphaning a wrapper script's children past the deadline),
+// and Cancel never fires at all when the direct child exits before the
+// deadline — a wrapper that leaves a background descendant holding the
+// output pipe would otherwise leak that descendant on every probe, with
+// WaitDelay merely unblocking Output rather than cleaning up. ESRCH from the
+// group kill means every group member already exited.
+func versionFromBinary(ctx context.Context, binaryPath string) (string, error) {
+	cmd := exec.CommandContext(ctx, binaryPath, "--version")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		// Setpgid makes the child's pgid its own pid; signal the group so
+		// descendants die (and get reaped by init) with the probe.
+		err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		if errors.Is(err, syscall.ESRCH) {
+			return os.ErrProcessDone
+		}
+		return err
+	}
+	cmd.WaitDelay = time.Second
 	output, err := cmd.Output()
+	if cmd.Process != nil {
+		// Kill the group on every completion path, not only via cmd.Cancel:
+		// Cancel never runs when the direct child exits before the context
+		// deadline, so descendants it left behind (still pinning the child's
+		// pid as their pgid) must be reaped here. A no-op ESRCH when the
+		// group is already empty.
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
 	if err != nil {
 		return "", fmt.Errorf("get qemu version: %w", err)
 	}
@@ -151,6 +195,25 @@ func (s *Starter) detectVersion(p *paths.Paths) (string, error) {
 	}
 
 	return "", fmt.Errorf("could not parse QEMU version from: %s", string(output))
+}
+
+// validateExecutable rejects paths that cannot be executed as the QEMU
+// binary: missing files, directories, and files without an execute bit.
+// GetBinaryPath's fixed /usr/bin and /usr/local/bin candidates are accepted
+// on a bare os.Stat, so launch-prerequisite checks must not assume a
+// resolved path is runnable.
+func validateExecutable(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if info.IsDir() {
+		return fmt.Errorf("path is a directory")
+	}
+	if info.Mode()&0111 == 0 {
+		return fmt.Errorf("file is not executable")
+	}
+	return nil
 }
 
 // buildQMPArgs returns the base QMP socket arguments for QEMU.

@@ -10,7 +10,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"runtime"
 	"time"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
@@ -84,7 +83,20 @@ func (c *Client) Capabilities() hypervisor.Capabilities {
 
 func capabilities() hypervisor.Capabilities {
 	return hypervisor.Capabilities{
-		SupportsSnapshot:            runtime.GOARCH == "arm64",
+		// Snapshot/standby support is runtime-derived: it requires Apple
+		// Silicon AND macOS 14+. An arm64-only check would overstate
+		// support on macOS 13 hosts.
+		SupportsSnapshot: saveRestoreSupported(),
+		// PrepareFork is implemented for every source state (fork.go): a
+		// stopped-source fork clones disks with no machine-state snapshot
+		// involved, so it works even where Virtualization.framework lacks VM
+		// save/restore (macOS 13). Gating fork on the save/restore probe
+		// would hide that valid operation. Forking a standby or running
+		// source does restore/create snapshots, but that is the documented
+		// contract of the fork feature itself: those source states
+		// additionally require the standby feature, which this backend
+		// derives from the save/restore probe (SupportsSnapshot above).
+		SupportsFork:                true,
 		SupportsHotplugMemory:       false,
 		SupportsBalloonControl:      true,
 		SupportsPause:               true,

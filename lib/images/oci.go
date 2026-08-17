@@ -27,6 +27,19 @@ type ociClient struct {
 	cacheDir string
 }
 
+type credentialedManifestInspector struct {
+	client      *ociClient
+	credentials *authn.AuthConfig
+}
+
+func (i *credentialedManifestInspector) inspectManifestWithPlatform(ctx context.Context, imageRef string, platform gcr.Platform) (string, error) {
+	return i.client.inspectManifestWithPlatformAuth(ctx, imageRef, platform, i.credentials)
+}
+
+func (i *credentialedManifestInspector) inspectDigestPlatform(ctx context.Context, imageRef string, requested gcr.Platform) (Platform, string, error) {
+	return i.client.inspectDigestPlatformAuth(ctx, imageRef, requested, i.credentials)
+}
+
 // digestToLayoutTag converts a digest to a valid OCI layout tag.
 // Uses just the hex portion without the algorithm prefix.
 // Example: "sha256:abc123..." -> "abc123..."
@@ -81,6 +94,10 @@ func (c *ociClient) inspectManifest(ctx context.Context, imageRef string) (strin
 // inspectManifestWithPlatform synchronously inspects a remote image to get its digest
 // for a specific platform.
 func (c *ociClient) inspectManifestWithPlatform(ctx context.Context, imageRef string, platform gcr.Platform) (string, error) {
+	return c.inspectManifestWithPlatformAuth(ctx, imageRef, platform, nil)
+}
+
+func (c *ociClient) inspectManifestWithPlatformAuth(ctx context.Context, imageRef string, platform gcr.Platform, credentials *authn.AuthConfig) (string, error) {
 	ref, err := name.ParseReference(imageRef)
 	if err != nil {
 		return "", fmt.Errorf("parse image reference: %w", err)
@@ -93,10 +110,9 @@ func (c *ociClient) inspectManifestWithPlatform(ctx context.Context, imageRef st
 	//
 	// Registry-error classification (rate-limit, not-found, platform-not-available)
 	// is centralized here so callers can `%w` the result without re-wrapping.
-	img, err := remote.Image(ref,
-		remote.WithContext(ctx),
-		remote.WithAuthFromKeychain(authn.DefaultKeychain),
-		remote.WithPlatform(platform))
+	opts := registryRemoteOptions(ctx, credentials)
+	opts = append(opts, remote.WithPlatform(platform))
+	img, err := remote.Image(ref, opts...)
 	if err != nil {
 		return "", fmt.Errorf("fetch manifest: %w", ClassifyRegistryError(err))
 	}
@@ -129,14 +145,16 @@ func (c *ociClient) inspectManifestWithPlatform(ctx context.Context, imageRef st
 // A digest absent from the registry surfaces as a not-found error, classified by
 // ClassifyRegistryError.
 func (c *ociClient) inspectDigestPlatform(ctx context.Context, imageRef string, requested gcr.Platform) (Platform, string, error) {
+	return c.inspectDigestPlatformAuth(ctx, imageRef, requested, nil)
+}
+
+func (c *ociClient) inspectDigestPlatformAuth(ctx context.Context, imageRef string, requested gcr.Platform, credentials *authn.AuthConfig) (Platform, string, error) {
 	ref, err := name.ParseReference(imageRef)
 	if err != nil {
 		return Platform{}, "", fmt.Errorf("parse image reference: %w", err)
 	}
 
-	desc, err := remote.Get(ref,
-		remote.WithContext(ctx),
-		remote.WithAuthFromKeychain(authn.DefaultKeychain))
+	desc, err := remote.Get(ref, registryRemoteOptions(ctx, credentials)...)
 	if err != nil {
 		return Platform{}, "", fmt.Errorf("fetch manifest: %w", ClassifyRegistryError(err))
 	}
@@ -145,10 +163,9 @@ func (c *ociClient) inspectDigestPlatform(ctx context.Context, imageRef string, 
 	if desc.MediaType.IsIndex() {
 		// Index: select the child for the requested platform. WithPlatform on the
 		// re-parsed digest ref is correct here because the digest names the index.
-		img, err = remote.Image(ref,
-			remote.WithContext(ctx),
-			remote.WithAuthFromKeychain(authn.DefaultKeychain),
-			remote.WithPlatform(requested))
+		opts := registryRemoteOptions(ctx, credentials)
+		opts = append(opts, remote.WithPlatform(requested))
+		img, err = remote.Image(ref, opts...)
 	} else {
 		// Single-arch manifest: the digest already pins the exact image.
 		img, err = desc.Image()
@@ -206,10 +223,18 @@ func (r *pullResult) measure(phase string, operation func() error) error {
 }
 
 func (c *ociClient) pullAndExport(ctx context.Context, imageRef, digest, exportDir string) (*pullResult, error) {
-	return c.pullAndExportWithPlatform(ctx, imageRef, digest, exportDir, vmPlatform())
+	return c.pullAndExportWithAuth(ctx, imageRef, digest, exportDir, nil)
+}
+
+func (c *ociClient) pullAndExportWithAuth(ctx context.Context, imageRef, digest, exportDir string, credentials *authn.AuthConfig) (*pullResult, error) {
+	return c.pullAndExportWithPlatformAuth(ctx, imageRef, digest, exportDir, vmPlatform(), credentials)
 }
 
 func (c *ociClient) pullAndExportWithPlatform(ctx context.Context, imageRef, digest, exportDir string, platform gcr.Platform) (*pullResult, error) {
+	return c.pullAndExportWithPlatformAuth(ctx, imageRef, digest, exportDir, platform, nil)
+}
+
+func (c *ociClient) pullAndExportWithPlatformAuth(ctx context.Context, imageRef, digest, exportDir string, platform gcr.Platform, credentials *authn.AuthConfig) (*pullResult, error) {
 	// Use a shared OCI layout for all images to enable automatic layer caching
 	// The cacheDir itself is the OCI layout root with shared blobs/sha256/ directory
 	// The digest is ALWAYS known at this point (from inspectManifest or digest reference)
@@ -227,7 +252,7 @@ func (c *ociClient) pullAndExportWithPlatform(ctx context.Context, imageRef, dig
 	if !result.CacheHit {
 		// Not cached, pull it using digest-based tag
 		if err := result.measure("registry_pull", func() error {
-			return c.pullToOCILayoutWithPlatform(ctx, imageRef, layoutTag, platform)
+			return c.pullToOCILayoutWithPlatformAuth(ctx, imageRef, layoutTag, platform, credentials)
 		}); err != nil {
 			return result, fmt.Errorf("pull to oci layout: %w", err)
 		}
@@ -265,6 +290,10 @@ func (c *ociClient) pullToOCILayout(ctx context.Context, imageRef, layoutTag str
 }
 
 func (c *ociClient) pullToOCILayoutWithPlatform(ctx context.Context, imageRef, layoutTag string, platform gcr.Platform) error {
+	return c.pullToOCILayoutWithPlatformAuth(ctx, imageRef, layoutTag, platform, nil)
+}
+
+func (c *ociClient) pullToOCILayoutWithPlatformAuth(ctx context.Context, imageRef, layoutTag string, platform gcr.Platform, credentials *authn.AuthConfig) error {
 	ref, err := name.ParseReference(imageRef)
 	if err != nil {
 		return fmt.Errorf("parse image reference: %w", err)
@@ -273,10 +302,9 @@ func (c *ociClient) pullToOCILayoutWithPlatform(ctx context.Context, imageRef, l
 	// Use system authentication (reads from ~/.docker/config.json, etc.)
 	// Default retry: only on network errors, max ~1.3s total
 	// WithPlatform ensures we pull the correct architecture for multi-arch images
-	img, err := remote.Image(ref,
-		remote.WithContext(ctx),
-		remote.WithAuthFromKeychain(authn.DefaultKeychain),
-		remote.WithPlatform(platform))
+	opts := registryRemoteOptions(ctx, credentials)
+	opts = append(opts, remote.WithPlatform(platform))
+	img, err := remote.Image(ref, opts...)
 	if err != nil {
 		// Rate limits fail here immediately (429 is not retried by default)
 		return fmt.Errorf("fetch image manifest: %w", ClassifyRegistryError(err))
@@ -304,6 +332,14 @@ func (c *ociClient) pullToOCILayoutWithPlatform(ctx context.Context, imageRef, l
 	}
 
 	return nil
+}
+
+func registryRemoteOptions(ctx context.Context, credentials *authn.AuthConfig) []remote.Option {
+	opts := []remote.Option{remote.WithContext(ctx)}
+	if credentials == nil {
+		return append(opts, remote.WithAuthFromKeychain(authn.DefaultKeychain))
+	}
+	return append(opts, remote.WithAuth(authn.FromConfig(*credentials)))
 }
 
 // extractDigest gets the manifest digest from the OCI layout

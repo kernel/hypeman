@@ -25,6 +25,23 @@ runs:
       with:
         version: "10.30.1"
 
+    - name: Install Rye
+      # The Python SDK's scripts/bootstrap runs `rye sync`.
+      shell: bash
+      env:
+        RYE_VERSION: "0.44.0"
+        RYE_SHA256: "e55e8b844c44820b540c3df46c8d4a3cee43a42ce5302e92bcd99b21d194a9bc"
+      run: |
+        rye_archive="$RUNNER_TEMP/rye-x86_64-linux.gz"
+        curl --fail --silent --show-error --location \
+          "https://github.com/astral-sh/rye/releases/download/${RYE_VERSION}/rye-x86_64-linux.gz" \
+          --output "$rye_archive"
+        echo "$RYE_SHA256  $rye_archive" | sha256sum --check
+        mkdir -p "$HOME/.rye/shims"
+        gzip --decompress --stdout "$rye_archive" > "$HOME/.rye/shims/rye"
+        chmod +x "$HOME/.rye/shims/rye"
+        echo "$HOME/.rye/shims" >> "$GITHUB_PATH"
+
     - name: Install stlc and target generators
       shell: bash
       env:
@@ -39,5 +56,6 @@ runs:
         npm install -g \
           "git+https://x-access-token:${STLC_READ_TOKEN}@github.com/stainless/stlc.git#cfc85d2651330f7ba6a94dbe8e3c92ab64124f38" \
           "git+https://x-access-token:${STLC_READ_TOKEN}@github.com/stainless/stlc-typescript.git#cd63c03a3381e7fbf05e1de78fb3e38a1fd1aaee" \
+          "git+https://x-access-token:${STLC_READ_TOKEN}@github.com/stainless/stlc-python.git#d67054a81ed5b5b863a2bbc321a23e9b66a8832d" \
           "git+https://x-access-token:${STLC_READ_TOKEN}@github.com/stainless/stlc-go.git#9473a876905d28ab87c5a7bce69199a9389a2094"
         stlc version

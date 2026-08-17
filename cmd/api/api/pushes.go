@@ -26,7 +26,7 @@ func (s *ApiService) CreatePush(ctx context.Context, request oapi.CreatePushRequ
 	domainReq := imagepush.PushRequest{
 		Image:       request.Body.Image,
 		Target:      request.Body.Target,
-		Credentials: pushCredentialsToAuthn(request.Body.Credentials),
+		Credentials: registryCredentialsToAuthn(request.Body.Credentials),
 	}
 	if request.Body.Insecure != nil {
 		domainReq.Insecure = *request.Body.Insecure
@@ -123,11 +123,10 @@ func (s *ApiService) ListPushes(ctx context.Context, request oapi.ListPushesRequ
 	return oapi.ListPushes200JSONResponse(out), nil
 }
 
-// pushCredentialsToAuthn maps API credentials to the go-containerregistry
-// auth config. Returns nil when absent or empty so the push falls back to
-// the server's default credential resolution — an empty credentials object
-// must not mask the keychain.
-func pushCredentialsToAuthn(creds *oapi.PushCredentials) *authn.AuthConfig {
+// registryCredentialsToAuthn maps borrowed API credentials to the
+// go-containerregistry auth config. Nil and empty credentials preserve the
+// server's default keychain behavior.
+func registryCredentialsToAuthn(creds *oapi.PushCredentials) *authn.AuthConfig {
 	if creds == nil {
 		return nil
 	}

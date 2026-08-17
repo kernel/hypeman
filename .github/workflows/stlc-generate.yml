@@ -1,4 +1,4 @@
-# Generates the TypeScript and Go SDKs with the self-hosted stlc CLI,
+# Generates the Python, TypeScript, and Go SDKs with the self-hosted stlc CLI,
 # replacing the hosted-Stainless pipeline that stainless-sdks.yml used to drive.
 #
 # On pull_request: builds every target, pushes a stlc/preview/pr-N branch to each
@@ -60,8 +60,8 @@ env:
   # An integration-test dispatch pushes this branch instead of the preview
   # branch or main.
   INTEGRATION_BRANCH: stlc/integration-test/run-${{ github.run_id }}
-  SDK_REPOS: hypeman-go-staging hypeman-ts-staging
-  SDK_TARGETS: go,typescript
+  SDK_REPOS: hypeman-go-staging hypeman-python-staging hypeman-ts-staging
+  SDK_TARGETS: go,python,typescript
 
 jobs:
   guard:
@@ -170,7 +170,7 @@ jobs:
           app-id: ${{ secrets.ADMIN_APP_ID }}
           private-key: ${{ secrets.ADMIN_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
-          repositories: hypeman-go,hypeman-ts,hypeman-go-staging,hypeman-ts-staging
+          repositories: hypeman-go,hypeman-python,hypeman-ts,hypeman-go-staging,hypeman-python-staging,hypeman-ts-staging
           permission-contents: write
           permission-workflows: write
           permission-pull-requests: write
@@ -214,6 +214,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Generate and validate SDKs
+        id: build
         env:
           # A per-PR preview branch on pull_request, the integration-test branch
           # on an integration-test dispatch, the trunk otherwise.
@@ -249,6 +250,48 @@ jobs:
             --no-lint \
             --push \
             --targets all
+
+      - name: Report a pending seal-tracking PR on a custom-code conflict
+        # Keep one actionable comment while an open tracking PR may explain the
+        # conflict, and remove it once that condition no longer applies.
+        if: always()
+        env:
+          BUILD_OUTCOME: ${{ steps.build.outcome }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          existing=""
+          if [ -n "$PR" ]; then
+            existing=$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
+              --jq '[.[] | select(.body | contains("<!-- stlc-seal-pending -->")) | .id][0] // empty')
+            existing=${existing%%$'\n'*}
+          fi
+
+          seal_pr=""
+          if [ "$BUILD_OUTCOME" = "failure" ]; then
+            status=$(cd "$STAINLESS_WORKSPACE" && stlc status 2>&1 || true)
+            if printf '%s\n' "$status" | grep -qi conflict; then
+              seal_pr=$(gh pr list --repo "$REPO" --head stlc/seal-tracking --state open --json url --jq '.[0].url // empty')
+            fi
+          fi
+
+          if [ -n "$seal_pr" ]; then
+            echo "::error::stlc encountered a custom-code conflict while a tracking-file sync PR is open: $seal_pr. Stale tracking files may be the cause. Merge that PR, update the affected branch from main, and let a new workflow run. If the conflict persists, use stlc status to resolve it as a legitimate custom-code conflict."
+            [ -n "$PR" ] || exit 0
+            body="<!-- stlc-seal-pending -->
+          This build encountered a custom-code conflict while a tracking-file sync PR is open: $seal_pr
+
+          Stale tracking files may be the cause. Merge the tracking PR, update this branch from \`main\`, and let a new workflow run. If the conflict persists, follow \`stlc status\` to resolve it as a legitimate custom-code conflict."
+            if [ -n "$existing" ]; then
+              gh api -X PATCH "repos/$REPO/issues/comments/$existing" -f body="$body"
+            else
+              gh api -X POST "repos/$REPO/issues/$PR/comments" -f body="$body"
+            fi
+          elif [ -n "$existing" ] && [ "$BUILD_OUTCOME" != "skipped" ]; then
+            gh api -X DELETE "repos/$REPO/issues/comments/$existing"
+          fi
 
       - name: Open or update draft PRs on the SDK repos
         # Integration-test runs only: a do-not-merge draft PR per SDK repo.
@@ -377,7 +420,7 @@ jobs:
           app-id: ${{ secrets.ADMIN_APP_ID }}
           private-key: ${{ secrets.ADMIN_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
-          repositories: hypeman-go-staging,hypeman-ts-staging
+          repositories: hypeman-go-staging,hypeman-python-staging,hypeman-ts-staging
           permission-contents: write
 
       - name: Delete the preview branches

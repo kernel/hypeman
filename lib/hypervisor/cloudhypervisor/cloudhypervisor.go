@@ -48,6 +48,9 @@ func (c *CloudHypervisor) Capabilities() hypervisor.Capabilities {
 	return capabilities()
 }
 
+// capabilities preserves the legacy client behavior for clients that do not
+// carry instance-version metadata. The runtime registry separately resolves
+// capabilities for the configured default used by new launches.
 func capabilities() hypervisor.Capabilities {
 	return CapabilitiesForVersion(vmm.DefaultVersion)
 }
@@ -57,7 +60,9 @@ func capabilities() hypervisor.Capabilities {
 // aren't supported on previous versions.
 func CapabilitiesForVersion(v vmm.CHVersion) hypervisor.Capabilities {
 	caps := hypervisor.Capabilities{
-		SupportsSnapshot:            true,
+		SupportsSnapshot: true,
+		// PrepareFork rewrites snapshot config for fork identity (fork.go).
+		SupportsFork:                true,
 		SupportsHotplugMemory:       true,
 		SupportsBalloonControl:      true,
 		SupportsPause:               true,
