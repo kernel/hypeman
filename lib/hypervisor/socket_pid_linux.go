@@ -20,43 +20,31 @@ var procDir = "/proc"
 const soAcceptcon = 0x10000
 
 // ResolveProcessPID finds the process currently holding the listening Unix
-// socket for the given hypervisor control path. confirmed reports whether the
-// PID was found through socket ownership rather than its command line.
-func ResolveProcessPID(socketPath string) (pid int, confirmed bool, err error) {
+// socket for the given hypervisor control path, via the socket inode in
+// /proc/net/unix and each process's fd table. The fd scan requires the
+// caller to hold CAP_SYS_PTRACE (or run as root) so no live owner is missed;
+// an ErrNoOwningProcess result is proof the listener is gone.
+func ResolveProcessPID(socketPath string) (pid int, err error) {
 	return resolveProcessPID(socketPath, 0)
 }
 
 // ResolveProcessPIDForOwner resolves a socket while preferring an expected
 // owner when the socket descriptor is temporarily shared with a child process.
-func ResolveProcessPIDForOwner(socketPath string, ownerPID int) (pid int, confirmed bool, err error) {
+func ResolveProcessPIDForOwner(socketPath string, ownerPID int) (pid int, err error) {
 	return resolveProcessPID(socketPath, ownerPID)
 }
 
-func resolveProcessPID(socketPath string, ownerPID int) (pid int, confirmed bool, err error) {
-	socketRef, socketErr := socketRefForPath(socketPath)
-	var refErr error
-	if socketErr == nil {
-		// Confirm the expected owner first so a live stored PID does not
-		// require scanning every process fd.
-		if ownerPID > 0 && processHoldsSocketRef(ownerPID, socketRef) {
-			return ownerPID, true, nil
-		}
-		pid, refErr = pidBySocketRef(socketRef, ownerPID)
-		if refErr == nil {
-			return pid, true, nil
-		}
+func resolveProcessPID(socketPath string, ownerPID int) (pid int, err error) {
+	socketRef, err := socketRefForPath(socketPath)
+	if err != nil {
+		return 0, err
 	}
-
-	if pid, cmdErr := pidByCmdline(socketPath); cmdErr == nil {
-		return pid, false, nil
+	// Confirm the expected owner first so a live stored PID does not
+	// require scanning every process fd.
+	if ownerPID > 0 && processHoldsSocketRef(ownerPID, socketRef) {
+		return ownerPID, nil
 	}
-	if refErr != nil {
-		return 0, false, refErr
-	}
-	if socketErr != nil {
-		return 0, false, socketErr
-	}
-	return 0, false, fmt.Errorf("resolve process pid for socket %s: %w", socketPath, ErrNoOwningProcess)
+	return pidBySocketRef(socketRef, ownerPID)
 }
 
 func processHoldsSocketRef(pid int, socketRef string) bool {
@@ -137,47 +125,6 @@ func pidBySocketRef(socketRef string, ownerPID int) (int, error) {
 		return 0, fmt.Errorf("resolve process pid for %s: inspect process fds: %w", socketRef, scanErr)
 	}
 	return 0, fmt.Errorf("resolve process pid for %s: %w", socketRef, ErrNoOwningProcess)
-}
-
-func pidByCmdline(socketPath string) (int, error) {
-	procEntries, err := os.ReadDir(procDir)
-	if err != nil {
-		return 0, fmt.Errorf("read /proc: %w", err)
-	}
-
-	var scanErr error
-	for _, entry := range procEntries {
-		if !entry.IsDir() {
-			continue
-		}
-
-		pid, err := strconv.Atoi(entry.Name())
-		if err != nil {
-			continue
-		}
-
-		cmdline, err := os.ReadFile(filepath.Join(procDir, entry.Name(), "cmdline"))
-		if err != nil {
-			if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ESRCH) {
-				continue
-			}
-			scanErr = err
-			continue
-		}
-		if len(cmdline) == 0 {
-			continue
-		}
-		for _, arg := range strings.Split(string(cmdline), "\x00") {
-			if arg == socketPath {
-				return pid, nil
-			}
-		}
-	}
-
-	if scanErr != nil {
-		return 0, fmt.Errorf("resolve process pid for socket %s: inspect process command lines: %w", socketPath, scanErr)
-	}
-	return 0, fmt.Errorf("resolve process pid for socket %s: no matching command line found: %w", socketPath, ErrNoOwningProcess)
 }
 
 func socketRefForPath(socketPath string) (string, error) {
