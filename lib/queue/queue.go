@@ -39,28 +39,23 @@ func New(maxConcurrent int) *Queue {
 // is torn down only once the queue is done with it), but only when this call
 // actually started the job — a dedup'd enqueue does not run it.
 func (q *Queue) Enqueue(key string, startFn func(), done func()) int {
-	return q.enqueue(key, startFn, done, false)
+	return q.enqueue(key, startFn, done, false, false)
 }
 
 // EnqueueSuccessor queues a new job behind an active job with the same key.
-// Pending jobs with the same key are still deduplicated. This is useful when
-// the caller has replaced the persisted work for a key while the previous job
-// is finishing.
+// If a successor is already pending, it is replaced by the new job. This is
+// useful when the caller has replaced the persisted work for a key while the
+// previous job is finishing.
 func (q *Queue) EnqueueSuccessor(key string, startFn func(), done func()) int {
-	return q.enqueue(key, startFn, done, true)
+	return q.enqueue(key, startFn, done, true, true)
 }
 
-func (q *Queue) enqueue(key string, startFn func(), done func(), allowActive bool) int {
+func (q *Queue) enqueue(key string, startFn func(), done func(), allowActive, replacePending bool) int {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
 	if q.active[key] && !allowActive {
 		return 0
-	}
-	for i, j := range q.pending {
-		if j.key == key {
-			return i + 1
-		}
 	}
 
 	wrappedFn := func() {
@@ -71,6 +66,15 @@ func (q *Queue) enqueue(key string, startFn func(), done func(), allowActive boo
 		}
 		defer q.complete(key)
 		startFn()
+	}
+
+	for i, j := range q.pending {
+		if j.key == key {
+			if replacePending {
+				q.pending[i] = job{key: key, startFn: wrappedFn}
+			}
+			return i + 1
+		}
 	}
 
 	if len(q.active) < q.maxConcurrent && !q.active[key] {

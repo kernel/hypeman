@@ -670,6 +670,17 @@ func TestDeleteAndRecreateDuringBuildTail(t *testing.T) {
 	currentMeta, err := readMetadata(p, repo, digestHex)
 	require.NoError(t, err)
 	require.NotEqual(t, firstMeta.BuildID, currentMeta.BuildID)
+	require.NoError(t, m.DeleteImage(ctx, repo+"@"+digestStr))
+	recreatedAgain, err := m.ImportLocalImage(ctx, repo, tag, digestStr)
+	require.NoError(t, err)
+	require.Equal(t, StatusPending, recreatedAgain.Status)
+	require.NotNil(t, recreatedAgain.QueuePosition)
+	require.Equal(t, 1, *recreatedAgain.QueuePosition)
+	latestMeta, err := readMetadata(p, repo, digestHex)
+	require.NoError(t, err)
+	require.NotEqual(t, currentMeta.BuildID, latestMeta.BuildID)
+	currentMeta = latestMeta
+
 	waitCtx, cancelWait := context.WithCancel(ctx)
 	defer cancelWait()
 	waitResult := make(chan error, 1)

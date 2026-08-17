@@ -300,6 +300,9 @@ func (m *manager) registerInflightPull(digest string, credentials *authn.AuthCon
 	if m.inflightPulls == nil {
 		m.inflightPulls = make(map[string]*inflightImagePull)
 	}
+	if previous := m.inflightPulls[digest]; previous != nil && previous.timer != nil {
+		previous.timer.Stop()
+	}
 	inflight := &inflightImagePull{
 		fingerprint: credentialFingerprint(credentials),
 		credentials: credentials,

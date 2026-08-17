@@ -109,7 +109,7 @@ func TestEnqueueSuccessor(t *testing.T) {
 	q := New(1)
 	release := make(chan struct{})
 	started := make(chan struct{}, 1)
-	successorDone := make(chan struct{})
+	replacementDone := make(chan struct{})
 
 	q.Enqueue("same", func() {
 		started <- struct{}{}
@@ -117,9 +117,7 @@ func TestEnqueueSuccessor(t *testing.T) {
 	}, nil)
 	<-started
 
-	pos := q.EnqueueSuccessor("same", func() {}, func() {
-		close(successorDone)
-	})
+	pos := q.EnqueueSuccessor("same", func() {}, nil)
 	if pos != 1 {
 		t.Fatalf("successor position = %d, want 1", pos)
 	}
@@ -127,16 +125,18 @@ func TestEnqueueSuccessor(t *testing.T) {
 		t.Fatalf("GetPosition(same) = %v, want 1", pos)
 	}
 
-	duplicatePos := q.EnqueueSuccessor("same", func() {}, nil)
+	duplicatePos := q.EnqueueSuccessor("same", func() {}, func() {
+		close(replacementDone)
+	})
 	if duplicatePos != 1 {
 		t.Fatalf("duplicate successor position = %d, want 1", duplicatePos)
 	}
 
 	close(release)
 	select {
-	case <-successorDone:
+	case <-replacementDone:
 	case <-time.After(5 * time.Second):
-		t.Fatal("successor did not run after active job completed")
+		t.Fatal("replacement successor did not run after active job completed")
 	}
 }
 
