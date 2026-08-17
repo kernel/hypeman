@@ -850,15 +850,13 @@ func (m *manager) startAndBootVM(
 // resolveRuntimeHypervisorPID resolves the runtime PID of the hypervisor
 // serving the instance socket and records its process identity. The
 // boot-scoped identity token is minted only for a trustworthy PID — the
-// direct child we spawned or the confirmed socket owner. A command-line-only
-// match records the bare PID without the token, so destructive paths must
-// confirm socket ownership before trusting it.
+// direct child we spawned or the confirmed socket owner.
 func resolveRuntimeHypervisorPID(log *slog.Logger, stored *StoredMetadata, fallbackPID int) int {
 	if ProcessExists(fallbackPID) {
 		stored.HypervisorProcessIdentity.Set(fallbackPID)
 		return fallbackPID
 	}
-	pid, confirmed, err := hypervisor.ResolveProcessPID(stored.SocketPath)
+	pid, err := hypervisor.ResolveProcessPID(stored.SocketPath)
 	if err != nil {
 		// The fallback PID was just proven dead, so it gets no identity
 		// token: minting one would stamp the current boot ID (and, if the
@@ -868,11 +866,7 @@ func resolveRuntimeHypervisorPID(log *slog.Logger, stored *StoredMetadata, fallb
 		stored.HypervisorProcessIdentity.SetUnconfirmed(fallbackPID)
 		return fallbackPID
 	}
-	if confirmed {
-		stored.HypervisorProcessIdentity.Set(pid)
-		return pid
-	}
-	stored.HypervisorProcessIdentity.SetUnconfirmed(pid)
+	stored.HypervisorProcessIdentity.Set(pid)
 	return pid
 }
 
