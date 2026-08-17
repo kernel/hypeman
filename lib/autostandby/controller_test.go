@@ -14,25 +14,25 @@ import (
 )
 
 type fakeInstanceStore struct {
-	mu                         sync.Mutex
-	instances                  []Instance
-	standbyIDs                 []string
-	persistedAutoStandbyState  map[string]*AutoStandbyState
-	events                     chan InstanceEvent
-	standbyErr                 error
-	listErr                    error
-	setAutoStandbyStateErr     error
-	setAutoStandbyStateStarted chan string
-	setAutoStandbyStateRelease chan struct{}
-	standbyStarted             chan string
-	standbyRelease             chan struct{}
+	mu                sync.Mutex
+	instances         []Instance
+	standbyIDs        []string
+	persistedRuntime  map[string]*Runtime
+	events            chan InstanceEvent
+	standbyErr        error
+	listErr           error
+	setRuntimeErr     error
+	setRuntimeStarted chan string
+	setRuntimeRelease chan struct{}
+	standbyStarted    chan string
+	standbyRelease    chan struct{}
 }
 
 func newFakeInstanceStore(instances []Instance) *fakeInstanceStore {
 	return &fakeInstanceStore{
-		instances:                 append([]Instance(nil), instances...),
-		persistedAutoStandbyState: make(map[string]*AutoStandbyState),
-		events:                    make(chan InstanceEvent, 16),
+		instances:        append([]Instance(nil), instances...),
+		persistedRuntime: make(map[string]*Runtime),
+		events:           make(chan InstanceEvent, 16),
 	}
 }
 
@@ -68,23 +68,23 @@ func (f *fakeInstanceStore) standbyCalls() []string {
 	return append([]string(nil), f.standbyIDs...)
 }
 
-func (f *fakeInstanceStore) SetAutoStandbyState(_ context.Context, id string, autoStandbyState *AutoStandbyState) error {
-	if f.setAutoStandbyStateStarted != nil {
-		f.setAutoStandbyStateStarted <- id
+func (f *fakeInstanceStore) SetRuntime(_ context.Context, id string, runtime *Runtime) error {
+	if f.setRuntimeStarted != nil {
+		f.setRuntimeStarted <- id
 	}
-	if f.setAutoStandbyStateRelease != nil {
-		<-f.setAutoStandbyStateRelease
+	if f.setRuntimeRelease != nil {
+		<-f.setRuntimeRelease
 	}
 
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.setAutoStandbyStateErr != nil {
-		return f.setAutoStandbyStateErr
+	if f.setRuntimeErr != nil {
+		return f.setRuntimeErr
 	}
-	f.persistedAutoStandbyState[id] = cloneAutoStandbyState(autoStandbyState)
+	f.persistedRuntime[id] = cloneRuntime(runtime)
 	for i := range f.instances {
 		if f.instances[i].ID == id {
-			f.instances[i].AutoStandbyState = cloneAutoStandbyState(autoStandbyState)
+			f.instances[i].Runtime = cloneRuntime(runtime)
 		}
 	}
 	return nil
@@ -146,7 +146,7 @@ func TestStartupResyncClearsPersistedIdleWhenCurrentConnectionsExist(t *testing.
 		NetworkEnabled: true,
 		IP:             "192.168.100.10",
 		AutoStandby:    &Policy{Enabled: true, IdleTimeout: "5m"},
-		AutoStandbyState: &AutoStandbyState{
+		Runtime: &Runtime{
 			IdleSince:             &idleSince,
 			LastInboundActivityAt: &lastInbound,
 		},
@@ -168,8 +168,8 @@ func TestStartupResyncClearsPersistedIdleWhenCurrentConnectionsExist(t *testing.
 	status := controller.Describe(store.instances[0])
 	require.Equal(t, StatusActive, status.Status)
 	require.Nil(t, status.IdleSince)
-	require.NotNil(t, store.persistedAutoStandbyState["inst-active"])
-	require.Nil(t, store.persistedAutoStandbyState["inst-active"].IdleSince)
+	require.NotNil(t, store.persistedRuntime["inst-active"])
+	require.Nil(t, store.persistedRuntime["inst-active"].IdleSince)
 }
 
 func TestStartupResyncResumesPersistedIdleCountdown(t *testing.T) {
@@ -183,7 +183,7 @@ func TestStartupResyncResumesPersistedIdleCountdown(t *testing.T) {
 		NetworkEnabled: true,
 		IP:             "192.168.100.20",
 		AutoStandby:    &Policy{Enabled: true, IdleTimeout: "10m"},
-		AutoStandbyState: &AutoStandbyState{
+		Runtime: &Runtime{
 			IdleSince: &idleSince,
 		},
 	}})
@@ -238,7 +238,7 @@ func TestPeriodicSnapshotSyncRefreshesTrackedState(t *testing.T) {
 	require.Equal(t, 1, status.ActiveInboundCount)
 }
 
-func TestInstanceEventClearsPersistedAutoStandbyStateWhenInstanceBecomesIneligible(t *testing.T) {
+func TestInstanceEventClearsPersistedRuntimeWhenInstanceBecomesIneligible(t *testing.T) {
 	t.Parallel()
 
 	idleSince := time.Date(2026, 4, 6, 10, 55, 0, 0, time.UTC)
@@ -250,7 +250,7 @@ func TestInstanceEventClearsPersistedAutoStandbyStateWhenInstanceBecomesIneligib
 		NetworkEnabled: true,
 		IP:             "192.168.100.22",
 		AutoStandby:    &Policy{Enabled: true, IdleTimeout: "10m"},
-		AutoStandbyState: &AutoStandbyState{
+		Runtime: &Runtime{
 			IdleSince:             &idleSince,
 			LastInboundActivityAt: &lastInbound,
 		},
@@ -274,9 +274,9 @@ func TestInstanceEventClearsPersistedAutoStandbyStateWhenInstanceBecomesIneligib
 		},
 	}))
 
-	autoStandbyState, ok := store.persistedAutoStandbyState["inst-ineligible"]
+	runtime, ok := store.persistedRuntime["inst-ineligible"]
 	require.True(t, ok)
-	require.Nil(t, autoStandbyState)
+	require.Nil(t, runtime)
 }
 
 func TestConnectionEventsClearIdleAndStartCountdown(t *testing.T) {
@@ -566,7 +566,7 @@ func TestHandleStandbyTimerCallsStandbyAndClearsState(t *testing.T) {
 		NetworkEnabled: true,
 		IP:             "192.168.100.61",
 		AutoStandby:    &Policy{Enabled: true, IdleTimeout: "1m"},
-		AutoStandbyState: &AutoStandbyState{
+		Runtime: &Runtime{
 			IdleSince: &idleSince,
 		},
 	}})
@@ -580,7 +580,7 @@ func TestHandleStandbyTimerCallsStandbyAndClearsState(t *testing.T) {
 	controller.standbyWG.Wait()
 
 	require.Equal(t, []string{"inst-standby"}, store.standbyCalls())
-	require.Nil(t, store.persistedAutoStandbyState["inst-standby"])
+	require.Nil(t, store.persistedRuntime["inst-standby"])
 
 	controller.mu.RLock()
 	state := controller.states["inst-standby"]
@@ -606,7 +606,7 @@ func TestHandleStandbyTimerFailureRearmsIdleCountdown(t *testing.T) {
 		NetworkEnabled: true,
 		IP:             "192.168.100.62",
 		AutoStandby:    &Policy{Enabled: true, IdleTimeout: "1m"},
-		AutoStandbyState: &AutoStandbyState{
+		Runtime: &Runtime{
 			IdleSince: &idleSince,
 		},
 	}})
@@ -621,9 +621,9 @@ func TestHandleStandbyTimerFailureRearmsIdleCountdown(t *testing.T) {
 	controller.standbyWG.Wait()
 
 	require.Equal(t, []string{"inst-standby-fail"}, store.standbyCalls())
-	require.NotNil(t, store.persistedAutoStandbyState["inst-standby-fail"])
-	require.NotNil(t, store.persistedAutoStandbyState["inst-standby-fail"].IdleSince)
-	assert.Equal(t, now, *store.persistedAutoStandbyState["inst-standby-fail"].IdleSince)
+	require.NotNil(t, store.persistedRuntime["inst-standby-fail"])
+	require.NotNil(t, store.persistedRuntime["inst-standby-fail"].IdleSince)
+	assert.Equal(t, now, *store.persistedRuntime["inst-standby-fail"].IdleSince)
 
 	controller.mu.RLock()
 	state := controller.states["inst-standby-fail"]
@@ -664,8 +664,8 @@ func TestHandleStandbyTimerSkipsStandbyWhenConntrackReportsConnection(t *testing
 	controller.standbyWG.Wait()
 
 	assert.Empty(t, store.standbyCalls())
-	require.NotNil(t, store.persistedAutoStandbyState["inst-missed-event"])
-	assert.Nil(t, store.persistedAutoStandbyState["inst-missed-event"].IdleSince)
+	require.NotNil(t, store.persistedRuntime["inst-missed-event"])
+	assert.Nil(t, store.persistedRuntime["inst-missed-event"].IdleSince)
 
 	controller.mu.RLock()
 	state := controller.states["inst-missed-event"]
@@ -698,9 +698,9 @@ func TestHandleStandbyTimerRearmsCountdownWhenConfirmationFails(t *testing.T) {
 	controller.standbyWG.Wait()
 
 	assert.Empty(t, store.standbyCalls())
-	require.NotNil(t, store.persistedAutoStandbyState["inst-confirm-fail"])
-	require.NotNil(t, store.persistedAutoStandbyState["inst-confirm-fail"].IdleSince)
-	assert.Equal(t, now, *store.persistedAutoStandbyState["inst-confirm-fail"].IdleSince)
+	require.NotNil(t, store.persistedRuntime["inst-confirm-fail"])
+	require.NotNil(t, store.persistedRuntime["inst-confirm-fail"].IdleSince)
+	assert.Equal(t, now, *store.persistedRuntime["inst-confirm-fail"].IdleSince)
 
 	controller.mu.RLock()
 	state := controller.states["inst-confirm-fail"]
@@ -745,8 +745,8 @@ func TestHandleStandbyTimerKeepsActiveStateWhenConfirmationFails(t *testing.T) {
 	controller.standbyWG.Wait()
 
 	assert.Empty(t, store.standbyCalls())
-	require.NotNil(t, store.persistedAutoStandbyState["inst-confirm-active"])
-	assert.Nil(t, store.persistedAutoStandbyState["inst-confirm-active"].IdleSince)
+	require.NotNil(t, store.persistedRuntime["inst-confirm-active"])
+	assert.Nil(t, store.persistedRuntime["inst-confirm-active"].IdleSince)
 
 	controller.mu.RLock()
 	state := controller.states["inst-confirm-active"]
@@ -984,13 +984,13 @@ func (s *restoreConnectionSource) OpenStream(context.Context) (ConnectionStream,
 func idleTestInstance(id, ip string, idleSince time.Time) Instance {
 	since := idleSince
 	return Instance{
-		ID:               id,
-		Name:             id,
-		State:            StateRunning,
-		NetworkEnabled:   true,
-		IP:               ip,
-		AutoStandby:      &Policy{Enabled: true, IdleTimeout: "1m"},
-		AutoStandbyState: &AutoStandbyState{IdleSince: &since},
+		ID:             id,
+		Name:           id,
+		State:          StateRunning,
+		NetworkEnabled: true,
+		IP:             ip,
+		AutoStandby:    &Policy{Enabled: true, IdleTimeout: "1m"},
+		Runtime:        &Runtime{IdleSince: &since},
 	}
 }
 
@@ -1245,7 +1245,7 @@ func TestStandbyFailureWithMidFlightActivityDoesNotRearmIdle(t *testing.T) {
 	controller.mu.RUnlock()
 
 	store.mu.Lock()
-	persisted := cloneAutoStandbyState(store.persistedAutoStandbyState["inst-fail-busy"])
+	persisted := cloneRuntime(store.persistedRuntime["inst-fail-busy"])
 	store.mu.Unlock()
 	require.NotNil(t, persisted)
 	assert.Nil(t, persisted.IdleSince, "failure must not persist a false idle window while connections are active")
@@ -1338,7 +1338,7 @@ func TestRefreshPersistFailureStillArmsIdleTimer(t *testing.T) {
 	controller := NewController(store, &fakeConnectionSource{}, ControllerOptions{
 		Now: func() time.Time { return idleSince },
 	})
-	store.setAutoStandbyStateErr = errors.New("metadata write failed")
+	store.setRuntimeErr = errors.New("metadata write failed")
 
 	// Fresh idle state forces the persist that fails; the countdown must be
 	// armed regardless.
@@ -1357,39 +1357,39 @@ func TestRefreshPersistFailureStillArmsIdleTimer(t *testing.T) {
 	controller.mu.RUnlock()
 }
 
-func TestAutoStandbyStatePersistencePreservesInstanceOrder(t *testing.T) {
+func TestRuntimePersistencePreservesInstanceOrder(t *testing.T) {
 	t.Parallel()
 
 	store := newFakeInstanceStore(nil)
-	store.setAutoStandbyStateStarted = make(chan string, 2)
+	store.setRuntimeStarted = make(chan string, 2)
 	controller := NewController(store, &fakeConnectionSource{}, ControllerOptions{})
 	firstTime := time.Date(2026, 4, 6, 10, 55, 0, 0, time.UTC)
 	secondTime := firstTime.Add(time.Second)
 
 	controller.mu.Lock()
-	first := controller.prepareAutoStandbyStatePersistenceLocked("inst-persist-order", &AutoStandbyState{IdleSince: &firstTime}, false, "test first write")
-	second := controller.prepareAutoStandbyStatePersistenceLocked("inst-persist-order", &AutoStandbyState{IdleSince: &secondTime}, false, "test second write")
+	first := controller.prepareRuntimePersistenceLocked("inst-persist-order", &Runtime{IdleSince: &firstTime}, false, "test first write")
+	second := controller.prepareRuntimePersistenceLocked("inst-persist-order", &Runtime{IdleSince: &secondTime}, false, "test second write")
 	controller.mu.Unlock()
 
 	secondDone := make(chan error, 1)
 	go func() {
-		secondDone <- controller.persistAutoStandbyState(context.Background(), second)
+		secondDone <- controller.persistRuntime(context.Background(), second)
 	}()
 	select {
-	case <-store.setAutoStandbyStateStarted:
-		require.FailNow(t, "second auto-standby state write started before first")
+	case <-store.setRuntimeStarted:
+		require.FailNow(t, "second runtime write started before first")
 	case <-time.After(50 * time.Millisecond):
 	}
 
-	require.NoError(t, controller.persistAutoStandbyState(context.Background(), first))
-	require.Equal(t, "inst-persist-order", <-store.setAutoStandbyStateStarted)
+	require.NoError(t, controller.persistRuntime(context.Background(), first))
+	require.Equal(t, "inst-persist-order", <-store.setRuntimeStarted)
 	require.NoError(t, <-secondDone)
-	require.Equal(t, "inst-persist-order", <-store.setAutoStandbyStateStarted)
-	require.NotNil(t, store.persistedAutoStandbyState["inst-persist-order"])
-	assert.Equal(t, secondTime, *store.persistedAutoStandbyState["inst-persist-order"].IdleSince)
+	require.Equal(t, "inst-persist-order", <-store.setRuntimeStarted)
+	require.NotNil(t, store.persistedRuntime["inst-persist-order"])
+	assert.Equal(t, secondTime, *store.persistedRuntime["inst-persist-order"].IdleSince)
 }
 
-func TestHoldStandbyDoesNotWaitForAutoStandbyStatePersistence(t *testing.T) {
+func TestHoldStandbyDoesNotWaitForRuntimePersistence(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2026, 4, 6, 10, 55, 0, 0, time.UTC)
@@ -1409,8 +1409,8 @@ func TestHoldStandbyDoesNotWaitForAutoStandbyStatePersistence(t *testing.T) {
 		TCPState:                TCPStateEstablished,
 	}
 	store := newFakeInstanceStore([]Instance{inst})
-	store.setAutoStandbyStateStarted = make(chan string, 1)
-	store.setAutoStandbyStateRelease = make(chan struct{})
+	store.setRuntimeStarted = make(chan string, 1)
+	store.setRuntimeRelease = make(chan struct{})
 	controller := NewController(store, &fakeConnectionSource{connections: []Connection{conn}}, ControllerOptions{
 		Now: func() time.Time { return now },
 	})
@@ -1419,7 +1419,7 @@ func TestHoldStandbyDoesNotWaitForAutoStandbyStatePersistence(t *testing.T) {
 	go func() {
 		resyncDone <- controller.startupResync(context.Background())
 	}()
-	require.Equal(t, inst.ID, <-store.setAutoStandbyStateStarted)
+	require.Equal(t, inst.ID, <-store.setRuntimeStarted)
 
 	holdDone := make(chan error, 1)
 	go func() {
@@ -1431,11 +1431,11 @@ func TestHoldStandbyDoesNotWaitForAutoStandbyStatePersistence(t *testing.T) {
 	case err := <-holdDone:
 		require.NoError(t, err)
 	case <-time.After(time.Second):
-		close(store.setAutoStandbyStateRelease)
-		require.FailNow(t, "hold waited for auto-standby state persistence")
+		close(store.setRuntimeRelease)
+		require.FailNow(t, "hold waited for runtime persistence")
 	}
 
-	close(store.setAutoStandbyStateRelease)
+	close(store.setRuntimeRelease)
 	require.NoError(t, <-resyncDone)
 }
 
@@ -1452,7 +1452,7 @@ func TestHoldStandbyExtendsArmedCountdown(t *testing.T) {
 	})
 
 	require.NoError(t, controller.startupResync(context.Background()))
-	persistedBefore := cloneAutoStandbyState(store.persistedAutoStandbyState["inst-hold"])
+	persistedBefore := cloneRuntime(store.persistedRuntime["inst-hold"])
 
 	snapshot, err := controller.HoldStandby(context.Background(), store.instances[0])
 	require.NoError(t, err)
@@ -1463,7 +1463,7 @@ func TestHoldStandbyExtendsArmedCountdown(t *testing.T) {
 	assert.Equal(t, now.Add(time.Minute), *snapshot.NextStandbyAt)
 
 	// Holds are in-memory only: the persisted countdown is untouched.
-	assert.Equal(t, persistedBefore, store.persistedAutoStandbyState["inst-hold"])
+	assert.Equal(t, persistedBefore, store.persistedRuntime["inst-hold"])
 
 	// A resync must keep the held deadline.
 	require.NoError(t, controller.startupResync(context.Background()))
@@ -1480,13 +1480,13 @@ func TestHoldStandbyReplacesLongerHold(t *testing.T) {
 
 	idleSince := time.Date(2026, 4, 6, 10, 55, 0, 0, time.UTC)
 	longPolicy := Instance{
-		ID:               "inst-reset-hold",
-		Name:             "inst-reset-hold",
-		State:            StateRunning,
-		NetworkEnabled:   true,
-		IP:               "192.168.100.110",
-		AutoStandby:      &Policy{Enabled: true, IdleTimeout: "10m"},
-		AutoStandbyState: &AutoStandbyState{IdleSince: &idleSince},
+		ID:             "inst-reset-hold",
+		Name:           "inst-reset-hold",
+		State:          StateRunning,
+		NetworkEnabled: true,
+		IP:             "192.168.100.110",
+		AutoStandby:    &Policy{Enabled: true, IdleTimeout: "10m"},
+		Runtime:        &Runtime{IdleSince: &idleSince},
 	}
 	store := newFakeInstanceStore([]Instance{longPolicy})
 	now := idleSince

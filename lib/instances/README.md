@@ -52,7 +52,7 @@ Manages VM instance lifecycle across multiple hypervisors (Cloud Hypervisor, QEM
           memory-ranges         # Memory state
 ```
 
-`metadata.json` also carries controller-owned `AutoStandbyState` timestamps when that feature is enabled, so idle countdown state can survive Hypeman restarts.
+`metadata.json` also carries controller-owned auto-standby runtime timestamps when that feature is enabled, so idle countdown state can survive Hypeman restarts.
 
 **Benefits:**
 - Content-addressable IDs (ULID = time-ordered)

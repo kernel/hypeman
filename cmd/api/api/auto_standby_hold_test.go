@@ -31,13 +31,13 @@ func TestHoldAutoStandbyExtendsCountdown(t *testing.T) {
 	idleSince := now.Add(-4 * time.Minute)
 	store := &statusStore{
 		instances: []autostandby.Instance{{
-			ID:               "inst-hold",
-			Name:             "inst-hold",
-			State:            autostandby.StateRunning,
-			NetworkEnabled:   true,
-			IP:               "192.168.100.30",
-			AutoStandby:      &autostandby.Policy{Enabled: true, IdleTimeout: "5m"},
-			AutoStandbyState: &autostandby.AutoStandbyState{IdleSince: &idleSince},
+			ID:             "inst-hold",
+			Name:           "inst-hold",
+			State:          autostandby.StateRunning,
+			NetworkEnabled: true,
+			IP:             "192.168.100.30",
+			AutoStandby:    &autostandby.Policy{Enabled: true, IdleTimeout: "5m"},
+			Runtime:        &autostandby.Runtime{IdleSince: &idleSince},
 		}},
 	}
 	controller := autostandby.NewController(store, &statusConnectionSource{}, autostandby.ControllerOptions{

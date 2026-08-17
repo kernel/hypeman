@@ -53,11 +53,11 @@ type InstanceEvent struct {
 }
 
 // InstanceStore supplies the controller with instance state, lifecycle events,
-// auto-standby state persistence, and standby actions.
+// runtime persistence, and standby actions.
 type InstanceStore interface {
 	ListInstances(ctx context.Context) ([]Instance, error)
 	StandbyInstance(ctx context.Context, id string) error
-	SetAutoStandbyState(ctx context.Context, id string, autoStandbyState *AutoStandbyState) error
+	SetRuntime(ctx context.Context, id string, runtime *Runtime) error
 	SubscribeInstanceEvents() (<-chan InstanceEvent, func(), error)
 }
 
@@ -118,16 +118,16 @@ type controllerState struct {
 	standbyExecuting bool
 }
 
-// autoStandbyStatePersistence preserves mutation order while metadata writes run
+// runtimePersistence preserves mutation order while metadata writes run
 // without holding the controller mutex. Every prepared value must be passed to
-// persistAutoStandbyState exactly once so its successor can proceed.
-type autoStandbyStatePersistence struct {
-	id               string
-	autoStandbyState *AutoStandbyState
-	previous         <-chan struct{}
-	done             chan struct{}
-	bestEffort       bool
-	operation        string
+// persistRuntime exactly once so its successor can proceed.
+type runtimePersistence struct {
+	id         string
+	runtime    *Runtime
+	previous   <-chan struct{}
+	done       chan struct{}
+	bestEffort bool
+	operation  string
 }
 
 // Controller decides when eligible instances should transition to standby.
@@ -148,12 +148,12 @@ type Controller struct {
 	standbySlots         chan struct{}
 	standbyWG            sync.WaitGroup
 
-	mu                              sync.RWMutex
-	states                          map[string]*controllerState
-	autoStandbyStatePersistenceTail chan struct{}
-	standbyInFlight                 int
-	observerConnected               bool
-	lastObserverErr                 error
+	mu                     sync.RWMutex
+	states                 map[string]*controllerState
+	runtimePersistenceTail chan struct{}
+	standbyInFlight        int
+	observerConnected      bool
+	lastObserverErr        error
 }
 
 // NewController creates a new event-driven auto-standby controller.
@@ -555,7 +555,7 @@ func (c *Controller) seedInstanceState(ctx context.Context, inst Instance, conns
 	if err != nil {
 		return err
 	}
-	return c.persistAutoStandbyState(ctx, persistence)
+	return c.persistRuntime(ctx, persistence)
 }
 
 func (c *Controller) handleInstanceEvent(ctx context.Context, event InstanceEvent) error {
@@ -580,32 +580,32 @@ func (c *Controller) handleInstanceEvent(ctx context.Context, event InstanceEven
 	if err != nil {
 		return err
 	}
-	return c.persistAutoStandbyState(ctx, persistence)
+	return c.persistRuntime(ctx, persistence)
 }
 
-func (c *Controller) refreshInstanceLocked(inst Instance, conns []Connection, now time.Time) (autoStandbyStatePersistence, error) {
+func (c *Controller) refreshInstanceLocked(inst Instance, conns []Connection, now time.Time) (runtimePersistence, error) {
 	state := c.ensureStateLocked(inst.ID)
 	state.instance = cloneInstance(inst)
 
 	if !eligible(inst) {
-		hadAutoStandbyState := inst.AutoStandbyState != nil || state.idleSince != nil || state.lastInboundAt != nil
+		hadRuntime := inst.Runtime != nil || state.idleSince != nil || state.lastInboundAt != nil
 		c.clearStateLocked(state)
-		if hadAutoStandbyState {
-			return c.prepareAutoStandbyStatePersistenceLocked(inst.ID, nil, false, "refresh disabled instance"), nil
+		if hadRuntime {
+			return c.prepareRuntimePersistenceLocked(inst.ID, nil, false, "refresh disabled instance"), nil
 		}
-		return autoStandbyStatePersistence{}, nil
+		return runtimePersistence{}, nil
 	}
 
 	compiled, err := compilePolicy(inst.AutoStandby)
 	if err != nil {
-		return autoStandbyStatePersistence{}, err
+		return runtimePersistence{}, err
 	}
 	state.compiledPolicy = compiled
 	state.idleTimeout = compiled.idleTimeout
 
 	activeSet, err := matchingConnections(inst, compiled, conns)
 	if err != nil {
-		return autoStandbyStatePersistence{}, err
+		return runtimePersistence{}, err
 	}
 	// Cancel any queued standby attempt only once the refresh is guaranteed to
 	// re-establish a countdown or reconcile below; an erroring refresh above
@@ -613,33 +613,33 @@ func (c *Controller) refreshInstanceLocked(inst Instance, conns []Connection, no
 	state.standbyRequested = false
 	state.activeInbound = activeSet
 
-	autoStandbyState := cloneAutoStandbyState(inst.AutoStandbyState)
+	runtime := cloneRuntime(inst.Runtime)
 	if len(activeSet) > 0 {
 		state.idleSince = nil
-		if autoStandbyState != nil && autoStandbyState.LastInboundActivityAt != nil {
-			state.lastInboundAt = cloneTimePtr(autoStandbyState.LastInboundActivityAt)
+		if runtime != nil && runtime.LastInboundActivityAt != nil {
+			state.lastInboundAt = cloneTimePtr(runtime.LastInboundActivityAt)
 		} else {
 			state.lastInboundAt = &now
 		}
 		c.cancelTimerLocked(state)
 		c.armReconcileLocked(inst.ID, state)
-		return c.prepareAutoStandbyStatePersistenceLocked(inst.ID, &AutoStandbyState{
+		return c.prepareRuntimePersistenceLocked(inst.ID, &Runtime{
 			LastInboundActivityAt: cloneTimePtr(state.lastInboundAt),
 		}, false, "refresh active instance"), nil
 	}
 
-	var persistence autoStandbyStatePersistence
-	if autoStandbyState != nil && autoStandbyState.IdleSince != nil {
-		state.idleSince = cloneTimePtr(autoStandbyState.IdleSince)
-		state.lastInboundAt = cloneTimePtr(autoStandbyState.LastInboundActivityAt)
+	var persistence runtimePersistence
+	if runtime != nil && runtime.IdleSince != nil {
+		state.idleSince = cloneTimePtr(runtime.IdleSince)
+		state.lastInboundAt = cloneTimePtr(runtime.LastInboundActivityAt)
 	} else {
 		state.idleSince = &now
-		if autoStandbyState != nil {
-			state.lastInboundAt = cloneTimePtr(autoStandbyState.LastInboundActivityAt)
+		if runtime != nil {
+			state.lastInboundAt = cloneTimePtr(runtime.LastInboundActivityAt)
 		} else {
 			state.lastInboundAt = nil
 		}
-		persistence = c.prepareAutoStandbyStatePersistenceLocked(inst.ID, &AutoStandbyState{
+		persistence = c.prepareRuntimePersistenceLocked(inst.ID, &Runtime{
 			IdleSince:             cloneTimePtr(state.idleSince),
 			LastInboundActivityAt: cloneTimePtr(state.lastInboundAt),
 		}, true, "refresh idle instance")
@@ -664,7 +664,7 @@ func (c *Controller) handleConnectionEvent(ctx context.Context, event Connection
 	c.recordConntrackEvent(string(event.Type), "received")
 
 	c.mu.Lock()
-	persistences := make([]autoStandbyStatePersistence, 0, 1)
+	persistences := make([]runtimePersistence, 0, 1)
 	for id, state := range c.states {
 		if state.compiledPolicy == nil {
 			continue
@@ -690,7 +690,7 @@ func (c *Controller) handleConnectionEvent(ctx context.Context, event Connection
 				state.standbyRequested = false
 				c.cancelReconcileLocked(state)
 				c.armTimerLocked(id, state, idleSince)
-				persistences = append(persistences, c.prepareAutoStandbyStatePersistenceLocked(id, &AutoStandbyState{
+				persistences = append(persistences, c.prepareRuntimePersistenceLocked(id, &Runtime{
 					IdleSince:             cloneTimePtr(state.idleSince),
 					LastInboundActivityAt: cloneTimePtr(state.lastInboundAt),
 				}, true, "start idle countdown"))
@@ -706,7 +706,7 @@ func (c *Controller) handleConnectionEvent(ctx context.Context, event Connection
 			state.standbyRequested = false
 			c.cancelTimerLocked(state)
 			c.armReconcileLocked(id, state)
-			persistences = append(persistences, c.prepareAutoStandbyStatePersistenceLocked(id, &AutoStandbyState{
+			persistences = append(persistences, c.prepareRuntimePersistenceLocked(id, &Runtime{
 				LastInboundActivityAt: cloneTimePtr(state.lastInboundAt),
 			}, true, "record inbound activity"))
 			c.log.Info("auto-standby inbound activity observed", "instance_id", id, "active_inbound_connections", len(state.activeInbound))
@@ -724,7 +724,7 @@ func (c *Controller) handleConnectionEvent(ctx context.Context, event Connection
 			state.standbyRequested = false
 			c.cancelReconcileLocked(state)
 			c.armTimerLocked(id, state, idleSince)
-			persistences = append(persistences, c.prepareAutoStandbyStatePersistenceLocked(id, &AutoStandbyState{
+			persistences = append(persistences, c.prepareRuntimePersistenceLocked(id, &Runtime{
 				IdleSince:             cloneTimePtr(state.idleSince),
 				LastInboundActivityAt: cloneTimePtr(state.lastInboundAt),
 			}, true, "restart idle countdown"))
@@ -734,7 +734,7 @@ func (c *Controller) handleConnectionEvent(ctx context.Context, event Connection
 	c.mu.Unlock()
 
 	for _, persistence := range persistences {
-		_ = c.persistAutoStandbyState(ctx, persistence)
+		_ = c.persistRuntime(ctx, persistence)
 	}
 }
 
@@ -765,13 +765,13 @@ func (c *Controller) confirmIdleBeforeStandby(ctx context.Context, id string) bo
 		idleSince := c.now().UTC()
 		state.idleSince = &idleSince
 		c.armTimerLocked(id, state, idleSince)
-		persistence := c.prepareAutoStandbyStatePersistenceLocked(id, &AutoStandbyState{
+		persistence := c.prepareRuntimePersistenceLocked(id, &Runtime{
 			IdleSince:             cloneTimePtr(state.idleSince),
 			LastInboundActivityAt: cloneTimePtr(state.lastInboundAt),
 		}, true, "handle unconfirmed standby")
 		c.mu.Unlock()
 
-		_ = c.persistAutoStandbyState(ctx, persistence)
+		_ = c.persistRuntime(ctx, persistence)
 		c.recordControllerError("standby_confirm")
 		c.log.Warn("auto-standby could not confirm idle before standby", "instance_id", id, "error", err)
 		return false
@@ -787,12 +787,12 @@ func (c *Controller) confirmIdleBeforeStandby(ctx context.Context, id string) bo
 	state.lastInboundAt = &now
 	c.cancelTimerLocked(state)
 	c.armReconcileLocked(id, state)
-	persistence := c.prepareAutoStandbyStatePersistenceLocked(id, &AutoStandbyState{
+	persistence := c.prepareRuntimePersistenceLocked(id, &Runtime{
 		LastInboundActivityAt: cloneTimePtr(state.lastInboundAt),
 	}, true, "record standby confirmation activity")
 	c.mu.Unlock()
 
-	_ = c.persistAutoStandbyState(ctx, persistence)
+	_ = c.persistRuntime(ctx, persistence)
 	c.log.Info("auto-standby skipped standby, conntrack still reports inbound connections", "instance_id", id, "active_inbound_connections", len(activeSet))
 	return false
 }
@@ -919,7 +919,7 @@ func (c *Controller) executeStandby(ctx context.Context, id string, instanceName
 			return
 		}
 		c.log.Warn("auto-standby standby attempt failed", "instance_id", id, "instance_name", instanceName, "error", err)
-		var persistence autoStandbyStatePersistence
+		var persistence runtimePersistence
 		if state := c.states[id]; state != nil {
 			state.standbyRequested = false
 			// Inbound activity that arrived during the attempt owns the state
@@ -929,14 +929,14 @@ func (c *Controller) executeStandby(ctx context.Context, id string, instanceName
 				idleSince := c.now().UTC()
 				state.idleSince = &idleSince
 				c.armTimerLocked(id, state, idleSince)
-				persistence = c.prepareAutoStandbyStatePersistenceLocked(id, &AutoStandbyState{
+				persistence = c.prepareRuntimePersistenceLocked(id, &Runtime{
 					IdleSince:             cloneTimePtr(state.idleSince),
 					LastInboundActivityAt: cloneTimePtr(state.lastInboundAt),
 				}, true, "recover from standby failure")
 			}
 		}
 		c.mu.Unlock()
-		_ = c.persistAutoStandbyState(ctx, persistence)
+		_ = c.persistRuntime(ctx, persistence)
 		return
 	}
 
@@ -944,13 +944,13 @@ func (c *Controller) executeStandby(ctx context.Context, id string, instanceName
 	c.log.Info("instance entered standby due to inbound inactivity", "instance_id", id, "instance_name", instanceName, "idle_timeout", idleTimeout)
 
 	c.mu.Lock()
-	var persistence autoStandbyStatePersistence
+	var persistence runtimePersistence
 	if state := c.states[id]; state != nil {
 		c.clearStateLocked(state)
-		persistence = c.prepareAutoStandbyStatePersistenceLocked(id, nil, true, "clear auto-standby state after standby")
+		persistence = c.prepareRuntimePersistenceLocked(id, nil, true, "clear runtime after standby")
 	}
 	c.mu.Unlock()
-	_ = c.persistAutoStandbyState(ctx, persistence)
+	_ = c.persistRuntime(ctx, persistence)
 }
 
 func (c *Controller) handleActiveReconcile(ctx context.Context, id string) {
@@ -999,14 +999,14 @@ func (c *Controller) handleActiveReconcile(ctx context.Context, id string) {
 	state.standbyRequested = false
 	c.cancelReconcileLocked(state)
 	c.armTimerLocked(id, state, now)
-	persistence := c.prepareAutoStandbyStatePersistenceLocked(id, &AutoStandbyState{
+	persistence := c.prepareRuntimePersistenceLocked(id, &Runtime{
 		IdleSince:             cloneTimePtr(state.idleSince),
 		LastInboundActivityAt: cloneTimePtr(state.lastInboundAt),
 	}, true, "finish active connection reconcile")
 	idleTimeout := state.idleTimeout
 	c.mu.Unlock()
 
-	_ = c.persistAutoStandbyState(ctx, persistence)
+	_ = c.persistRuntime(ctx, persistence)
 	c.log.Info("auto-standby idle countdown started after active connection reconcile", "instance_id", id, "idle_timeout", idleTimeout)
 }
 
@@ -1139,24 +1139,24 @@ func (c *Controller) stopAllTimers() {
 	}
 }
 
-// prepareAutoStandbyStatePersistenceLocked reserves this write's place in the global
-// persistence order. The caller must pass the result to persistAutoStandbyState exactly
+// prepareRuntimePersistenceLocked reserves this write's place in the global
+// persistence order. The caller must pass the result to persistRuntime exactly
 // once after releasing c.mu.
-func (c *Controller) prepareAutoStandbyStatePersistenceLocked(id string, autoStandbyState *AutoStandbyState, bestEffort bool, operation string) autoStandbyStatePersistence {
+func (c *Controller) prepareRuntimePersistenceLocked(id string, runtime *Runtime, bestEffort bool, operation string) runtimePersistence {
 	done := make(chan struct{})
-	persistence := autoStandbyStatePersistence{
-		id:               id,
-		autoStandbyState: cloneAutoStandbyState(autoStandbyState),
-		previous:         c.autoStandbyStatePersistenceTail,
-		done:             done,
-		bestEffort:       bestEffort,
-		operation:        operation,
+	persistence := runtimePersistence{
+		id:         id,
+		runtime:    cloneRuntime(runtime),
+		previous:   c.runtimePersistenceTail,
+		done:       done,
+		bestEffort: bestEffort,
+		operation:  operation,
 	}
-	c.autoStandbyStatePersistenceTail = done
+	c.runtimePersistenceTail = done
 	return persistence
 }
 
-func (c *Controller) persistAutoStandbyState(ctx context.Context, persistence autoStandbyStatePersistence) error {
+func (c *Controller) persistRuntime(ctx context.Context, persistence runtimePersistence) error {
 	if persistence.done == nil {
 		return nil
 	}
@@ -1167,10 +1167,10 @@ func (c *Controller) persistAutoStandbyState(ctx context.Context, persistence au
 	}
 	defer close(persistence.done)
 
-	err := c.store.SetAutoStandbyState(ctx, persistence.id, persistence.autoStandbyState)
+	err := c.store.SetRuntime(ctx, persistence.id, persistence.runtime)
 	if err != nil && persistence.bestEffort {
-		c.recordControllerError("persist_auto_standby_state")
-		c.log.Warn("auto-standby failed to persist state", "instance_id", persistence.id, "operation", persistence.operation, "error", err)
+		c.recordControllerError("persist_runtime")
+		c.log.Warn("auto-standby failed to persist runtime", "instance_id", persistence.id, "operation", persistence.operation, "error", err)
 		return nil
 	}
 	return err
@@ -1245,20 +1245,20 @@ func connectionKey(conn Connection) ConnectionKey {
 	}
 }
 
-func cloneAutoStandbyState(autoStandbyState *AutoStandbyState) *AutoStandbyState {
-	if autoStandbyState == nil {
+func cloneRuntime(runtime *Runtime) *Runtime {
+	if runtime == nil {
 		return nil
 	}
-	return &AutoStandbyState{
-		IdleSince:             cloneTimePtr(autoStandbyState.IdleSince),
-		LastInboundActivityAt: cloneTimePtr(autoStandbyState.LastInboundActivityAt),
+	return &Runtime{
+		IdleSince:             cloneTimePtr(runtime.IdleSince),
+		LastInboundActivityAt: cloneTimePtr(runtime.LastInboundActivityAt),
 	}
 }
 
 func cloneInstance(inst Instance) Instance {
 	cloned := inst
 	cloned.AutoStandby = clonePolicy(inst.AutoStandby)
-	cloned.AutoStandbyState = cloneAutoStandbyState(inst.AutoStandbyState)
+	cloned.Runtime = cloneRuntime(inst.Runtime)
 	return cloned
 }
 

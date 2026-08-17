@@ -11,7 +11,7 @@ func deepCopyMetadata(src *metadata) *metadata {
 
 	return &metadata{
 		StoredMetadata:     cloneStoredMetadata(src.StoredMetadata),
-		AutoStandbyState:   cloneAutoStandbyState(src.AutoStandbyState),
+		AutoStandbyRuntime: cloneAutoStandbyRuntime(src.AutoStandbyRuntime),
 		HealthCheckRuntime: healthcheck.CloneRuntime(src.HealthCheckRuntime),
 	}
 }
