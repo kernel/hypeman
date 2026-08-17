@@ -82,7 +82,7 @@ func TestBackfillHypervisorProcessIdentitiesSkipsMissingSocketOwner(t *testing.T
 	assert.NoError(t, syscall.Kill(stalePID, 0))
 }
 
-func TestBackfillHypervisorProcessIdentitiesSkipsUnconfirmedCommandLineMatch(t *testing.T) {
+func TestBackfillHypervisorProcessIdentitiesIgnoresCommandLineBystander(t *testing.T) {
 	mgr := &manager{paths: paths.New(t.TempDir())}
 	socketPath := filepath.Join(t.TempDir(), "test.sock")
 	match := exec.Command("sh", "-c", "sleep 30", "sh", socketPath)

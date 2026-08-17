@@ -66,11 +66,10 @@ func (h *HypervisorProcessIdentity) Set(pid int) {
 }
 
 // SetUnconfirmed records a bare PID without the boot-scoped identity token.
-// Used when the PID matched the socket by command line only or was just
-// proven dead: minting a token would stamp the current boot ID (and, if the
-// PID is recycled mid-call, a live start time) onto a process that is not the
-// hypervisor. Destructive paths must confirm socket ownership before trusting
-// an unconfirmed PID.
+// Used when the PID was just proven dead: minting a token would stamp the
+// current boot ID (and, if the PID is recycled mid-call, a live start time)
+// onto a process that is not the hypervisor. Destructive paths must confirm
+// socket ownership before trusting an unconfirmed PID.
 func (h *HypervisorProcessIdentity) SetUnconfirmed(pid int) {
 	h.HypervisorPID = &pid
 	h.HypervisorStartTime = 0
@@ -98,25 +97,18 @@ func refreshHypervisorPID(stored *StoredMetadata, state State) {
 	if stored.SocketPath == "" {
 		return
 	}
-	pid, confirmed, err := hypervisor.ResolveProcessPID(stored.SocketPath)
+	pid, err := hypervisor.ResolveProcessPID(stored.SocketPath)
 	if err != nil {
 		return
 	}
-	if confirmed {
-		stored.HypervisorProcessIdentity.Set(pid)
-		return
-	}
-	// Command-line-only match: record the bare PID without the identity
-	// token, same rule as resolveRuntimeHypervisorPID.
-	stored.HypervisorProcessIdentity.SetUnconfirmed(pid)
+	stored.HypervisorProcessIdentity.Set(pid)
 }
 
 // resolveLiveHypervisorPID returns the PID of the live hypervisor that owns
 // the instance socket, or 0 when no live hypervisor is found. A live stored PID
 // whose recorded boot ID and start time match is returned without socket
-// confirmation. It returns an error when socket ownership cannot be confirmed:
-// a live process matches the socket path by command line only, or a live stored
-// PID's ownership cannot be verified.
+// confirmation. It returns an error when socket ownership cannot be confirmed
+// because the socket scan itself failed.
 func resolveLiveHypervisorPID(id HypervisorProcessIdentity, socketPath string) (int, error) {
 	stored := 0
 	if id.HypervisorPID != nil && ProcessExists(*id.HypervisorPID) {
@@ -136,54 +128,38 @@ func resolveLiveHypervisorPID(id HypervisorProcessIdentity, socketPath string) (
 		return stored, nil
 	}
 	var resolved int
-	var confirmed bool
 	var err error
 	if stored != 0 && id.HypervisorStartTime == 0 {
-		resolved, confirmed, err = hypervisor.ResolveProcessPIDForOwner(socketPath, stored)
+		resolved, err = hypervisor.ResolveProcessPIDForOwner(socketPath, stored)
 	} else {
-		resolved, confirmed, err = hypervisor.ResolveProcessPID(socketPath)
+		resolved, err = hypervisor.ResolveProcessPID(socketPath)
 	}
-	return classifyResolvedHypervisorOwner(socketPath, stored, resolved, confirmed, err)
+	return classifyResolvedHypervisorOwner(socketPath, stored, resolved, err)
 }
 
 // classifyResolvedHypervisorOwner interprets a socket resolution result for
 // resolveLiveHypervisorPID: which live PID, if any, is the recorded
 // hypervisor, and whether the ambiguity must fail closed.
-func classifyResolvedHypervisorOwner(socketPath string, stored, resolved int, confirmed bool, err error) (int, error) {
+func classifyResolvedHypervisorOwner(socketPath string, stored, resolved int, err error) (int, error) {
 	switch {
-	case err == nil && confirmed && ProcessExists(resolved):
+	case err == nil && ProcessExists(resolved):
 		return resolved, nil
-	case err == nil && confirmed:
-		return 0, nil
-	case err == nil && !confirmed && ProcessExists(resolved):
-		if stored != 0 {
-			return 0, fmt.Errorf("cannot confirm ownership of socket %s for stored hypervisor PID %d: process %d matched by command line only", socketPath, stored, resolved)
-		}
-		return 0, fmt.Errorf("cannot confirm ownership of socket %s: process %d matched by command line only", socketPath, resolved)
 	case err == nil:
-		// The only match was by command line and that process is already
-		// gone: the socket-owner scan found nothing and no live process
-		// matches the command line, the same provable-death conclusion as
-		// ErrNoOwningProcess below.
-		return 0, nil
-	}
-	if stored == 0 {
-		if !errors.Is(err, hypervisor.ErrNoOwningProcess) {
-			return 0, fmt.Errorf("cannot confirm ownership of socket %s: %w", socketPath, err)
-		}
 		return 0, nil
 	}
 	if errors.Is(err, hypervisor.ErrNoOwningProcess) {
-		// Neither the socket-owner scan nor the full command-line scan
-		// found any process tied to the socket. A live hypervisor always
-		// holds its control-socket listener, so the recorded hypervisor is
-		// gone and the live stored PID is a recycled number — the same
-		// conclusion already drawn above when the stored PID is dead.
+		// The socket-owner scan found no process holding the listener. A live
+		// hypervisor always holds its control-socket listener, so the recorded
+		// hypervisor is gone and a live stored PID is a recycled number — the
+		// same conclusion already drawn above when the stored PID is dead.
 		// Without this, legacy metadata carrying no boot-scoped identity
 		// wedges stop and delete forever once its PID is reused.
 		return 0, nil
 	}
-	return 0, fmt.Errorf("cannot confirm ownership of socket %s for stored hypervisor PID %d: %w", socketPath, stored, err)
+	if stored != 0 {
+		return 0, fmt.Errorf("cannot confirm ownership of socket %s for stored hypervisor PID %d: %w", socketPath, stored, err)
+	}
+	return 0, fmt.Errorf("cannot confirm ownership of socket %s: %w", socketPath, err)
 }
 
 // ProcessExists reports whether pid belongs to a live, non-zombie process.
