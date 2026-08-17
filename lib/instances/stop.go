@@ -168,24 +168,25 @@ func (m *manager) stopInstance(
 		)
 		if err := m.shutdownHypervisor(shutdownCtx, &inst); err != nil {
 			shutdownSpanEnd(err)
-			// Continue to final SIGKILL fallback if graceful shutdown API fails.
 			log.WarnContext(ctx, "failed to shutdown hypervisor", "instance_id", id, "error", err)
+
+			// Final fallback: force-kill the process. A nil return from
+			// shutdownHypervisor already confirmed the hypervisor is gone, so
+			// this only runs when shutdown could not.
+			killCtx, killSpanEnd := m.startLifecycleStep(ctx, "force_kill_hypervisor",
+				attribute.String("instance_id", id),
+				attribute.String("hypervisor", string(stored.HypervisorType)),
+				attribute.String("operation", "force_kill_hypervisor"),
+			)
+			if err := m.killHypervisor(killCtx, &inst); err != nil {
+				killSpanEnd(err)
+				log.ErrorContext(ctx, "failed to force-kill hypervisor process", "instance_id", id, "error", err)
+				return nil, err
+			}
+			killSpanEnd(nil)
 		} else {
 			shutdownSpanEnd(nil)
 		}
-
-		// Final fallback: force-kill the process if it's still alive.
-		killCtx, killSpanEnd := m.startLifecycleStep(ctx, "force_kill_hypervisor",
-			attribute.String("instance_id", id),
-			attribute.String("hypervisor", string(stored.HypervisorType)),
-			attribute.String("operation", "force_kill_hypervisor"),
-		)
-		if err := m.killHypervisor(killCtx, &inst); err != nil {
-			killSpanEnd(err)
-			log.ErrorContext(ctx, "failed to force-kill hypervisor process", "instance_id", id, "error", err)
-			return nil, err
-		}
-		killSpanEnd(nil)
 	}
 
 	// 6. Release network allocation (delete TAP device)
