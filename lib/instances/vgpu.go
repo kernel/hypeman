@@ -92,9 +92,7 @@ func clearStoredVGPUDevice(stored *StoredMetadata) {
 // cleanup stack is LIFO, so cleanups registered after this one run before it
 // and this restore would clobber anything they persisted; it is safe only
 // while no such cleanup writes metadata and the instance lock serializes
-// start. The snapshot is also a shallow copy (Phases shares its map), so it
-// must be persisted before any Phases.Record on the live struct. Violating
-// either invariant requires switching to targeted field restores.
+// start. Violating that requires switching to targeted field restores.
 //
 // It reports whether the assignment was retained after a failed destroy and
 // whether that retention record was persisted, so start can surface the
