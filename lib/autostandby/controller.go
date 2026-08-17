@@ -119,7 +119,8 @@ type controllerState struct {
 }
 
 // runtimePersistence preserves mutation order while metadata writes run
-// without holding the controller mutex.
+// without holding the controller mutex. Every prepared value must be passed to
+// persistRuntime exactly once so its successor can proceed.
 type runtimePersistence struct {
 	id         string
 	runtime    *Runtime
@@ -1138,6 +1139,9 @@ func (c *Controller) stopAllTimers() {
 	}
 }
 
+// prepareRuntimePersistenceLocked reserves this write's place in the global
+// persistence order. The caller must pass the result to persistRuntime exactly
+// once after releasing c.mu.
 func (c *Controller) prepareRuntimePersistenceLocked(id string, runtime *Runtime, bestEffort bool, operation string) runtimePersistence {
 	done := make(chan struct{})
 	persistence := runtimePersistence{
@@ -1157,6 +1161,8 @@ func (c *Controller) persistRuntime(ctx context.Context, persistence runtimePers
 		return nil
 	}
 	if persistence.previous != nil {
+		// Do not abandon this wait on context cancellation: a successor must not
+		// start until the predecessor has stopped writing.
 		<-persistence.previous
 	}
 	defer close(persistence.done)
