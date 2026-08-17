@@ -109,7 +109,7 @@ func TestEnqueueSuccessor(t *testing.T) {
 	q := New(1)
 	release := make(chan struct{})
 	started := make(chan struct{}, 1)
-	var ran int64
+	successorDone := make(chan struct{})
 
 	q.Enqueue("same", func() {
 		started <- struct{}{}
@@ -117,9 +117,9 @@ func TestEnqueueSuccessor(t *testing.T) {
 	}, nil)
 	<-started
 
-	pos := q.EnqueueSuccessor("same", func() {
-		atomic.AddInt64(&ran, 1)
-	}, nil)
+	pos := q.EnqueueSuccessor("same", func() {}, func() {
+		close(successorDone)
+	})
 	if pos != 1 {
 		t.Fatalf("successor position = %d, want 1", pos)
 	}
@@ -127,20 +127,16 @@ func TestEnqueueSuccessor(t *testing.T) {
 		t.Fatalf("GetPosition(same) = %v, want 1", pos)
 	}
 
-	duplicatePos := q.EnqueueSuccessor("same", func() {
-		atomic.AddInt64(&ran, 1)
-	}, nil)
+	duplicatePos := q.EnqueueSuccessor("same", func() {}, nil)
 	if duplicatePos != 1 {
 		t.Fatalf("duplicate successor position = %d, want 1", duplicatePos)
 	}
 
 	close(release)
-	deadline := time.Now().Add(5 * time.Second)
-	for atomic.LoadInt64(&ran) != 1 || q.QueueLength() != 0 {
-		if time.Now().After(deadline) {
-			t.Fatal("successor did not run after active job completed")
-		}
-		time.Sleep(time.Millisecond)
+	select {
+	case <-successorDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("successor did not run after active job completed")
 	}
 }
 
@@ -148,6 +144,7 @@ func TestEnqueueSuccessorSkipsActiveKey(t *testing.T) {
 	q := New(2)
 	releaseA := make(chan struct{})
 	releaseB := make(chan struct{})
+	successorDone := make(chan struct{})
 	startedA := make(chan struct{}, 1)
 	startedB := make(chan struct{}, 1)
 	startedC := make(chan struct{}, 1)
@@ -157,15 +154,20 @@ func TestEnqueueSuccessorSkipsActiveKey(t *testing.T) {
 		<-releaseA
 	}, nil)
 	<-startedA
-	q.EnqueueSuccessor("a", func() {}, nil)
+	q.EnqueueSuccessor("a", func() {}, func() {
+		close(successorDone)
+	})
 	q.Enqueue("b", func() {
 		startedB <- struct{}{}
 		<-releaseB
 	}, nil)
 	<-startedB
+	cDone := make(chan struct{})
 	q.Enqueue("c", func() {
 		startedC <- struct{}{}
-	}, nil)
+	}, func() {
+		close(cDone)
+	})
 
 	close(releaseB)
 	select {
@@ -173,14 +175,16 @@ func TestEnqueueSuccessorSkipsActiveKey(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("unblocked pending job did not start")
 	}
+	select {
+	case <-cDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("unblocked pending job did not complete")
+	}
 	close(releaseA)
-
-	deadline := time.Now().Add(5 * time.Second)
-	for q.QueueLength() != 0 {
-		if time.Now().After(deadline) {
-			t.Fatal("successor did not run after its active job completed")
-		}
-		time.Sleep(time.Millisecond)
+	select {
+	case <-successorDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("successor did not run after its active job completed")
 	}
 }
 

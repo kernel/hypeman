@@ -14,11 +14,14 @@ import (
 	"time"
 
 	"github.com/google/go-containerregistry/pkg/authn"
+	"github.com/google/uuid"
 	"github.com/kernel/hypeman/lib/paths"
 	"github.com/kernel/hypeman/lib/queue"
 	"github.com/kernel/hypeman/lib/tags"
 	"go.opentelemetry.io/otel/metric"
 )
+
+var errStaleBuild = errors.New("stale image build")
 
 const (
 	StatusPending    = "pending"
@@ -365,6 +368,7 @@ func (m *manager) createAndQueueImage(ref *ResolvedRef, req CreateImageRequest, 
 		Status:       StatusPending,
 		Request:      &storedReq,
 		BorrowedAuth: req.Credentials != nil,
+		BuildID:      uuid.New().String(),
 		Tags:         tags.Clone(req.Tags),
 		CreatedAt:    time.Now(),
 	}
@@ -377,10 +381,11 @@ func (m *manager) createAndQueueImage(ref *ResolvedRef, req CreateImageRequest, 
 	// Keep borrowed credentials outside the queued closure so their lifetime is
 	// bounded even when this job waits behind another pull.
 	inflight := m.registerInflightPull(ref.Digest(), req.Credentials)
+	buildID := meta.BuildID
 	queuePos := m.queue.EnqueueSuccessor(ref.Digest(), func() {
 		credentials, deadline, expired := m.borrowedAuth(ref.Digest())
 		if expired {
-			m.updateStatusByDigest(ref, StatusFailed, ErrBorrowedCredentialsExpired)
+			m.updateStatusByDigest(ref, StatusFailed, ErrBorrowedCredentialsExpired, buildID)
 			return
 		}
 		ctx := context.Background()
@@ -389,7 +394,7 @@ func (m *manager) createAndQueueImage(ref *ResolvedRef, req CreateImageRequest, 
 			ctx, cancel = context.WithDeadline(ctx, deadline)
 			defer cancel()
 		}
-		m.buildImage(ctx, ref, credentials)
+		m.buildImage(ctx, ref, credentials, buildID)
 	}, m.releaseInflightPull(ref.Digest(), inflight))
 
 	img := meta.toImage()
@@ -399,7 +404,7 @@ func (m *manager) createAndQueueImage(ref *ResolvedRef, req CreateImageRequest, 
 	return img, nil
 }
 
-func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef, credentials *authn.AuthConfig) {
+func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef, credentials *authn.AuthConfig, buildID string) {
 	buildStart := time.Now()
 	buildStatus := "failed"
 	buildDir := m.paths.SystemBuild(ref.String())
@@ -409,7 +414,7 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef, credentials 
 	}()
 
 	if err := os.MkdirAll(buildDir, 0755); err != nil {
-		m.updateStatusByDigest(ref, StatusFailed, fmt.Errorf("create build dir: %w", err))
+		m.updateStatusByDigest(ref, StatusFailed, fmt.Errorf("create build dir: %w", err), buildID)
 		return
 	}
 
@@ -420,7 +425,7 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef, credentials 
 		m.recordImageBuildPhase(ctx, ref.Digest(), "cleanup", time.Since(start), phaseStatus(err), "not_applicable")
 	}()
 
-	m.updateStatusByDigest(ref, StatusPulling, nil)
+	m.updateStatusByDigest(ref, StatusPulling, nil, buildID)
 
 	// Pull by the digest-pinned reference, not the tag: a digest ref fetches the
 	// exact manifest regardless of the platform passed downstream, so a
@@ -431,7 +436,7 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef, credentials 
 	result, err := m.ociClient.pullAndExportWithAuth(ctx, pullRef, ref.Digest(), tempDir, credentials)
 	m.recordPullResultMetrics(ctx, ref.Digest(), result)
 	if err != nil {
-		m.updateStatusByDigest(ref, StatusFailed, fmt.Errorf("pull and export: %w", err))
+		m.updateStatusByDigest(ref, StatusFailed, fmt.Errorf("pull and export: %w", err), buildID)
 		m.recordPullMetrics(ctx, "failed")
 		return
 	}
@@ -449,7 +454,7 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef, credentials 
 		}
 	}
 
-	m.updateStatusByDigest(ref, StatusConverting, nil)
+	m.updateStatusByDigest(ref, StatusConverting, nil, buildID)
 
 	diskPath := digestPath(m.paths, ref.Repository(), ref.DigestHex())
 	// Use default image format (erofs on Linux, ext4 on Darwin)
@@ -457,30 +462,32 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef, credentials 
 	diskSize, err := ExportRootfs(tempDir, diskPath, DefaultImageFormat)
 	m.recordImageBuildPhase(ctx, ref.Digest(), "filesystem_export", time.Since(convertStart), phaseStatus(err), "not_applicable")
 	if err != nil {
-		m.updateStatusByDigest(ref, StatusFailed, fmt.Errorf("convert to %s: %w", DefaultImageFormat, err))
+		m.updateStatusByDigest(ref, StatusFailed, fmt.Errorf("convert to %s: %w", DefaultImageFormat, err), buildID)
 		return
 	}
 
 	finalizeStart := time.Now()
-	err = m.finalizeImage(ref, result, diskSize)
+	err = m.finalizeImage(ref, result, diskSize, buildID)
 	m.recordImageBuildPhase(ctx, ref.Digest(), "finalize", time.Since(finalizeStart), phaseStatus(err), "not_applicable")
 	if err != nil {
-		m.updateStatusByDigest(ref, StatusFailed, err)
+		if errors.Is(err, errStaleBuild) {
+			return
+		}
+		m.updateStatusByDigest(ref, StatusFailed, err, buildID)
 		return
 	}
 
 	buildStatus = "success"
 }
 
-func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, diskSize int64) error {
-	// Read current metadata to preserve request info.
+func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, diskSize int64, buildID string) error {
+	m.createMu.Lock()
+	defer m.createMu.Unlock()
+
+	// Read current metadata to preserve request info and reject stale builds.
 	meta, err := readMetadata(m.paths, ref.Repository(), ref.DigestHex())
-	if err != nil {
-		meta = &imageMetadata{
-			Name:      ref.String(),
-			Digest:    ref.Digest(),
-			CreatedAt: time.Now(),
-		}
+	if err != nil || meta.BuildID != buildID {
+		return errStaleBuild
 	}
 
 	// The pulled image config is the source of truth for the platform.
@@ -557,19 +564,15 @@ func (m *manager) recordImageBuildPhase(ctx context.Context, digest, phase strin
 	)
 }
 
-func (m *manager) updateStatusByDigest(ref *ResolvedRef, status string, err error) {
+func (m *manager) updateStatusByDigest(ref *ResolvedRef, status string, err error, buildID string) {
+	m.createMu.Lock()
+	defer m.createMu.Unlock()
+
 	meta, readErr := readMetadata(m.paths, ref.Repository(), ref.DigestHex())
-	if readErr != nil {
-		// Create new metadata if it doesn't exist
-		meta = &imageMetadata{
-			Name:      ref.String(),
-			Digest:    ref.Digest(),
-			Status:    status,
-			CreatedAt: time.Now(),
-		}
-	} else {
-		meta.Status = status
+	if readErr != nil || meta.BuildID != buildID {
+		return
 	}
+	meta.Status = status
 
 	if err != nil {
 		errorMsg := err.Error()
@@ -578,7 +581,8 @@ func (m *manager) updateStatusByDigest(ref *ResolvedRef, status string, err erro
 
 	writeMetadata(m.paths, ref.Repository(), ref.DigestHex(), meta)
 
-	// Notify subscribers of terminal status
+	// Notify while holding createMu so a delete/recreate cannot race the
+	// metadata write and receive a terminal event for the old build.
 	if status == StatusReady || status == StatusFailed {
 		m.notifyReady(ref.DigestHex(), status, err)
 	}
@@ -608,11 +612,12 @@ func (m *manager) RecoverInterruptedBuilds() {
 		}
 		ref := NewResolvedRef(normalized, meta.Digest)
 		if meta.BorrowedAuth && (meta.Status != StatusConverting || !m.ociClient.existsInLayout(digestToLayoutTag(meta.Digest))) {
-			m.updateStatusByDigest(ref, StatusFailed, ErrBorrowedCredentialsExpired)
+			m.updateStatusByDigest(ref, StatusFailed, ErrBorrowedCredentialsExpired, meta.BuildID)
 			continue
 		}
+		buildID := meta.BuildID
 		m.queue.Enqueue(meta.Digest, func() {
-			m.buildImage(context.Background(), ref, nil)
+			m.buildImage(context.Background(), ref, nil, buildID)
 		}, nil)
 	}
 }

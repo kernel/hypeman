@@ -642,6 +642,9 @@ func TestDeleteAndRecreateDuringBuildTail(t *testing.T) {
 	case <-time.After(30 * time.Second):
 		t.Fatal("first build did not become ready")
 	}
+	firstMeta, err := readMetadata(p, repo, digestHex)
+	require.NoError(t, err)
+	require.NotEmpty(t, firstMeta.BuildID)
 
 	slotHeld := make(chan struct{})
 	releaseSlot := make(chan struct{})
@@ -664,6 +667,32 @@ func TestDeleteAndRecreateDuringBuildTail(t *testing.T) {
 	require.NotNil(t, recreated.QueuePosition)
 	require.Equal(t, 1, *recreated.QueuePosition)
 
+	currentMeta, err := readMetadata(p, repo, digestHex)
+	require.NoError(t, err)
+	require.NotEqual(t, firstMeta.BuildID, currentMeta.BuildID)
+	waitCtx, cancelWait := context.WithCancel(ctx)
+	defer cancelWait()
+	waitResult := make(chan error, 1)
+	go func() {
+		waitResult <- m.WaitForReady(waitCtx, repo+"@"+digestStr)
+	}()
+	select {
+	case err := <-waitResult:
+		t.Fatalf("recreated image completed before successor ran: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	normalized, err := ParseNormalizedRef(repo + "@" + digestStr)
+	require.NoError(t, err)
+	staleRef := NewResolvedRef(normalized, digestStr)
+	m.updateStatusByDigest(staleRef, StatusFailed, errors.New("stale build"), firstMeta.BuildID)
+	staleResult, _, _, err := m.ociClient.extractOCIImageDetails(digestHex)
+	require.NoError(t, err)
+	require.ErrorIs(t, m.finalizeImage(staleRef, &pullResult{Metadata: staleResult}, 1, firstMeta.BuildID), errStaleBuild)
+	currentMeta, err = readMetadata(p, repo, digestHex)
+	require.NoError(t, err)
+	require.Equal(t, StatusPending, currentMeta.Status)
+	require.Nil(t, currentMeta.Error)
+
 	close(releaseSlot)
 	select {
 	case event := <-events:
@@ -671,7 +700,12 @@ func TestDeleteAndRecreateDuringBuildTail(t *testing.T) {
 	case <-time.After(30 * time.Second):
 		t.Fatal("recreated image did not become ready")
 	}
-	waitForReady(t, m, ctx, repo+":"+tag)
+	select {
+	case err := <-waitResult:
+		require.NoError(t, err)
+	case <-time.After(30 * time.Second):
+		t.Fatal("WaitForReady did not observe the successor build")
+	}
 }
 
 // waitForReady waits for an image build to complete
