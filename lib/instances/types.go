@@ -365,6 +365,11 @@ type ForkSnapshotRequest struct {
 	Name             string          // Required: name for the new instance
 	TargetState      State           // Optional
 	TargetHypervisor hypervisor.Type // Optional, allowed only for Stopped snapshots
+	// Tags override the tags cloned from the snapshot's source onto the fork
+	// (request wins per key; unrelated source tags are kept). A consumer forks
+	// many instances from one source and needs to re-identify each fork rather
+	// than inherit the source's identity labels.
+	Tags map[string]string
 }
 
 // SnapshotPolicy defines default snapshot behavior for an instance.

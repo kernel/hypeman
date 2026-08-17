@@ -890,6 +890,14 @@ components:
           pattern: ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$
           maxLength: 63
           example: nginx-from-snap
+        tags:
+          $ref: "#/components/schemas/Tags"
+          description: |
+            Tags for the forked instance. These override the tags cloned from the
+            snapshot's source instance (request wins per key; unrelated source
+            tags are preserved), so a caller forking many instances from one
+            source can re-identify each fork rather than inherit the source's
+            identity labels.
         target_state:
           $ref: "#/components/schemas/SnapshotTargetState"
           description: |
