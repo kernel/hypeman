@@ -73,3 +73,40 @@ func TestDiscoverVGPUWithPropagatesVendorVFIOError(t *testing.T) {
 	assert.Equal(t, VGPUFrameworkNone, framework)
 	assert.Nil(t, vfs)
 }
+
+func TestDiscoverMdevVFsSkipsUnreadableVF(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	busPath := filepath.Join(root, "sys", "class", "mdev_bus")
+	pciPath := filepath.Join(root, "sys", "bus", "pci", "devices")
+	require.NoError(t, os.MkdirAll(filepath.Join(busPath, "0000:82:00.4", "mdev_supported_types", "nvidia-556"), 0755))
+	// A regular file makes the supported-types read fail without IsNotExist.
+	require.NoError(t, os.MkdirAll(filepath.Join(busPath, "0000:82:00.5"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(busPath, "0000:82:00.5", "mdev_supported_types"), nil, 0644))
+
+	vfs, err := discoverMdevVFsWith(busPath, pciPath, func() ([]MdevDevice, error) {
+		return nil, nil
+	})
+	require.NoError(t, err)
+	require.Len(t, vfs, 1)
+	assert.Equal(t, "0000:82:00.4", vfs[0].PCIAddress)
+}
+
+func TestDiscoverMdevVFsFailsWhenNoVFIsReadable(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	busPath := filepath.Join(root, "sys", "class", "mdev_bus")
+	pciPath := filepath.Join(root, "sys", "bus", "pci", "devices")
+	require.NoError(t, os.MkdirAll(filepath.Join(busPath, "0000:82:00.4"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(busPath, "0000:82:00.4", "mdev_supported_types"), nil, 0644))
+
+	// With every VF unreadable, discovery must fail rather than report an
+	// empty inventory that would demote the host to vendor VFIO or
+	// passthrough.
+	_, err := discoverMdevVFsWith(busPath, pciPath, func() ([]MdevDevice, error) {
+		return nil, nil
+	})
+	require.Error(t, err)
+}
