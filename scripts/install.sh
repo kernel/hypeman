@@ -660,12 +660,21 @@ if command -v docker >/dev/null 2>&1; then
     # escalates privileged operations through $SUDO, so do the same here
     # rather than failing the one step this script exists to make work.
     DOCKER="docker"
+    DOCKER_READY=1
     if ! docker info >/dev/null 2>&1; then
         if [ -n "$SUDO" ] && $SUDO docker info >/dev/null 2>&1; then
             DOCKER="$SUDO docker"
+        else
+            # The binary is present but its daemon is not reachable (even with
+            # sudo). Decide that here rather than letting `docker build` fail
+            # later — for a release install that would first fetch the source
+            # tarball and only then fail on the same unreachable daemon.
+            DOCKER_READY=0
         fi
     fi
-    if $DOCKER image inspect hypeman/builder:latest >/dev/null 2>&1; then
+    if [ "$DOCKER_READY" -eq 0 ]; then
+        warn "Docker is installed but its daemon is not accessible (even with sudo); skipping builder image build (hypeman build will not work until it exists)"
+    elif $DOCKER image inspect hypeman/builder:latest >/dev/null 2>&1; then
         info "Builder image hypeman/builder:latest already present, skipping build"
     else
         info "Building builder image..."
@@ -693,8 +702,11 @@ if command -v docker >/dev/null 2>&1; then
             if ! $DOCKER build -t hypeman/builder:latest -f "${BUILD_CONTEXT}/lib/builds/images/generic/Dockerfile" "$BUILD_CONTEXT" > "$BUILDER_BUILD_LOG" 2>&1; then
                 # TMP_DIR is removed by the EXIT trap, so print the captured output
                 # now rather than naming a log path that will not survive the install.
+                # To stdout, matching every other log dump in this script (the
+                # source-build path's `cat "$BUILD_LOG"`) and the warn above it, so
+                # the log cannot detach from its message or vanish under `2>/dev/null`.
                 warn "Failed to build builder image; docker build output follows:"
-                sed 's/^/    /' "$BUILDER_BUILD_LOG" >&2
+                sed 's/^/    /' "$BUILDER_BUILD_LOG"
                 warn "Source builds will not work until it exists: docker build -t hypeman/builder:latest -f lib/builds/images/generic/Dockerfile <source checkout>"
             else
                 info "Builder image built successfully"
