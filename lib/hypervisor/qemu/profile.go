@@ -67,7 +67,10 @@ func (MicroVMProfile) requiresStoredVersion() bool     { return true }
 
 func qemuCapabilities(supportsPCI bool) hypervisor.Capabilities {
 	return hypervisor.Capabilities{
-		SupportsSnapshot:            true,
+		SupportsSnapshot: true,
+		// PrepareFork rewrites the saved QEMU VM config for forks (fork.go);
+		// both boards share the implementation.
+		SupportsFork:                true,
 		SupportsHotplugMemory:       false,
 		SupportsBalloonControl:      true,
 		SupportsPause:               true,

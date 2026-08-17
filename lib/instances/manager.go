@@ -690,6 +690,15 @@ func (m *manager) UpdateInstance(ctx context.Context, id string, req UpdateInsta
 	return inst, err
 }
 
+// DefaultHypervisor returns the effective default hypervisor type used for
+// launches that do not specify one. It is deliberately not part of the
+// Manager interface — widening that interface would break alternate
+// implementations (mocks, wrappers) compiled against this public module — so
+// callers that need it type-assert for this method instead.
+func (m *manager) DefaultHypervisor() hypervisor.Type {
+	return m.defaultHypervisor
+}
+
 // ListInstances returns instances, optionally filtered by the given criteria.
 // Pass nil to return all instances.
 func (m *manager) ListInstances(ctx context.Context, filter *ListInstancesFilter) ([]Instance, error) {

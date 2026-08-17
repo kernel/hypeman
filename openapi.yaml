@@ -1425,6 +1425,172 @@ components:
           type: string
           enum: [ok]
           example: ok
+
+    Capabilities:
+      type: object
+      required: [server, host, default_runtime, runtimes, network, images, features]
+      properties:
+        server:
+          $ref: "#/components/schemas/CapabilitiesServer"
+        host:
+          $ref: "#/components/schemas/CapabilitiesHost"
+        default_runtime:
+          $ref: "#/components/schemas/CapabilitiesDefaultRuntime"
+        runtimes:
+          type: array
+          items:
+            $ref: "#/components/schemas/CapabilitiesRuntime"
+          description: |
+            Every runtime this server build supports on this host platform,
+            each with its own availability flag and feature IDs. Hosts
+            commonly support several runtimes at once (for example
+            cloud-hypervisor, firecracker, qemu, and qemu-microvm on
+            linux/amd64). A listed runtime is only launchable when its
+            "available" flag is true. Entries are sorted by name.
+        network:
+          $ref: "#/components/schemas/CapabilitiesNetwork"
+        images:
+          $ref: "#/components/schemas/CapabilitiesImages"
+        features:
+          type: array
+          items:
+            type: string
+          description: |
+            Stable server-level feature IDs: API surfaces this server exposes
+            regardless of which runtime backs an instance. Always present:
+            "instances", "images", "builds", "volumes", "ingress", "exec",
+            "logs". Host-conditional: "devices" (device passthrough
+            management, Linux hosts only) and "rosetta-emulation" (Apple
+            Silicon macOS hosts with Rosetta currently installed, per the same
+            availability probe launches enforce). Per-runtime features are
+            reported under each runtimes[] entry.
+
+    CapabilitiesServer:
+      type: object
+      required: [version, api_version]
+      properties:
+        version:
+          type: string
+          description: Server build version (short git revision, with "-dirty" suffix for uncommitted builds, or "unknown")
+          example: 76a2fdb3
+        api_version:
+          type: string
+          description: API contract version (matches the OpenAPI document info version)
+          example: 0.2.0
+
+    CapabilitiesHost:
+      type: object
+      required: [os, arch]
+      properties:
+        os:
+          type: string
+          description: Host operating system
+          example: linux
+        arch:
+          type: string
+          description: Host CPU architecture
+          example: arm64
+
+    CapabilitiesDefaultRuntime:
+      type: object
+      required: [name, available]
+      properties:
+        name:
+          type: string
+          description: Runtime used for launches that do not name one
+          example: cloud-hypervisor
+        available:
+          type: boolean
+          description: |
+            Whether the default runtime can launch on this host: it appears in
+            runtimes and its launch prerequisites are met (matches that
+            entry's "available"). When false, launches that rely on the
+            default will fail until the server is reconfigured with an
+            available runtime or the missing prerequisite (for example the
+            QEMU system binary) is installed.
+
+    CapabilitiesRuntime:
+      type: object
+      required: [name, available, features]
+      properties:
+        name:
+          type: string
+          description: Runtime identifier
+          example: cloud-hypervisor
+        available:
+          type: boolean
+          description: |
+            Whether this runtime's launch prerequisites are currently met on
+            this host. Listed runtimes are supported by this server build on
+            this platform; available=false means a host prerequisite is
+            missing (for example qemu requires a runnable system-installed
+            QEMU binary and the host vhost-vsock device) and launches naming
+            this runtime will fail until it is installed.
+        features:
+          type: array
+          items:
+            type: string
+          description: |
+            Stable feature IDs supported by this runtime on this host:
+            "snapshots" (snapshot/restore), "standby" (pause + memory
+            snapshot, with later restore), "fork" (clone an instance from a
+            stopped source; forking a standby or running source
+            restores/creates snapshots and additionally requires "standby"),
+            "pause" (pause/resume), "hotplug-memory" (live memory resize),
+            "balloon-control" (runtime balloon target changes), "vsock"
+            (guest vsock communication), "gpu-passthrough" (GPU/PCI device
+            passthrough), "disk-io-limit" (disk I/O rate limiting),
+            "disk-resize" (live disk resize). Values are host- and
+            configuration-truthful: vz omits snapshots and standby on macOS
+            13, which lacks Virtualization.framework VM save/restore, while
+            still advertising fork (stopped-source clones need no
+            save/restore there), and cloud-hypervisor reports "disk-resize"
+            only when the configured default version supports it.
+
+    CapabilitiesNetwork:
+      type: object
+      required: [model, guest_to_guest]
+      properties:
+        model:
+          type: string
+          enum: [bridge, nat]
+          description: |
+            Guest networking model. "bridge" is a Linux bridge with per-VM TAP
+            devices; "nat" is hypervisor-provided NAT (macOS).
+        gateway:
+          type: string
+          description: |
+            Guest-visible host gateway IP. Guests reach host services (including
+            host ingress) through this address. Omitted when no default network
+            has been resolved on this host yet.
+          example: 10.100.0.1
+        subnet:
+          type: string
+          description: Guest subnet CIDR
+          example: 10.100.0.0/16
+        guest_to_guest:
+          type: boolean
+          description: Whether direct VM-to-VM traffic is permitted on the default network
+
+    CapabilitiesImages:
+      type: object
+      required: [platforms, default_platform]
+      properties:
+        platforms:
+          type: array
+          items:
+            type: string
+          description: |
+            Image platforms (os/arch) this host can run. On Apple Silicon macOS
+            this includes linux/amd64 only when Rosetta is currently installed
+            — probed via the same Virtualization.framework availability check
+            launches enforce — so a listed platform is launchable right now.
+            Install Rosetta (softwareupdate --install-rosetta) to enable it.
+          example: [linux/arm64, linux/amd64]
+        default_platform:
+          type: string
+          description: Image platform selected when a create request omits one
+          example: linux/arm64
     
     IngressMatch:
       type: object
@@ -2263,6 +2429,36 @@ paths:
               schema:
                 $ref: "#/components/schemas/Health"
   
+  /capabilities:
+    get:
+      summary: Get host capabilities
+      description: |
+        Returns machine-readable host capabilities: server and API version, host
+        OS/architecture, every runtime available on this host with its per-runtime
+        feature IDs, the configured default runtime and whether it is available,
+        guest networking model and host gateway, supported image platforms, and
+        stable server-level feature IDs.
+
+        Runtime-derived values reflect the actual host (for example, snapshot and
+        standby support on macOS is gated on the host OS version), so clients can
+        gate behavior on capabilities without hard-coding hypervisor knowledge.
+      operationId: getCapabilities
+      security:
+        - bearerAuth: []
+      responses:
+        200:
+          description: Host capabilities
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Capabilities"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /resources:
     get:
       summary: Get host resource capacity and allocations

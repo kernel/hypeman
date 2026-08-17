@@ -73,6 +73,14 @@ func TestMicroVMCapabilitiesExcludePCIPassthrough(t *testing.T) {
 	assert.True(t, (MicroVMProfile{}).capabilities().RequiresHostSnapshotVersion)
 }
 
+// TestQEMUCapabilitiesAdvertiseFork pins that both QEMU boards advertise fork
+// explicitly, matching the shared PrepareFork implementation in fork.go.
+func TestQEMUCapabilitiesAdvertiseFork(t *testing.T) {
+	t.Parallel()
+	assert.True(t, (StandardProfile{}).capabilities().SupportsFork)
+	assert.True(t, (MicroVMProfile{}).capabilities().SupportsFork)
+}
+
 func TestValidateConfigMicroVM(t *testing.T) {
 	t.Parallel()
 	if _, err := microVMMachineType(); err != nil {
