@@ -14,15 +14,15 @@ import (
 	"go.opentelemetry.io/otel"
 )
 
-type autoStandbyRuntimeManager interface {
-	GetAutoStandbyRuntime(ctx context.Context, id string) (*autostandby.Runtime, error)
-	SetAutoStandbyRuntime(ctx context.Context, id string, runtime *autostandby.Runtime) error
+type autoStandbyStateManager interface {
+	GetAutoStandbyState(ctx context.Context, id string) (*autostandby.AutoStandbyState, error)
+	SetAutoStandbyState(ctx context.Context, id string, autoStandbyState *autostandby.AutoStandbyState) error
 	SubscribeLifecycleEvents(consumer instances.LifecycleEventConsumer) (<-chan instances.LifecycleEvent, func())
 }
 
 type autoStandbyInstanceStore struct {
-	manager        instances.Manager
-	runtimeManager autoStandbyRuntimeManager
+	manager      instances.Manager
+	stateManager autoStandbyStateManager
 }
 
 func (s autoStandbyInstanceStore) ListInstances(ctx context.Context) ([]autostandby.Instance, error) {
@@ -33,20 +33,20 @@ func (s autoStandbyInstanceStore) ListInstances(ctx context.Context) ([]autostan
 
 	out := make([]autostandby.Instance, 0, len(insts))
 	for _, inst := range insts {
-		runtime, err := s.runtimeManager.GetAutoStandbyRuntime(ctx, inst.Id)
+		autoStandbyState, err := s.stateManager.GetAutoStandbyState(ctx, inst.Id)
 		if err != nil {
 			return nil, err
 		}
 
 		out = append(out, autostandby.Instance{
-			ID:             inst.Id,
-			Name:           inst.Name,
-			State:          string(inst.State),
-			NetworkEnabled: inst.NetworkEnabled,
-			IP:             inst.IP,
-			HasVGPU:        inst.GPUProfile != "" || inst.GPUMdevUUID != "",
-			AutoStandby:    inst.AutoStandby,
-			Runtime:        runtime,
+			ID:               inst.Id,
+			Name:             inst.Name,
+			State:            string(inst.State),
+			NetworkEnabled:   inst.NetworkEnabled,
+			IP:               inst.IP,
+			HasVGPU:          inst.GPUProfile != "" || inst.GPUMdevUUID != "",
+			AutoStandby:      inst.AutoStandby,
+			AutoStandbyState: autoStandbyState,
 		})
 	}
 	return out, nil
@@ -60,21 +60,21 @@ func (s autoStandbyInstanceStore) StandbyInstance(ctx context.Context, id string
 	return err
 }
 
-func (s autoStandbyInstanceStore) SetRuntime(ctx context.Context, id string, runtime *autostandby.Runtime) error {
-	return s.runtimeManager.SetAutoStandbyRuntime(ctx, id, runtime)
+func (s autoStandbyInstanceStore) SetAutoStandbyState(ctx context.Context, id string, autoStandbyState *autostandby.AutoStandbyState) error {
+	return s.stateManager.SetAutoStandbyState(ctx, id, autoStandbyState)
 }
 
 func (s autoStandbyInstanceStore) SubscribeInstanceEvents() (<-chan autostandby.InstanceEvent, func(), error) {
-	src, unsub := s.runtimeManager.SubscribeLifecycleEvents(instances.LifecycleEventConsumerAutoStandby)
+	src, unsub := s.stateManager.SubscribeLifecycleEvents(instances.LifecycleEventConsumerAutoStandby)
 	dst := make(chan autostandby.InstanceEvent, 32)
 	go func() {
 		defer close(dst)
 		for event := range src {
 			inst := toAutoStandbyInstance(event.Instance)
 			if inst != nil {
-				runtime, err := s.runtimeManager.GetAutoStandbyRuntime(context.Background(), inst.ID)
+				autoStandbyState, err := s.stateManager.GetAutoStandbyState(context.Background(), inst.ID)
 				if err == nil {
-					inst.Runtime = runtime
+					inst.AutoStandbyState = autoStandbyState
 				}
 			}
 			dst <- autostandby.InstanceEvent{
@@ -108,13 +108,13 @@ func ProvideAutoStandbyController(instanceManager instances.Manager, cfg *config
 		return nil
 	}
 
-	runtimeManager, ok := instanceManager.(autoStandbyRuntimeManager)
+	stateManager, ok := instanceManager.(autoStandbyStateManager)
 	if !ok {
 		return nil
 	}
 
 	return autostandby.NewController(
-		autoStandbyInstanceStore{manager: instanceManager, runtimeManager: runtimeManager},
+		autoStandbyInstanceStore{manager: instanceManager, stateManager: stateManager},
 		autostandby.NewConntrackSource(),
 		autostandby.ControllerOptions{
 			Log:                   log.With("controller", "auto_standby"),

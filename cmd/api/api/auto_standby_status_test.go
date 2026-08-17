@@ -27,9 +27,9 @@ func (m *captureStatusManager) GetInstance(context.Context, string) (*instances.
 }
 
 type statusStore struct {
-	instances []autostandby.Instance
-	runtime   map[string]*autostandby.Runtime
-	events    chan autostandby.InstanceEvent
+	instances        []autostandby.Instance
+	autoStandbyState map[string]*autostandby.AutoStandbyState
+	events           chan autostandby.InstanceEvent
 }
 
 func (s *statusStore) ListInstances(context.Context) ([]autostandby.Instance, error) {
@@ -38,11 +38,11 @@ func (s *statusStore) ListInstances(context.Context) ([]autostandby.Instance, er
 
 func (s *statusStore) StandbyInstance(context.Context, string) error { return nil }
 
-func (s *statusStore) SetRuntime(_ context.Context, id string, runtime *autostandby.Runtime) error {
-	if s.runtime == nil {
-		s.runtime = make(map[string]*autostandby.Runtime)
+func (s *statusStore) SetAutoStandbyState(_ context.Context, id string, autoStandbyState *autostandby.AutoStandbyState) error {
+	if s.autoStandbyState == nil {
+		s.autoStandbyState = make(map[string]*autostandby.AutoStandbyState)
 	}
-	s.runtime[id] = runtime
+	s.autoStandbyState[id] = autoStandbyState
 	return nil
 }
 

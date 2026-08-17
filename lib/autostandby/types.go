@@ -19,14 +19,14 @@ type Policy struct {
 
 // Instance is the minimal instance view needed by the auto-standby controller.
 type Instance struct {
-	ID             string
-	Name           string
-	State          string
-	NetworkEnabled bool
-	IP             string
-	HasVGPU        bool
-	AutoStandby    *Policy
-	Runtime        *Runtime
+	ID               string
+	Name             string
+	State            string
+	NetworkEnabled   bool
+	IP               string
+	HasVGPU          bool
+	AutoStandby      *Policy
+	AutoStandbyState *AutoStandbyState
 }
 
 // Connection is the normalized network view used by activity classification.
@@ -38,8 +38,8 @@ type Connection struct {
 	TCPState                TCPState
 }
 
-// Runtime stores persisted and in-memory idle-tracking timestamps.
-type Runtime struct {
+// AutoStandbyState stores persisted and in-memory idle-tracking timestamps.
+type AutoStandbyState struct {
 	IdleSince             *time.Time `json:"idle_since,omitempty"`
 	LastInboundActivityAt *time.Time `json:"last_inbound_activity_at,omitempty"`
 }

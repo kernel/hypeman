@@ -40,8 +40,9 @@ const (
 // metadata wraps StoredMetadata for JSON serialization
 type metadata struct {
 	StoredMetadata
-	AutoStandbyRuntime *autostandby.Runtime `json:"auto_standby_runtime,omitempty"`
-	HealthCheckRuntime *healthcheck.Runtime `json:"health_check_runtime,omitempty"`
+	// Keep the legacy JSON key so existing instance metadata remains readable.
+	AutoStandbyState   *autostandby.AutoStandbyState `json:"auto_standby_runtime,omitempty"`
+	HealthCheckRuntime *healthcheck.Runtime          `json:"health_check_runtime,omitempty"`
 }
 
 // ensureDirectories creates the instance directory structure

@@ -12,34 +12,34 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type autoStandbyRuntimeManagerStub struct {
-	runtimeByID map[string]*autostandby.Runtime
-	events      chan instances.LifecycleEvent
+type autoStandbyStateManagerStub struct {
+	stateByID map[string]*autostandby.AutoStandbyState
+	events    chan instances.LifecycleEvent
 }
 
-func (s *autoStandbyRuntimeManagerStub) GetAutoStandbyRuntime(_ context.Context, id string) (*autostandby.Runtime, error) {
-	if runtime, ok := s.runtimeByID[id]; ok {
-		cloned := *runtime
+func (s *autoStandbyStateManagerStub) GetAutoStandbyState(_ context.Context, id string) (*autostandby.AutoStandbyState, error) {
+	if autoStandbyState, ok := s.stateByID[id]; ok {
+		cloned := *autoStandbyState
 		return &cloned, nil
 	}
 	return nil, nil
 }
 
-func (s *autoStandbyRuntimeManagerStub) SetAutoStandbyRuntime(context.Context, string, *autostandby.Runtime) error {
+func (s *autoStandbyStateManagerStub) SetAutoStandbyState(context.Context, string, *autostandby.AutoStandbyState) error {
 	return nil
 }
 
-func (s *autoStandbyRuntimeManagerStub) SubscribeLifecycleEvents(instances.LifecycleEventConsumer) (<-chan instances.LifecycleEvent, func()) {
+func (s *autoStandbyStateManagerStub) SubscribeLifecycleEvents(instances.LifecycleEventConsumer) (<-chan instances.LifecycleEvent, func()) {
 	return s.events, func() {}
 }
 
-func TestAutoStandbyInstanceStoreSubscribeInstanceEventsIncludesRuntime(t *testing.T) {
+func TestAutoStandbyInstanceStoreSubscribeInstanceEventsIncludesState(t *testing.T) {
 	t.Parallel()
 
 	idleSince := time.Date(2026, 4, 7, 12, 0, 0, 0, time.UTC)
 	lastInbound := idleSince.Add(-time.Minute)
-	runtimeManager := &autoStandbyRuntimeManagerStub{
-		runtimeByID: map[string]*autostandby.Runtime{
+	stateManager := &autoStandbyStateManagerStub{
+		stateByID: map[string]*autostandby.AutoStandbyState{
 			"inst-1": {
 				IdleSince:             &idleSince,
 				LastInboundActivityAt: &lastInbound,
@@ -48,13 +48,13 @@ func TestAutoStandbyInstanceStoreSubscribeInstanceEventsIncludesRuntime(t *testi
 		events: make(chan instances.LifecycleEvent, 1),
 	}
 	store := autoStandbyInstanceStore{
-		runtimeManager: runtimeManager,
+		stateManager: stateManager,
 	}
 
 	eventCh, _, err := store.SubscribeInstanceEvents()
 	require.NoError(t, err)
 
-	runtimeManager.events <- instances.LifecycleEvent{
+	stateManager.events <- instances.LifecycleEvent{
 		Action:     instances.LifecycleEventUpdate,
 		InstanceID: "inst-1",
 		Instance: &instances.Instance{
@@ -71,9 +71,9 @@ func TestAutoStandbyInstanceStoreSubscribeInstanceEventsIncludesRuntime(t *testi
 
 	event := <-eventCh
 	require.NotNil(t, event.Instance)
-	require.NotNil(t, event.Instance.Runtime)
-	require.NotNil(t, event.Instance.Runtime.IdleSince)
-	require.Equal(t, idleSince, *event.Instance.Runtime.IdleSince)
-	require.NotNil(t, event.Instance.Runtime.LastInboundActivityAt)
-	require.Equal(t, lastInbound, *event.Instance.Runtime.LastInboundActivityAt)
+	require.NotNil(t, event.Instance.AutoStandbyState)
+	require.NotNil(t, event.Instance.AutoStandbyState.IdleSince)
+	require.Equal(t, idleSince, *event.Instance.AutoStandbyState.IdleSince)
+	require.NotNil(t, event.Instance.AutoStandbyState.LastInboundActivityAt)
+	require.Equal(t, lastInbound, *event.Instance.AutoStandbyState.LastInboundActivityAt)
 }

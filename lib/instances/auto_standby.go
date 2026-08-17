@@ -24,18 +24,18 @@ func cloneAutoStandbyPolicy(policy *autostandby.Policy) *autostandby.Policy {
 	return cloned
 }
 
-func cloneAutoStandbyRuntime(runtime *autostandby.Runtime) *autostandby.Runtime {
-	if runtime == nil {
+func cloneAutoStandbyState(autoStandbyState *autostandby.AutoStandbyState) *autostandby.AutoStandbyState {
+	if autoStandbyState == nil {
 		return nil
 	}
 
-	cloned := &autostandby.Runtime{}
-	if runtime.IdleSince != nil {
-		idleSince := runtime.IdleSince.UTC()
+	cloned := &autostandby.AutoStandbyState{}
+	if autoStandbyState.IdleSince != nil {
+		idleSince := autoStandbyState.IdleSince.UTC()
 		cloned.IdleSince = &idleSince
 	}
-	if runtime.LastInboundActivityAt != nil {
-		lastInboundActivityAt := runtime.LastInboundActivityAt.UTC()
+	if autoStandbyState.LastInboundActivityAt != nil {
+		lastInboundActivityAt := autoStandbyState.LastInboundActivityAt.UTC()
 		cloned.LastInboundActivityAt = &lastInboundActivityAt
 	}
 	return cloned

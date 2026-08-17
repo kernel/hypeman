@@ -58,8 +58,8 @@ func (s integrationAutoStandbyStore) StandbyInstance(ctx context.Context, id str
 	return err
 }
 
-func (s integrationAutoStandbyStore) SetRuntime(ctx context.Context, id string, runtime *autostandby.Runtime) error {
-	return s.manager.SetAutoStandbyRuntime(ctx, id, runtime)
+func (s integrationAutoStandbyStore) SetAutoStandbyState(ctx context.Context, id string, autoStandbyState *autostandby.AutoStandbyState) error {
+	return s.manager.SetAutoStandbyState(ctx, id, autoStandbyState)
 }
 
 func (s integrationAutoStandbyStore) SubscribeInstanceEvents() (<-chan autostandby.InstanceEvent, func(), error) {
@@ -375,7 +375,7 @@ func TestAutoStandbyCloudHypervisorHoldStandby(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, StateRunning, current.State)
 
-	runtimeBefore, err := mgr.GetAutoStandbyRuntime(ctx, instanceID)
+	stateBefore, err := mgr.GetAutoStandbyState(ctx, instanceID)
 	require.NoError(t, err)
 
 	snapshot, err := controller.HoldStandby(ctx, toAutoStandby(current))
@@ -386,9 +386,9 @@ func TestAutoStandbyCloudHypervisorHoldStandby(t *testing.T) {
 		"hold_until %s must be after the countdown deadline %s", snapshot.HoldUntil, countdownDeadline)
 
 	// Holds are in-memory only: the persisted countdown is untouched.
-	runtimeAfter, err := mgr.GetAutoStandbyRuntime(ctx, instanceID)
+	stateAfter, err := mgr.GetAutoStandbyState(ctx, instanceID)
 	require.NoError(t, err)
-	require.Equal(t, runtimeBefore, runtimeAfter)
+	require.Equal(t, stateBefore, stateAfter)
 
 	// Just past the countdown deadline the instance must still be running;
 	// without the hold the standby would have fired here.
