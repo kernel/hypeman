@@ -271,6 +271,44 @@ curl -s http://localhost:4973/resources | jq '.gpu.profiles'
    curl http://localhost:4973/instances/<id>/logs?source=app
    ```
 
+### Guest driver init times out on one VF (vendor VFIO)
+
+A VF can be wedged inside the NVIDIA stack while its sysfs interface stays
+healthy: assignment succeeds, the host plugin logs `display_init inst: 0
+successful`, but the guest driver loops on
+
+```
+NVRM: GPU 0000:00:03.0: RmInitAdapter failed! (0x22:0x65:884)
+```
+
+(0x65 = timeout; the guest's init requests are never answered, and
+`/proc/interrupts` shows the GPU's MSI-X vectors allocated but idle). Because
+placement is deterministic least-loaded, an idle host re-picks the same VF for
+every request, so one wedged VF presents as all vGPU instances failing while
+`/resources` reports full capacity.
+
+The wedge itself leaves no host-side log: no kernel error, no XID, no plugin
+crash. In the observed case it followed a period of heavy attach/teardown
+churn on the VF, including QEMU processes that exited within seconds of
+opening the VFIO device (failed start attempts that were then retried), so
+suspect any workload that repeatedly kills the VMM mid-device-init.
+
+Confirm by assigning the same profile on a different VF: if that guest
+initializes, the VF is wedged, not the driver stack. Remediate by cycling
+SR-IOV on the parent GPU (this destroys and recreates all of its VFs, so it
+requires no vGPU assignments on that GPU):
+
+```bash
+/usr/lib/nvidia/sriov-manage -d <parent-gpu-pci-addr>
+/usr/lib/nvidia/sriov-manage -e <parent-gpu-pci-addr>
+```
+
+Do not unbind/rebind the VF from the nvidia driver — it breaks the
+nvidia-vgpu-vfio core-device registration (`vfio_pci_core_device not found`)
+and the VF stops accepting assignments entirely until the SR-IOV cycle.
+Services holding the GPU (DCGM, persistenced) must be stopped for the cycle
+to obtain the unbind lock.
+
 ### vGPU assignment fails
 
 Check the files for the framework detected on the host:
