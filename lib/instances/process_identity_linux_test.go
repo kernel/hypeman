@@ -5,6 +5,7 @@ package instances
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -274,29 +275,31 @@ func TestClassifyResolvedHypervisorOwner(t *testing.T) {
 	})
 	livePID := live.Process.Pid
 
-	// A command-line match that exited between the scan and the liveness
-	// check means no live process owns or references the socket: provably
-	// dead, same conclusion as ErrNoOwningProcess, even with a live stored
-	// PID. A live command-line-only match is genuinely ambiguous and fails
-	// closed whether or not a stored PID exists.
+	// A resolved owner that exited between the scan and the liveness check is
+	// the same provable-death conclusion as ErrNoOwningProcess, even with a
+	// live stored PID. Only a failed scan fails closed.
 	for _, tc := range []struct {
 		name             string
 		stored, resolved int
+		err              error
+		wantPID          int
 		wantErr          bool
 	}{
-		{"dead cmdline match with live stored PID", livePID, deadPID, false},
-		{"dead cmdline match without stored PID", 0, deadPID, false},
-		{"live cmdline match with stored PID", livePID, livePID, true},
-		{"live cmdline match without stored PID", 0, livePID, true},
+		{name: "live resolved owner", resolved: livePID, wantPID: livePID},
+		{name: "dead resolved owner with live stored PID", stored: livePID, resolved: deadPID},
+		{name: "dead resolved owner without stored PID", resolved: deadPID},
+		{name: "no owning process with live stored PID", stored: livePID, err: fmt.Errorf("wrapped: %w", hypervisor.ErrNoOwningProcess)},
+		{name: "scan failure with stored PID", stored: livePID, err: errors.New("inspect process fds: permission denied"), wantErr: true},
+		{name: "scan failure without stored PID", err: errors.New("inspect process fds: permission denied"), wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			pid, err := classifyResolvedHypervisorOwner("/fake.sock", tc.stored, tc.resolved, false, nil)
+			pid, err := classifyResolvedHypervisorOwner("/fake.sock", tc.stored, tc.resolved, tc.err)
 			if tc.wantErr {
 				require.Error(t, err)
 				return
 			}
 			require.NoError(t, err)
-			assert.Zero(t, pid)
+			assert.Equal(t, tc.wantPID, pid)
 		})
 	}
 }
@@ -334,7 +337,7 @@ func TestShutdownHypervisorKillsResolvedOwnerWhenClientUnavailable(t *testing.T)
 	assert.True(t, os.IsNotExist(statErr), "instance socket should be removed")
 }
 
-func TestShutdownHypervisorFailsClosedOnUnconfirmedOwnership(t *testing.T) {
+func TestShutdownHypervisorIgnoresCommandLineBystander(t *testing.T) {
 	socketPath := filepath.Join(t.TempDir(), "test.sock")
 	require.NoError(t, os.WriteFile(socketPath, nil, 0600))
 	match := exec.Command("sh", "-c", "sleep 30", "sh", socketPath)
@@ -351,21 +354,22 @@ func TestShutdownHypervisorFailsClosedOnUnconfirmedOwnership(t *testing.T) {
 		_ = stale.Wait()
 	})
 
+	// No process owns the socket listener; a debug client carrying the socket
+	// path in its command line must not be mistaken for the hypervisor or
+	// block shutdown.
 	stalePID := stale.Process.Pid
 	m := &manager{}
 	err := m.shutdownHypervisor(context.Background(), &Instance{
 		StoredMetadata: StoredMetadata{
-			Id:                        "shutdown-unconfirmed",
+			Id:                        "shutdown-cmdline-bystander",
 			HypervisorType:            hypervisor.TypeCloudHypervisor,
 			HypervisorProcessIdentity: HypervisorProcessIdentity{HypervisorPID: &stalePID},
 			SocketPath:                socketPath,
 		},
 	})
-	require.ErrorContains(t, err, "confirm hypervisor ownership before shutdown")
-	assert.NoError(t, syscall.Kill(stalePID, 0), "stored PID must not be signaled on unconfirmed ownership")
-	assert.NoError(t, syscall.Kill(match.Process.Pid, 0), "command-line match must not be signaled")
-	_, statErr := os.Stat(socketPath)
-	assert.NoError(t, statErr, "socket must be kept as evidence for the hardened kill path")
+	require.NotContains(t, fmt.Sprint(err), "confirm hypervisor ownership")
+	assert.NoError(t, syscall.Kill(stalePID, 0), "process with a recycled PID must not be killed")
+	assert.NoError(t, syscall.Kill(match.Process.Pid, 0), "command-line bystander must not be signaled")
 }
 
 func TestKillProcessAndWaitIgnoresExitedProcess(t *testing.T) {
@@ -476,10 +480,12 @@ func TestKillHypervisorSucceedsOnReusedPIDWhenNoProcessOwnsSocket(t *testing.T) 
 	assert.NoError(t, syscall.Kill(stalePID, 0), "process with a recycled PID must not be killed")
 }
 
-func TestKillHypervisorFailsOnUnconfirmedCommandLineMatch(t *testing.T) {
+func TestKillHypervisorIgnoresCommandLineBystander(t *testing.T) {
 	socketPath := filepath.Join(t.TempDir(), "test.sock")
 	// A process whose command line contains the socket path but that does not
-	// own a listening socket: ResolveProcessPID resolves it unconfirmed.
+	// own a listening socket (e.g. a debug client like ch-remote) is invisible
+	// to resolution: no listener exists, so the recorded hypervisor is
+	// provably gone and the kill completes without signaling the bystander.
 	match := exec.Command("sh", "-c", "sleep 30", "sh", socketPath)
 	require.NoError(t, match.Start())
 	t.Cleanup(func() {
@@ -489,11 +495,11 @@ func TestKillHypervisorFailsOnUnconfirmedCommandLineMatch(t *testing.T) {
 
 	matchPID := match.Process.Pid
 	m := &manager{}
-	require.Error(t, m.killHypervisor(context.Background(), &Instance{
+	require.NoError(t, m.killHypervisor(context.Background(), &Instance{
 		StoredMetadata: StoredMetadata{Id: "kill-test", HypervisorProcessIdentity: HypervisorProcessIdentity{HypervisorPID: &matchPID}, SocketPath: socketPath},
-	}), "a command-line match must not satisfy destructive ownership verification")
+	}))
 
-	assert.NoError(t, syscall.Kill(matchPID, 0), "process matched only by command line must not be killed")
+	assert.NoError(t, syscall.Kill(matchPID, 0), "command-line bystander must not be killed")
 }
 
 func TestResolveRuntimeHypervisorPIDMintsIdentityOnlyWhenConfirmed(t *testing.T) {
@@ -535,7 +541,7 @@ func TestResolveRuntimeHypervisorPIDMintsIdentityOnlyWhenConfirmed(t *testing.T)
 		assert.NotEmpty(t, stored.HypervisorBootID)
 	})
 
-	t.Run("command-line-only match stores bare PID", func(t *testing.T) {
+	t.Run("command-line bystander is not adopted", func(t *testing.T) {
 		socketPath := filepath.Join(t.TempDir(), "test.sock")
 		match := exec.Command("sh", "-c", "sleep 30", "sh", socketPath)
 		require.NoError(t, match.Start())
@@ -547,11 +553,11 @@ func TestResolveRuntimeHypervisorPIDMintsIdentityOnlyWhenConfirmed(t *testing.T)
 		stored := &StoredMetadata{SocketPath: socketPath}
 		pid := resolveRuntimeHypervisorPID(log, stored, deadPID)
 
-		assert.Equal(t, match.Process.Pid, pid)
+		assert.Equal(t, deadPID, pid, "a process matching only by command line must not be resolved")
 		require.NotNil(t, stored.HypervisorPID)
-		assert.Equal(t, match.Process.Pid, *stored.HypervisorPID)
-		assert.Zero(t, stored.HypervisorStartTime, "unconfirmed match must not mint the identity token")
-		assert.Empty(t, stored.HypervisorBootID, "unconfirmed match must not mint the identity token")
+		assert.Equal(t, deadPID, *stored.HypervisorPID)
+		assert.Zero(t, stored.HypervisorStartTime, "a dead fallback must not mint the identity token")
+		assert.Empty(t, stored.HypervisorBootID, "a dead fallback must not mint the identity token")
 	})
 
 	t.Run("dead fallback with unresolvable socket stores bare PID", func(t *testing.T) {
