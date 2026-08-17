@@ -1507,7 +1507,7 @@ components:
             entry's "available"). When false, launches that rely on the
             default will fail until the server is reconfigured with an
             available runtime or the missing prerequisite (for example the
-            QEMU system binary) is installed and Hypeman is restarted.
+            QEMU system binary) is installed.
 
     CapabilitiesRuntime:
       type: object
@@ -1525,8 +1525,7 @@ components:
             this platform; available=false means a host prerequisite is
             missing (for example qemu requires a runnable system-installed
             QEMU binary and the host vhost-vsock device) and launches naming
-            this runtime will fail. QEMU readiness is cached at first use for
-            the life of the Hypeman process; restart after repairing it.
+            this runtime will fail until it is installed.
         features:
           type: array
           items:
