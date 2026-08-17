@@ -5,7 +5,9 @@ package devices
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -112,6 +114,7 @@ func discoverMdevVFsWith(busPath, pciPath string, listMdevs func() ([]MdevDevice
 	}
 
 	var vfs []VirtualFunction
+	var vfErrs []error
 	for _, entry := range entries {
 		vfAddr := entry.Name()
 		types, err := os.ReadDir(filepath.Join(busPath, vfAddr, "mdev_supported_types"))
@@ -119,7 +122,8 @@ func discoverMdevVFsWith(busPath, pciPath string, listMdevs func() ([]MdevDevice
 			if os.IsNotExist(err) {
 				continue
 			}
-			return nil, fmt.Errorf("read mdev supported types for VF %s: %w", vfAddr, err)
+			vfErrs = append(vfErrs, fmt.Errorf("read mdev supported types for VF %s: %w", vfAddr, err))
+			continue
 		}
 		usable := false
 		for _, typ := range types {
@@ -148,6 +152,16 @@ func discoverMdevVFsWith(busPath, pciPath string, listMdevs func() ([]MdevDevice
 			ParentGPU:  parentGPU,
 			Allocated:  hasMdev,
 		})
+	}
+	if len(vfErrs) > 0 {
+		// Mirror vendor VFIO discovery: one unreadable VF must not blank out
+		// the host's GPU capacity. Only when no VF is readable does discovery
+		// fail, so a wholesale sysfs outage cannot demote an mdev host to
+		// vendor VFIO or passthrough while assignments exist.
+		if len(vfs) == 0 {
+			return nil, errors.Join(vfErrs...)
+		}
+		slog.Default().Warn("skipping unreadable mdev VFs", "error", errors.Join(vfErrs...))
 	}
 
 	return vfs, nil
