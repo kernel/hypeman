@@ -34,7 +34,9 @@ targets:
     production_repo: kernel/hypeman-python
     staging_repo: kernel/hypeman-python-staging
     publish:
-      pypi: true
+      pypi:
+        auth_method: oidc
+        release_environment: pypi
       release:
         branch: main
         prerelease: false
