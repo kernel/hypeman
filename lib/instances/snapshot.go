@@ -422,6 +422,24 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 	forkMeta := cloneStoredMetadataWithoutPendingStandbyCompression(rec.StoredMetadata)
 	forkMeta.Id = forkID
 	forkMeta.Name = req.Name
+	// Caller-supplied tags override the cloned source tags (request wins per
+	// key), so a fork can be re-identified rather than inherit the source's
+	// identity labels. Unrelated source tags are preserved.
+	if len(req.Tags) > 0 {
+		if forkMeta.Tags == nil {
+			forkMeta.Tags = make(map[string]string, len(req.Tags))
+		}
+		for k, v := range req.Tags {
+			forkMeta.Tags[k] = v
+		}
+	}
+	// Record the measured fork mode, mirroring the instance-fork path: a shared
+	// mem-file is copy-on-write, anything else is a full copy.
+	if shareMemFile {
+		forkMeta.ForkMode = ForkModeShared
+	} else {
+		forkMeta.ForkMode = ForkModeCopied
+	}
 	forkMeta.CreatedAt = now
 	forkMeta.ExpiresAt = nil
 	forkMeta.StartedAt = nil
