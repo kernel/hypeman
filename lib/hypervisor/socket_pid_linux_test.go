@@ -105,6 +105,32 @@ func TestResolveProcessPIDForOwnerPrefersExpectedProcess(t *testing.T) {
 	require.Equal(t, 101, pid)
 }
 
+func TestPidBySocketRefPrefersExpectedOwnerAmongMultiple(t *testing.T) {
+	oldProcDir := procDir
+	procDir = t.TempDir()
+	t.Cleanup(func() { procDir = oldProcDir })
+
+	// The full scan itself must prefer the expected owner when a child
+	// transiently shares the inherited listener fd: the fast path can miss on
+	// a transient fd-dir read failure, and the scan's observation of the
+	// owner holding the fd is the same evidence the fast path would have used.
+	for _, pid := range []string{"100", "101"} {
+		fdDir := filepath.Join(procDir, pid, "fd")
+		require.NoError(t, os.MkdirAll(fdDir, 0o755))
+		require.NoError(t, os.Symlink("socket:[12345]", filepath.Join(fdDir, "3")))
+	}
+
+	pid, err := pidBySocketRef("socket:[12345]", 101)
+	require.NoError(t, err)
+	require.Equal(t, 101, pid)
+
+	_, err = pidBySocketRef("socket:[12345]", 0)
+	require.ErrorContains(t, err, "multiple owning processes found")
+
+	_, err = pidBySocketRef("socket:[12345]", 999)
+	require.ErrorContains(t, err, "multiple owning processes found")
+}
+
 func TestResolveProcessPIDReportsNoOwnerAfterExitedProcesses(t *testing.T) {
 	oldProcDir := procDir
 	procDir = t.TempDir()

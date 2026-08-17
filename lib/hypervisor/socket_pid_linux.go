@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -108,12 +109,11 @@ func pidBySocketRef(socketRef string, ownerPID int) (int, error) {
 		}
 	}
 
-	if ownerPID > 0 {
-		for _, pid := range owners {
-			if pid == ownerPID {
-				return pid, nil
-			}
-		}
+	// The scan observed ownerPID holding the listener fd — the same evidence
+	// the fast path uses — so a child transiently sharing the inherited fd
+	// must not turn a proven owner into an error.
+	if ownerPID > 0 && slices.Contains(owners, ownerPID) {
+		return ownerPID, nil
 	}
 	if len(owners) == 1 {
 		return owners[0], nil
