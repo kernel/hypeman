@@ -109,9 +109,9 @@ type RuntimeRegistration struct {
 	// LaunchCheck verifies host launch prerequisites that platform-gated
 	// registration cannot express, such as a required system-installed binary
 	// (QEMU). nil means registration alone implies launchability (backends
-	// that ship an embedded VMM binary). Like Capabilities, it is evaluated
-	// on every registry read so prerequisites fixed after startup are
-	// reflected without a restart.
+	// that ship an embedded VMM binary). The registry invokes it on every
+	// read; a backend may memoize startup readiness when changing host
+	// prerequisites requires a process restart.
 	LaunchCheck func() error
 }
 

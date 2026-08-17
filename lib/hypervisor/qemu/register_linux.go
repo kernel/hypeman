@@ -40,21 +40,19 @@ func init() {
 	}
 }
 
-// launchPrereqCache is the single shared launch-prerequisite result for both
-// QEMU boards: the standard and microvm registrations verify the same host
-// prerequisites (the same system binary and vsock device), so they share one
-// briefly-cached probe instead of each executing `qemu --version` on every
-// registry read — and concurrent capability requests coalesce onto one
-// in-flight probe. The short TTL keeps availability live: installing QEMU or
-// loading vhost_vsock flips it within launchCheckCacheTTL, no restart needed.
-var launchPrereqCache = newLaunchCheckCache(checkLaunchPrerequisites, launchCheckCacheTTL)
+// launchPrereqCache is the process-lifetime launch-readiness result shared by
+// both QEMU boards. The standard and microvm registrations require the same
+// system binary and vsock device, so one bounded probe at first use is enough;
+// concurrent capability requests coalesce onto it. Changing those host
+// prerequisites requires restarting Hypeman.
+var launchPrereqCache = newLaunchCheckCache(checkLaunchPrerequisites)
 
 // checkLaunchPrerequisites is the capability registry's side-effect-free
 // launch check for both QEMU boards (via launchPrereqCache): it resolves the
 // system binary with the same lookup launches use, then verifies the
-// prerequisites every ordinary launch needs. The version probe it runs is
-// bounded by versionProbeTimeout so a hung binary fails the check instead of
-// wedging capability requests.
+// prerequisites every ordinary launch needs. The version probe is bounded by
+// versionProbeTimeout so a hung binary fails the check instead of wedging the
+// first capability request.
 func checkLaunchPrerequisites() error {
 	binaryPath, err := (&Starter{}).GetBinaryPath(nil, "")
 	if err != nil {

@@ -5,26 +5,13 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 )
 
-// newTestCache builds a private cache instance around the given probe with a
-// manually advanced clock. Tests never touch the package's shared
-// launchPrereqCache, so parallel tests (and the real registrations) are
-// unaffected.
-func newTestCache(probe func() error, ttl time.Duration) (*launchCheckCache, *time.Time) {
-	c := newLaunchCheckCache(probe, ttl)
-	now := time.Unix(1700000000, 0)
-	c.now = func() time.Time { return now }
-	return c, &now
-}
-
 // TestLaunchCheckCacheCoalescesConcurrentProbes pins that concurrent Check
-// calls on an empty cache share a single in-flight probe: the standard and
-// microvm registrations plus a burst of capability requests must not each
-// execute `qemu --version`.
+// calls share one probe: the standard and microvm registrations plus a burst
+// of capability requests must not each execute `qemu --version`.
 func TestLaunchCheckCacheCoalescesConcurrentProbes(t *testing.T) {
 	t.Parallel()
 
@@ -32,12 +19,12 @@ func TestLaunchCheckCacheCoalescesConcurrentProbes(t *testing.T) {
 	var probes atomic.Int32
 	release := make(chan struct{})
 	entered := make(chan struct{})
-	cache, _ := newTestCache(func() error {
+	cache := newLaunchCheckCache(func() error {
 		probes.Add(1)
 		close(entered) // panics if a duplicate probe ever starts
 		<-release
 		return nil
-	}, time.Minute)
+	})
 
 	var wg sync.WaitGroup
 	results := make([]error, callers)
@@ -58,59 +45,22 @@ func TestLaunchCheckCacheCoalescesConcurrentProbes(t *testing.T) {
 	}
 }
 
-// TestLaunchCheckCacheExpiry pins TTL semantics: results (successes and
-// failures alike) are served from cache within the TTL and re-probed after it
-// elapses, so a repaired host prerequisite becomes visible without a restart.
-func TestLaunchCheckCacheExpiry(t *testing.T) {
+// TestLaunchCheckCacheKeepsFirstResult pins process-lifetime semantics. Host
+// readiness changes require a Hypeman restart rather than an in-process cache
+// refresh that can delay a capability response or race with host mutation.
+func TestLaunchCheckCacheKeepsFirstResult(t *testing.T) {
 	t.Parallel()
 
-	probeErr := errors.New("qemu binary missing")
-	var result error = probeErr
+	probeErr := errors.New("qemu prerequisites unavailable")
+	result := probeErr
 	var probes int
-	cache, now := newTestCache(func() error {
+	cache := newLaunchCheckCache(func() error {
 		probes++
 		return result
-	}, time.Second)
+	})
 
 	require.ErrorIs(t, cache.Check(), probeErr)
-	require.Equal(t, 1, probes)
-
-	// Within the TTL the cached failure is served without re-probing.
-	*now = now.Add(500 * time.Millisecond)
-	require.ErrorIs(t, cache.Check(), probeErr)
-	require.Equal(t, 1, probes, "a fresh result must be served from cache")
-
-	// After the TTL the probe runs again and a repaired prerequisite
-	// (installed binary) is reported.
 	result = nil
-	*now = now.Add(time.Second)
-	require.NoError(t, cache.Check())
-	require.Equal(t, 2, probes, "an expired result must be re-probed")
-
-	// A subsequent failure is likewise picked up after expiry.
-	result = probeErr
-	*now = now.Add(2 * time.Second)
 	require.ErrorIs(t, cache.Check(), probeErr)
-	require.Equal(t, 3, probes)
-}
-
-// TestLaunchCheckCacheInvalidate pins the explicit invalidation seam: callers
-// that know host state changed can force the next Check to re-probe without
-// waiting out the TTL.
-func TestLaunchCheckCacheInvalidate(t *testing.T) {
-	t.Parallel()
-
-	var probes int
-	cache, _ := newTestCache(func() error {
-		probes++
-		return nil
-	}, time.Hour)
-
-	require.NoError(t, cache.Check())
-	require.NoError(t, cache.Check())
-	require.Equal(t, 1, probes, "an unexpired result must be served from cache")
-
-	cache.Invalidate()
-	require.NoError(t, cache.Check())
-	require.Equal(t, 2, probes, "Invalidate must force the next Check to re-probe")
+	require.Equal(t, 1, probes, "the first readiness result must remain cached until restart")
 }

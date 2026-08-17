@@ -55,17 +55,6 @@ func TestQEMUAvailabilityTracksLaunchPrerequisites(t *testing.T) {
 	require.GreaterOrEqual(t, checked, 1, "standard qemu must be registered on Linux")
 }
 
-// TestLaunchCheckCacheSharedByRegistrations pins that both QEMU registry
-// entries resolve availability through the same shared cache instance with
-// the short production TTL, so one registry read (which checks both boards)
-// executes at most one probe per TTL window while repaired prerequisites
-// still surface promptly.
-func TestLaunchCheckCacheSharedByRegistrations(t *testing.T) {
-	t.Parallel()
-	require.NotNil(t, launchPrereqCache)
-	require.Equal(t, launchCheckCacheTTL, launchPrereqCache.ttl)
-}
-
 // fakeQEMUBinary writes an executable script that mimics `qemu --version`
 // output, standing in for a working system QEMU.
 func fakeQEMUBinary(t *testing.T, dir string) string {

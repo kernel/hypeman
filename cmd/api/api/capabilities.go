@@ -69,16 +69,18 @@ func (s *ApiService) GetCapabilities(ctx context.Context, _ oapi.GetCapabilities
 
 	// The capability registry is platform-gated at registration time, so its
 	// contents are exactly the runtimes this build supports on this host —
-	// including ones added after this handler was written. Capabilities and
-	// launch prerequisites are resolved per request, so configuration applied
-	// after init (e.g. a pinned cloud-hypervisor version) and host state
-	// (e.g. an installed QEMU binary) are reflected without a restart.
+	// including ones added after this handler was written. Capabilities are
+	// resolved per request so configuration applied after init (for example a
+	// pinned cloud-hypervisor version) remains visible. Backends may cache host
+	// launch-readiness probes when those prerequisites are startup state.
 	registered := hypervisor.RegisteredRuntimes()
 	runtimes := make([]oapi.CapabilitiesRuntime, 0, len(registered))
+	defaultRegistered := false
 	defaultAvailable := false
 	for _, rt := range registered {
 		available := rt.Available()
 		if rt.Type == defaultRuntime {
+			defaultRegistered = true
 			defaultAvailable = available
 		}
 		if !available {
@@ -92,10 +94,17 @@ func (s *ApiService) GetCapabilities(ctx context.Context, _ oapi.GetCapabilities
 		})
 	}
 	if !defaultAvailable {
-		// Ordinary launches use the default runtime and will fail on this
-		// host; surface that in logs as well as in the response.
-		log.WarnContext(ctx, "configured default runtime is not available on this host",
-			"runtime", string(defaultRuntime), "host_os", runtime.GOOS, "host_arch", runtime.GOARCH)
+		// A registered default is supported on this platform but missing a
+		// prerequisite, so ordinary launches will fail and operators need to
+		// act. An unregistered default simply cannot run on this platform; log
+		// that expected configuration mismatch at info level.
+		if defaultRegistered {
+			log.WarnContext(ctx, "configured default runtime is missing launch prerequisites",
+				"runtime", string(defaultRuntime), "host_os", runtime.GOOS, "host_arch", runtime.GOARCH)
+		} else {
+			log.InfoContext(ctx, "configured default runtime cannot run on this platform",
+				"runtime", string(defaultRuntime), "host_os", runtime.GOOS, "host_arch", runtime.GOARCH)
+		}
 	}
 
 	networkCaps, err := s.networkCapabilities(ctx)
