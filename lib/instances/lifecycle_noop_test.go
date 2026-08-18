@@ -160,8 +160,8 @@ func TestDeleteContinuesWhenVGPUReleaseFails(t *testing.T) {
 	require.NoError(t, m.saveMetadata(meta))
 
 	// A failed release is logged and the delete continues, matching the
-	// pre-refactor contract; the leaked assignment is recovered by startup
-	// reconciliation.
+	// pre-refactor contract; the leaked assignment is recovered by the
+	// background retry or startup reconciliation.
 	require.NoError(t, m.DeleteInstance(context.Background(), id))
 
 	_, err = m.loadMetadata(id)
