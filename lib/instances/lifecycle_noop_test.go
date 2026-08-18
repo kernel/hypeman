@@ -152,6 +152,7 @@ func TestLifecycleNoopStandbyWithOptionsStillRejectsStandbyInstance(t *testing.T
 
 func TestDeleteContinuesWhenVGPUReleaseFails(t *testing.T) {
 	m, id := newLifecycleNoopManagerWithInstance(t, StateStopped, time.Now().UTC())
+	m.orphanedVGPURetryDelay = time.Millisecond
 	meta, err := m.loadMetadata(id)
 	require.NoError(t, err)
 	meta.GPUProfile = "NVIDIA L40S-2Q"
@@ -163,6 +164,7 @@ func TestDeleteContinuesWhenVGPUReleaseFails(t *testing.T) {
 	// pre-refactor contract; the leaked assignment is recovered by the
 	// background retry or startup reconciliation.
 	require.NoError(t, m.DeleteInstance(context.Background(), id))
+	waitForOrphanQueueEmpty(t, m)
 
 	_, err = m.loadMetadata(id)
 	require.Error(t, err, "instance data must be deleted despite the failed release")
@@ -282,6 +284,7 @@ func TestDeleteDropsStaleVGPUClaimedByLiveInstance(t *testing.T) {
 
 func TestDeleteContinuesTeardownAfterFailedVGPURelease(t *testing.T) {
 	m, id := newLifecycleNoopManagerWithInstance(t, StateStopped, time.Now().UTC())
+	m.orphanedVGPURetryDelay = time.Millisecond
 	deviceManager := &recordingDeviceManager{}
 	m.deviceManager = deviceManager
 	meta, err := m.loadMetadata(id)
@@ -295,6 +298,7 @@ func TestDeleteContinuesTeardownAfterFailedVGPURelease(t *testing.T) {
 	// The failed release must not block the rest of the teardown: devices
 	// are detached and the instance is fully deleted.
 	require.NoError(t, m.DeleteInstance(context.Background(), id))
+	waitForOrphanQueueEmpty(t, m)
 	assert.Equal(t, []string{"dev-1"}, deviceManager.detached)
 
 	_, err = m.loadMetadata(id)
