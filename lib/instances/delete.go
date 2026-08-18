@@ -151,9 +151,8 @@ func (m *manager) deleteInstanceWithOptions(
 		log.InfoContext(ctx, "destroying vGPU", "instance_id", id, "uuid", stored.GPUMdevUUID)
 	}
 	if err := m.releaseStoredVGPU(ctx, stored); err != nil {
-		// Log error but continue with cleanup. The metadata is about to be
-		// deleted, so hand the assignment to the background retry — otherwise
-		// the VF stays allocated until the next startup reconciliation.
+		// Log error but continue with cleanup; the background retry releases
+		// the VF once the metadata is gone.
 		log.WarnContext(ctx, "failed to destroy vGPU, continuing with cleanup", "instance_id", id, "uuid", stored.GPUMdevUUID, "error", err)
 		m.scheduleOrphanedVGPURelease(ctx, *stored)
 	} else if hadVGPUAssignment {
