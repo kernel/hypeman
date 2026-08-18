@@ -211,6 +211,14 @@ type manager struct {
 	// Periodic TAP garbage collection reconciler.
 	tapGCOnce sync.Once
 
+	// vGPU assignments that survived a completed delete, keyed by device
+	// path, each with a background release retry in flight.
+	// orphanedVGPURetryDelay overrides the retry delay in tests; zero means
+	// the default.
+	orphanedVGPUMu         sync.Mutex
+	orphanedVGPUs          map[string]struct{}
+	orphanedVGPURetryDelay time.Duration
+
 	// Hypervisor support
 	vmStarters                       map[hypervisor.Type]hypervisor.VMStarter
 	defaultHypervisor                hypervisor.Type // Default hypervisor type when not specified in request
