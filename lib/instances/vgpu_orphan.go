@@ -18,18 +18,12 @@ const (
 )
 
 // scheduleOrphanedVGPURelease retries a vGPU release that failed during a
-// completed delete, off the request path. Delete's log-and-continue contract
-// is untouched — the caller already has its success — but without a retry the
-// VF would stay allocated until the next startup reconciliation, silently
-// shrinking host GPU capacity. A GPU-busy VMM routinely outlives delete's
-// force-kill wait while the kernel finishes VFIO teardown, so this is the
-// common case under load, not a tail case.
-//
-// Each attempt re-runs releaseStoredVGPU on a copy of the deleted instance's
-// stored metadata, so the vendor VFIO claim scan and the destroy-side owner
-// and open-handle guards apply on every retry exactly as they did on the
-// original release. The queue is in-memory only: a restart abandons it and
-// startup reconciliation sweeps the VF instead.
+// completed delete, off the request path. A GPU-busy VMM routinely outlives
+// delete's force-kill wait while the kernel finishes VFIO teardown, and once
+// the metadata is deleted nothing else releases the VF until the next
+// startup reconciliation. Each attempt re-runs releaseStoredVGPU, so the
+// claim scan and destroy guards apply on every retry. The queue is in-memory
+// only: a restart abandons it and startup reconciliation sweeps the VF.
 func (m *manager) scheduleOrphanedVGPURelease(ctx context.Context, stored StoredMetadata) {
 	path := storedVGPUDevicePath(&stored)
 	if path == "" {
