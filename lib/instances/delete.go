@@ -144,15 +144,18 @@ func (m *manager) deleteInstanceWithOptions(
 	// or volume teardown. Release failure is logged and the delete continues,
 	// matching the pre-refactor contract: the VMM is already confirmed dead,
 	// the guards inside the release never destroy a device they cannot prove
-	// is unowned, and a skipped release is recovered by startup
-	// reconciliation.
+	// is unowned, and a skipped release is recovered by the background retry
+	// below or, after a restart, by startup reconciliation.
 	hadVGPUAssignment := storedVGPUDevicePath(stored) != ""
 	if hadVGPUAssignment {
 		log.InfoContext(ctx, "destroying vGPU", "instance_id", id, "uuid", stored.GPUMdevUUID)
 	}
 	if err := m.releaseStoredVGPU(ctx, stored); err != nil {
-		// Log error but continue with cleanup.
+		// Log error but continue with cleanup. The metadata is about to be
+		// deleted, so hand the assignment to the background retry — otherwise
+		// the VF stays allocated until the next startup reconciliation.
 		log.WarnContext(ctx, "failed to destroy vGPU, continuing with cleanup", "instance_id", id, "uuid", stored.GPUMdevUUID, "error", err)
+		m.scheduleOrphanedVGPURelease(ctx, *stored)
 	} else if hadVGPUAssignment {
 		if err := m.saveMetadata(meta); err != nil {
 			log.WarnContext(ctx, "failed to save metadata after vGPU release", "instance_id", id, "error", err)
