@@ -169,6 +169,33 @@ func readMetadata(p *paths.Paths, repository, digestHex string) (*imageMetadata,
 	return &meta, nil
 }
 
+func cloneReadyImage(p *paths.Paths, sourceRepository, targetRepository, digestHex string, sourceMeta *imageMetadata, targetName string) error {
+	sourceDiskPath := digestPath(p, sourceRepository, digestHex)
+	if _, err := os.Stat(sourceDiskPath); err != nil {
+		return fmt.Errorf("stat source disk: %w", err)
+	}
+
+	targetDir := digestDir(p, targetRepository, digestHex)
+	if err := os.MkdirAll(targetDir, 0755); err != nil {
+		return fmt.Errorf("create target digest directory: %w", err)
+	}
+
+	targetDiskPath := digestPath(p, targetRepository, digestHex)
+	if err := os.Remove(targetDiskPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove existing target disk: %w", err)
+	}
+	if err := os.Link(sourceDiskPath, targetDiskPath); err != nil {
+		return fmt.Errorf("link source disk: %w", err)
+	}
+
+	targetMeta := *sourceMeta
+	targetMeta.Name = targetName
+	if err := writeMetadata(p, targetRepository, digestHex, &targetMeta); err != nil {
+		return fmt.Errorf("write target metadata: %w", err)
+	}
+	return nil
+}
+
 // createTagSymlink creates or updates a tag symlink to point to a digest (only
 // if the digest dir exists and the build is ready).
 //

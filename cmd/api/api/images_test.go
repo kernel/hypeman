@@ -37,6 +37,15 @@ func (m *captureCreateImageManager) CreateImage(_ context.Context, req images.Cr
 	return &images.Image{Name: req.Name, Digest: "sha256:test", Status: images.StatusPending, CreatedAt: time.Now()}, nil
 }
 
+type tagImageErrManager struct {
+	images.Manager
+	err error
+}
+
+func (m tagImageErrManager) TagImage(context.Context, string, string) (*images.Image, error) {
+	return nil, m.err
+}
+
 func TestCreateImage_MapsBorrowedCredentials(t *testing.T) {
 	t.Parallel()
 
@@ -141,6 +150,64 @@ func errorCodeOf(resp oapi.CreateImageResponseObject) string {
 	case oapi.CreateImage429JSONResponse:
 		return r.Code
 	case oapi.CreateImage500JSONResponse:
+		return r.Code
+	default:
+		return ""
+	}
+}
+
+func TestTagImage_ErrorStatusMapping(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name     string
+		err      error
+		wantType any
+		wantCode string
+	}{
+		{
+			name:     "invalid name -> 400",
+			err:      fmt.Errorf("tag: %w", images.ErrInvalidName),
+			wantType: oapi.TagImage400JSONResponse{},
+			wantCode: "invalid_name",
+		},
+		{
+			name:     "not found -> 404",
+			err:      fmt.Errorf("tag: %w", images.ErrNotFound),
+			wantType: oapi.TagImage404JSONResponse{},
+			wantCode: "not_found",
+		},
+		{
+			name:     "not ready -> 409",
+			err:      fmt.Errorf("tag: %w", images.ErrImageNotReady),
+			wantType: oapi.TagImage409JSONResponse{},
+			wantCode: "image_not_ready",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := &ApiService{ImageManager: tagImageErrManager{err: tc.err}}
+			resp, err := svc.TagImage(ctx(), oapi.TagImageRequestObject{
+				Name: "docker.io/library/alpine:latest",
+				Body: &oapi.TagImageRequest{Target: "docker.io/library/alpine:stable"},
+			})
+			require.NoError(t, err)
+			require.IsType(t, tc.wantType, resp)
+			require.Equal(t, tc.wantCode, tagImageErrorCode(resp))
+		})
+	}
+}
+
+func tagImageErrorCode(resp oapi.TagImageResponseObject) string {
+	switch r := resp.(type) {
+	case oapi.TagImage400JSONResponse:
+		return r.Code
+	case oapi.TagImage404JSONResponse:
+		return r.Code
+	case oapi.TagImage409JSONResponse:
+		return r.Code
+	case oapi.TagImage500JSONResponse:
 		return r.Code
 	default:
 		return ""

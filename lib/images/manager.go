@@ -46,6 +46,8 @@ type Manager interface {
 	// Unlike CreateImage, it does not resolve from a remote registry.
 	ImportLocalImage(ctx context.Context, repo, reference, digest string) (*Image, error)
 	GetImage(ctx context.Context, name string) (*Image, error)
+	// TagImage creates or updates a local tag for an existing image.
+	TagImage(ctx context.Context, source, target string) (*Image, error)
 	DeleteImage(ctx context.Context, name string) error
 	RecoverInterruptedBuilds()
 	// TotalImageBytes returns the total size of all ready images on disk.
@@ -666,6 +668,52 @@ func (m *manager) GetImage(ctx context.Context, name string) (*Image, error) {
 	}
 
 	return img, nil
+}
+
+// TagImage creates or updates target as a local tag for source without pulling
+// the image again. Source may be a tag or digest reference; target must be a tag.
+func (m *manager) TagImage(ctx context.Context, source, target string) (*Image, error) {
+	sourceRef, err := ParseNormalizedRef(source)
+	if err != nil {
+		return nil, fmt.Errorf("%w: invalid source reference: %s", ErrInvalidName, err)
+	}
+	targetRef, err := ParseNormalizedRef(target)
+	if err != nil {
+		return nil, fmt.Errorf("%w: invalid target reference: %s", ErrInvalidName, err)
+	}
+	if targetRef.IsDigest() {
+		return nil, fmt.Errorf("%w: target must include a tag", ErrInvalidName)
+	}
+	m.createMu.Lock()
+	defer m.createMu.Unlock()
+
+	digestHex := sourceRef.DigestHex()
+	if !sourceRef.IsDigest() {
+		digestHex, err = resolveTag(m.paths, sourceRef.Repository(), sourceRef.Tag())
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	meta, err := readMetadata(m.paths, sourceRef.Repository(), digestHex)
+	if err != nil {
+		return nil, err
+	}
+	if meta.Status != StatusReady {
+		return nil, fmt.Errorf("%w: %s", ErrImageNotReady, meta.Status)
+	}
+	if sourceRef.Repository() != targetRef.Repository() {
+		if err := cloneReadyImage(m.paths, sourceRef.Repository(), targetRef.Repository(), digestHex, meta, targetRef.String()); err != nil {
+			return nil, fmt.Errorf("create image alias: %w", err)
+		}
+	}
+	if err := createTagSymlink(m.paths, targetRef.Repository(), targetRef.Tag(), digestHex); err != nil {
+		return nil, fmt.Errorf("create image tag: %w", err)
+	}
+
+	img := *meta.toImage()
+	img.Name = targetRef.String()
+	return &img, nil
 }
 
 func (m *manager) DeleteImage(ctx context.Context, name string) error {

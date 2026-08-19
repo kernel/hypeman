@@ -94,6 +94,45 @@ func (s *ApiService) CreateImage(ctx context.Context, request oapi.CreateImageRe
 	return oapi.CreateImage202JSONResponse(imageToOAPI(*img)), nil
 }
 
+func (s *ApiService) TagImage(ctx context.Context, request oapi.TagImageRequestObject) (oapi.TagImageResponseObject, error) {
+	if request.Body == nil {
+		return oapi.TagImage400JSONResponse{
+			Code:    "invalid_request",
+			Message: "request body is required",
+		}, nil
+	}
+
+	img, err := s.ImageManager.TagImage(ctx, request.Name, request.Body.Target)
+	if err != nil {
+		log := logger.FromContext(ctx)
+		switch {
+		case errors.Is(err, images.ErrInvalidName):
+			return oapi.TagImage400JSONResponse{
+				Code:    "invalid_name",
+				Message: err.Error(),
+			}, nil
+		case errors.Is(err, images.ErrNotFound):
+			return oapi.TagImage404JSONResponse{
+				Code:    "not_found",
+				Message: "source image not found",
+			}, nil
+		case errors.Is(err, images.ErrImageNotReady):
+			return oapi.TagImage409JSONResponse{
+				Code:    "image_not_ready",
+				Message: err.Error(),
+			}, nil
+		default:
+			log.ErrorContext(ctx, "failed to tag image", "error", err, "source", request.Name, "target", request.Body.Target)
+			return oapi.TagImage500JSONResponse{
+				Code:    "internal_error",
+				Message: "failed to tag image",
+			}, nil
+		}
+	}
+
+	return oapi.TagImage200JSONResponse(imageToOAPI(*img)), nil
+}
+
 // GetImage gets image details by name
 // Note: Resolution is handled by ResolveResource middleware
 func (s *ApiService) GetImage(ctx context.Context, request oapi.GetImageRequestObject) (oapi.GetImageResponseObject, error) {

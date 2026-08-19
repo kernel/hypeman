@@ -350,6 +350,17 @@ func (m *mockImageManager) ImportLocalImage(ctx context.Context, repo, reference
 	return img, nil
 }
 
+func (m *mockImageManager) TagImage(ctx context.Context, source, target string) (*images.Image, error) {
+	sourceImage, err := m.GetImage(ctx, source)
+	if err != nil {
+		return nil, err
+	}
+	targetImage := *sourceImage
+	targetImage.Name = target
+	m.images[target] = &targetImage
+	return &targetImage, nil
+}
+
 func (m *mockImageManager) GetImage(ctx context.Context, name string) (*images.Image, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

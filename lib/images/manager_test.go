@@ -188,6 +188,45 @@ func TestTagFollowsLastPull(t *testing.T) {
 	t.Run("emulated then native", func(t *testing.T) { check(t, emul, native) })
 }
 
+func TestTagImage(t *testing.T) {
+	p := paths.New(t.TempDir())
+	mgr, err := NewManager(p, 1, nil)
+	require.NoError(t, err)
+
+	const (
+		repo      = "docker.io/library/alpine"
+		digestRef = repo + "@sha256:029a752048e32e843bd6defe3841186fb8d19a28dae8ec287f433bb9d6d1ad85"
+	)
+	seedReadyDigestOnlyImageMetadata(t, p, digestRef, nil)
+
+	ctx := context.Background()
+	got, err := mgr.TagImage(ctx, digestRef, repo+":stable")
+	require.NoError(t, err)
+	require.Equal(t, repo+":stable", got.Name)
+	require.Equal(t, "sha256:029a752048e32e843bd6defe3841186fb8d19a28dae8ec287f433bb9d6d1ad85", got.Digest)
+
+	resolved, err := mgr.GetImage(ctx, repo+":stable")
+	require.NoError(t, err)
+	require.Equal(t, StatusReady, resolved.Status)
+	require.Equal(t, got.Digest, resolved.Digest)
+
+	aliased, err := mgr.TagImage(ctx, digestRef, "docker.io/library/busybox:stable")
+	require.NoError(t, err)
+	require.Equal(t, "docker.io/library/busybox:stable", aliased.Name)
+
+	resolvedAlias, err := mgr.GetImage(ctx, "docker.io/library/busybox:stable")
+	require.NoError(t, err)
+	require.Equal(t, got.Digest, resolvedAlias.Digest)
+
+	require.NoError(t, mgr.DeleteImage(ctx, digestRef))
+	resolvedAlias, err = mgr.GetImage(ctx, "docker.io/library/busybox:stable")
+	require.NoError(t, err)
+	require.Equal(t, got.Digest, resolvedAlias.Digest)
+
+	_, err = mgr.TagImage(ctx, digestRef, repo+"@sha256:029a752048e32e843bd6defe3841186fb8d19a28dae8ec287f433bb9d6d1ad85")
+	require.ErrorIs(t, err, ErrInvalidName)
+}
+
 func TestListImages(t *testing.T) {
 	dataDir := t.TempDir()
 	mgr, err := NewManager(paths.New(dataDir), 1, nil)
