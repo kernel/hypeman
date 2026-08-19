@@ -14,6 +14,7 @@ import (
 // files found in the digest directory so we do not undercount host disk usage.
 func totalReadyImageBytesFromMetadata(imagesDir string) (int64, error) {
 	var total int64
+	seenRootfs := make([]os.FileInfo, 0)
 
 	err := filepath.Walk(imagesDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -45,11 +46,34 @@ func totalReadyImageBytesFromMetadata(imagesDir string) (int64, error) {
 			}
 			return fmt.Errorf("unmarshal image metadata %s: %w", path, err)
 		}
-		if meta.Status == StatusReady && meta.SizeBytes > 0 {
-			total += meta.SizeBytes
-			return nil
-		}
 		if meta.Status == StatusReady {
+			rootfsPaths, globErr := filepath.Glob(filepath.Join(filepath.Dir(path), "rootfs.*"))
+			if globErr != nil {
+				return fmt.Errorf("find ready image rootfs for %s: %w", path, globErr)
+			}
+			for _, rootfsPath := range rootfsPaths {
+				rootfsInfo, statErr := os.Stat(rootfsPath)
+				if statErr != nil {
+					continue
+				}
+				duplicate := false
+				for _, seen := range seenRootfs {
+					if os.SameFile(rootfsInfo, seen) {
+						duplicate = true
+						break
+					}
+				}
+				if duplicate {
+					return nil
+				}
+				seenRootfs = append(seenRootfs, rootfsInfo)
+				break
+			}
+
+			if meta.SizeBytes > 0 {
+				total += meta.SizeBytes
+				return nil
+			}
 			rootfsBytes, err := totalRootfsBytesInDigestDir(filepath.Dir(path))
 			if err != nil {
 				return fmt.Errorf("stat ready image rootfs for %s: %w", path, err)

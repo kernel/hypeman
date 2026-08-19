@@ -207,6 +207,7 @@ func TestTagImage(t *testing.T) {
 
 	resolved, err := mgr.GetImage(ctx, repo+":stable")
 	require.NoError(t, err)
+	require.Equal(t, repo+":stable", resolved.Name)
 	require.Equal(t, StatusReady, resolved.Status)
 	require.Equal(t, got.Digest, resolved.Digest)
 
@@ -216,11 +217,13 @@ func TestTagImage(t *testing.T) {
 
 	resolvedAlias, err := mgr.GetImage(ctx, "docker.io/library/busybox:stable")
 	require.NoError(t, err)
+	require.Equal(t, "docker.io/library/busybox:stable", resolvedAlias.Name)
 	require.Equal(t, got.Digest, resolvedAlias.Digest)
 
 	require.NoError(t, mgr.DeleteImage(ctx, digestRef))
 	resolvedAlias, err = mgr.GetImage(ctx, "docker.io/library/busybox:stable")
 	require.NoError(t, err)
+	require.Equal(t, "docker.io/library/busybox:stable", resolvedAlias.Name)
 	require.Equal(t, got.Digest, resolvedAlias.Digest)
 
 	_, err = mgr.TagImage(ctx, digestRef, repo+"@sha256:029a752048e32e843bd6defe3841186fb8d19a28dae8ec287f433bb9d6d1ad85")

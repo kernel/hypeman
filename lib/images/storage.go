@@ -180,18 +180,58 @@ func cloneReadyImage(p *paths.Paths, sourceRepository, targetRepository, digestH
 		return fmt.Errorf("create target digest directory: %w", err)
 	}
 
-	targetDiskPath := digestPath(p, targetRepository, digestHex)
-	if err := os.Remove(targetDiskPath); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("remove existing target disk: %w", err)
-	}
-	if err := os.Link(sourceDiskPath, targetDiskPath); err != nil {
-		return fmt.Errorf("link source disk: %w", err)
-	}
-
 	targetMeta := *sourceMeta
 	targetMeta.Name = targetName
-	if err := writeMetadata(p, targetRepository, digestHex, &targetMeta); err != nil {
-		return fmt.Errorf("write target metadata: %w", err)
+	data, err := json.MarshalIndent(&targetMeta, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal target metadata: %w", err)
+	}
+
+	diskTemp, err := os.CreateTemp(targetDir, ".rootfs-*")
+	if err != nil {
+		return fmt.Errorf("create temporary target disk: %w", err)
+	}
+	diskTempPath := diskTemp.Name()
+	if err := diskTemp.Close(); err != nil {
+		os.Remove(diskTempPath)
+		return fmt.Errorf("close temporary target disk: %w", err)
+	}
+	if err := os.Remove(diskTempPath); err != nil {
+		return fmt.Errorf("remove temporary target disk: %w", err)
+	}
+	if err := os.Link(sourceDiskPath, diskTempPath); err != nil {
+		return fmt.Errorf("link source disk: %w", err)
+	}
+	defer os.Remove(diskTempPath)
+
+	metadataTemp, err := os.CreateTemp(targetDir, ".metadata-*")
+	if err != nil {
+		return fmt.Errorf("create temporary target metadata: %w", err)
+	}
+	metadataTempPath := metadataTemp.Name()
+	if err := metadataTemp.Chmod(0644); err != nil {
+		metadataTemp.Close()
+		os.Remove(metadataTempPath)
+		return fmt.Errorf("chmod temporary target metadata: %w", err)
+	}
+	if _, err := metadataTemp.Write(data); err != nil {
+		metadataTemp.Close()
+		os.Remove(metadataTempPath)
+		return fmt.Errorf("write temporary target metadata: %w", err)
+	}
+	if err := metadataTemp.Close(); err != nil {
+		os.Remove(metadataTempPath)
+		return fmt.Errorf("close temporary target metadata: %w", err)
+	}
+	defer os.Remove(metadataTempPath)
+
+	targetDiskPath := digestPath(p, targetRepository, digestHex)
+	if err := os.Rename(diskTempPath, targetDiskPath); err != nil {
+		return fmt.Errorf("install target disk: %w", err)
+	}
+	metadataPath := metadataPath(p, targetRepository, digestHex)
+	if err := os.Rename(metadataTempPath, metadataPath); err != nil {
+		return fmt.Errorf("install target metadata: %w", err)
 	}
 	return nil
 }
