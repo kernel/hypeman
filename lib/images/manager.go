@@ -720,6 +720,15 @@ func (m *manager) TagImage(ctx context.Context, source, target string) (*Image, 
 	return &img, nil
 }
 
+func contentIsDigestOnly(p *paths.Paths, digestHex string) bool {
+	meta, err := readMetadata(p, "", digestHex)
+	if err != nil {
+		return false
+	}
+	ref, err := ParseNormalizedRef(meta.Name)
+	return err == nil && ref.IsDigest()
+}
+
 func (m *manager) DeleteImage(ctx context.Context, name string) error {
 	// Parse and normalize the reference
 	ref, err := ParseNormalizedRef(name)
@@ -792,7 +801,10 @@ func (m *manager) DeleteImage(ctx context.Context, name string) error {
 			fmt.Fprintf(os.Stderr, "Warning: failed to count content tags for digest %s: %v\n", digestHex, err)
 			return nil
 		}
-		count = len(refs)
+		if len(refs) > 0 || contentIsDigestOnly(m.paths, digestHex) {
+			return nil
+		}
+		count = 0
 	}
 	if count == 0 {
 		// Digest is orphaned, delete it

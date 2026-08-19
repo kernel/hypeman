@@ -228,6 +228,36 @@ func TestTagImage(t *testing.T) {
 	require.ErrorIs(t, err, ErrInvalidName)
 }
 
+func TestDigestOnlyContentSurvivesAliasDeletion(t *testing.T) {
+	p := paths.New(t.TempDir())
+	mgr, err := NewManager(p, 1, nil)
+	require.NoError(t, err)
+
+	repository := "docker.io/library/alpine"
+	digest := "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+	require.NoError(t, writeMetadataFile(p.ImageContentMetadata(digest), &imageMetadata{
+		Name:      repository + "@sha256:" + digest,
+		Digest:    "sha256:" + digest,
+		Status:    StatusReady,
+		SizeBytes: 5,
+		CreatedAt: time.Now().UTC(),
+	}))
+	require.NoError(t, os.WriteFile(p.ImageContentPath(digest), []byte("rootfs"), 0o644))
+	linkPath := p.ImageRepositoryTagSymlink("registry.example.com/myapp", "v1")
+	require.NoError(t, os.MkdirAll(filepath.Dir(linkPath), 0o755))
+	target, err := filepath.Rel(filepath.Dir(linkPath), p.ImageContentDir(digest))
+	require.NoError(t, err)
+	require.NoError(t, os.Symlink(target, linkPath))
+
+	require.NoError(t, mgr.DeleteImage(context.Background(), "registry.example.com/myapp:v1"))
+	_, err = mgr.GetImage(context.Background(), repository+"@sha256:"+digest)
+	require.NoError(t, err)
+
+	require.NoError(t, mgr.DeleteImage(context.Background(), repository+"@sha256:"+digest))
+	_, err = os.Stat(p.ImageContentDir(digest))
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
 func TestListImages(t *testing.T) {
 	dataDir := t.TempDir()
 	mgr, err := NewManager(paths.New(dataDir), 1, nil)
