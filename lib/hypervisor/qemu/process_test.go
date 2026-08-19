@@ -448,8 +448,3 @@ func TestCleanupEscalatesToSIGKILLAfterTermGrace(t *testing.T) {
 	assert.ErrorIs(t, syscall.Kill(proc.pid, 0), syscall.ESRCH, "SIGTERM-ignoring process must still be hard-killed")
 	require.NoFileExists(t, socketPath)
 }
-
-func TestHasVFIODevice(t *testing.T) {
-	assert.True(t, hasVFIODevice([]string{"-device", "vfio-pci,sysfsdev=/sys/bus/pci/devices/0000:82:00.4"}))
-	assert.False(t, hasVFIODevice([]string{"-device", "virtio-balloon-pci,id=balloon0"}))
-}

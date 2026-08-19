@@ -1,6 +1,7 @@
 package instances
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
+	"github.com/kernel/hypeman/lib/logger"
 )
 
 // linuxBootIDPath is the kernel-provided boot ID used to scope process
@@ -25,9 +27,9 @@ const linuxBootIDPath = "/proc/sys/kernel/random/boot_id"
 // does not unstick it, so the wait is short to keep stop and delete fast.
 const hypervisorSIGKILLWaitTimeout = 2 * time.Second
 
-// defaultVGPUInitTermGrace is how long killHypervisor waits for a vGPU
+// defaultVGPUInitTermGrace is how long terminateThenKill waits for a vGPU
 // hypervisor still in driver init to exit on SIGTERM before SIGKILL. Only
-// the force-kill fallback pays it, and only for initializing vGPU instances.
+// force-kill paths pay it, and only for initializing vGPU instances.
 const defaultVGPUInitTermGrace = 10 * time.Second
 
 // vgpuTermGrace returns the SIGTERM wait used before hard-killing an
@@ -37,6 +39,21 @@ func (m *manager) vgpuTermGrace() time.Duration {
 		return m.vgpuInitTermGrace
 	}
 	return defaultVGPUInitTermGrace
+}
+
+// terminateThenKill hard-kills the hypervisor process, first giving a vGPU
+// instance still in driver init a SIGTERM grace: SIGKILL in that window can
+// silently wedge the VF until its parent GPU's SR-IOV is cycled (see
+// lib/devices/GPU.md), while a terminating QEMU runs its VFIO teardown.
+func (m *manager) terminateThenKill(ctx context.Context, inst *Instance, pid int) error {
+	if inst.GPUProfile != "" && inst.State == StateInitializing {
+		if syscall.Kill(pid, syscall.SIGTERM) == nil && WaitForProcessExit(pid, m.vgpuTermGrace()) {
+			return nil
+		}
+		logger.FromContext(ctx).WarnContext(ctx, "vGPU hypervisor did not exit on SIGTERM during driver init; hard-killing, VF may wedge",
+			"instance_id", inst.Id, "device_path", inst.GPUDevicePath)
+	}
+	return killProcessAndWait(pid)
 }
 
 // killProcessAndWait SIGKILLs pid and waits for it to exit. A process that
