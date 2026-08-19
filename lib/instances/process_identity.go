@@ -29,8 +29,10 @@ const hypervisorSIGKILLWaitTimeout = 2 * time.Second
 
 // defaultVGPUInitTermGrace is how long terminateThenKill waits for a vGPU
 // hypervisor still in driver init to exit on SIGTERM before SIGKILL. Only
-// force-kill paths pay it, and only for initializing vGPU instances.
-const defaultVGPUInitTermGrace = 10 * time.Second
+// force-kill paths pay it, only for initializing vGPU instances, and only
+// when the process ignores SIGTERM; observed mid-init VFIO teardown takes
+// 1-2s.
+const defaultVGPUInitTermGrace = 5 * time.Second
 
 // vgpuTermGrace returns the SIGTERM wait used before hard-killing an
 // initializing vGPU hypervisor.
