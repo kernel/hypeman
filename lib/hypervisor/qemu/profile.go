@@ -27,9 +27,17 @@ func (StandardProfile) machineType() (MachineType, error) {
 func (StandardProfile) capabilities() hypervisor.Capabilities {
 	return qemuCapabilities(true)
 }
-func (StandardProfile) validateConfig(hypervisor.VMConfig) error { return nil }
-func (StandardProfile) requiresStoredMachineType() bool          { return false }
-func (StandardProfile) requiresStoredVersion() bool              { return false }
+func (StandardProfile) validateConfig(cfg hypervisor.VMConfig) error {
+	if err := hypervisor.ValidateBootConfig(cfg); err != nil {
+		return err
+	}
+	if cfg.EffectiveBootMode() == hypervisor.BootModeUEFI && standardMachineType() != MachineTypeQ35 {
+		return fmt.Errorf("UEFI boot is currently supported only by qemu/q35 on amd64")
+	}
+	return nil
+}
+func (StandardProfile) requiresStoredMachineType() bool { return false }
+func (StandardProfile) requiresStoredVersion() bool     { return false }
 
 // MicroVMProfile selects QEMU's minimal x86 microvm board and enforces its
 // virtio-mmio device contract.
@@ -43,6 +51,9 @@ func (MicroVMProfile) capabilities() hypervisor.Capabilities {
 	return qemuCapabilities(false)
 }
 func (MicroVMProfile) validateConfig(cfg hypervisor.VMConfig) error {
+	if err := hypervisor.ValidateDirectRawConfig("qemu-microvm", cfg); err != nil {
+		return err
+	}
 	if cfg.HotplugBytes > 0 {
 		return fmt.Errorf("microvm does not support hotplug memory")
 	}

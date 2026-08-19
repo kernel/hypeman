@@ -425,6 +425,25 @@ func (s *Starter) validateSnapshotMachineType(stored MachineType) (MachineType, 
 	return expected, nil
 }
 
+func (s *Starter) startConfiguredProcess(ctx context.Context, p *paths.Paths, version, socketPath string, config hypervisor.VMConfig, args []string) (int, *QEMU, *cleanup.Cleanup, error) {
+	tpmProcess, err := startSWTPM(config.TPM, filepath.Dir(socketPath))
+	if err != nil {
+		return 0, nil, nil, err
+	}
+
+	pid, hv, cu, err := s.startQEMUProcess(ctx, p, version, socketPath, args)
+	if err != nil {
+		if tpmProcess != nil {
+			tpmProcess.cleanup()
+		}
+		return 0, nil, nil, err
+	}
+	if tpmProcess != nil {
+		cu.Add(tpmProcess.cleanup)
+	}
+	return pid, hv, cu, nil
+}
+
 // StartVM launches QEMU with the VM configuration and returns a Hypervisor client.
 // QEMU receives all configuration via command-line arguments at process start.
 func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, socketPath string, config hypervisor.VMConfig) (int, hypervisor.Hypervisor, error) {
@@ -474,7 +493,7 @@ func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, s
 			// Build command arguments: QMP socket + VM configuration
 			args := buildQMPArgs(socketPath)
 			args = append(args, buildArgs(attempt, machineType)...)
-			pid, hv, cu, err = s.startQEMUProcess(ctx, p, version, socketPath, args)
+			pid, hv, cu, err = s.startConfiguredProcess(ctx, p, version, socketPath, attempt, args)
 			if err == nil {
 				booted = attempt
 				started = true
@@ -609,7 +628,7 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 	incomingURI := "exec:cat < " + memoryFile
 	args = append(args, "-incoming", incomingURI)
 
-	pid, hv, cu, err := s.startQEMUProcess(ctx, p, version, socketPath, args)
+	pid, hv, cu, err := s.startConfiguredProcess(ctx, p, version, socketPath, config, args)
 	if err != nil {
 		return 0, nil, err
 	}
