@@ -63,6 +63,49 @@ func TestMachineArtifactDiskRejectsSymlinkEscape(t *testing.T) {
 	assert.ErrorContains(t, err, "escapes artifact root")
 }
 
+func TestMaterializeRejectsExternalDiskReferences(t *testing.T) {
+	if _, err := exec.LookPath("qemu-img"); err != nil {
+		if os.Getenv("CI") == "true" {
+			t.Fatal("qemu-img is required in CI")
+		}
+		t.Skip("qemu-img is unavailable")
+	}
+
+	p := paths.New(t.TempDir())
+	m := &manager{paths: p}
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "hypeman"), 0755))
+
+	backed := filepath.Join(root, "hypeman", "backed.qcow2")
+	output, err := exec.Command("qemu-img", "create", "-f", "qcow2", "-F", "raw", "-b", "/etc/passwd", backed, "4M").CombinedOutput()
+	require.NoError(t, err, "%s", output)
+	meta := windowsMachineMetadata(MachineImageWindowsBase, "hypeman/backed.qcow2", "")
+	meta.Labels[MachineImageDiskFormatLabel] = "qcow2"
+	machine, err := parseMachineImage(meta)
+	require.NoError(t, err)
+	ref, err := ParseNormalizedRef("registry.example/windows/base@sha256:" + strings.Repeat("5", 64))
+	require.NoError(t, err)
+	_, err = m.materializeMachineImage(NewResolvedRef(ref, ref.Digest()), root, machine)
+	assert.ErrorContains(t, err, "must not reference a backing file")
+
+	dataFile := filepath.Join(t.TempDir(), "external.raw")
+	require.NoError(t, os.WriteFile(dataFile, make([]byte, 4<<20), 0644))
+	external := filepath.Join(root, "hypeman", "external.qcow2")
+	output, err = exec.Command("qemu-img", "create", "-f", "qcow2", "-o", "data_file="+dataFile+",data_file_raw=on", external, "4M").CombinedOutput()
+	require.NoError(t, err, "%s", output)
+	persona := windowsMachineMetadata(
+		MachineImageWindowsPersona,
+		"hypeman/external.qcow2",
+		"registry.example/windows/base@sha256:"+strings.Repeat("6", 64),
+	)
+	machine, err = parseMachineImage(persona)
+	require.NoError(t, err)
+	personaRef, err := ParseNormalizedRef("registry.example/windows/persona@sha256:" + strings.Repeat("7", 64))
+	require.NoError(t, err)
+	_, err = m.materializeMachineImage(NewResolvedRef(personaRef, personaRef.Digest()), root, machine)
+	assert.ErrorContains(t, err, "unsupported data-file feature")
+}
+
 func TestMaterializeWindowsBaseFormats(t *testing.T) {
 	if _, err := exec.LookPath("qemu-img"); err != nil {
 		if os.Getenv("CI") == "true" {
@@ -101,7 +144,7 @@ func TestMaterializeWindowsBaseFormats(t *testing.T) {
 			require.NoError(t, err)
 			_, err = m.materializeMachineImage(resolved, root, machine)
 			require.NoError(t, err)
-			info, err := inspectQEMUImage(machineDiskPath(p, ref.Repository(), digest, MachineImageWindowsBase))
+			info, err := inspectQEMUImage(machineDiskPath(p, ref.Repository(), digest, MachineImageWindowsBase), "raw")
 			require.NoError(t, err)
 			assert.Equal(t, "raw", info.Format)
 		})
@@ -164,7 +207,7 @@ func TestMaterializeWindowsBaseAndPersona(t *testing.T) {
 	require.NoError(t, err)
 
 	personaPath := machineDiskPath(p, personaRef.Repository(), personaDigest, MachineImageWindowsPersona)
-	info, err := inspectQEMUImage(personaPath)
+	info, err := inspectQEMUImage(personaPath, "qcow2")
 	require.NoError(t, err)
 	assert.Equal(t, "qcow2", info.Format)
 	assert.Equal(t, "raw", info.BackingFileFormat)

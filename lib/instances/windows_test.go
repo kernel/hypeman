@@ -4,6 +4,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/kernel/hypeman/lib/autostandby"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/paths"
@@ -41,12 +42,19 @@ func TestValidateWindowsCreate(t *testing.T) {
 		{name: "small memory", hv: hypervisor.TypeQEMU, req: CreateInstanceRequest{Size: 2 << 30}},
 		{name: "one CPU", hv: hypervisor.TypeQEMU, req: CreateInstanceRequest{Vcpus: 1}},
 		{name: "command", hv: hypervisor.TypeQEMU, req: CreateInstanceRequest{Cmd: []string{"cmd.exe"}}},
+		{name: "snapshot policy", hv: hypervisor.TypeQEMU, req: CreateInstanceRequest{SnapshotPolicy: &SnapshotPolicy{}}},
+		{name: "auto standby", hv: hypervisor.TypeQEMU, req: CreateInstanceRequest{AutoStandby: &autostandby.Policy{}}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assert.Error(t, validateWindowsCreate(tt.req, image, tt.hv))
 		})
 	}
+}
+
+func TestRejectWindowsSnapshotLifecycle(t *testing.T) {
+	assert.ErrorIs(t, rejectWindowsSnapshotLifecycle("windows/amd64", "fork"), ErrNotSupported)
+	assert.NoError(t, rejectWindowsSnapshotLifecycle("linux/amd64", "fork"))
 }
 
 func TestBuildWindowsHypervisorConfig(t *testing.T) {

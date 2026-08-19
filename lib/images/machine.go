@@ -128,10 +128,14 @@ type qemuImageInfo struct {
 	VirtualSize       int64  `json:"virtual-size"`
 	BackingFilename   string `json:"backing-filename"`
 	BackingFileFormat string `json:"backing-filename-format"`
+	FormatSpecific    struct {
+		Type string                     `json:"type"`
+		Data map[string]json.RawMessage `json:"data"`
+	} `json:"format-specific"`
 }
 
-func inspectQEMUImage(path string) (qemuImageInfo, error) {
-	output, err := exec.Command("qemu-img", "info", "--output=json", path).CombinedOutput()
+func inspectQEMUImage(path, format string) (qemuImageInfo, error) {
+	output, err := exec.Command("qemu-img", "info", "--output=json", "-f", format, path).CombinedOutput()
 	if err != nil {
 		return qemuImageInfo{}, fmt.Errorf("inspect machine disk: %w: %s", err, output)
 	}
@@ -142,9 +146,39 @@ func inspectQEMUImage(path string) (qemuImageInfo, error) {
 	return info, nil
 }
 
+func validateMachineSource(info qemuImageInfo, allowBacking bool) error {
+	if !allowBacking && info.BackingFilename != "" {
+		return fmt.Errorf("machine image source must not reference a backing file")
+	}
+	for _, feature := range []string{"data-file", "data-file-raw", "encrypt", "encryption", "encrypt-format"} {
+		if _, ok := info.FormatSpecific.Data[feature]; ok {
+			return fmt.Errorf("machine image source uses unsupported %s feature", feature)
+		}
+	}
+	return nil
+}
+
+func qemuDiskFormat(format string) string {
+	if format == "vhd" {
+		return "vpc"
+	}
+	return format
+}
+
 func (m *manager) materializeMachineImage(ref *ResolvedRef, root string, machine *MachineImage) (int64, error) {
 	source, err := machineArtifactDisk(root, machine)
 	if err != nil {
+		return 0, err
+	}
+	sourceFormat := qemuDiskFormat(machine.DiskFormat)
+	sourceInfo, err := inspectQEMUImage(source, sourceFormat)
+	if err != nil {
+		return 0, err
+	}
+	if sourceInfo.Format != sourceFormat {
+		return 0, fmt.Errorf("machine image source format is %s, expected %s", sourceInfo.Format, sourceFormat)
+	}
+	if err := validateMachineSource(sourceInfo, machine.Kind == MachineImageWindowsPersona); err != nil {
 		return 0, err
 	}
 
@@ -165,11 +199,7 @@ func (m *manager) materializeMachineImage(ref *ResolvedRef, root string, machine
 		if machine.DiskFormat == "raw" {
 			err = forkvm.CopyRegularFile(source, destination)
 		} else {
-			format := machine.DiskFormat
-			if format == "vhd" {
-				format = "vpc"
-			}
-			output, convertErr := exec.Command("qemu-img", "convert", "-f", format, "-O", "raw", source, destination).CombinedOutput()
+			output, convertErr := exec.Command("qemu-img", "convert", "-f", sourceFormat, "-O", "raw", source, destination).CombinedOutput()
 			if convertErr != nil {
 				err = fmt.Errorf("convert Windows base to raw: %w: %s", convertErr, output)
 			}
@@ -177,7 +207,7 @@ func (m *manager) materializeMachineImage(ref *ResolvedRef, root string, machine
 		if err != nil {
 			return 0, fmt.Errorf("materialize Windows base: %w", err)
 		}
-		info, err := inspectQEMUImage(destination)
+		info, err := inspectQEMUImage(destination, "raw")
 		if err != nil {
 			return 0, err
 		}
@@ -200,14 +230,17 @@ func (m *manager) materializeMachineImage(ref *ResolvedRef, root string, machine
 		if err != nil {
 			return 0, fmt.Errorf("set persona backing file: %w: %s", err, output)
 		}
-		info, err := inspectQEMUImage(destination)
+		info, err := inspectQEMUImage(destination, "qcow2")
 		if err != nil {
+			return 0, err
+		}
+		if err := validateMachineSource(info, true); err != nil {
 			return 0, err
 		}
 		if info.Format != "qcow2" || info.BackingFileFormat != "raw" || info.BackingFilename != basePath {
 			return 0, fmt.Errorf("invalid persona disk backing configuration")
 		}
-		baseInfo, err := inspectQEMUImage(basePath)
+		baseInfo, err := inspectQEMUImage(basePath, "raw")
 		if err != nil {
 			return 0, err
 		}
