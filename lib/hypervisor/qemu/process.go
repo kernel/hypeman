@@ -40,6 +40,11 @@ const (
 	// socketDialTimeout is timeout for individual socket connection attempts
 	socketDialTimeout = 100 * time.Millisecond
 
+	// vfioTermGrace is how long start-failure cleanup waits for a
+	// VFIO-attached QEMU to exit on SIGTERM before SIGKILL. Only failed
+	// starts pay it.
+	vfioTermGrace = 10 * time.Second
+
 	// clientCreateTimeout is how long to retry QMP client creation after the
 	// socket appears. Under high parallel load the socket can accept connections
 	// slightly later than file creation/availability.
@@ -225,8 +230,14 @@ func buildQMPArgs(socketPath string) []string {
 }
 
 type startedProcess struct {
-	pid          int
-	socketPath   string
+	pid        int
+	socketPath string
+	// termGrace, when non-zero, makes cleanup send SIGTERM and wait this long
+	// before SIGKILL. Set for VFIO-attached processes: hard-killing QEMU while
+	// the NVIDIA vGPU plugin is initializing can silently wedge the VF until
+	// its parent GPU's SR-IOV is cycled, while a terminating QEMU runs its
+	// device teardown and leaves the VF reusable.
+	termGrace    time.Duration
 	waitDone     chan error
 	waitConsumed bool
 	waitErr      error
@@ -277,12 +288,45 @@ func (p *startedProcess) wait() error {
 	return err
 }
 
+// waitFor waits up to d for the process to exit, returning whether it did.
+func (p *startedProcess) waitFor(d time.Duration) bool {
+	if _, exited := p.checkExited(); exited {
+		return true
+	}
+	select {
+	case err := <-p.waitDone:
+		p.waitConsumed = true
+		p.waitErr = err
+		return true
+	case <-time.After(d):
+		return false
+	}
+}
+
 func (p *startedProcess) cleanup() {
 	if _, exited := p.checkExited(); !exited {
-		_ = syscall.Kill(p.pid, syscall.SIGKILL)
-		_ = p.wait()
+		terminated := false
+		if p.termGrace > 0 {
+			if syscall.Kill(p.pid, syscall.SIGTERM) == nil {
+				terminated = p.waitFor(p.termGrace)
+			}
+		}
+		if !terminated {
+			_ = syscall.Kill(p.pid, syscall.SIGKILL)
+			_ = p.wait()
+		}
 	}
 	_ = os.Remove(p.socketPath)
+}
+
+// hasVFIODevice reports whether the QEMU command line attaches a VFIO device.
+func hasVFIODevice(args []string) bool {
+	for _, arg := range args {
+		if strings.Contains(arg, "vfio-pci") {
+			return true
+		}
+	}
+	return false
 }
 
 // startQEMUProcess handles the common QEMU process startup logic.
@@ -358,6 +402,9 @@ func (s *Starter) startQEMUProcess(ctx context.Context, p *paths.Paths, version 
 	}
 
 	pid := proc.pid
+	if hasVFIODevice(args) {
+		proc.termGrace = vfioTermGrace
+	}
 	log.DebugContext(processCtx, "QEMU process started", "pid", pid, "duration_ms", time.Since(processStartTime).Milliseconds())
 
 	// Setup cleanup to kill, reap, and remove the socket if subsequent steps fail.

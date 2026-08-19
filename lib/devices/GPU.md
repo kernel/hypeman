@@ -288,10 +288,16 @@ every request, so one wedged VF presents as all vGPU instances failing while
 `/resources` reports full capacity.
 
 The wedge itself leaves no host-side log: no kernel error, no XID, no plugin
-crash. In the observed case it followed a period of heavy attach/teardown
-churn on the VF, including QEMU processes that exited within seconds of
-opening the VFIO device (failed start attempts that were then retried), so
-suspect any workload that repeatedly kills the VMM mid-device-init.
+crash. The trigger is a SIGKILL delivered to QEMU while the vGPU plugin is
+still initializing the VF (roughly the first seconds after process start):
+a single hard kill in that window wedges the VF near-deterministically,
+while QEMU processes that exit voluntarily — error exits, QMP quit, SIGTERM —
+run their VFIO teardown and never wedge, and hard kills of fully-initialized
+vGPU VMs are also safe. Hypeman therefore SIGTERMs a vGPU QEMU first and only
+escalates to SIGKILL after a grace period, both in start-failure cleanup and
+when force-killing an instance that is still initializing; a hard kill in the
+init window logs `VF may wedge` with the device path. External SIGKILLs
+(OOM killer, manual `kill -9`) can still trigger it.
 
 Confirm by assigning the same profile on a different VF: if that guest
 initializes, the VF is wedged, not the driver stack. Remediate by cycling
