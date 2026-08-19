@@ -22,6 +22,7 @@ type Image struct {
 	Labels        map[string]string
 	Tags          tags.Tags
 	WorkingDir    string
+	Machine       *MachineImage
 	CreatedAt     time.Time
 }
 

@@ -128,6 +128,12 @@ func (m *manager) createInstance(
 		log.ErrorContext(ctx, "image not ready", "image", req.Image, "status", imageInfo.Status)
 		return nil, fmt.Errorf("%w: image status is %s", ErrImageNotReady, imageInfo.Status)
 	}
+	windows := isWindowsPlatform(imageInfo.Platform)
+	if windows {
+		if err := validateWindowsCreate(req, imageInfo, hvType); err != nil {
+			return nil, err
+		}
+	}
 
 	// A guest whose architecture differs from the host kernel can only boot via
 	// emulation. On Apple silicon that is Rosetta, enabled automatically; on any
@@ -147,17 +153,20 @@ func (m *manager) createInstance(
 		return nil, fmt.Errorf("get vm starter for %s: %w", hvType, starterErr)
 	}
 
-	defaultKernel := m.systemManager.GetDefaultKernelVersion()
-	kernelVer, err := resolveCreateKernelVersion(imageInfo, defaultKernel)
-	if err != nil {
-		log.ErrorContext(ctx, "invalid image kernel label", "image", req.Image, "error", err)
-		return nil, err
-	}
-	if kernelVer != defaultKernel {
-		log.InfoContext(ctx, "using image-declared kernel version",
-			"image", req.Image,
-			"kernel", kernelVer,
-			"label", system.ImageKernelVersionLabel)
+	var kernelVer system.KernelVersion
+	if !windows {
+		defaultKernel := m.systemManager.GetDefaultKernelVersion()
+		kernelVer, err = resolveCreateKernelVersion(imageInfo, defaultKernel)
+		if err != nil {
+			log.ErrorContext(ctx, "invalid image kernel label", "image", req.Image, "error", err)
+			return nil, err
+		}
+		if kernelVer != defaultKernel {
+			log.InfoContext(ctx, "using image-declared kernel version",
+				"image", req.Image,
+				"kernel", kernelVer,
+				"label", system.ImageKernelVersionLabel)
+		}
 	}
 	// resolvedImageRef is the digest-pinned reference used for boot/start/restore
 	// (stable across mutable tags). The caller-facing Image field keeps the
@@ -185,11 +194,17 @@ func (m *manager) createInstance(
 	// 6. Apply defaults
 	size := req.Size
 	if size == 0 {
-		size = 1 * 1024 * 1024 * 1024 // 1GB default
+		if windows {
+			size = 8 * 1024 * 1024 * 1024
+		} else {
+			size = 1 * 1024 * 1024 * 1024 // 1GB default
+		}
 	}
 	hotplugSize := req.HotplugSize
 	overlaySize := req.OverlaySize
-	if overlaySize == 0 {
+	if windows {
+		overlaySize = imageInfo.Machine.VirtualSize
+	} else if overlaySize == 0 {
 		overlaySize = 10 * 1024 * 1024 * 1024 // 10GB default
 	}
 	// Validate overlay size against max
@@ -198,7 +213,11 @@ func (m *manager) createInstance(
 	}
 	vcpus := req.Vcpus
 	if vcpus == 0 {
-		vcpus = 2
+		if windows {
+			vcpus = 4
+		} else {
+			vcpus = 2
+		}
 	}
 
 	// Validate per-instance resource limits
@@ -365,7 +384,7 @@ func (m *manager) createInstance(
 		Entrypoint:               req.Entrypoint,
 		Cmd:                      req.Cmd,
 		SkipKernelHeaders:        req.SkipKernelHeaders,
-		SkipGuestAgent:           req.SkipGuestAgent,
+		SkipGuestAgent:           req.SkipGuestAgent || windows,
 		EnableRosetta:            enableRosetta,
 		SnapshotPolicy:           cloneSnapshotPolicy(req.SnapshotPolicy),
 		AutoStandby:              cloneAutoStandbyPolicy(req.AutoStandby),
@@ -380,11 +399,17 @@ func (m *manager) createInstance(
 		return nil, fmt.Errorf("ensure directories: %w", err)
 	}
 
-	// 13. Create overlay disk with specified size
-	log.DebugContext(ctx, "creating overlay disk", "instance_id", id, "size_bytes", stored.OverlaySize)
-	if err := m.createOverlayDisk(id, stored.OverlaySize); err != nil {
-		log.ErrorContext(ctx, "failed to create overlay disk", "instance_id", id, "error", err)
-		return nil, fmt.Errorf("create overlay disk: %w", err)
+	// 13. Create the guest's writable disk.
+	if windows {
+		if err := m.prepareWindowsInstance(stored, imageInfo); err != nil {
+			return nil, fmt.Errorf("prepare Windows instance: %w", err)
+		}
+	} else {
+		log.DebugContext(ctx, "creating overlay disk", "instance_id", id, "size_bytes", stored.OverlaySize)
+		if err := m.createOverlayDisk(id, stored.OverlaySize); err != nil {
+			log.ErrorContext(ctx, "failed to create overlay disk", "instance_id", id, "error", err)
+			return nil, fmt.Errorf("create overlay disk: %w", err)
+		}
 	}
 
 	// 14. Allocate network (if network enabled)
@@ -482,18 +507,20 @@ func (m *manager) createInstance(
 			m.unregisterEgressProxyInstance(ctx, id)
 		})
 	}
-	log.DebugContext(ctx, "creating config disk", "instance_id", id)
-	configDiskCtx, configDiskSpanEnd := m.startLifecycleStep(ctx, "create_config_disk",
-		attribute.String("instance_id", id),
-		attribute.String("hypervisor", string(stored.HypervisorType)),
-		attribute.String("operation", "create_config_disk"),
-	)
-	if err := m.createConfigDisk(configDiskCtx, inst, imageInfo, netConfig, proxyGuestConfig); err != nil {
-		configDiskSpanEnd(err)
-		log.ErrorContext(ctx, "failed to create config disk", "instance_id", id, "error", err)
-		return nil, fmt.Errorf("create config disk: %w", err)
+	if !windows {
+		log.DebugContext(ctx, "creating config disk", "instance_id", id)
+		configDiskCtx, configDiskSpanEnd := m.startLifecycleStep(ctx, "create_config_disk",
+			attribute.String("instance_id", id),
+			attribute.String("hypervisor", string(stored.HypervisorType)),
+			attribute.String("operation", "create_config_disk"),
+		)
+		if err := m.createConfigDisk(configDiskCtx, inst, imageInfo, netConfig, proxyGuestConfig); err != nil {
+			configDiskSpanEnd(err)
+			log.ErrorContext(ctx, "failed to create config disk", "instance_id", id, "error", err)
+			return nil, fmt.Errorf("create config disk: %w", err)
+		}
+		configDiskSpanEnd(nil)
 	}
-	configDiskSpanEnd(nil)
 
 	// 17. Record boot start time before launching the VM so marker hydration
 	// can safely ignore stale sentinels from prior runs.
@@ -809,6 +836,10 @@ func resolveRuntimeHypervisorPID(log *slog.Logger, socketPath string, fallbackPI
 
 // buildHypervisorConfig creates a hypervisor-agnostic VM configuration
 func (m *manager) buildHypervisorConfig(ctx context.Context, inst *Instance, imageInfo *images.Image, netConfig *network.NetworkConfig) (hypervisor.VMConfig, error) {
+	if isWindowsPlatform(inst.Platform) {
+		return m.buildWindowsHypervisorConfig(inst, imageInfo, netConfig)
+	}
+
 	// Get system file paths
 	kernelPath, _ := m.systemManager.GetKernelPath(system.KernelVersion(inst.KernelVersion))
 	initrdPath, _ := m.systemManager.GetInitrdPath()

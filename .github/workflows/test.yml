@@ -113,6 +113,10 @@ jobs:
           done
           test -f "$HYPEMAN_WINDOWS_OVMF_CODE"
           test -f "$HYPEMAN_WINDOWS_OVMF_VARS"
+          test -r /ci/windows/base.raw
+          test -r /ci/windows/persona.qcow2
+          qemu-img info --output=json /ci/windows/persona.qcow2 \
+            | jq -e '.format == "qcow2" and .["backing-filename-format"] == "raw"' >/dev/null
 
       - name: Test Windows hypervisor primitives
         run: |
