@@ -77,15 +77,41 @@ func (m *imageMetadata) toImage() *Image {
 	return img
 }
 
-// digestDir returns the directory for a specific digest
-// e.g., /var/lib/hypeman/images/docker.io/library/alpine/abc123def456...
-func digestDir(p *paths.Paths, repository, digestHex string) string {
+// contentLayoutEnabled is intentionally disabled in the compatibility layer.
+// The child storage PR enables new writes after these readers are deployed.
+const contentLayoutEnabled = false
+
+// legacyDigestDir returns the directory used by the original image layout.
+func legacyDigestDir(p *paths.Paths, repository, digestHex string) string {
 	return p.ImageDigestDir(repository, digestHex)
 }
 
-// digestPath returns the path to the rootfs disk file for a digest
-// Uses .erofs on Linux (compressed) or .ext4 on Darwin (VZ kernel lacks erofs support)
+// contentDigestDir returns the directory used by the content-addressed layout.
+func contentDigestDir(p *paths.Paths, digestHex string) string {
+	return p.ImageContentDir(digestHex)
+}
+
+// digestDir returns the directory for a specific digest, preferring the new
+// content-addressed layout and falling back to the legacy repository layout.
+func digestDir(p *paths.Paths, repository, digestHex string) string {
+	if _, err := os.Stat(p.ImageContentMetadata(digestHex)); err == nil {
+		return contentDigestDir(p, digestHex)
+	}
+	return legacyDigestDir(p, repository, digestHex)
+}
+
+// contentDigestPath returns the rootfs path for a newly written image.
+func contentDigestPath(p *paths.Paths, digestHex string) string {
+	return p.ImageContentPath(digestHex)
+}
+
+// digestPath returns the path to the rootfs disk file for a digest, preferring
+// the new content-addressed layout and falling back to the legacy layout.
 func digestPath(p *paths.Paths, repository, digestHex string) string {
+	contentPath := p.ImageContentPath(digestHex)
+	if _, err := os.Stat(contentPath); err == nil {
+		return contentPath
+	}
 	return p.ImageDigestPath(repository, digestHex)
 }
 
@@ -103,22 +129,48 @@ func GetDiskPath(p *paths.Paths, imageName string, digest string) (string, error
 	return digestPath(p, ref.Repository(), digestHex), nil
 }
 
-// metadataPath returns the path to metadata.json for a digest
+// metadataPath returns the path to metadata.json for a digest, preferring the
+// new content-addressed layout and falling back to the legacy layout.
 func metadataPath(p *paths.Paths, repository, digestHex string) string {
+	contentPath := p.ImageContentMetadata(digestHex)
+	if _, err := os.Stat(contentPath); err == nil {
+		return contentPath
+	}
 	return p.ImageMetadata(repository, digestHex)
 }
 
-// tagSymlinkPath returns the path to a tag symlink
-// e.g., /var/lib/hypeman/images/docker.io/library/alpine/latest
+// newTagSymlinkPath returns the path to a tag in the repository namespace.
+func newTagSymlinkPath(p *paths.Paths, repository, tag string) string {
+	return p.ImageRepositoryTagSymlink(repository, tag)
+}
+
+// tagSymlinkPath returns the path to a tag symlink in the active layout.
 func tagSymlinkPath(p *paths.Paths, repository, tag string) string {
+	newPath := newTagSymlinkPath(p, repository, tag)
+	if _, err := os.Lstat(newPath); err == nil {
+		return newPath
+	}
 	return p.ImageTagSymlink(repository, tag)
 }
 
-// writeMetadata writes metadata for a digest
+func usesLegacyLayout(p *paths.Paths, repository, digestHex string) bool {
+	_, legacyErr := os.Stat(p.ImageMetadata(repository, digestHex))
+	_, contentErr := os.Stat(p.ImageContentMetadata(digestHex))
+	return legacyErr == nil && errors.Is(contentErr, os.ErrNotExist)
+}
+
+// writeMetadata writes metadata for a digest.
 func writeMetadata(p *paths.Paths, repository, digestHex string, meta *imageMetadata) error {
-	dir := digestDir(p, repository, digestHex)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("create digest directory: %w", err)
+	path := p.ImageMetadata(repository, digestHex)
+	if contentLayoutEnabled && !usesLegacyLayout(p, repository, digestHex) {
+		path = p.ImageContentMetadata(digestHex)
+	}
+	return writeMetadataFile(path, meta)
+}
+
+func writeMetadataFile(path string, meta *imageMetadata) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return fmt.Errorf("create metadata directory: %w", err)
 	}
 
 	data, err := json.MarshalIndent(meta, "", "  ")
@@ -126,17 +178,14 @@ func writeMetadata(p *paths.Paths, repository, digestHex string, meta *imageMeta
 		return fmt.Errorf("marshal metadata: %w", err)
 	}
 
-	tempPath := metadataPath(p, repository, digestHex) + ".tmp"
+	tempPath := path + ".tmp"
 	if err := os.WriteFile(tempPath, data, 0644); err != nil {
 		return fmt.Errorf("write temp metadata: %w", err)
 	}
-
-	finalPath := metadataPath(p, repository, digestHex)
-	if err := os.Rename(tempPath, finalPath); err != nil {
-		os.Remove(tempPath)
+	if err := os.Rename(tempPath, path); err != nil {
+		_ = os.Remove(tempPath)
 		return fmt.Errorf("rename metadata: %w", err)
 	}
-
 	return nil
 }
 
@@ -169,31 +218,28 @@ func readMetadata(p *paths.Paths, repository, digestHex string) (*imageMetadata,
 	return &meta, nil
 }
 
-func cloneReadyImage(p *paths.Paths, sourceRepository, targetRepository, digestHex string, sourceMeta *imageMetadata, targetName string) error {
+func cloneReadyImageLegacy(p *paths.Paths, sourceRepository, targetRepository, digestHex string, sourceMeta *imageMetadata, targetName string) error {
 	sourceDiskPath := digestPath(p, sourceRepository, digestHex)
 	if _, err := os.Stat(sourceDiskPath); err != nil {
 		return fmt.Errorf("stat source disk: %w", err)
 	}
-
 	targetDir := digestDir(p, targetRepository, digestHex)
 	if err := os.MkdirAll(targetDir, 0755); err != nil {
 		return fmt.Errorf("create target digest directory: %w", err)
 	}
-
 	targetMeta := *sourceMeta
 	targetMeta.Name = targetName
 	data, err := json.MarshalIndent(&targetMeta, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal target metadata: %w", err)
 	}
-
 	diskTemp, err := os.CreateTemp(targetDir, ".rootfs-*")
 	if err != nil {
 		return fmt.Errorf("create temporary target disk: %w", err)
 	}
 	diskTempPath := diskTemp.Name()
 	if err := diskTemp.Close(); err != nil {
-		os.Remove(diskTempPath)
+		_ = os.Remove(diskTempPath)
 		return fmt.Errorf("close temporary target disk: %w", err)
 	}
 	if err := os.Remove(diskTempPath); err != nil {
@@ -202,37 +248,122 @@ func cloneReadyImage(p *paths.Paths, sourceRepository, targetRepository, digestH
 	if err := os.Link(sourceDiskPath, diskTempPath); err != nil {
 		return fmt.Errorf("link source disk: %w", err)
 	}
-	defer os.Remove(diskTempPath)
-
+	installed := false
+	defer func() {
+		if !installed {
+			_ = os.Remove(diskTempPath)
+		}
+	}()
 	metadataTemp, err := os.CreateTemp(targetDir, ".metadata-*")
 	if err != nil {
 		return fmt.Errorf("create temporary target metadata: %w", err)
 	}
 	metadataTempPath := metadataTemp.Name()
 	if err := metadataTemp.Chmod(0644); err != nil {
-		metadataTemp.Close()
-		os.Remove(metadataTempPath)
+		_ = metadataTemp.Close()
+		_ = os.Remove(metadataTempPath)
 		return fmt.Errorf("chmod temporary target metadata: %w", err)
 	}
 	if _, err := metadataTemp.Write(data); err != nil {
-		metadataTemp.Close()
-		os.Remove(metadataTempPath)
+		_ = metadataTemp.Close()
+		_ = os.Remove(metadataTempPath)
 		return fmt.Errorf("write temporary target metadata: %w", err)
 	}
 	if err := metadataTemp.Close(); err != nil {
-		os.Remove(metadataTempPath)
+		_ = os.Remove(metadataTempPath)
 		return fmt.Errorf("close temporary target metadata: %w", err)
 	}
-	defer os.Remove(metadataTempPath)
-
-	targetDiskPath := digestPath(p, targetRepository, digestHex)
-	if err := os.Rename(diskTempPath, targetDiskPath); err != nil {
+	metadataInstalled := false
+	defer func() {
+		if !metadataInstalled {
+			_ = os.Remove(metadataTempPath)
+		}
+	}()
+	if err := os.Rename(diskTempPath, digestPath(p, targetRepository, digestHex)); err != nil {
 		return fmt.Errorf("install target disk: %w", err)
 	}
-	metadataPath := metadataPath(p, targetRepository, digestHex)
-	if err := os.Rename(metadataTempPath, metadataPath); err != nil {
+	installed = true
+	if err := os.Rename(metadataTempPath, p.ImageMetadata(targetRepository, digestHex)); err != nil {
 		return fmt.Errorf("install target metadata: %w", err)
 	}
+	metadataInstalled = true
+	return nil
+}
+
+func cloneReadyImage(p *paths.Paths, sourceRepository, targetRepository, digestHex string, sourceMeta *imageMetadata, targetName string) error {
+	if !contentLayoutEnabled {
+		return cloneReadyImageLegacy(p, sourceRepository, targetRepository, digestHex, sourceMeta, targetName)
+	}
+	return cloneReadyImageContent(p, sourceRepository, targetRepository, digestHex, sourceMeta, targetName)
+}
+
+func cloneReadyImageContent(p *paths.Paths, sourceRepository, targetRepository, digestHex string, sourceMeta *imageMetadata, targetName string) error {
+	contentDir := contentDigestDir(p, digestHex)
+	if _, err := os.Stat(p.ImageContentMetadata(digestHex)); errors.Is(err, os.ErrNotExist) {
+		sourceDiskPath := digestPath(p, sourceRepository, digestHex)
+		if _, err := os.Stat(sourceDiskPath); err != nil {
+			return fmt.Errorf("stat source disk: %w", err)
+		}
+		if err := os.MkdirAll(contentDir, 0755); err != nil {
+			return fmt.Errorf("create content directory: %w", err)
+		}
+
+		diskTemp, err := os.CreateTemp(contentDir, ".rootfs-*")
+		if err != nil {
+			return fmt.Errorf("create temporary content disk: %w", err)
+		}
+		diskTempPath := diskTemp.Name()
+		if err := diskTemp.Close(); err != nil {
+			_ = os.Remove(diskTempPath)
+			return fmt.Errorf("close temporary content disk: %w", err)
+		}
+		if err := os.Remove(diskTempPath); err != nil {
+			return fmt.Errorf("remove temporary content disk: %w", err)
+		}
+		if err := os.Link(sourceDiskPath, diskTempPath); err != nil {
+			return fmt.Errorf("link source disk: %w", err)
+		}
+		installed := false
+		defer func() {
+			if !installed {
+				_ = os.Remove(diskTempPath)
+			}
+		}()
+
+		if err := os.Rename(diskTempPath, contentDigestPath(p, digestHex)); err != nil {
+			return fmt.Errorf("install content disk: %w", err)
+		}
+		installed = true
+		if err := writeMetadataFile(p.ImageContentMetadata(digestHex), sourceMeta); err != nil {
+			return fmt.Errorf("write content metadata: %w", err)
+		}
+	}
+
+	// A legacy source may still have tags pointing at its repository-local
+	// digest directory. Move those references to the shared content before
+	// removing the duplicate legacy tree.
+	legacyDir := legacyDigestDir(p, sourceRepository, digestHex)
+	if _, err := os.Stat(legacyDir); err == nil {
+		tags, err := listTags(p, sourceRepository)
+		if err != nil {
+			return err
+		}
+		for _, tag := range tags {
+			target, err := resolveTag(p, sourceRepository, tag)
+			if err != nil || target != digestHex {
+				continue
+			}
+			if err := createTagSymlink(p, sourceRepository, tag, digestHex); err != nil {
+				return fmt.Errorf("promote legacy tag %s: %w", tag, err)
+			}
+		}
+		if err := os.RemoveAll(legacyDir); err != nil {
+			return fmt.Errorf("remove legacy digest directory: %w", err)
+		}
+	}
+
+	_ = targetRepository
+	_ = targetName
 	return nil
 }
 
@@ -249,15 +380,31 @@ func createTagSymlink(p *paths.Paths, repository, tag, digestHex string) error {
 	linkPath := tagSymlinkPath(p, repository, tag)
 	targetPath := digestHex // Relative path (just the digest hex)
 
-	// Ensure parent directory exists
+	// Use repository references for content-addressed images. Legacy images keep
+	// their original tag location until they are promoted by a cross-repository tag.
+	contentPath := p.ImageContentPath(digestHex)
+	newLayout := false
+	if contentLayoutEnabled {
+		if _, err := os.Stat(contentPath); err == nil {
+			linkPath = newTagSymlinkPath(p, repository, tag)
+			var err error
+			targetPath, err = filepath.Rel(filepath.Dir(linkPath), p.ImageContentDir(digestHex))
+			if err != nil {
+				return fmt.Errorf("calculate content symlink target: %w", err)
+			}
+			newLayout = true
+		}
+	}
 	if err := os.MkdirAll(filepath.Dir(linkPath), 0755); err != nil {
 		return fmt.Errorf("create parent directory: %w", err)
 	}
 
-	// Remove existing symlink if present
-	os.Remove(linkPath)
-
-	// Create new symlink
+	// Remove references in either layout so retagging does not leave a stale alias.
+	_ = os.Remove(newTagSymlinkPath(p, repository, tag))
+	_ = os.Remove(p.ImageTagSymlink(repository, tag))
+	if !newLayout {
+		linkPath = p.ImageTagSymlink(repository, tag)
+	}
 	if err := os.Symlink(targetPath, linkPath); err != nil {
 		return fmt.Errorf("create symlink: %w", err)
 	}
@@ -278,39 +425,51 @@ func resolveTag(p *paths.Paths, repository, tag string) (string, error) {
 		return "", fmt.Errorf("read symlink: %w", err)
 	}
 
-	// Validate it's just a digest hex (not an absolute path)
-	if filepath.IsAbs(target) || strings.Contains(target, "/") {
+	// Legacy links contain only the digest. New links point relatively into the
+	// shared content directory; validate that they resolve to that digest only.
+	if filepath.IsAbs(target) {
 		return "", fmt.Errorf("invalid symlink target: %s", target)
 	}
+	digestHex := filepath.Base(target)
+	if digestHex == "." || digestHex == string(filepath.Separator) {
+		return "", fmt.Errorf("invalid symlink target: %s", target)
+	}
+	if target != digestHex {
+		resolved := filepath.Clean(filepath.Join(filepath.Dir(linkPath), target))
+		if resolved != filepath.Clean(contentDigestDir(p, digestHex)) {
+			return "", fmt.Errorf("invalid symlink target: %s", target)
+		}
+	}
 
-	return target, nil
+	return digestHex, nil
 }
 
 // listTags returns all tags for a repository
 func listTags(p *paths.Paths, repository string) ([]string, error) {
-	repoDir := p.ImageRepositoryDir(repository)
-
-	entries, err := os.ReadDir(repoDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("read repository directory: %w", err)
-	}
-
-	var tags []string
-	for _, entry := range entries {
-		// Check if it's a symlink
-		info, err := os.Lstat(filepath.Join(repoDir, entry.Name()))
+	dirs := []string{p.ImageRepositoryDir(repository), filepath.Join(p.ImageRepositoriesDir(), repository)}
+	seen := make(map[string]struct{})
+	tags := make([]string, 0)
+	for _, repoDir := range dirs {
+		entries, err := os.ReadDir(repoDir)
 		if err != nil {
-			continue
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, fmt.Errorf("read repository directory: %w", err)
 		}
-
-		if info.Mode()&os.ModeSymlink != 0 {
+		for _, entry := range entries {
+			path := filepath.Join(repoDir, entry.Name())
+			info, err := os.Lstat(path)
+			if err != nil || info.Mode()&os.ModeSymlink == 0 {
+				continue
+			}
+			if _, ok := seen[entry.Name()]; ok {
+				continue
+			}
+			seen[entry.Name()] = struct{}{}
 			tags = append(tags, entry.Name())
 		}
 	}
-
 	return tags, nil
 }
 
@@ -320,11 +479,28 @@ func listTags(p *paths.Paths, repository string) ([]string, error) {
 func listAllMetadata(p *paths.Paths) ([]*imageMetadata, error) {
 	imagesDir := p.ImagesDir()
 	seen := make(map[string]struct{})
+	contentDigests := make(map[string]struct{})
 	metas := make([]*imageMetadata, 0)
 
 	err := filepath.Walk(imagesDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil // Skip errors
+		}
+		rel, err := filepath.Rel(imagesDir, path)
+		if err != nil {
+			return nil
+		}
+		parts := strings.Split(rel, string(filepath.Separator))
+		if len(parts) > 0 && parts[0] == "content" {
+			if info.IsDir() {
+				return nil
+			}
+			if info.Name() != "metadata.json" {
+				return nil
+			}
+			digestHex := filepath.Base(filepath.Dir(path))
+			contentDigests[digestHex] = struct{}{}
+			return nil
 		}
 
 		switch {
@@ -333,13 +509,17 @@ func listAllMetadata(p *paths.Paths) ([]*imageMetadata, error) {
 			if err != nil {
 				return nil // Skip invalid symlinks
 			}
+			digestHex = filepath.Base(digestHex)
 
-			repository, err := filepath.Rel(imagesDir, filepath.Dir(path))
-			if err != nil {
-				return nil
+			var repository, tag string
+			if len(parts) > 1 && parts[0] == "repositories" {
+				repository = filepath.Join(parts[1 : len(parts)-1]...)
+				tag = parts[len(parts)-1]
+			} else {
+				repository = filepath.Dir(rel)
+				tag = filepath.Base(path)
 			}
-
-			return appendMetadataIfNew(p, repository, digestHex, seen, &metas)
+			return appendMetadataForTag(p, repository, tag, digestHex, seen, &metas)
 		case !info.IsDir() && info.Name() == "metadata.json":
 			digestHex := filepath.Base(filepath.Dir(path))
 			repository, err := filepath.Rel(imagesDir, filepath.Dir(filepath.Dir(path)))
@@ -356,6 +536,20 @@ func listAllMetadata(p *paths.Paths) ([]*imageMetadata, error) {
 	if err != nil && !os.IsNotExist(err) {
 		return nil, fmt.Errorf("walk images directory: %w", err)
 	}
+	for digestHex := range contentDigests {
+		found := false
+		for _, meta := range metas {
+			if strings.TrimPrefix(meta.Digest, "sha256:") == digestHex {
+				found = true
+				break
+			}
+		}
+		if !found {
+			if err := appendContentMetadataIfNew(p, digestHex, seen, &metas); err != nil {
+				return nil, err
+			}
+		}
+	}
 
 	return metas, nil
 }
@@ -371,6 +565,25 @@ func appendMetadataIfNew(p *paths.Paths, repository, digestHex string, seen map[
 		return nil // Skip if metadata can't be read
 	}
 
+	seen[key] = struct{}{}
+	*metas = append(*metas, meta)
+	return nil
+}
+
+func appendContentMetadataIfNew(p *paths.Paths, digestHex string, seen map[string]struct{}, metas *[]*imageMetadata) error {
+	return appendMetadataIfNew(p, "", digestHex, seen, metas)
+}
+
+func appendMetadataForTag(p *paths.Paths, repository, tag, digestHex string, seen map[string]struct{}, metas *[]*imageMetadata) error {
+	key := repository + "@" + digestHex
+	if _, ok := seen[key]; ok {
+		return nil
+	}
+	meta, err := readMetadata(p, repository, digestHex)
+	if err != nil {
+		return nil
+	}
+	meta.Name = repository + ":" + tag
 	seen[key] = struct{}{}
 	*metas = append(*metas, meta)
 	return nil
@@ -445,11 +658,44 @@ func deleteTagsForDigest(p *paths.Paths, repository, digestHex string) error {
 	return nil
 }
 
-// deleteDigest removes a digest directory and all its contents
+func contentTagsForDigest(p *paths.Paths, digestHex string) ([]string, error) {
+	root := p.ImageRepositoriesDir()
+	refs := make([]string, 0)
+	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() || info.Mode()&os.ModeSymlink == 0 {
+			return nil
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return nil
+		}
+		parts := strings.Split(rel, string(filepath.Separator))
+		if len(parts) < 2 {
+			return nil
+		}
+		repository := filepath.Join(parts[:len(parts)-1]...)
+		tag := parts[len(parts)-1]
+		target, err := resolveTag(p, repository, tag)
+		if err == nil && target == digestHex {
+			refs = append(refs, path)
+		}
+		return nil
+	})
+	if err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("walk content tags: %w", err)
+	}
+	return refs, nil
+}
+
+// deleteDigest removes a digest from both supported layouts.
 func deleteDigest(p *paths.Paths, repository, digestHex string) error {
-	dir := digestDir(p, repository, digestHex)
-	if err := os.RemoveAll(dir); err != nil {
-		return fmt.Errorf("remove digest directory: %w", err)
+	for _, dir := range []string{
+		contentDigestDir(p, digestHex),
+		legacyDigestDir(p, repository, digestHex),
+	} {
+		if err := os.RemoveAll(dir); err != nil {
+			return fmt.Errorf("remove digest directory: %w", err)
+		}
 	}
 	return nil
 }

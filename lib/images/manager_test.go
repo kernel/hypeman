@@ -204,7 +204,6 @@ func TestTagImage(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, repo+":stable", got.Name)
 	require.Equal(t, "sha256:029a752048e32e843bd6defe3841186fb8d19a28dae8ec287f433bb9d6d1ad85", got.Digest)
-
 	resolved, err := mgr.GetImage(ctx, repo+":stable")
 	require.NoError(t, err)
 	require.Equal(t, repo+":stable", resolved.Name)
@@ -214,7 +213,6 @@ func TestTagImage(t *testing.T) {
 	aliased, err := mgr.TagImage(ctx, digestRef, "docker.io/library/busybox:stable")
 	require.NoError(t, err)
 	require.Equal(t, "docker.io/library/busybox:stable", aliased.Name)
-
 	resolvedAlias, err := mgr.GetImage(ctx, "docker.io/library/busybox:stable")
 	require.NoError(t, err)
 	require.Equal(t, "docker.io/library/busybox:stable", resolvedAlias.Name)

@@ -1,11 +1,33 @@
 package images
 
 import (
+	"os"
 	"testing"
 	"time"
 
+	"github.com/kernel/hypeman/lib/paths"
 	"github.com/stretchr/testify/require"
 )
+
+func TestListAllMetadataContentLayout(t *testing.T) {
+	p := paths.New(t.TempDir())
+	digest := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	meta := &imageMetadata{
+		Name:      "docker.io/library/alpine:latest",
+		Digest:    "sha256:" + digest,
+		Status:    StatusReady,
+		SizeBytes: 5,
+		CreatedAt: time.Now().UTC(),
+	}
+	require.NoError(t, writeMetadataFile(p.ImageContentMetadata(digest), meta))
+	require.NoError(t, os.WriteFile(p.ImageContentPath(digest), []byte("rootfs"), 0o644))
+	require.NoError(t, createTagSymlink(p, "docker.io/library/alpine", "latest", digest))
+
+	metas, err := listAllMetadata(p)
+	require.NoError(t, err)
+	require.Len(t, metas, 1)
+	require.Equal(t, "docker.io/library/alpine:latest", metas[0].Name)
+}
 
 func TestImageMetadataToImage_ClonesMetadata(t *testing.T) {
 	createdAt := time.Now().UTC().Truncate(time.Second)

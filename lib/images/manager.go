@@ -212,8 +212,7 @@ func (m *manager) CreateImage(ctx context.Context, req CreateImageRequest) (*Ima
 		// Don't cache failed builds - allow retry
 		if meta.Status == StatusFailed {
 			// Clean up the failed build directory so we can retry
-			digestDir := filepath.Join(m.paths.ImagesDir(), ref.Repository(), ref.DigestHex())
-			os.RemoveAll(digestDir)
+			os.RemoveAll(digestDir(m.paths, ref.Repository(), ref.DigestHex()))
 			// Fall through to re-queue the build
 		} else {
 			// We have this digest already (ready, pending, pulling, or converting).
@@ -269,8 +268,7 @@ func (m *manager) ImportLocalImage(ctx context.Context, repo, reference, digest 
 	if meta, err := readMetadata(m.paths, ref.Repository(), ref.DigestHex()); err == nil {
 		// Don't cache failed builds - allow retry
 		if meta.Status == StatusFailed {
-			digestDir := filepath.Join(m.paths.ImagesDir(), ref.Repository(), ref.DigestHex())
-			os.RemoveAll(digestDir)
+			os.RemoveAll(digestDir(m.paths, ref.Repository(), ref.DigestHex()))
 			// Fall through to re-queue the build
 		} else {
 			// We have this digest already; last-pull-wins repoints the tag.
@@ -467,7 +465,10 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef, credentials 
 
 	m.updateStatusByDigest(ref, StatusConverting, nil, buildID)
 
-	diskPath := digestPath(m.paths, ref.Repository(), ref.DigestHex())
+	diskPath := m.paths.ImageDigestPath(ref.Repository(), ref.DigestHex())
+	if contentLayoutEnabled && !usesLegacyLayout(m.paths, ref.Repository(), ref.DigestHex()) {
+		diskPath = contentDigestPath(m.paths, ref.DigestHex())
+	}
 	// Use default image format (erofs on Linux, ext4 on Darwin)
 	convertStart := time.Now()
 	diskSize, err := ExportRootfs(tempDir, diskPath, DefaultImageFormat)
@@ -738,8 +739,21 @@ func (m *manager) DeleteImage(ctx context.Context, name string) error {
 		if _, err := readMetadata(m.paths, repository, digestHex); err != nil {
 			return err
 		}
+		contentImage := false
+		if _, err := os.Stat(m.paths.ImageContentMetadata(digestHex)); err == nil {
+			contentImage = true
+		}
 		if err := deleteTagsForDigest(m.paths, repository, digestHex); err != nil {
 			return err
+		}
+		if contentImage {
+			refs, err := contentTagsForDigest(m.paths, digestHex)
+			if err != nil {
+				return err
+			}
+			if len(refs) > 0 {
+				return nil
+			}
 		}
 		if err := deleteDigest(m.paths, repository, digestHex); err != nil {
 			return err
@@ -768,6 +782,18 @@ func (m *manager) DeleteImage(ctx context.Context, name string) error {
 		return nil
 	}
 
+	contentImage := false
+	if _, err := os.Stat(m.paths.ImageContentMetadata(digestHex)); err == nil {
+		contentImage = true
+	}
+	if contentImage {
+		refs, err := contentTagsForDigest(m.paths, digestHex)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to count content tags for digest %s: %v\n", digestHex, err)
+			return nil
+		}
+		count = len(refs)
+	}
 	if count == 0 {
 		// Digest is orphaned, delete it
 		if err := deleteDigest(m.paths, repository, digestHex); err != nil {
