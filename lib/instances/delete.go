@@ -241,19 +241,8 @@ func (m *manager) killHypervisor(ctx context.Context, inst *Instance) error {
 			log.WarnContext(ctx, "stored hypervisor PID does not own the instance socket, killing the socket owner",
 				"instance_id", inst.Id, "stored_pid", *inst.HypervisorPID, "owner_pid", pid)
 		}
-		if inst.GPUProfile != "" && inst.State == StateInitializing {
-			// SIGKILL during vGPU driver init can silently wedge the VF until
-			// its parent GPU's SR-IOV is cycled, so ask the VMM to exit and
-			// run its VFIO teardown first.
-			if syscall.Kill(pid, syscall.SIGTERM) == nil && WaitForProcessExit(pid, m.vgpuTermGrace()) {
-				os.Remove(inst.SocketPath)
-				return nil
-			}
-			log.WarnContext(ctx, "vGPU hypervisor did not exit on SIGTERM during driver init; hard-killing, VF may wedge",
-				"instance_id", inst.Id, "device_path", inst.GPUDevicePath)
-		}
 		log.DebugContext(ctx, "killing hypervisor process", "instance_id", inst.Id, "pid", pid)
-		if err := killProcessAndWait(pid); err != nil {
+		if err := m.terminateThenKill(ctx, inst, pid); err != nil {
 			return err
 		}
 	}
