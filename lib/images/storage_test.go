@@ -10,6 +10,21 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestWriteMetadataUsesContentWhenLegacyDirectoryIsEmpty(t *testing.T) {
+	p := paths.New(t.TempDir())
+	repository := "docker.io/library/alpine"
+	digest := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	require.NoError(t, os.MkdirAll(p.ImageDigestDir(repository, digest), 0o755))
+	require.NoError(t, writeMetadata(p, repository, digest, &imageMetadata{
+		Name:   repository + ":latest",
+		Digest: "sha256:" + digest,
+		Status: StatusPending,
+	}))
+	require.FileExists(t, p.ImageContentMetadata(digest))
+	_, err := os.Stat(p.ImageMetadata(repository, digest))
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
 func TestListAllMetadataContentLayout(t *testing.T) {
 	p := paths.New(t.TempDir())
 	digest := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
