@@ -16,6 +16,6 @@ A machine image uses these OCI config labels:
 
 Hypeman materializes the base as immutable sparse raw. It rewrites the persona's qcow2 backing header to the cache-owned base path, ignoring any artifact-supplied backing path. At instance creation, Hypeman reflink-clones the immutable persona into a writable `windows.qcow2`; the clone remains backed directly by the raw base.
 
-The base must be pulled before its personas. A base cannot be deleted while any cached persona references its digest.
+The base must be pulled before its personas. A base cannot be deleted while any cached persona references its digest. Instance references are not tracked by the image cache, matching existing Linux behavior: do not delete a base while any Windows instance cloned from one of its personas exists.
 
 Windows installation media, activation material, credentials, and generated disks belong in private registries and must not be committed to this repository.

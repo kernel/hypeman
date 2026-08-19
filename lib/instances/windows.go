@@ -52,6 +52,16 @@ func validateWindowsCreate(req CreateInstanceRequest, image *images.Image, hvTyp
 	if req.NetworkEgress != nil || len(req.Credentials) != 0 {
 		return fmt.Errorf("%w: Windows instances do not yet support managed egress or credentials", ErrInvalidRequest)
 	}
+	if req.SnapshotPolicy != nil || req.AutoStandby != nil {
+		return fmt.Errorf("%w: Windows snapshot policies are added in the snapshots phase", ErrInvalidRequest)
+	}
+	return nil
+}
+
+func rejectWindowsSnapshotLifecycle(platform, operation string) error {
+	if isWindowsPlatform(platform) {
+		return fmt.Errorf("%w: %s is not supported for Windows until the snapshots phase", ErrNotSupported, operation)
+	}
 	return nil
 }
 
