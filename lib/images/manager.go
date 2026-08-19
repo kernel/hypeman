@@ -466,7 +466,7 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef, credentials 
 	m.updateStatusByDigest(ref, StatusConverting, nil, buildID)
 
 	diskPath := m.paths.ImageDigestPath(ref.Repository(), ref.DigestHex())
-	if contentLayoutEnabled && !usesLegacyLayout(m.paths, ref.Repository(), ref.DigestHex()) {
+	if contentLayoutForWrite(m.paths, ref.Repository(), ref.DigestHex()) {
 		diskPath = contentDigestPath(m.paths, ref.DigestHex())
 	}
 	// Use default image format (erofs on Linux, ext4 on Darwin)

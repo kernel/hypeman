@@ -78,7 +78,8 @@ func (m *imageMetadata) toImage() *Image {
 }
 
 // contentLayoutEnabled is intentionally disabled in the compatibility layer.
-// The child storage PR enables new writes after these readers are deployed.
+// Existing content-layout images remain writable; the child PR enables the
+// layout for new images after these readers are deployed.
 const contentLayoutEnabled = false
 
 // legacyDigestDir returns the directory used by the original image layout.
@@ -159,10 +160,18 @@ func usesLegacyLayout(p *paths.Paths, repository, digestHex string) bool {
 	return legacyErr == nil && errors.Is(contentErr, os.ErrNotExist)
 }
 
+func contentLayoutForWrite(p *paths.Paths, repository, digestHex string) bool {
+	if contentLayoutEnabled {
+		return !usesLegacyLayout(p, repository, digestHex)
+	}
+	_, err := os.Stat(p.ImageContentMetadata(digestHex))
+	return err == nil
+}
+
 // writeMetadata writes metadata for a digest.
 func writeMetadata(p *paths.Paths, repository, digestHex string, meta *imageMetadata) error {
 	path := p.ImageMetadata(repository, digestHex)
-	if contentLayoutEnabled && !usesLegacyLayout(p, repository, digestHex) {
+	if contentLayoutForWrite(p, repository, digestHex) {
 		path = p.ImageContentMetadata(digestHex)
 	}
 	return writeMetadataFile(path, meta)
@@ -384,16 +393,14 @@ func createTagSymlink(p *paths.Paths, repository, tag, digestHex string) error {
 	// their original tag location until they are promoted by a cross-repository tag.
 	contentPath := p.ImageContentPath(digestHex)
 	newLayout := false
-	if contentLayoutEnabled {
-		if _, err := os.Stat(contentPath); err == nil {
-			linkPath = newTagSymlinkPath(p, repository, tag)
-			var err error
-			targetPath, err = filepath.Rel(filepath.Dir(linkPath), p.ImageContentDir(digestHex))
-			if err != nil {
-				return fmt.Errorf("calculate content symlink target: %w", err)
-			}
-			newLayout = true
+	if _, err := os.Stat(contentPath); err == nil {
+		linkPath = newTagSymlinkPath(p, repository, tag)
+		var err error
+		targetPath, err = filepath.Rel(filepath.Dir(linkPath), p.ImageContentDir(digestHex))
+		if err != nil {
+			return fmt.Errorf("calculate content symlink target: %w", err)
 		}
+		newLayout = true
 	}
 	if err := os.MkdirAll(filepath.Dir(linkPath), 0755); err != nil {
 		return fmt.Errorf("create parent directory: %w", err)

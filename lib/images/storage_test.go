@@ -2,6 +2,7 @@ package images
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -21,7 +22,14 @@ func TestListAllMetadataContentLayout(t *testing.T) {
 	}
 	require.NoError(t, writeMetadataFile(p.ImageContentMetadata(digest), meta))
 	require.NoError(t, os.WriteFile(p.ImageContentPath(digest), []byte("rootfs"), 0o644))
-	require.NoError(t, createTagSymlink(p, "docker.io/library/alpine", "latest", digest))
+	linkPath := p.ImageRepositoryTagSymlink("docker.io/library/alpine", "latest")
+	require.NoError(t, os.MkdirAll(filepath.Dir(linkPath), 0o755))
+	target, err := filepath.Rel(filepath.Dir(linkPath), p.ImageContentDir(digest))
+	require.NoError(t, err)
+	require.NoError(t, os.Symlink(target, linkPath))
+	require.NoError(t, createTagSymlink(p, "docker.io/library/alpine", "stable", digest))
+	_, err = os.Lstat(p.ImageRepositoryTagSymlink("docker.io/library/alpine", "stable"))
+	require.NoError(t, err)
 
 	metas, err := listAllMetadata(p)
 	require.NoError(t, err)
