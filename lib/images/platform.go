@@ -79,18 +79,24 @@ func (p Platform) Normalize() Platform {
 	}
 }
 
-// validate enforces the platforms hypeman can actually boot today: Linux
-// guests on amd64 or arm64. Other operating systems and architectures are
-// rejected with an actionable error.
+// validate enforces the platforms hypeman can boot. Windows machine images
+// currently target the QEMU amd64 path only.
 func (p Platform) validate() error {
-	if p.OS != "linux" {
-		return fmt.Errorf("%w: unsupported os %q: only linux guests are supported", ErrInvalidPlatform, p.OS)
-	}
-	switch p.Architecture {
-	case "amd64", "arm64":
-		return nil
+	switch p.OS {
+	case "linux":
+		switch p.Architecture {
+		case "amd64", "arm64":
+			return nil
+		default:
+			return fmt.Errorf("%w: unsupported Linux architecture %q: must be amd64 or arm64", ErrInvalidPlatform, p.Architecture)
+		}
+	case "windows":
+		if p.Architecture == "amd64" && p.Variant == "" {
+			return nil
+		}
+		return fmt.Errorf("%w: Windows machine images require amd64 without a variant", ErrInvalidPlatform)
 	default:
-		return fmt.Errorf("%w: unsupported architecture %q: must be amd64 or arm64", ErrInvalidPlatform, p.Architecture)
+		return fmt.Errorf("%w: unsupported os %q: must be linux or windows", ErrInvalidPlatform, p.OS)
 	}
 }
 

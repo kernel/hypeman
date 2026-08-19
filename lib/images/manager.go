@@ -563,20 +563,34 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef, credentials 
 
 	m.updateStatusByDigest(ref, StatusConverting, nil, buildID)
 
+	machine, err := parseMachineImage(result.Metadata)
+	if err != nil {
+		m.updateStatusByDigest(ref, StatusFailed, err, buildID)
+		return
+	}
+
 	diskPath := resolveImageLayout(m.paths, ref.Repository(), ref.DigestHex()).disk
+	if machine != nil {
+		diskPath = machineDiskPath(m.paths, ref.Repository(), ref.DigestHex(), machine.Kind)
+	}
 	diskTempPath := diskPath + ".tmp-" + buildID
 	defer os.Remove(diskTempPath)
-	// Use default image format (erofs on Linux, ext4 on Darwin)
+
 	convertStart := time.Now()
-	diskSize, err := ExportRootfs(tempDir, diskTempPath, DefaultImageFormat)
+	var diskSize int64
+	if machine != nil {
+		diskSize, err = m.materializeMachineImage(tempDir, machine, diskTempPath)
+	} else {
+		diskSize, err = ExportRootfs(tempDir, diskTempPath, DefaultImageFormat)
+	}
 	m.recordImageBuildPhase(ctx, ref.Digest(), "filesystem_export", time.Since(convertStart), phaseStatus(err), "not_applicable")
 	if err != nil {
-		m.updateStatusByDigest(ref, StatusFailed, fmt.Errorf("convert to %s: %w", DefaultImageFormat, err), buildID)
+		m.updateStatusByDigest(ref, StatusFailed, fmt.Errorf("materialize image: %w", err), buildID)
 		return
 	}
 
 	finalizeStart := time.Now()
-	err = m.finalizeImage(ref, result, diskSize, buildID, diskTempPath)
+	err = m.finalizeImage(ref, result, diskSize, machine, buildID, diskTempPath)
 	m.recordImageBuildPhase(ctx, ref.Digest(), "finalize", time.Since(finalizeStart), phaseStatus(err), "not_applicable")
 	if err != nil {
 		if errors.Is(err, errStaleBuild) {
@@ -589,7 +603,7 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef, credentials 
 	buildStatus = "success"
 }
 
-func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, diskSize int64, buildID, diskTempPath string) error {
+func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, diskSize int64, machine *MachineImage, buildID, diskTempPath string) error {
 	if diskTempPath != "" {
 		defer os.Remove(diskTempPath)
 	}
@@ -604,6 +618,9 @@ func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, diskSize i
 	}
 
 	finalDiskPath := resolveImageLayout(m.paths, ref.Repository(), ref.DigestHex()).disk
+	if machine != nil {
+		finalDiskPath = machineDiskPath(m.paths, ref.Repository(), ref.DigestHex(), machine.Kind)
+	}
 	if err := installAtomically(finalDiskPath, func(path string) error {
 		return os.Rename(diskTempPath, path)
 	}); err != nil {
@@ -629,6 +646,7 @@ func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, diskSize i
 	meta.Env = result.Metadata.Env
 	meta.Labels = result.Metadata.Labels
 	meta.WorkingDir = result.Metadata.WorkingDir
+	meta.Machine = machine
 
 	if err := writeMetadata(m.paths, ref.Repository(), ref.DigestHex(), meta); err != nil {
 		return fmt.Errorf("write final metadata: %w", err)
@@ -819,6 +837,9 @@ func (m *manager) DeleteImage(ctx context.Context, name string) error {
 		if _, err := readMetadata(m.paths, repository, digestHex); err != nil {
 			return err
 		}
+		if err := m.ensureNoMachineDependents(repository, digestHex); err != nil {
+			return err
+		}
 		if err := deleteTagsForDigest(m.paths, repository, digestHex); err != nil {
 			return err
 		}
@@ -838,18 +859,20 @@ func (m *manager) DeleteImage(ctx context.Context, name string) error {
 		return err
 	}
 
-	// Delete the tag symlink
-	if err := deleteTag(m.paths, repository, tag); err != nil {
-		return err
-	}
-
-	// Check if the digest is now orphaned (no other tags reference it)
 	count, err := countTagsForDigest(m.paths, repository, digestHex)
 	if err != nil {
 		return fmt.Errorf("count tags for digest %s: %w", digestHex, err)
 	}
+	if count == 1 {
+		if err := m.ensureNoMachineDependents(repository, digestHex); err != nil {
+			return err
+		}
+	}
 
-	if count == 0 {
+	if err := deleteTag(m.paths, repository, tag); err != nil {
+		return err
+	}
+	if count == 1 {
 		if err := removeDigestIfUnreferenced(m.paths, repository, digestHex, true); err != nil {
 			return fmt.Errorf("delete orphaned digest %s: %w", digestHex, err)
 		}
