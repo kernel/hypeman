@@ -233,6 +233,9 @@ func TestTagImage(t *testing.T) {
 
 	require.NoError(t, mgr.DeleteImage(ctx, "docker.io/library/busybox:stable"))
 	_, err = os.Stat(p.ImageContentDir(digestHex))
+	require.NoError(t, err)
+	require.NoError(t, mgr.DeleteImage(ctx, digestRef))
+	_, err = os.Stat(p.ImageContentDir(digestHex))
 	require.ErrorIs(t, err, os.ErrNotExist)
 
 	_, err = mgr.TagImage(ctx, digestRef, repo+"@sha256:029a752048e32e843bd6defe3841186fb8d19a28dae8ec287f433bb9d6d1ad85")
