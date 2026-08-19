@@ -691,3 +691,88 @@ func TestResolveRuntimeHypervisorPIDMintsIdentityOnlyWhenConfirmed(t *testing.T)
 		assert.Empty(t, stored.HypervisorBootID, "a dead fallback must not mint the identity token")
 	})
 }
+
+// startTrapProcess starts a shell with the given TERM trap action (empty
+// ignores the signal) and blocks until the trap is installed. It returns the
+// PID and its boot-scoped identity.
+func startTrapProcess(t *testing.T, trapAction string) (int, HypervisorProcessIdentity) {
+	t.Helper()
+	script := fmt.Sprintf("trap '%s' TERM; echo ready; sleep 30 & wait", trapAction)
+	process := exec.Command("sh", "-c", script)
+	stdout, err := process.StdoutPipe()
+	require.NoError(t, err)
+	require.NoError(t, process.Start())
+	_, err = bufio.NewReader(stdout).ReadString('\n')
+	require.NoError(t, err)
+	waitDone := make(chan error, 1)
+	go func() { waitDone <- process.Wait() }()
+	t.Cleanup(func() {
+		_ = process.Process.Kill()
+		<-waitDone
+	})
+
+	pid := process.Process.Pid
+	startTime := processStartTime(pid)
+	require.NotZero(t, startTime)
+	return pid, HypervisorProcessIdentity{HypervisorPID: &pid, HypervisorStartTime: startTime, HypervisorBootID: hostBootID()}
+}
+
+func TestKillHypervisorSIGTERMsInitializingVGPUHypervisor(t *testing.T) {
+	markerPath := filepath.Join(t.TempDir(), "terminated")
+	pid, identity := startTrapProcess(t, "touch "+markerPath+"; exit 0")
+	socketPath := filepath.Join(t.TempDir(), "missing.sock")
+
+	m := &manager{}
+	require.NoError(t, m.killHypervisor(context.Background(), &Instance{
+		State: StateInitializing,
+		StoredMetadata: StoredMetadata{
+			Id:                        "kill-test",
+			GPUProfile:                "NVIDIA L40S-1Q",
+			HypervisorProcessIdentity: identity,
+			SocketPath:                socketPath,
+		},
+	}))
+
+	require.Eventually(t, func() bool {
+		return syscall.Kill(pid, 0) == syscall.ESRCH
+	}, 5*time.Second, 10*time.Millisecond)
+	assert.FileExists(t, markerPath, "hypervisor must be given SIGTERM, not SIGKILL, during vGPU driver init")
+}
+
+func TestKillHypervisorEscalatesToSIGKILLWhenSIGTERMIgnored(t *testing.T) {
+	pid, identity := startTrapProcess(t, "")
+	socketPath := filepath.Join(t.TempDir(), "missing.sock")
+
+	m := &manager{vgpuInitTermGrace: 50 * time.Millisecond}
+	require.NoError(t, m.killHypervisor(context.Background(), &Instance{
+		State: StateInitializing,
+		StoredMetadata: StoredMetadata{
+			Id:                        "kill-test",
+			GPUProfile:                "NVIDIA L40S-1Q",
+			HypervisorProcessIdentity: identity,
+			SocketPath:                socketPath,
+		},
+	}))
+
+	assert.ErrorIs(t, syscall.Kill(pid, 0), syscall.ESRCH, "SIGTERM-ignoring hypervisor must still be hard-killed")
+}
+
+func TestKillHypervisorHardKillsVGPUHypervisorPastInit(t *testing.T) {
+	markerPath := filepath.Join(t.TempDir(), "terminated")
+	pid, identity := startTrapProcess(t, "touch "+markerPath+"; exit 0")
+	socketPath := filepath.Join(t.TempDir(), "missing.sock")
+
+	m := &manager{}
+	require.NoError(t, m.killHypervisor(context.Background(), &Instance{
+		State: StateRunning,
+		StoredMetadata: StoredMetadata{
+			Id:                        "kill-test",
+			GPUProfile:                "NVIDIA L40S-1Q",
+			HypervisorProcessIdentity: identity,
+			SocketPath:                socketPath,
+		},
+	}))
+
+	assert.ErrorIs(t, syscall.Kill(pid, 0), syscall.ESRCH)
+	assert.NoFileExists(t, markerPath, "running vGPU hypervisors keep the direct SIGKILL path")
+}
