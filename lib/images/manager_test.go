@@ -98,10 +98,12 @@ func TestCreateImage(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEqual(t, 0, linkStat.Mode()&os.ModeSymlink, "should be a symlink")
 
-	// Verify symlink points to digest directory
+	// Verify symlink resolves to the expected digest in either layout.
 	linkTarget, err := os.Readlink(linkPath)
 	require.NoError(t, err)
-	require.Equal(t, digestHex, linkTarget, "symlink should point to digest")
+	resolvedDigest, err := resolveTag(paths.New(dataDir), ref.Repository(), ref.Tag())
+	require.NoError(t, err)
+	require.Equal(t, digestHex, resolvedDigest, "symlink should resolve to the image digest")
 	t.Logf("Tag symlink: %s -> %s", linkPath, linkTarget)
 }
 
