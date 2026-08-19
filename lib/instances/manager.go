@@ -220,6 +220,10 @@ type manager struct {
 	orphanedVGPUs          map[string]struct{}
 	orphanedVGPURetryDelay time.Duration
 
+	// vgpuInitTermGrace overrides killHypervisor's SIGTERM wait for vGPU
+	// instances still initializing; zero means the default.
+	vgpuInitTermGrace time.Duration
+
 	// Hypervisor support
 	vmStarters                       map[hypervisor.Type]hypervisor.VMStarter
 	defaultHypervisor                hypervisor.Type // Default hypervisor type when not specified in request

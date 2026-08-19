@@ -1,6 +1,7 @@
 package qemu
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"os"
@@ -408,4 +409,47 @@ func TestWaitForSocketOrExitReturnsEarlyWhenProcessDies(t *testing.T) {
 	require.NoFileExists(t, socketPath)
 	require.NotNil(t, cmd.ProcessState)
 	assert.True(t, cmd.ProcessState.Exited())
+}
+
+func TestCleanupSIGTERMsProcessWithTermGrace(t *testing.T) {
+	socketPath := filepath.Join(t.TempDir(), "qemu.sock")
+	markerPath := filepath.Join(t.TempDir(), "terminated")
+
+	cmd := exec.Command("sh", "-c", "trap 'touch "+markerPath+"; exit 0' TERM; echo ready; sleep 30 & wait")
+	stdout, err := cmd.StdoutPipe()
+	require.NoError(t, err)
+	proc, err := startManagedProcess(cmd, socketPath)
+	require.NoError(t, err)
+	_, err = bufio.NewReader(stdout).ReadString('\n')
+	require.NoError(t, err)
+	proc.termGrace = 5 * time.Second
+
+	proc.cleanup()
+
+	assert.FileExists(t, markerPath, "process must get SIGTERM, not SIGKILL, when termGrace is set")
+	require.NoFileExists(t, socketPath)
+	require.NotNil(t, cmd.ProcessState)
+}
+
+func TestCleanupEscalatesToSIGKILLAfterTermGrace(t *testing.T) {
+	socketPath := filepath.Join(t.TempDir(), "qemu.sock")
+
+	cmd := exec.Command("sh", "-c", "trap '' TERM; echo ready; sleep 30 & wait")
+	stdout, err := cmd.StdoutPipe()
+	require.NoError(t, err)
+	proc, err := startManagedProcess(cmd, socketPath)
+	require.NoError(t, err)
+	_, err = bufio.NewReader(stdout).ReadString('\n')
+	require.NoError(t, err)
+	proc.termGrace = 50 * time.Millisecond
+
+	proc.cleanup()
+
+	assert.ErrorIs(t, syscall.Kill(proc.pid, 0), syscall.ESRCH, "SIGTERM-ignoring process must still be hard-killed")
+	require.NoFileExists(t, socketPath)
+}
+
+func TestHasVFIODevice(t *testing.T) {
+	assert.True(t, hasVFIODevice([]string{"-device", "vfio-pci,sysfsdev=/sys/bus/pci/devices/0000:82:00.4"}))
+	assert.False(t, hasVFIODevice([]string{"-device", "virtio-balloon-pci,id=balloon0"}))
 }
