@@ -42,8 +42,9 @@ const (
 
 	// vfioTermGrace is how long start-failure cleanup waits for a
 	// VFIO-attached QEMU to exit on SIGTERM before SIGKILL. Only failed
-	// starts pay it.
-	vfioTermGrace = 10 * time.Second
+	// starts pay it, and only when the process ignores SIGTERM; observed
+	// mid-init VFIO teardown takes 1-2s.
+	vfioTermGrace = 5 * time.Second
 
 	// clientCreateTimeout is how long to retry QMP client creation after the
 	// socket appears. Under high parallel load the socket can accept connections
