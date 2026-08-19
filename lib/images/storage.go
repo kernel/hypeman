@@ -77,10 +77,9 @@ func (m *imageMetadata) toImage() *Image {
 	return img
 }
 
-// contentLayoutEnabled is intentionally disabled in the compatibility layer.
-// Existing content-layout images remain writable; the child PR enables the
-// layout for new images after these readers are deployed.
-const contentLayoutEnabled = false
+// The compatibility readers are in the parent PR; this child enables new
+// content-layout writes after those readers are deployed.
+const contentLayoutEnabled = true
 
 // legacyDigestDir returns the directory used by the original image layout.
 func legacyDigestDir(p *paths.Paths, repository, digestHex string) string {
