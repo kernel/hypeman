@@ -257,11 +257,8 @@ func TestDigestOnlyContentSurvivesAliasDeletion(t *testing.T) {
 		CreatedAt: time.Now().UTC(),
 	}))
 	require.NoError(t, os.WriteFile(p.ImageContentPath(digest), []byte("rootfs"), 0o644))
-	linkPath := p.ImageRepositoryTagSymlink("registry.example.com/myapp", "v1")
-	require.NoError(t, os.MkdirAll(filepath.Dir(linkPath), 0o755))
-	target, err := filepath.Rel(filepath.Dir(linkPath), p.ImageContentDir(digest))
+	_, err = mgr.TagImage(context.Background(), repository+"@sha256:"+digest, "registry.example.com/myapp:v1")
 	require.NoError(t, err)
-	require.NoError(t, os.Symlink(target, linkPath))
 
 	require.NoError(t, mgr.DeleteImage(context.Background(), "registry.example.com/myapp:v1"))
 	_, err = mgr.GetImage(context.Background(), repository+"@sha256:"+digest)

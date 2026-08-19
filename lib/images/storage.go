@@ -299,7 +299,7 @@ func cloneReadyImageLegacy(p *paths.Paths, sourceRepository, targetRepository, d
 }
 
 func cloneReadyImage(p *paths.Paths, sourceRepository, targetRepository, digestHex string, sourceMeta *imageMetadata, targetName string) error {
-	if !contentLayoutEnabled {
+	if !contentLayoutEnabled && usesLegacyLayout(p, sourceRepository, digestHex) {
 		return cloneReadyImageLegacy(p, sourceRepository, targetRepository, digestHex, sourceMeta, targetName)
 	}
 	return cloneReadyImageContent(p, sourceRepository, targetRepository, digestHex, sourceMeta, targetName)
