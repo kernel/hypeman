@@ -244,6 +244,32 @@ func TestTagImage(t *testing.T) {
 	require.ErrorIs(t, err, ErrInvalidName)
 }
 
+func TestTagImagePromotesOverIncompleteContent(t *testing.T) {
+	p := paths.New(t.TempDir())
+	mgr, err := NewManager(p, 1, nil)
+	require.NoError(t, err)
+
+	repository := "docker.io/library/alpine"
+	digest := "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+	digestRef := repository + "@sha256:" + digest
+	seedReadyDigestOnlyImageMetadata(t, p, digestRef, nil)
+	require.NoError(t, writeMetadataFile(p.ImageContentMetadata(digest), &imageMetadata{
+		Name:   "registry.example.com/app:latest",
+		Digest: "sha256:" + digest,
+		Status: StatusFailed,
+	}))
+
+	_, err = mgr.TagImage(context.Background(), digestRef, "registry.example.com/app:v1")
+	require.NoError(t, err)
+	resolved, err := mgr.GetImage(context.Background(), "registry.example.com/app:v1")
+	require.NoError(t, err)
+	require.Equal(t, StatusReady, resolved.Status)
+	require.Equal(t, "sha256:"+digest, resolved.Digest)
+	require.FileExists(t, p.ImageContentPath(digest))
+	_, err = mgr.GetImage(context.Background(), digestRef)
+	require.NoError(t, err)
+}
+
 func TestDigestOnlyContentSurvivesAliasDeletion(t *testing.T) {
 	p := paths.New(t.TempDir())
 	mgr, err := NewManager(p, 1, nil)

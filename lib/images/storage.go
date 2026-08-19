@@ -94,6 +94,9 @@ func contentDigestDir(p *paths.Paths, digestHex string) string {
 // digestDir returns the directory for a specific digest, preferring the new
 // content-addressed layout and falling back to the legacy repository layout.
 func digestDir(p *paths.Paths, repository, digestHex string) string {
+	if useLegacyLayoutForRead(p, repository, digestHex) {
+		return legacyDigestDir(p, repository, digestHex)
+	}
 	if _, err := os.Stat(p.ImageContentMetadata(digestHex)); err == nil {
 		return contentDigestDir(p, digestHex)
 	}
@@ -111,11 +114,40 @@ func legacyImageExists(p *paths.Paths, repository, digestHex string) bool {
 	return metadataErr == nil && diskErr == nil
 }
 
+func metadataStatus(path string) (string, bool) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", false
+	}
+	var meta imageMetadata
+	if err := json.Unmarshal(data, &meta); err != nil {
+		return "", false
+	}
+	return meta.Status, true
+}
+
+// useLegacyLayoutForRead keeps a complete ready legacy image authoritative over
+// an incomplete content record for the same digest. Once the content record is
+// ready, it becomes the canonical representation, including when the legacy
+// record is failed or pending.
+func useLegacyLayoutForRead(p *paths.Paths, repository, digestHex string) bool {
+	if !legacyImageExists(p, repository, digestHex) {
+		return false
+	}
+	contentPath := p.ImageContentMetadata(digestHex)
+	if _, err := os.Stat(contentPath); errors.Is(err, os.ErrNotExist) {
+		return true
+	}
+	legacyStatus, legacyOK := metadataStatus(p.ImageMetadata(repository, digestHex))
+	contentStatus, contentOK := metadataStatus(contentPath)
+	return legacyOK && legacyStatus == StatusReady && (!contentOK || contentStatus != StatusReady)
+}
+
 // digestPath returns the path to the rootfs disk file for a digest. A complete
-// legacy image takes precedence when both layouts contain the digest so a
-// pending or failed content record from another repository cannot shadow it.
+// ready legacy image takes precedence over an incomplete content record, while
+// ready content is canonical for all other cases.
 func digestPath(p *paths.Paths, repository, digestHex string) string {
-	if legacyImageExists(p, repository, digestHex) {
+	if useLegacyLayoutForRead(p, repository, digestHex) {
 		return p.ImageDigestPath(repository, digestHex)
 	}
 	contentPath := p.ImageContentPath(digestHex)
@@ -139,11 +171,10 @@ func GetDiskPath(p *paths.Paths, imageName string, digest string) (string, error
 	return digestPath(p, ref.Repository(), digestHex), nil
 }
 
-// metadataPath returns the path to metadata.json for a digest. A complete
-// legacy image takes precedence when both layouts contain the digest so a
-// pending or failed content record from another repository cannot shadow it.
+// metadataPath returns the path to metadata.json for a digest, using the same
+// layout selection as digestPath.
 func metadataPath(p *paths.Paths, repository, digestHex string) string {
-	if legacyImageExists(p, repository, digestHex) {
+	if useLegacyLayoutForRead(p, repository, digestHex) {
 		return p.ImageMetadata(repository, digestHex)
 	}
 	contentPath := p.ImageContentMetadata(digestHex)
@@ -321,7 +352,11 @@ func cloneReadyImage(p *paths.Paths, sourceRepository, targetRepository, digestH
 
 func cloneReadyImageContent(p *paths.Paths, sourceRepository, targetRepository, digestHex string, sourceMeta *imageMetadata, targetName string) error {
 	contentDir := contentDigestDir(p, digestHex)
-	if _, err := os.Stat(p.ImageContentMetadata(digestHex)); errors.Is(err, os.ErrNotExist) {
+	contentReady := false
+	if contentMeta, err := readMetadata(p, "", digestHex); err == nil {
+		contentReady = contentMeta.Status == StatusReady
+	}
+	if !contentReady {
 		sourceDiskPath := digestPath(p, sourceRepository, digestHex)
 		if _, err := os.Stat(sourceDiskPath); err != nil {
 			return fmt.Errorf("stat source disk: %w", err)
