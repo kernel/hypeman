@@ -105,9 +105,19 @@ func contentDigestPath(p *paths.Paths, digestHex string) string {
 	return p.ImageContentPath(digestHex)
 }
 
-// digestPath returns the path to the rootfs disk file for a digest, preferring
-// the new content-addressed layout and falling back to the legacy layout.
+func legacyImageExists(p *paths.Paths, repository, digestHex string) bool {
+	_, metadataErr := os.Stat(p.ImageMetadata(repository, digestHex))
+	_, diskErr := os.Stat(p.ImageDigestPath(repository, digestHex))
+	return metadataErr == nil && diskErr == nil
+}
+
+// digestPath returns the path to the rootfs disk file for a digest. A complete
+// legacy image takes precedence when both layouts contain the digest so a
+// pending or failed content record from another repository cannot shadow it.
 func digestPath(p *paths.Paths, repository, digestHex string) string {
+	if legacyImageExists(p, repository, digestHex) {
+		return p.ImageDigestPath(repository, digestHex)
+	}
 	contentPath := p.ImageContentPath(digestHex)
 	if _, err := os.Stat(contentPath); err == nil {
 		return contentPath
@@ -129,9 +139,13 @@ func GetDiskPath(p *paths.Paths, imageName string, digest string) (string, error
 	return digestPath(p, ref.Repository(), digestHex), nil
 }
 
-// metadataPath returns the path to metadata.json for a digest, preferring the
-// new content-addressed layout and falling back to the legacy layout.
+// metadataPath returns the path to metadata.json for a digest. A complete
+// legacy image takes precedence when both layouts contain the digest so a
+// pending or failed content record from another repository cannot shadow it.
 func metadataPath(p *paths.Paths, repository, digestHex string) string {
+	if legacyImageExists(p, repository, digestHex) {
+		return p.ImageMetadata(repository, digestHex)
+	}
 	contentPath := p.ImageContentMetadata(digestHex)
 	if _, err := os.Stat(contentPath); err == nil {
 		return contentPath

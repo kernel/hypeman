@@ -10,6 +10,31 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestLegacyImageIsNotShadowedByContentMetadata(t *testing.T) {
+	p := paths.New(t.TempDir())
+	repository := "docker.io/library/alpine"
+	digest := "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+	legacyMeta := &imageMetadata{
+		Name:   repository + ":latest",
+		Digest: "sha256:" + digest,
+		Status: StatusReady,
+	}
+	legacyDir := p.ImageDigestDir(repository, digest)
+	require.NoError(t, os.MkdirAll(legacyDir, 0o755))
+	require.NoError(t, writeMetadataFile(p.ImageMetadata(repository, digest), legacyMeta))
+	require.NoError(t, os.WriteFile(p.ImageDigestPath(repository, digest), []byte("legacy rootfs"), 0o644))
+	require.NoError(t, writeMetadataFile(p.ImageContentMetadata(digest), &imageMetadata{
+		Name:   "docker.io/library/busybox:latest",
+		Digest: "sha256:" + digest,
+		Status: StatusFailed,
+	}))
+
+	meta, err := readMetadata(p, repository, digest)
+	require.NoError(t, err)
+	require.Equal(t, StatusReady, meta.Status)
+	require.Equal(t, p.ImageDigestPath(repository, digest), digestPath(p, repository, digest))
+}
+
 func TestWriteMetadataUsesContentWhenLegacyDirectoryIsEmpty(t *testing.T) {
 	p := paths.New(t.TempDir())
 	repository := "docker.io/library/alpine"
