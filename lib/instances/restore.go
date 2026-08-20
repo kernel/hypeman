@@ -474,7 +474,16 @@ func (m *manager) acquireRestoreSlot(ctx context.Context, hvType hypervisor.Type
 }
 
 func reconfigureGuestNetwork(ctx context.Context, stored *StoredMetadata, alloc *network.Allocation) error {
-	cfg, err := guestNetworkReconfigureConfig(alloc)
+	if alloc == nil {
+		return fmt.Errorf("missing network allocation")
+	}
+	return reconfigureGuestNetworkConfig(ctx, stored, &network.NetworkConfig{
+		IP: alloc.IP, MAC: alloc.MAC, Gateway: alloc.Gateway, Netmask: alloc.Netmask, DNS: alloc.DNS, TAPDevice: alloc.TAPDevice,
+	})
+}
+
+func reconfigureGuestNetworkConfig(ctx context.Context, stored *StoredMetadata, netConfig *network.NetworkConfig) error {
+	cfg, err := guestNetworkReconfigureConfig(netConfig)
 	if err != nil {
 		return err
 	}
@@ -484,16 +493,22 @@ func reconfigureGuestNetwork(ctx context.Context, stored *StoredMetadata, alloc 
 		return fmt.Errorf("create vsock dialer: %w", err)
 	}
 
+	interfaceName := "eth0"
+	if isWindowsPlatform(stored.Platform) {
+		interfaceName = ""
+	}
 	err = guest.ReconfigureNetworkInInstance(ctx, dialer, guest.ReconfigureNetworkOptions{
-		InterfaceName: "eth0",
+		InterfaceName: interfaceName,
 		MAC:           cfg.mac,
 		IPv4:          cfg.ip,
 		Prefix:        uint32(cfg.prefix),
 		Gateway:       cfg.gateway,
+		DNSServers:    cfg.dns,
 		WaitForAgent:  120 * time.Second,
 	})
 	if err != nil {
-		if status.Code(err) == codes.Unimplemented {
+		if status.Code(err) == codes.Unimplemented && !isWindowsPlatform(stored.Platform) {
+			alloc := &network.Allocation{IP: netConfig.IP, MAC: netConfig.MAC, Gateway: netConfig.Gateway, Netmask: netConfig.Netmask}
 			return reconfigureGuestNetworkWithExec(ctx, dialer, alloc)
 		}
 		return fmt.Errorf("reconfigure guest network: %w", err)
@@ -528,37 +543,46 @@ type guestNetworkConfig struct {
 	ip      string
 	mac     string
 	gateway string
+	dns     []string
 	prefix  int
 }
 
-func guestNetworkReconfigureConfig(alloc *network.Allocation) (*guestNetworkConfig, error) {
-	if alloc == nil {
+func guestNetworkReconfigureConfig(netConfig *network.NetworkConfig) (*guestNetworkConfig, error) {
+	if netConfig == nil {
 		return nil, fmt.Errorf("missing network allocation")
 	}
-	ip := strings.TrimSpace(alloc.IP)
+	ip := strings.TrimSpace(netConfig.IP)
 	if ip == "" {
 		return nil, fmt.Errorf("missing network allocation IP")
 	}
-	mac := strings.ToLower(strings.TrimSpace(alloc.MAC))
+	mac := strings.ToLower(strings.TrimSpace(netConfig.MAC))
 	if mac == "" {
 		return nil, fmt.Errorf("missing network allocation MAC")
 	}
 	if _, err := net.ParseMAC(mac); err != nil {
-		return nil, fmt.Errorf("invalid network allocation MAC %q: %w", alloc.MAC, err)
+		return nil, fmt.Errorf("invalid network allocation MAC %q: %w", netConfig.MAC, err)
 	}
-	gateway := strings.TrimSpace(alloc.Gateway)
+	gateway := strings.TrimSpace(netConfig.Gateway)
 	if gateway == "" {
 		return nil, fmt.Errorf("missing network allocation gateway")
 	}
-	prefix, err := netmaskToPrefix(alloc.Netmask)
+	prefix, err := netmaskToPrefix(netConfig.Netmask)
 	if err != nil {
 		return nil, err
 	}
-	return &guestNetworkConfig{ip: ip, mac: mac, gateway: gateway, prefix: prefix}, nil
+	var dns []string
+	for _, server := range strings.FieldsFunc(netConfig.DNS, func(r rune) bool { return r == ',' || r == ' ' }) {
+		server = strings.TrimSpace(server)
+		if net.ParseIP(server).To4() == nil {
+			return nil, fmt.Errorf("invalid DNS server %q", server)
+		}
+		dns = append(dns, server)
+	}
+	return &guestNetworkConfig{ip: ip, mac: mac, gateway: gateway, dns: dns, prefix: prefix}, nil
 }
 
 func guestNetworkReconfigureCommand(alloc *network.Allocation) (string, error) {
-	cfg, err := guestNetworkReconfigureConfig(alloc)
+	cfg, err := guestNetworkReconfigureConfig(networkConfigFromAllocation(alloc))
 	if err != nil {
 		return "", err
 	}

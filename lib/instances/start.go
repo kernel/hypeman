@@ -223,6 +223,20 @@ func (m *manager) startInstance(
 		log.WarnContext(ctx, "failed to update metadata after VM start", "instance_id", id, "error", err)
 	}
 
+	if isWindowsPlatform(stored.Platform) && netConfig != nil {
+		networkCtx, networkSpanEnd := m.startLifecycleStep(ctx, "configure_guest_network",
+			attribute.String("instance_id", id),
+			attribute.String("hypervisor", string(stored.HypervisorType)),
+			attribute.String("operation", "configure_guest_network"),
+		)
+		if err := reconfigureGuestNetworkConfig(networkCtx, stored, netConfig); err != nil {
+			networkSpanEnd(err)
+			_, _ = m.stopInstance(ctx, id)
+			return nil, fmt.Errorf("configure Windows guest network: %w", err)
+		}
+		networkSpanEnd(nil)
+	}
+
 	// Return instance state from current metadata without forcing a log scan.
 	finalInst := m.toInstanceWithoutHydration(ctx, meta)
 	// Record metrics
