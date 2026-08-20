@@ -273,6 +273,28 @@ func TestTagImagePromotesOverIncompleteContent(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestGetImageDigestUsesRequestedReference(t *testing.T) {
+	p := paths.New(t.TempDir())
+	mgr, err := NewManager(p, 1, nil)
+	require.NoError(t, err)
+
+	const (
+		sourceRepo = "docker.io/library/alpine"
+		targetRepo = "registry.example.com/app"
+		digest     = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+	)
+	sourceRef := sourceRepo + "@sha256:" + digest
+	targetRef := targetRepo + "@sha256:" + digest
+	seedReadyDigestOnlyImageMetadata(t, p, sourceRef, nil)
+
+	_, err = mgr.TagImage(context.Background(), sourceRef, targetRepo+":latest")
+	require.NoError(t, err)
+
+	got, err := mgr.GetImage(context.Background(), targetRef)
+	require.NoError(t, err)
+	require.Equal(t, targetRef, got.Name)
+}
+
 func TestDigestOnlyContentSurvivesAliasDeletion(t *testing.T) {
 	p := paths.New(t.TempDir())
 	mgr, err := NewManager(p, 1, nil)
@@ -555,6 +577,28 @@ func TestDeleteDigestPreservesInFlightContentPull(t *testing.T) {
 	require.NoError(t, mgr.DeleteImage(context.Background(), digestRef))
 	require.FileExists(t, p.ImageContentMetadata(digest))
 	require.FileExists(t, p.ImageContentPath(digest))
+}
+
+func TestDeleteRemovesFailedContentPull(t *testing.T) {
+	p := paths.New(t.TempDir())
+	mgr, err := NewManager(p, 1, nil)
+	require.NoError(t, err)
+
+	const (
+		repository = "docker.io/library/alpine"
+		digest     = "3333333333333333333333333333333333333333333333333333333333333333"
+	)
+	digestRef := repository + "@sha256:" + digest
+	require.NoError(t, writeMetadataFile(p.ImageContentMetadata(digest), &imageMetadata{
+		Name:   digestRef,
+		Digest: "sha256:" + digest,
+		Status: StatusFailed,
+	}))
+	require.NoError(t, os.WriteFile(p.ImageContentPath(digest), []byte("failed rootfs"), 0o644))
+
+	require.NoError(t, mgr.DeleteImage(context.Background(), digestRef))
+	_, err = os.Stat(p.ImageContentDir(digest))
+	require.ErrorIs(t, err, os.ErrNotExist)
 }
 
 func TestNormalizedRefParsing(t *testing.T) {

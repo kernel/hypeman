@@ -257,13 +257,18 @@ func promoteImageToContent(p *paths.Paths, sourceRepository, digestHex string, s
 		if err := os.MkdirAll(p.ImageContentDir(digestHex), 0755); err != nil {
 			return fmt.Errorf("create content directory: %w", err)
 		}
+		contentMeta := *sourceMeta
+		contentMeta.Status = StatusConverting
+		if err := writeMetadataFile(p.ImageContentMetadata(digestHex), &contentMeta); err != nil {
+			return fmt.Errorf("write content metadata: %w", err)
+		}
 		if err := installAtomically(p.ImageContentPath(digestHex), func(path string) error {
 			return os.Link(sourceDiskPath, path)
 		}); err != nil {
 			return fmt.Errorf("link source disk: %w", err)
 		}
 		if err := writeMetadataFile(p.ImageContentMetadata(digestHex), sourceMeta); err != nil {
-			return fmt.Errorf("write content metadata: %w", err)
+			return fmt.Errorf("finalize content metadata: %w", err)
 		}
 	}
 
@@ -671,7 +676,15 @@ func contentMetadataStatus(p *paths.Paths, digestHex string) (string, error) {
 
 func contentPullInProgress(p *paths.Paths, digestHex string) bool {
 	status, err := contentMetadataStatus(p, digestHex)
-	return err == nil && status != StatusReady
+	if err != nil {
+		return false
+	}
+	switch status {
+	case StatusPending, StatusPulling, StatusConverting:
+		return true
+	default:
+		return false
+	}
 }
 
 func contentIsDigestOnly(p *paths.Paths, digestHex string) bool {

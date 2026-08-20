@@ -158,7 +158,7 @@ func (s *ApiService) DeleteImage(ctx context.Context, request oapi.DeleteImageRe
 	}
 	log := logger.FromContext(ctx)
 
-	err := s.ImageManager.DeleteImage(ctx, img.Name)
+	err := s.ImageManager.DeleteImage(ctx, request.Name)
 	if err != nil {
 		log.ErrorContext(ctx, "failed to delete image", "error", err)
 		return oapi.DeleteImage500JSONResponse{

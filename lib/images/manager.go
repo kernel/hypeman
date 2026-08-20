@@ -662,9 +662,7 @@ func (m *manager) GetImage(ctx context.Context, name string) (*Image, error) {
 	}
 
 	img := meta.toImage()
-	if !ref.IsDigest() {
-		img.Name = ref.String()
-	}
+	img.Name = ref.String()
 
 	if meta.Status == StatusPending {
 		img.QueuePosition = m.queue.GetPosition(meta.Digest)

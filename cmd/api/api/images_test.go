@@ -284,6 +284,28 @@ func TestDeleteImage_DigestOnlyImageDoesNotInternalError(t *testing.T) {
 	require.True(t, ok, "expected deleting an existing digest-only image not to return internal_error")
 }
 
+func TestDeleteImage_DigestUsesRequestedRepository(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	const (
+		sourceRepo = "docker.io/library/alpine"
+		targetRepo = "registry.example.com/app"
+		digest     = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+	)
+	sourceRef := sourceRepo + "@sha256:" + digest
+	targetRef := targetRepo + "@sha256:" + digest
+	seedReadyDigestOnlyImage(t, svc, sourceRef, nil)
+	_, err := svc.ImageManager.TagImage(ctx(), sourceRef, targetRepo+":latest")
+	require.NoError(t, err)
+
+	resp, err := svc.DeleteImage(ctxWithImage(svc, targetRef), oapi.DeleteImageRequestObject{Name: targetRef})
+	require.NoError(t, err)
+	require.IsType(t, oapi.DeleteImage204Response{}, resp)
+	_, err = svc.ImageManager.GetImage(ctx(), targetRepo+":latest")
+	require.ErrorIs(t, err, images.ErrNotFound)
+}
+
 func TestCreateImage_Async(t *testing.T) {
 	t.Parallel()
 	svc := newTestService(t)
