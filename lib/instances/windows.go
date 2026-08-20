@@ -81,21 +81,23 @@ func (m *manager) ensureWindowsVsockCIDAvailable(ctx context.Context, stored *St
 	return nil
 }
 
-func (m *manager) prepareWindowsForkIdentity(stored *StoredMetadata) error {
+func (m *manager) prepareWindowsForkIdentity(stored *StoredMetadata, resetTPM bool) error {
 	if stored == nil || !isWindowsPlatform(stored.Platform) {
 		return nil
 	}
 	if err := validateWindowsForkPolicy(stored); err != nil {
 		return err
 	}
-	if err := os.RemoveAll(m.paths.InstanceTPMDir(stored.Id)); err != nil {
-		return fmt.Errorf("clear forked Windows TPM state: %w", err)
-	}
-	if err := os.MkdirAll(m.paths.InstanceTPMDir(stored.Id), 0700); err != nil {
-		return fmt.Errorf("create forked Windows TPM state: %w", err)
-	}
-	if err := os.Remove(m.paths.InstanceTPMSocket(stored.Id)); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("remove forked Windows TPM socket: %w", err)
+	if resetTPM {
+		if err := os.RemoveAll(m.paths.InstanceTPMDir(stored.Id)); err != nil {
+			return fmt.Errorf("clear forked Windows TPM state: %w", err)
+		}
+		if err := os.MkdirAll(m.paths.InstanceTPMDir(stored.Id), 0700); err != nil {
+			return fmt.Errorf("create forked Windows TPM state: %w", err)
+		}
+		if err := os.Remove(m.paths.InstanceTPMSocket(stored.Id)); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove forked Windows TPM socket: %w", err)
+		}
 	}
 	stored.WindowsIdentityPending = true
 	return nil

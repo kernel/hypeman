@@ -62,14 +62,20 @@ func TestPrepareWindowsForkIdentity(t *testing.T) {
 	require.NoError(t, os.MkdirAll(p.InstanceTPMDir(stored.Id), 0700))
 	require.NoError(t, os.WriteFile(filepath.Join(p.InstanceTPMDir(stored.Id), "state"), []byte("source identity"), 0600))
 
-	require.NoError(t, m.prepareWindowsForkIdentity(stored))
+	require.NoError(t, m.prepareWindowsForkIdentity(stored, true))
 	assert.True(t, stored.WindowsIdentityPending)
 	entries, err := os.ReadDir(p.InstanceTPMDir(stored.Id))
 	require.NoError(t, err)
 	assert.Empty(t, entries)
 
+	require.NoError(t, os.WriteFile(filepath.Join(p.InstanceTPMDir(stored.Id), "state"), []byte("memory identity"), 0600))
+	require.NoError(t, m.prepareWindowsForkIdentity(stored, false))
+	state, err := os.ReadFile(filepath.Join(p.InstanceTPMDir(stored.Id), "state"))
+	require.NoError(t, err)
+	assert.Equal(t, "memory identity", string(state))
+
 	stored.WindowsBitLockerPolicy = ""
-	assert.ErrorIs(t, m.prepareWindowsForkIdentity(stored), ErrNotSupported)
+	assert.ErrorIs(t, m.prepareWindowsForkIdentity(stored, true), ErrNotSupported)
 }
 
 func TestBuildWindowsHypervisorConfig(t *testing.T) {

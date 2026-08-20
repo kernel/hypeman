@@ -55,6 +55,7 @@ func TestWindowsStandbyForkIntegration(t *testing.T) {
 	ctx := context.Background()
 	source := createWindowsSnapshotInstance(t, ctx, manager, image, "windows-standby-fork-source")
 	sourceMachineID := windowsMachineID(t, ctx, manager, source.Id)
+	sourceTPMEK := windowsTPMEK(t, ctx, manager, source.Id)
 	windowsPowerShell(t, ctx, manager, source.Id, `New-Item -ItemType Directory -Force C:\ProgramData\Hypeman | Out-Null; Set-Content C:\ProgramData\Hypeman\standby.txt inherited`)
 
 	_, err := manager.StandbyInstance(ctx, source.Id, StandbyInstanceRequest{})
@@ -67,6 +68,7 @@ func TestWindowsStandbyForkIntegration(t *testing.T) {
 	t.Cleanup(func() { _ = deleteTestInstanceNow(context.Background(), manager, forked.Id) })
 	assert.Equal(t, source.VsockCID, forked.VsockCID, "memory-restored Windows forks retain the captured VioSock CID until cold boot")
 	assert.NotEqual(t, sourceMachineID, windowsMachineID(t, ctx, manager, forked.Id))
+	assert.Equal(t, sourceTPMEK, windowsTPMEK(t, ctx, manager, forked.Id), "memory forks inherit TPM state from the QEMU migration stream")
 	assert.Equal(t, "inherited", windowsPowerShell(t, ctx, manager, forked.Id, `Get-Content C:\ProgramData\Hypeman\standby.txt`))
 	assertIndependentFile(t, p.InstanceOVMFVars(source.Id), p.InstanceOVMFVars(forked.Id))
 	assertIndependentFile(t, p.InstanceWindowsDisk(source.Id), p.InstanceWindowsDisk(forked.Id))
@@ -77,6 +79,7 @@ func TestWindowsForkIntegration(t *testing.T) {
 	ctx := context.Background()
 	source := createWindowsSnapshotInstance(t, ctx, manager, image, "windows-fork-source")
 	sourceMachineID := windowsMachineID(t, ctx, manager, source.Id)
+	sourceTPMEK := windowsTPMEK(t, ctx, manager, source.Id)
 	windowsPowerShell(t, ctx, manager, source.Id, `New-Item -ItemType Directory -Force C:\ProgramData\Hypeman | Out-Null; Set-Content C:\ProgramData\Hypeman\identity.txt source`)
 
 	stopped, err := manager.StopInstance(ctx, source.Id)
@@ -89,6 +92,7 @@ func TestWindowsForkIntegration(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = deleteTestInstanceNow(context.Background(), manager, forked.Id) })
 	assert.NotEqual(t, sourceMachineID, windowsMachineID(t, ctx, manager, forked.Id), "fork must receive a new Windows machine identity")
+	assert.NotEqual(t, sourceTPMEK, windowsTPMEK(t, ctx, manager, forked.Id), "cold forks must initialize a fresh TPM")
 	assert.NotEqual(t, source.VsockCID, forked.VsockCID, "forks need unique vsock CIDs")
 	assertIndependentFile(t, p.InstanceOVMFVars(source.Id), p.InstanceOVMFVars(forked.Id))
 	assertIndependentFile(t, p.InstanceWindowsDisk(source.Id), p.InstanceWindowsDisk(forked.Id))
@@ -164,6 +168,13 @@ func createWindowsSnapshotInstance(t *testing.T, ctx context.Context, manager *m
 func windowsMachineID(t *testing.T, ctx context.Context, manager *manager, instanceID string) string {
 	t.Helper()
 	return windowsPowerShell(t, ctx, manager, instanceID, `(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Cryptography').MachineGuid`)
+}
+
+func windowsTPMEK(t *testing.T, ctx context.Context, manager *manager, instanceID string) string {
+	t.Helper()
+	hash := windowsPowerShell(t, ctx, manager, instanceID, `(Get-TpmEndorsementKeyInfo -HashAlgorithm Sha256).PublicKeyHash`)
+	require.NotEmpty(t, hash, "TPM endorsement key hash")
+	return hash
 }
 
 func windowsPowerShell(t *testing.T, ctx context.Context, manager *manager, instanceID, command string) string {
