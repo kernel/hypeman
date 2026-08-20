@@ -295,9 +295,10 @@ while QEMU processes that exit voluntarily â€” error exits, QMP quit, SIGTERM â€
 run their VFIO teardown and never wedge, and hard kills of fully-initialized
 vGPU VMs are also safe. Hypeman therefore SIGTERMs a vGPU QEMU first and only
 escalates to SIGKILL after a grace period, both in start-failure cleanup and
-when force-killing an instance that is still initializing; a hard kill in the
-init window logs `VF may wedge` with the device path. External SIGKILLs
-(OOM killer, manual `kill -9`) can still trigger it.
+when force-killing any vGPU instance (the instance reports Running seconds
+before driver init completes, so no state reliably marks the window); a hard
+kill after an ignored SIGTERM logs `VF may wedge` with the device path.
+External SIGKILLs (OOM killer, manual `kill -9`) can still trigger it.
 
 Confirm by assigning the same profile on a different VF: if that guest
 initializes, the VF is wedged, not the driver stack. Remediate by cycling

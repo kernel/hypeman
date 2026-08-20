@@ -28,14 +28,13 @@ const linuxBootIDPath = "/proc/sys/kernel/random/boot_id"
 const hypervisorSIGKILLWaitTimeout = 2 * time.Second
 
 // defaultVGPUInitTermGrace is how long terminateThenKill waits for a vGPU
-// hypervisor still in driver init to exit on SIGTERM before SIGKILL. Only
-// force-kill paths pay it, only for initializing vGPU instances, and only
-// when the process ignores SIGTERM; observed mid-init VFIO teardown takes
-// 1-2s.
+// hypervisor to exit on SIGTERM before SIGKILL. Only force-kill paths pay it,
+// only for vGPU instances, and only when the process ignores SIGTERM;
+// observed mid-init VFIO teardown takes 1-2s.
 const defaultVGPUInitTermGrace = 5 * time.Second
 
-// vgpuTermGrace returns the SIGTERM wait used before hard-killing an
-// initializing vGPU hypervisor.
+// vgpuTermGrace returns the SIGTERM wait used before hard-killing a vGPU
+// hypervisor.
 func (m *manager) vgpuTermGrace() time.Duration {
 	if m.vgpuInitTermGrace > 0 {
 		return m.vgpuInitTermGrace
@@ -43,16 +42,20 @@ func (m *manager) vgpuTermGrace() time.Duration {
 	return defaultVGPUInitTermGrace
 }
 
-// terminateThenKill hard-kills the hypervisor process, first giving a vGPU
-// instance still in driver init a SIGTERM grace: SIGKILL in that window can
-// silently wedge the VF until its parent GPU's SR-IOV is cycled (see
-// lib/devices/GPU.md), while a terminating QEMU runs its VFIO teardown.
+// terminateThenKill hard-kills the hypervisor process, first giving any vGPU
+// instance a SIGTERM grace: SIGKILL during guest driver init can silently
+// wedge the VF until its parent GPU's SR-IOV is cycled (see
+// lib/devices/GPU.md), while a terminating QEMU runs its VFIO teardown. The
+// grace applies in every state, not just Initializing, because the instance
+// reports Running seconds before the guest driver finishes initializing and
+// nothing host-side observes that boundary; post-init the SIGTERM is proven
+// harmless and costs the grace only when the process ignores it.
 func (m *manager) terminateThenKill(ctx context.Context, inst *Instance, pid int) error {
-	if inst.GPUProfile != "" && inst.State == StateInitializing {
+	if inst.GPUProfile != "" {
 		if syscall.Kill(pid, syscall.SIGTERM) == nil && WaitForProcessExit(pid, m.vgpuTermGrace()) {
 			return nil
 		}
-		logger.FromContext(ctx).WarnContext(ctx, "vGPU hypervisor did not exit on SIGTERM during driver init; hard-killing, VF may wedge",
+		logger.FromContext(ctx).WarnContext(ctx, "vGPU hypervisor did not exit on SIGTERM; hard-killing, VF may wedge if the guest driver was initializing",
 			"instance_id", inst.Id, "device_path", inst.GPUDevicePath)
 	}
 	return killProcessAndWait(pid)
