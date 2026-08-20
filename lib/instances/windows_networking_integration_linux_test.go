@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -83,8 +84,11 @@ func assertWindowsNetworkReady(t *testing.T, ctx context.Context, manager *manag
 
 	dialer, err := manager.GetVsockDialer(ctx, instanceID)
 	require.NoError(t, err)
+	allocation, err := manager.networkManager.GetAllocation(ctx, instanceID)
+	require.NoError(t, err)
+	expectedDNS := strings.Join(strings.FieldsFunc(allocation.DNS, func(r rune) bool { return r == ',' || r == ' ' }), ",")
 	var stdout, stderr bytes.Buffer
-	command := fmt.Sprintf("$a=Get-NetIPAddress -AddressFamily IPv4 | Where-Object IPAddress -eq '%s'; if (-not $a) { exit 20 }; [System.Net.Dns]::GetHostAddresses('example.com') | Out-Null; [Console]::Out.Write($a.IPAddress)", expectedIP)
+	command := fmt.Sprintf("$a=Get-NetIPAddress -AddressFamily IPv4 | Where-Object IPAddress -eq '%s'; if (-not $a) { exit 20 }; $dns=@((Get-DnsClientServerAddress -InterfaceIndex $a.InterfaceIndex -AddressFamily IPv4).ServerAddresses); if (($dns -join ',') -ne '%s') { exit 21 }; [System.Net.Dns]::GetHostAddresses('example.com') | Out-Null; [Console]::Out.Write($a.IPAddress)", expectedIP, expectedDNS)
 	exit, err := guest.ExecIntoInstance(ctx, dialer, guest.ExecOptions{
 		Command: []string{"powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command},
 		Stdout:  &stdout,
