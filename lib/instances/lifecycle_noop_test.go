@@ -367,6 +367,28 @@ func TestStopStoppedInstanceReleasesRetainedVGPU(t *testing.T) {
 	assert.Empty(t, stored.GPUDevicePath)
 }
 
+func TestStopStoppedInstanceLeavesRetentionStubForDelete(t *testing.T) {
+	m, id := newLifecycleNoopManagerWithInstance(t, StateStopped, time.Now().UTC())
+	meta, err := m.loadMetadata(id)
+	require.NoError(t, err)
+	meta.GPUProfile = "NVIDIA L40S-2Q"
+	meta.GPUFramework = devices.VGPUFrameworkNone
+	meta.GPUDevicePath = "/sys/bus/pci/devices/0000:82:00.4"
+	meta.GPURetainedForCleanup = true
+	require.NoError(t, m.saveMetadata(meta))
+
+	inst, err := m.StopInstance(context.Background(), id)
+	require.NoError(t, err)
+	require.NotNil(t, inst)
+
+	// Retention stubs are delete-only: releasing on stop would leave a stub
+	// whose start/fork/snapshot errors still claim a retained assignment.
+	stored, err := m.loadMetadata(id)
+	require.NoError(t, err)
+	assert.Equal(t, "/sys/bus/pci/devices/0000:82:00.4", stored.GPUDevicePath)
+	assert.True(t, stored.GPURetainedForCleanup)
+}
+
 func TestStopStoppedInstanceVGPUReleaseFailureRemainsNoop(t *testing.T) {
 	m, id := newLifecycleNoopManagerWithInstance(t, StateStopped, time.Now().UTC())
 	meta, err := m.loadMetadata(id)
