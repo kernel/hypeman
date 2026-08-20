@@ -8,9 +8,11 @@ import (
 	"log"
 	"sync"
 	"syscall"
+	"time"
 
 	pty "github.com/aymanbagabas/go-pty"
 	pb "github.com/kernel/hypeman/lib/guest"
+	"golang.org/x/sys/windows"
 )
 
 func (s *guestServer) executeTTY(ctx context.Context, stream pb.GuestService_ExecServer, start *pb.ExecStart) error {
@@ -43,12 +45,20 @@ func (s *guestServer) executeTTY(ctx context.Context, stream pb.GuestService_Exe
 		return err
 	}
 	defer cleanup()
-	if token != 0 {
-		cmd.SysProcAttr = &syscall.SysProcAttr{Token: token}
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Token:         token,
+		CreationFlags: windows.CREATE_SUSPENDED,
 	}
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start ConPTY command: %w", err)
 	}
+	jobCleanup, err := attachProcessJob(ctx, cmd.Process, time.Duration(start.TimeoutSeconds)*time.Second)
+	if err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return fmt.Errorf("attach ConPTY process job: %w", err)
+	}
+	defer jobCleanup()
 
 	var sendMu sync.Mutex
 	var wg sync.WaitGroup

@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os/exec"
 
@@ -10,6 +11,8 @@ import (
 )
 
 func defaultCommand() []string { return []string{"/bin/sh"} }
+
+func execContext(context.Context) context.Context { return context.Background() }
 
 func configureExecCommand(_ *exec.Cmd, session pb.ExecSession) (func(), error) {
 	switch session {

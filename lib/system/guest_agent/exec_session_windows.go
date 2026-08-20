@@ -3,9 +3,11 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os/exec"
 	"syscall"
+	"time"
 	"unsafe"
 
 	pb "github.com/kernel/hypeman/lib/guest"
@@ -13,6 +15,12 @@ import (
 )
 
 func defaultCommand() []string { return []string{"cmd.exe"} }
+
+func execContext(streamCtx context.Context) context.Context { return streamCtx }
+
+func execCommand(_ context.Context, name string, args ...string) *exec.Cmd {
+	return exec.Command(name, args...)
+}
 
 func activeDesktopToken() (windows.Token, error) {
 	var sessions *windows.WTS_SESSION_INFO
@@ -56,8 +64,10 @@ func configureExecCommand(cmd *exec.Cmd, session pb.ExecSession) (func(), error)
 	if err != nil {
 		return nil, err
 	}
-	if token != 0 {
-		cmd.SysProcAttr = &syscall.SysProcAttr{Token: token}
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Token:         token,
+		CreationFlags: windows.CREATE_SUSPENDED,
 	}
+	cmd.WaitDelay = 2 * time.Second
 	return cleanup, nil
 }
