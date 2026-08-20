@@ -717,6 +717,12 @@ func run() error {
 			return app.HealthCheckController.Run(gctx)
 		})
 	}
+	if app.VGPUSentinelController != nil {
+		grp.Go(func() error {
+			logger.Info("starting vGPU sentinel controller")
+			return app.VGPUSentinelController.Run(gctx)
+		})
+	}
 	if restartController, ok := app.InstanceManager.(interface {
 		StartRestartPolicyController(context.Context) error
 	}); ok {

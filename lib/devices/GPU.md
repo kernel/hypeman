@@ -282,13 +282,26 @@ NVRM: GPU 0000:00:03.0: RmInitAdapter failed! (0x22:0x65:884)
 ```
 
 (0x65 = timeout; the guest's init requests are never answered, and
-`/proc/interrupts` shows the GPU's MSI-X vectors allocated but idle). Because
-placement is deterministic least-loaded, an idle host re-picks the same VF for
-every request, so one wedged VF presents as all vGPU instances failing while
-`/resources` reports full capacity.
+`/proc/interrupts` shows the GPU's MSI-X vectors allocated but idle).
 
-The wedge itself leaves no host-side log: no kernel error, no XID, no plugin
-crash. The trigger is a SIGKILL delivered to QEMU while the vGPU plugin is
+Hypeman detects this automatically: the guest kernel writes that line to the
+serial console, which lands in the instance's `logs/app.log`, and the vGPU
+sentinel controller scans that file for every vendor VFIO instance. A match
+quarantines the VF in `<data-dir>/gpu/vf-health.json` (it survives restarts):
+the VF is excluded from placement and from advertised profile availability,
+and its parent GPU becomes overflow-only so it drains toward the SR-IOV
+cycle. The conviction is logged at error level (`quarantined wedged vGPU VF`)
+and counted in `hypeman_instances_vgpu_sentinel_convictions_total`;
+`hypeman_instances_vgpu_quarantined_vfs` gauges the current quarantine count.
+A burst of convictions (more than 3 in 15 minutes) pauses auto-conviction, so
+a systemic non-wedge init failure — e.g. a guest/host driver mismatch rolling
+out — cannot quarantine the fleet.
+
+The wedge-creating kill itself leaves no host-side log: no kernel error, no
+XID, no plugin crash. Detection therefore happens on the next boot that lands
+on the VF, whose guest emits the sentinel ~27s after spawn.
+
+The trigger is a SIGKILL delivered to QEMU while the vGPU plugin is
 still initializing the VF (roughly the first seconds after process start):
 a single hard kill in that window wedges the VF near-deterministically,
 while QEMU processes that exit voluntarily — error exits, QMP quit, SIGTERM —
@@ -309,6 +322,11 @@ requires no vGPU assignments on that GPU):
 /usr/lib/nvidia/sriov-manage -d <parent-gpu-pci-addr>
 /usr/lib/nvidia/sriov-manage -e <parent-gpu-pci-addr>
 ```
+
+After the cycle, boot a verification instance on the recovered VF and confirm
+its guest reaches the driver (no sentinel in its app log), then clear the
+quarantine by removing the VF's entry from `<data-dir>/gpu/vf-health.json`
+and restarting hypeman.
 
 Do not unbind/rebind the VF from the nvidia driver — it breaks the
 nvidia-vgpu-vfio core-device registration (`vfio_pci_core_device not found`)

@@ -314,6 +314,11 @@ func (p *Paths) DeviceMetadata(id string) string {
 	return filepath.Join(p.DeviceDir(id), "metadata.json")
 }
 
+// VFHealthState returns the path to the persisted vGPU VF health file.
+func (p *Paths) VFHealthState() string {
+	return filepath.Join(p.dataDir, "gpu", "vf-health.json")
+}
+
 // Volume path methods
 
 // VolumesDir returns the root volumes directory.

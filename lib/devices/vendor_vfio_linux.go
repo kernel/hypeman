@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"sort"
@@ -29,6 +30,15 @@ type vendorVFIOSysfs struct {
 	vfioDevicesPath   string
 	owners            map[string]string
 	framebufferByType map[string]int
+	pickVFIndex       func(n int) int // overridden in tests; nil means random
+}
+
+// withVGPUPlacementLock runs f under the lock that serializes vendor VFIO
+// vGPU placement, so quarantine updates and VF selection cannot interleave.
+func withVGPUPlacementLock(f func()) {
+	vendorVFIOMu.Lock()
+	defer vendorVFIOMu.Unlock()
+	f()
 }
 
 var (
@@ -102,6 +112,7 @@ func (s vendorVFIOSysfs) discoverVFs() ([]VirtualFunction, error) {
 // available_instances. This is a best-effort snapshot because creating on one
 // VF may revoke the type from siblings that share its GPU framebuffer.
 func (s vendorVFIOSysfs) listProfiles(vfs []VirtualFunction) ([]GPUProfile, error) {
+	quarantined := vfHealth.snapshotAddresses()
 	profilesByType := make(map[string]profileMetadata)
 	creatableVFs := make(map[string]int)
 	for _, vf := range vfs {
@@ -113,9 +124,10 @@ func (s vendorVFIOSysfs) listProfiles(vfs []VirtualFunction) ([]GPUProfile, erro
 			slog.Default().Warn("skipping unreadable creatable vGPU types", "vf", vf.PCIAddress, "error", err)
 			continue
 		}
+		_, bad := quarantined[vf.PCIAddress]
 		for _, profile := range creatable {
 			profilesByType[profile.TypeName] = profile
-			if !vf.Allocated {
+			if !vf.Allocated && !bad {
 				creatableVFs[profile.TypeName]++
 			}
 		}
@@ -304,10 +316,22 @@ func (s vendorVFIOSysfs) reconcile(ctx context.Context, protectedDevicePaths map
 }
 
 func (s vendorVFIOSysfs) selectLeastLoadedVF(vfs []VirtualFunction, profileType string) (string, error) {
+	quarantined := vfHealth.snapshotAddresses()
 	usageByGPU := make(map[string]int)
 	unknownUsageByGPU := make(map[string]bool)
+	quarantinedByGPU := make(map[string]int)
 	freeByGPU := make(map[string][]VirtualFunction)
 	for _, vf := range vfs {
+		// A quarantined VF is never a placement candidate, but its parent GPU
+		// stays usable: the count only deprioritizes the card so it drains
+		// toward the SR-IOV cycle instead of staying warm.
+		_, bad := quarantined[vf.PCIAddress]
+		if bad {
+			quarantinedByGPU[vf.ParentGPU]++
+			if !vf.Allocated {
+				continue
+			}
+		}
 		if vf.Allocated {
 			// framebufferByType only covers currently creatable profiles, so
 			// after a restart an allocated type can be missing when its
@@ -341,6 +365,9 @@ func (s vendorVFIOSysfs) selectLeastLoadedVF(vfs []VirtualFunction, profileType 
 		gpus = append(gpus, gpu)
 	}
 	sort.Slice(gpus, func(i, j int) bool {
+		if quarantinedByGPU[gpus[i]] != quarantinedByGPU[gpus[j]] {
+			return quarantinedByGPU[gpus[i]] < quarantinedByGPU[gpus[j]]
+		}
 		if unknownUsageByGPU[gpus[i]] != unknownUsageByGPU[gpus[j]] {
 			return !unknownUsageByGPU[gpus[i]]
 		}
@@ -352,7 +379,16 @@ func (s vendorVFIOSysfs) selectLeastLoadedVF(vfs []VirtualFunction, profileType 
 	if len(gpus) == 0 {
 		return "", nil
 	}
-	return freeByGPU[gpus[0]][0].PCIAddress, nil
+	// Randomize among the chosen GPU's free VFs. A deterministic
+	// lowest-address pick would route every first create on an idle host to
+	// the same VF, so a single undetected wedged VF presents as every GPU
+	// create failing.
+	candidates := freeByGPU[gpus[0]]
+	pick := s.pickVFIndex
+	if pick == nil {
+		pick = rand.IntN
+	}
+	return candidates[pick(len(candidates))].PCIAddress, nil
 }
 
 func (s vendorVFIOSysfs) profileMetadata(vfs []VirtualFunction) ([]profileMetadata, error) {
