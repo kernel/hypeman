@@ -187,6 +187,11 @@ func (m *manager) vgpuAssignmentClaimedByLiveInstance(ctx context.Context, exclu
 		}
 		meta, err := m.loadMetadata(id)
 		if err != nil {
+			if errors.Is(err, ErrNotFound) {
+				// Deleted between listing and load; a vanished record cannot
+				// be a live claimant.
+				continue
+			}
 			return false, fmt.Errorf("load metadata for vGPU release check: instance %s: %w", id, err)
 		}
 		stored := &meta.StoredMetadata
@@ -228,6 +233,12 @@ func (m *manager) releaseRetainedVGPULocked(ctx context.Context, id string) {
 		return
 	}
 	stored := &meta.StoredMetadata
+	if stored.GPURetainedForCleanup {
+		// Delete-only retention stubs release through delete. Releasing here
+		// would leave a stub whose start/fork/snapshot errors still claim a
+		// retained assignment that no longer exists.
+		return
+	}
 	if storedVGPUDevicePath(stored) == "" {
 		return
 	}
