@@ -93,6 +93,19 @@ func TestApplyHeaderInjectionsHTTPSOnlyAndDomainGated(t *testing.T) {
 	require.Equal(t, "Bearer mock-OUTBOUND_OPENAI_KEY", httpAllowedDomain.Get("Authorization"))
 }
 
+func TestServeHTTPRejectsUnregisteredSource(t *testing.T) {
+	t.Parallel()
+
+	svc := &Service{policiesBySourceIP: map[string]sourcePolicy{}}
+	req := httptest.NewRequest(http.MethodGet, "http://api.example.com/", nil)
+	req.RemoteAddr = "10.0.0.3:1234"
+	rec := httptest.NewRecorder()
+
+	svc.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusForbidden, rec.Code)
+}
+
 func TestHandleHTTPProxyRequest_DoesNotLeakUpstreamErrorDetails(t *testing.T) {
 	t.Parallel()
 
@@ -103,11 +116,12 @@ func TestHandleHTTPProxyRequest_DoesNotLeakUpstreamErrorDetails(t *testing.T) {
 				return nil, sentinelErr
 			},
 		},
-		policiesBySourceIP: map[string]sourcePolicy{},
+		policiesBySourceIP: map[string]sourcePolicy{"10.0.0.2": {}},
 		sourceIPByInstance: map[string]string{},
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "http://api.example.com/v1/chat/completions", nil)
+	req.RemoteAddr = "10.0.0.2:1234"
 	rec := httptest.NewRecorder()
 
 	svc.ServeHTTP(rec, req)

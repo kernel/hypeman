@@ -63,7 +63,9 @@ Operationally, this is intended for key rotation, revocation/reissue flows, and 
 
 - Real secret values are persisted in the normal instance `env` metadata, which is already host-side state.
 - TLS interception requires guest trust of the proxy CA; hypeman installs this CA in the guest when proxy mode is enabled.
-- Egress enforcement is applied per instance TAP device and removed when the instance stops/standbys/deletes.
+- Proxy requests are accepted only from source addresses registered to running instances.
+- Upstream resolution rejects private, loopback, link-local, carrier-grade NAT, documentation, benchmark, multicast, and reserved addresses.
+- Egress enforcement matches each instance source address and is removed when the instance stops/standbys/deletes.
 - Enforcement intentionally targets TCP egress only. DNS/other non-TCP traffic is not rewritten and is not blocked by `all` mode.
 
 ## Limits of enforcement

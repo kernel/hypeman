@@ -4,6 +4,7 @@ package egressproxy
 
 import (
 	"fmt"
+	"net"
 	"os/exec"
 	"strings"
 	"unicode"
@@ -15,8 +16,8 @@ const (
 	enforcementSuffixAllTCP  = "all-tcp"
 )
 
-func applyEgressEnforcement(instanceID, tapDevice, gatewayIP string, proxyPort int, blockAllTCPEgress bool) error {
-	if instanceID == "" || tapDevice == "" || gatewayIP == "" || proxyPort <= 0 {
+func applyEgressEnforcement(instanceID, sourceIP, gatewayIP string, proxyPort int, blockAllTCPEgress bool) error {
+	if instanceID == "" || net.ParseIP(sourceIP).To4() == nil || net.ParseIP(gatewayIP).To4() == nil || proxyPort <= 0 {
 		return fmt.Errorf("invalid egress enforcement inputs")
 	}
 
@@ -30,16 +31,16 @@ func applyEgressEnforcement(instanceID, tapDevice, gatewayIP string, proxyPort i
 	_ = removeRuleByComment(commentAllTCP)
 
 	if blockAllTCPEgress {
-		if err := insertRejectAllTCPRule(tapDevice, gatewayIP, commentAllTCP); err != nil {
+		if err := insertRejectAllTCPRule(sourceIP, commentAllTCP); err != nil {
 			return fmt.Errorf("insert all-tcp egress enforcement: %w", err)
 		}
 		return nil
 	}
 
-	if err := insertRejectRule(tapDevice, gatewayIP, 80, comment80); err != nil {
+	if err := insertRejectRule(sourceIP, 80, comment80); err != nil {
 		return fmt.Errorf("insert port 80 egress enforcement: %w", err)
 	}
-	if err := insertRejectRule(tapDevice, gatewayIP, 443, comment443); err != nil {
+	if err := insertRejectRule(sourceIP, 443, comment443); err != nil {
 		_ = removeRuleByComment(comment80)
 		return fmt.Errorf("insert port 443 egress enforcement: %w", err)
 	}
@@ -60,35 +61,41 @@ func removeEgressEnforcement(instanceID string) error {
 	return nil
 }
 
-func insertRejectRule(tapDevice, gatewayIP string, port int, comment string) error {
-	cmd := exec.Command(
-		"iptables", "-I", "FORWARD", "1",
-		"-i", tapDevice,
-		"-p", "tcp",
-		"--dport", fmt.Sprintf("%d", port),
-		"!", "-d", gatewayIP,
-		"-m", "comment", "--comment", comment,
-		"-j", "REJECT",
-	)
+func insertRejectRule(sourceIP string, port int, comment string) error {
+	cmd := exec.Command("iptables", rejectRuleArgs(sourceIP, port, comment)...)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("iptables insert failed: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	return nil
 }
 
-func insertRejectAllTCPRule(tapDevice, gatewayIP, comment string) error {
-	cmd := exec.Command(
-		"iptables", "-I", "FORWARD", "1",
-		"-i", tapDevice,
-		"-p", "tcp",
-		"!", "-d", gatewayIP,
-		"-m", "comment", "--comment", comment,
-		"-j", "REJECT",
-	)
+func insertRejectAllTCPRule(sourceIP, comment string) error {
+	cmd := exec.Command("iptables", rejectAllTCPRuleArgs(sourceIP, comment)...)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("iptables insert failed: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+func rejectRuleArgs(sourceIP string, port int, comment string) []string {
+	return []string{
+		"-I", "FORWARD", "1",
+		"-s", sourceIP,
+		"-p", "tcp",
+		"--dport", fmt.Sprintf("%d", port),
+		"-m", "comment", "--comment", comment,
+		"-j", "REJECT",
+	}
+}
+
+func rejectAllTCPRuleArgs(sourceIP, comment string) []string {
+	return []string{
+		"-I", "FORWARD", "1",
+		"-s", sourceIP,
+		"-p", "tcp",
+		"-m", "comment", "--comment", comment,
+		"-j", "REJECT",
+	}
 }
 
 func removeRuleByComment(comment string) error {

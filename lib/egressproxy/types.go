@@ -1,8 +1,10 @@
 package egressproxy
 
 import (
+	"context"
 	"errors"
 	"log/slog"
+	"net"
 
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
@@ -20,7 +22,6 @@ var (
 type InstanceConfig struct {
 	InstanceID        string
 	SourceIP          string
-	TAPDevice         string
 	BlockAllTCPEgress bool
 	HeaderInjectRules []HeaderInjectRuleConfig
 }
@@ -35,6 +36,7 @@ type HeaderInjectRuleConfig struct {
 // ServiceOptions customizes service construction (primarily for tests).
 type ServiceOptions struct {
 	AdditionalRootCAPEM []string
+	DialContext         func(context.Context, string, string) (net.Conn, error)
 	Logger              *slog.Logger
 	Meter               metric.Meter
 	Tracer              trace.Tracer

@@ -83,9 +83,14 @@ func NewServiceWithOptions(dataDir string, listenPort int, opts ServiceOptions) 
 		return nil, err
 	}
 
+	dialer := &net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}
+	dialContext := publicDialContext(net.DefaultResolver, dialer.DialContext)
+	if opts.DialContext != nil {
+		dialContext = opts.DialContext
+	}
 	transport := &http.Transport{
 		Proxy:               nil,
-		DialContext:         (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+		DialContext:         dialContext,
 		ForceAttemptHTTP2:   false,
 		MaxIdleConns:        100,
 		IdleConnTimeout:     90 * time.Second,
@@ -212,7 +217,7 @@ func (s *Service) RegisterInstance(ctx context.Context, gatewayIP string, cfg In
 		return GuestConfig{}, err
 	}
 
-	if err := applyEgressEnforcement(cfg.InstanceID, cfg.TAPDevice, gatewayIP, s.listenPort, cfg.BlockAllTCPEgress); err != nil {
+	if err := applyEgressEnforcement(cfg.InstanceID, cfg.SourceIP, gatewayIP, s.listenPort, cfg.BlockAllTCPEgress); err != nil {
 		log.WarnContext(ctx, "failed to apply egress proxy enforcement", "instance_id", cfg.InstanceID, "error", err)
 		opErr = err
 		return GuestConfig{}, err
@@ -358,11 +363,22 @@ func (s *Service) proxyURLLocked() string {
 
 func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	sourceIP := sourceIPFromRemoteAddr(r.RemoteAddr)
+	if !s.isRegisteredSourceIP(sourceIP) {
+		http.Error(w, "proxy source is not registered", http.StatusForbidden)
+		return
+	}
 	if r.Method == http.MethodConnect {
 		s.handleConnect(w, r, sourceIP)
 		return
 	}
 	s.handleHTTPProxyRequest(w, r, sourceIP, false)
+}
+
+func (s *Service) isRegisteredSourceIP(sourceIP string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	_, ok := s.policiesBySourceIP[sourceIP]
+	return ok
 }
 
 func (s *Service) handleHTTPProxyRequest(w http.ResponseWriter, r *http.Request, sourceIP string, insideTunnel bool) {

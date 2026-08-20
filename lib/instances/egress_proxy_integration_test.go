@@ -36,6 +36,7 @@ func TestEgressProxyRewritesHTTPSHeaders(t *testing.T) {
 	caPEM, cert := mustGenerateTLSChain(t, []string{"localhost"})
 	manager.egressProxyServiceOptions = egressproxy.ServiceOptions{
 		AdditionalRootCAPEM: []string{caPEM},
+		DialContext:         (&net.Dialer{}).DialContext,
 	}
 
 	target := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
