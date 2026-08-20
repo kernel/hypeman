@@ -28,8 +28,8 @@ import (
 
 // Timeout constants for QEMU operations
 const (
-	// socketWaitTimeout is how long to wait for QMP socket to become available after process start
-	socketWaitTimeout = 10 * time.Second
+	// socketWaitTimeout is how long to wait for QEMU and swtpm sockets after process start.
+	socketWaitTimeout = 30 * time.Second
 
 	// migrationTimeout is how long to wait for migration to complete
 	migrationTimeout = 30 * time.Second
