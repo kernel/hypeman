@@ -10,6 +10,27 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestDeleteTagRemovesBothLayoutReferences(t *testing.T) {
+	p := paths.New(t.TempDir())
+	repository := "docker.io/library/alpine"
+	tag := "latest"
+	digest := "abababababababababababababababababababababababababababababababab"
+	legacyPath := p.ImageTagSymlink(repository, tag)
+	contentPath := p.ImageRepositoryTagSymlink(repository, tag)
+	require.NoError(t, os.MkdirAll(filepath.Dir(legacyPath), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Dir(contentPath), 0o755))
+	require.NoError(t, os.Symlink(digest, legacyPath))
+	target, err := filepath.Rel(filepath.Dir(contentPath), p.ImageContentDir(digest))
+	require.NoError(t, err)
+	require.NoError(t, os.Symlink(target, contentPath))
+
+	require.NoError(t, deleteTag(p, repository, tag))
+	_, err = os.Lstat(legacyPath)
+	require.ErrorIs(t, err, os.ErrNotExist)
+	_, err = os.Lstat(contentPath)
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
 func TestLegacyImageIsNotShadowedByContentMetadata(t *testing.T) {
 	p := paths.New(t.TempDir())
 	repository := "docker.io/library/alpine"

@@ -281,13 +281,32 @@ func promoteImageToContent(p *paths.Paths, sourceRepository, digestHex string, s
 		if err != nil {
 			return err
 		}
+		staged := make([]stagedTagSymlink, 0, len(tags))
+		cleanupStaged := func() {
+			for _, ref := range staged {
+				_ = os.RemoveAll(ref.tempDir)
+			}
+		}
+		defer cleanupStaged()
 		for _, tag := range tags {
 			target, err := resolveTag(p, sourceRepository, tag)
 			if err != nil || target != digestHex {
 				continue
 			}
-			if err := createTagSymlink(p, sourceRepository, tag, digestHex); err != nil {
-				return fmt.Errorf("promote legacy tag %s: %w", tag, err)
+			ref, err := stageTagSymlink(p, sourceRepository, tag, digestHex)
+			if err != nil {
+				return fmt.Errorf("stage legacy tag %s: %w", tag, err)
+			}
+			staged = append(staged, ref)
+		}
+		for _, ref := range staged {
+			if err := os.Rename(ref.tempPath, ref.linkPath); err != nil {
+				return fmt.Errorf("promote legacy tag: %w", err)
+			}
+		}
+		for _, ref := range staged {
+			if err := removeStaleTagSymlink(p, &ref); err != nil {
+				return err
 			}
 		}
 		if err := os.RemoveAll(legacyDir); err != nil {
@@ -314,6 +333,58 @@ func installAtomically(path string, install func(string) error) error {
 	return os.Rename(tempPath, path)
 }
 
+type stagedTagSymlink struct {
+	repository string
+	tag        string
+	linkPath   string
+	tempDir    string
+	tempPath   string
+}
+
+func stageTagSymlink(p *paths.Paths, repository, tag, digestHex string) (stagedTagSymlink, error) {
+	layout := resolveImageLayout(p, repository, digestHex)
+	linkPath := p.ImageTagSymlink(repository, tag)
+	targetPath := digestHex // Relative path (just the digest hex)
+	if layout.content {
+		linkPath = p.ImageRepositoryTagSymlink(repository, tag)
+		var err error
+		targetPath, err = filepath.Rel(filepath.Dir(linkPath), layout.dir)
+		if err != nil {
+			return stagedTagSymlink{}, fmt.Errorf("calculate content symlink target: %w", err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Dir(linkPath), 0755); err != nil {
+		return stagedTagSymlink{}, fmt.Errorf("create parent directory: %w", err)
+	}
+	tempDir, err := os.MkdirTemp(filepath.Dir(linkPath), ".tag-stage-*")
+	if err != nil {
+		return stagedTagSymlink{}, fmt.Errorf("create temporary tag directory: %w", err)
+	}
+	tempPath := filepath.Join(tempDir, filepath.Base(linkPath))
+	if err := os.Symlink(targetPath, tempPath); err != nil {
+		_ = os.RemoveAll(tempDir)
+		return stagedTagSymlink{}, fmt.Errorf("create temporary tag symlink: %w", err)
+	}
+	return stagedTagSymlink{
+		repository: repository,
+		tag:        tag,
+		linkPath:   linkPath,
+		tempDir:    tempDir,
+		tempPath:   tempPath,
+	}, nil
+}
+
+func removeStaleTagSymlink(p *paths.Paths, ref *stagedTagSymlink) error {
+	stalePath := p.ImageTagSymlink(ref.repository, ref.tag)
+	if stalePath == ref.linkPath {
+		stalePath = p.ImageRepositoryTagSymlink(ref.repository, ref.tag)
+	}
+	if err := os.Remove(stalePath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove stale tag symlink: %w", err)
+	}
+	return nil
+}
+
 // createTagSymlink creates or updates a tag symlink to point to a digest (only
 // if the digest dir exists and the build is ready).
 //
@@ -324,34 +395,19 @@ func installAtomically(path string, install func(string) error) error {
 // amd64) and was non-recoverable. Always repointing is symmetric and matches
 // Docker; callers repoint unconditionally on a ready digest.
 func createTagSymlink(p *paths.Paths, repository, tag, digestHex string) error {
-	layout := resolveImageLayout(p, repository, digestHex)
-	linkPath := p.ImageTagSymlink(repository, tag)
-	targetPath := digestHex // Relative path (just the digest hex)
-	if layout.content {
-		linkPath = p.ImageRepositoryTagSymlink(repository, tag)
-		var err error
-		targetPath, err = filepath.Rel(filepath.Dir(linkPath), layout.dir)
-		if err != nil {
-			return fmt.Errorf("calculate content symlink target: %w", err)
-		}
+	ref, err := stageTagSymlink(p, repository, tag, digestHex)
+	if err != nil {
+		return fmt.Errorf("stage tag symlink: %w", err)
 	}
-	if err := os.MkdirAll(filepath.Dir(linkPath), 0755); err != nil {
-		return fmt.Errorf("create parent directory: %w", err)
-	}
-
-	if err := installAtomically(linkPath, func(path string) error {
-		return os.Symlink(targetPath, path)
-	}); err != nil {
+	if err := os.Rename(ref.tempPath, ref.linkPath); err != nil {
+		_ = os.RemoveAll(ref.tempDir)
 		return fmt.Errorf("install tag symlink: %w", err)
 	}
-
-	stalePath := p.ImageTagSymlink(repository, tag)
-	if stalePath == linkPath {
-		stalePath = p.ImageRepositoryTagSymlink(repository, tag)
+	if err := removeStaleTagSymlink(p, &ref); err != nil {
+		_ = os.RemoveAll(ref.tempDir)
+		return err
 	}
-	if err := os.Remove(stalePath); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("remove stale tag symlink: %w", err)
-	}
+	_ = os.RemoveAll(ref.tempDir)
 	return nil
 }
 
@@ -389,7 +445,7 @@ func resolveTag(p *paths.Paths, repository, tag string) (string, error) {
 
 // listTags returns all tags for a repository
 func listTags(p *paths.Paths, repository string) ([]string, error) {
-	dirs := []string{p.ImageRepositoryDir(repository), filepath.Join(p.ImageRepositoriesDir(), repository)}
+	dirs := []string{filepath.Join(p.ImageRepositoriesDir(), repository), p.ImageRepositoryDir(repository)}
 	seen := make(map[string]struct{})
 	tags := make([]string, 0)
 	for _, repoDir := range dirs {
@@ -571,23 +627,29 @@ func digestExists(p *paths.Paths, repository, digestHex string) bool {
 	return err == nil
 }
 
-// deleteTag removes a tag symlink (does not delete the digest directory)
+// deleteTag removes a tag symlink in either supported layout (does not delete
+// the digest directory).
 func deleteTag(p *paths.Paths, repository, tag string) error {
-	linkPath := tagSymlinkPath(p, repository, tag)
-
-	// Check if symlink exists
-	if _, err := os.Lstat(linkPath); err != nil {
-		if os.IsNotExist(err) {
-			return ErrNotFound
+	pathsToRemove := []string{
+		p.ImageRepositoryTagSymlink(repository, tag),
+		p.ImageTagSymlink(repository, tag),
+	}
+	found := false
+	for _, linkPath := range pathsToRemove {
+		if _, err := os.Lstat(linkPath); err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return fmt.Errorf("stat symlink: %w", err)
 		}
-		return fmt.Errorf("stat symlink: %w", err)
+		found = true
+		if err := os.Remove(linkPath); err != nil {
+			return fmt.Errorf("remove symlink: %w", err)
+		}
 	}
-
-	// Remove symlink
-	if err := os.Remove(linkPath); err != nil {
-		return fmt.Errorf("remove symlink: %w", err)
+	if !found {
+		return ErrNotFound
 	}
-
 	return nil
 }
 

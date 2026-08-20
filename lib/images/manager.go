@@ -468,9 +468,10 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef, credentials 
 	m.updateStatusByDigest(ref, StatusConverting, nil, buildID)
 
 	diskPath := resolveImageLayout(m.paths, ref.Repository(), ref.DigestHex()).disk
+	diskTempPath := filepath.Join(buildDir, ".rootfs-"+buildID+filepath.Ext(diskPath))
 	// Use default image format (erofs on Linux, ext4 on Darwin)
 	convertStart := time.Now()
-	diskSize, err := ExportRootfs(tempDir, diskPath, DefaultImageFormat)
+	diskSize, err := ExportRootfs(tempDir, diskTempPath, DefaultImageFormat)
 	m.recordImageBuildPhase(ctx, ref.Digest(), "filesystem_export", time.Since(convertStart), phaseStatus(err), "not_applicable")
 	if err != nil {
 		m.updateStatusByDigest(ref, StatusFailed, fmt.Errorf("convert to %s: %w", DefaultImageFormat, err), buildID)
@@ -478,7 +479,7 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef, credentials 
 	}
 
 	finalizeStart := time.Now()
-	err = m.finalizeImage(ref, result, diskSize, buildID)
+	err = m.finalizeImage(ref, result, diskSize, buildID, diskTempPath)
 	m.recordImageBuildPhase(ctx, ref.Digest(), "finalize", time.Since(finalizeStart), phaseStatus(err), "not_applicable")
 	if err != nil {
 		if errors.Is(err, errStaleBuild) {
@@ -491,7 +492,11 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef, credentials 
 	buildStatus = "success"
 }
 
-func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, diskSize int64, buildID string) error {
+func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, diskSize int64, buildID, diskTempPath string) error {
+	if diskTempPath != "" {
+		defer os.Remove(diskTempPath)
+	}
+
 	m.createMu.Lock()
 	defer m.createMu.Unlock()
 
@@ -499,6 +504,15 @@ func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, diskSize i
 	meta, err := readMetadata(m.paths, ref.Repository(), ref.DigestHex())
 	if err != nil || meta.BuildID != buildID {
 		return errStaleBuild
+	}
+
+	if diskTempPath != "" {
+		finalDiskPath := resolveImageLayout(m.paths, ref.Repository(), ref.DigestHex()).disk
+		if err := installAtomically(finalDiskPath, func(path string) error {
+			return os.Rename(diskTempPath, path)
+		}); err != nil {
+			return fmt.Errorf("install image disk: %w", err)
+		}
 	}
 
 	// The pulled image config is the source of truth for the platform.
