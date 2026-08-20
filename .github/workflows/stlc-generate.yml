@@ -238,7 +238,15 @@ jobs:
             --targets all \
             "${commit_args[@]}"
           stlc exec --targets "$SDK_TARGETS" -- ./scripts/bootstrap
-          stlc lint --targets "$SDK_TARGETS"
+          for attempt in 1 2 3; do
+            if stlc lint --targets "$SDK_TARGETS"; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            sleep 5
+          done
           stlc test --targets "$SDK_TARGETS"
           stlc exec --targets "$SDK_TARGETS" -- sh -c \
             'status=$(git status --porcelain --untracked-files=all) && [ -z "$status" ] || { printf "%s\n" "$status" >&2; exit 1; }'
