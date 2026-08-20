@@ -27,8 +27,8 @@ const (
 type MachineImageKind string
 
 const (
-	MachineImageWindowsBase    MachineImageKind = "windows-base"
-	MachineImageWindowsPersona MachineImageKind = "windows-persona"
+	MachineImageWindowsBase  MachineImageKind = "windows-base"
+	MachineImageWindowsImage MachineImageKind = "windows-image"
 )
 
 // MachineImage describes a bootable disk artifact. The OCI manifest remains
@@ -86,13 +86,13 @@ func parseMachineImage(meta *containerMetadata) (*MachineImage, error) {
 		if machine.Base != "" {
 			return nil, fmt.Errorf("Windows base image cannot reference another base")
 		}
-	case MachineImageWindowsPersona:
+	case MachineImageWindowsImage:
 		if machine.DiskFormat != "qcow2" {
-			return nil, fmt.Errorf("Windows persona disk format must be qcow2")
+			return nil, fmt.Errorf("Windows image disk format must be qcow2")
 		}
 		base, err := ParseNormalizedRef(machine.Base)
 		if err != nil || !base.IsDigest() {
-			return nil, fmt.Errorf("Windows persona base must be a digest-pinned OCI reference")
+			return nil, fmt.Errorf("Windows image base must be a digest-pinned OCI reference")
 		}
 	default:
 		return nil, fmt.Errorf("unsupported machine image kind %q", machine.Kind)
@@ -178,7 +178,7 @@ func (m *manager) materializeMachineImage(ref *ResolvedRef, root string, machine
 	if sourceInfo.Format != sourceFormat {
 		return 0, fmt.Errorf("machine image source format is %s, expected %s", sourceInfo.Format, sourceFormat)
 	}
-	if err := validateMachineSource(sourceInfo, machine.Kind == MachineImageWindowsPersona); err != nil {
+	if err := validateMachineSource(sourceInfo, machine.Kind == MachineImageWindowsImage); err != nil {
 		return 0, err
 	}
 
@@ -215,12 +215,12 @@ func (m *manager) materializeMachineImage(ref *ResolvedRef, root string, machine
 			return 0, fmt.Errorf("Windows base disk must be raw, got %s", info.Format)
 		}
 		machine.VirtualSize = info.VirtualSize
-	case MachineImageWindowsPersona:
+	case MachineImageWindowsImage:
 		if err := forkvm.CopyRegularFile(source, destination); err != nil {
-			return 0, fmt.Errorf("materialize Windows persona: %w", err)
+			return 0, fmt.Errorf("materialize Windows image: %w", err)
 		}
 		if err := os.Chmod(destination, 0600); err != nil {
-			return 0, fmt.Errorf("make Windows persona writable for validation: %w", err)
+			return 0, fmt.Errorf("make Windows image writable for validation: %w", err)
 		}
 		basePath, err := m.resolveMachineBase(machine.Base)
 		if err != nil {
@@ -228,7 +228,7 @@ func (m *manager) materializeMachineImage(ref *ResolvedRef, root string, machine
 		}
 		output, err := exec.Command("qemu-img", "rebase", "-u", "-f", "qcow2", "-F", "raw", "-b", basePath, destination).CombinedOutput()
 		if err != nil {
-			return 0, fmt.Errorf("set persona backing file: %w: %s", err, output)
+			return 0, fmt.Errorf("set image backing file: %w: %s", err, output)
 		}
 		info, err := inspectQEMUImage(destination, "qcow2")
 		if err != nil {
@@ -238,14 +238,14 @@ func (m *manager) materializeMachineImage(ref *ResolvedRef, root string, machine
 			return 0, err
 		}
 		if info.Format != "qcow2" || info.BackingFileFormat != "raw" || info.BackingFilename != basePath {
-			return 0, fmt.Errorf("invalid persona disk backing configuration")
+			return 0, fmt.Errorf("invalid Windows image disk backing configuration")
 		}
 		baseInfo, err := inspectQEMUImage(basePath, "raw")
 		if err != nil {
 			return 0, err
 		}
 		if info.VirtualSize != baseInfo.VirtualSize {
-			return 0, fmt.Errorf("persona virtual size %d does not match base %d", info.VirtualSize, baseInfo.VirtualSize)
+			return 0, fmt.Errorf("image virtual size %d does not match base %d", info.VirtualSize, baseInfo.VirtualSize)
 		}
 		machine.VirtualSize = info.VirtualSize
 	}
@@ -278,8 +278,8 @@ func (m *manager) resolveMachineBase(reference string) (string, error) {
 
 func machineDiskPath(p *paths.Paths, repository, digestHex string, kind MachineImageKind) string {
 	name := "base.raw"
-	if kind == MachineImageWindowsPersona {
-		name = "persona.qcow2"
+	if kind == MachineImageWindowsImage {
+		name = "image.qcow2"
 	}
 	return filepath.Join(p.ImageDigestDir(repository, digestHex), name)
 }
@@ -290,12 +290,12 @@ func (m *manager) ensureNoMachineDependents(repository, digestHex string) error 
 		return err
 	}
 	for _, meta := range metas {
-		if meta.Machine == nil || meta.Machine.Kind != MachineImageWindowsPersona {
+		if meta.Machine == nil || meta.Machine.Kind != MachineImageWindowsImage {
 			continue
 		}
 		base, err := ParseNormalizedRef(meta.Machine.Base)
 		if err == nil && base.Repository() == repository && base.DigestHex() == digestHex {
-			return fmt.Errorf("cannot delete Windows base while persona %s depends on it", meta.Name)
+			return fmt.Errorf("cannot delete Windows base while image %s depends on it", meta.Name)
 		}
 	}
 	return nil
@@ -313,7 +313,7 @@ func GetMachineDiskPath(p *paths.Paths, imageName, digest string, machine *Machi
 	return machineDiskPath(p, ref.Repository(), strings.TrimPrefix(digest, "sha256:"), machine.Kind), nil
 }
 
-// IsWindowsPersona reports whether an image is directly launchable as a Windows desktop.
-func IsWindowsPersona(image *Image) bool {
-	return image != nil && image.Machine != nil && image.Machine.Kind == MachineImageWindowsPersona
+// IsWindowsImage reports whether an image is directly launchable as a Windows desktop.
+func IsWindowsImage(image *Image) bool {
+	return image != nil && image.Machine != nil && image.Machine.Kind == MachineImageWindowsImage
 }

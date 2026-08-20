@@ -49,6 +49,14 @@ OCI Registry → go-containerregistry → OCI Layout → umoci → rootfs/ → m
 
 **Alternative:** ext4 without journal works but erofs is optimized for this exact use case
 
+## Windows machine images
+
+Windows uses the same image-manager contract as Linux: callers pull a named image and create instances from it. The launchable artifact is therefore called a Windows image. A `windows-base` artifact is separate because it is an immutable storage dependency rather than a launchable image.
+
+Base disks may arrive as raw, qcow2, VHD, or VHDX. Materialization normalizes them to immutable sparse raw so every dependent image has one stable backing format. A `windows-image` artifact is a qcow2 delta with a digest-pinned base reference. Hypeman ignores its supplied backing path and rewrites the header to the cache-owned base, preventing an artifact from retaining an external host path. The image and base must have identical virtual sizes.
+
+Instance creation reflink-clones the cached Windows image into a private writable qcow2 disk while leaving the cached source immutable. Its virtual size becomes the instance disk size; unlike Linux's separate overlay, this disk is not resized because Windows online partition and filesystem growth are not part of the launch contract.
+
 ## Filesystem Layout (storage.go, oci.go)
 
 Content-addressable storage with tag symlinks (similar to Docker/Unikraft):

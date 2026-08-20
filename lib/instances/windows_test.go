@@ -12,14 +12,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func windowsPersonaFixture() *images.Image {
+func windowsImageFixture() *images.Image {
 	return &images.Image{
-		Name:     "registry.example/windows/persona:test",
+		Name:     "registry.example/windows/image:test",
 		Digest:   "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		Platform: "windows/amd64",
 		Status:   images.StatusReady,
 		Machine: &images.MachineImage{
-			Kind:        images.MachineImageWindowsPersona,
+			Kind:        images.MachineImageWindowsImage,
 			Base:        "registry.example/windows/base@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
 			TPM:         "2.0",
 			SecureBoot:  "required",
@@ -29,25 +29,26 @@ func windowsPersonaFixture() *images.Image {
 }
 
 func TestValidateWindowsCreate(t *testing.T) {
-	image := windowsPersonaFixture()
-	require.NoError(t, validateWindowsCreate(CreateInstanceRequest{}, image, hypervisor.TypeQEMU))
+	image := windowsImageFixture()
+	windowsCaps := hypervisor.Capabilities{SupportsUEFIBoot: true, SupportsTPM: true}
+	require.NoError(t, validateWindowsCreate(CreateInstanceRequest{}, image, windowsCaps))
 
 	tests := []struct {
 		name string
 		req  CreateInstanceRequest
-		hv   hypervisor.Type
+		caps hypervisor.Capabilities
 	}{
-		{name: "wrong hypervisor", hv: hypervisor.TypeCloudHypervisor},
-		{name: "networking", hv: hypervisor.TypeQEMU, req: CreateInstanceRequest{NetworkEnabled: true}},
-		{name: "small memory", hv: hypervisor.TypeQEMU, req: CreateInstanceRequest{Size: 2 << 30}},
-		{name: "one CPU", hv: hypervisor.TypeQEMU, req: CreateInstanceRequest{Vcpus: 1}},
-		{name: "command", hv: hypervisor.TypeQEMU, req: CreateInstanceRequest{Cmd: []string{"cmd.exe"}}},
-		{name: "snapshot policy", hv: hypervisor.TypeQEMU, req: CreateInstanceRequest{SnapshotPolicy: &SnapshotPolicy{}}},
-		{name: "auto standby", hv: hypervisor.TypeQEMU, req: CreateInstanceRequest{AutoStandby: &autostandby.Policy{}}},
+		{name: "missing boot capabilities"},
+		{name: "networking", caps: windowsCaps, req: CreateInstanceRequest{NetworkEnabled: true}},
+		{name: "small memory", caps: windowsCaps, req: CreateInstanceRequest{Size: 2 << 30}},
+		{name: "one CPU", caps: windowsCaps, req: CreateInstanceRequest{Vcpus: 1}},
+		{name: "command", caps: windowsCaps, req: CreateInstanceRequest{Cmd: []string{"cmd.exe"}}},
+		{name: "snapshot policy", caps: windowsCaps, req: CreateInstanceRequest{SnapshotPolicy: &SnapshotPolicy{}}},
+		{name: "auto standby", caps: windowsCaps, req: CreateInstanceRequest{AutoStandby: &autostandby.Policy{}}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Error(t, validateWindowsCreate(tt.req, image, tt.hv))
+			assert.Error(t, validateWindowsCreate(tt.req, image, tt.caps))
 		})
 	}
 }
@@ -66,7 +67,7 @@ func TestBuildWindowsHypervisorConfig(t *testing.T) {
 		require.NoError(t, os.WriteFile(path, []byte("fixture"), 0600))
 	}
 
-	config, err := m.buildWindowsHypervisorConfig(&Instance{StoredMetadata: stored}, windowsPersonaFixture(), nil)
+	config, err := m.buildWindowsHypervisorConfig(&Instance{StoredMetadata: stored}, windowsImageFixture(), nil)
 	require.NoError(t, err)
 	assert.Equal(t, hypervisor.BootModeUEFI, config.BootMode)
 	assert.True(t, config.Firmware.SecureBoot)

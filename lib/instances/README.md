@@ -22,6 +22,14 @@ Manages VM instance lifecycle across multiple hypervisors (Cloud Hypervisor, QEM
 - `Shutdown` - VM shutdown, VMM exists (CH native)
 - `Standby` - No VMM, snapshot exists (can restore)
 
+### Windows launch defaults
+
+Windows machine images boot through UEFI with Secure Boot and TPM 2.0. The default 8 GiB memory and 4 vCPUs provide headroom for Windows 11 startup and the guest service; the lower admission limits of 4 GiB and 2 vCPUs permit explicitly sized, constrained workloads without making that minimum the default.
+
+The launchable Windows image already defines its virtual disk size, so instance creation clones that size exactly. Windows disk, partition, and filesystem growth are not implemented, and an `overlay_size` that differs from the image is rejected rather than silently presenting inconsistent capacity.
+
+A Windows VM remains `Initializing` until its guest agent answers over VioSock. This avoids treating firmware completion as application readiness.
+
 ### Why Config Disk? (configdisk.go)
 
 **What:** Read-only erofs disk with instance configuration

@@ -15,15 +15,15 @@ func isWindowsPlatform(platform string) bool {
 	return strings.EqualFold(strings.TrimSpace(platform), "windows/amd64")
 }
 
-func validateWindowsCreate(req CreateInstanceRequest, image *images.Image, hvType hypervisor.Type) error {
-	if !images.IsWindowsPersona(image) {
-		return fmt.Errorf("%w: Windows instances require a persona image", ErrInvalidRequest)
+func validateWindowsCreate(req CreateInstanceRequest, image *images.Image, caps hypervisor.Capabilities) error {
+	if !images.IsWindowsImage(image) {
+		return fmt.Errorf("%w: Windows instances require a Windows machine image", ErrInvalidRequest)
 	}
-	if hvType != hypervisor.TypeQEMU {
-		return fmt.Errorf("%w: Windows instances require the qemu hypervisor", ErrInvalidRequest)
+	if !caps.SupportsUEFIBoot || !caps.SupportsTPM {
+		return fmt.Errorf("%w: selected hypervisor must support UEFI boot and TPM devices", ErrInvalidRequest)
 	}
 	if image.Machine.VirtualSize <= 0 {
-		return fmt.Errorf("%w: Windows persona is missing its virtual disk size", ErrInvalidRequest)
+		return fmt.Errorf("%w: Windows image is missing its virtual disk size", ErrInvalidRequest)
 	}
 	if req.HotplugSize != 0 {
 		return fmt.Errorf("%w: Windows instances do not yet support hotplug memory", ErrInvalidRequest)
@@ -87,12 +87,12 @@ func windowsFirmwareTemplates() (string, string, error) {
 }
 
 func (m *manager) prepareWindowsInstance(inst *StoredMetadata, image *images.Image) error {
-	persona, err := images.GetMachineDiskPath(m.paths, image.Name, image.Digest, image.Machine)
+	source, err := images.GetMachineDiskPath(m.paths, image.Name, image.Digest, image.Machine)
 	if err != nil {
 		return err
 	}
-	if err := forkvm.CopyRegularFile(persona, m.paths.InstanceWindowsDisk(inst.Id)); err != nil {
-		return fmt.Errorf("clone Windows persona: %w", err)
+	if err := forkvm.CopyRegularFile(source, m.paths.InstanceWindowsDisk(inst.Id)); err != nil {
+		return fmt.Errorf("clone Windows image: %w", err)
 	}
 	if err := os.Chmod(m.paths.InstanceWindowsDisk(inst.Id), 0600); err != nil {
 		return fmt.Errorf("make Windows instance disk writable: %w", err)
@@ -121,8 +121,8 @@ func (m *manager) prepareWindowsInstance(inst *StoredMetadata, image *images.Ima
 }
 
 func (m *manager) buildWindowsHypervisorConfig(inst *Instance, image *images.Image, netConfig *network.NetworkConfig) (hypervisor.VMConfig, error) {
-	if !images.IsWindowsPersona(image) {
-		return hypervisor.VMConfig{}, fmt.Errorf("image is not a Windows persona")
+	if !images.IsWindowsImage(image) {
+		return hypervisor.VMConfig{}, fmt.Errorf("image is not a Windows machine image")
 	}
 	if _, err := os.Stat(m.paths.InstanceWindowsDisk(inst.Id)); err != nil {
 		return hypervisor.VMConfig{}, fmt.Errorf("stat Windows instance disk: %w", err)
