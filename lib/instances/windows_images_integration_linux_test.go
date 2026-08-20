@@ -53,6 +53,9 @@ func requireWindowsFixture(t *testing.T) string {
 }
 
 func TestWindowsImagesIntegration(t *testing.T) {
+	if os.Getenv("HYPEMAN_RUN_WINDOWS_IMAGES_INTEGRATION") != "1" {
+		t.Skip("run by the dedicated Windows images CI gate")
+	}
 	fixture := requireWindowsFixture(t)
 	acquireHeavyIO(t)
 
