@@ -707,7 +707,7 @@ func (m *manager) TagImage(ctx context.Context, source, target string) (*Image, 
 		return nil, fmt.Errorf("%w: %s", ErrImageNotReady, meta.Status)
 	}
 	if sourceRef.Repository() != targetRef.Repository() {
-		if err := cloneReadyImage(m.paths, sourceRef.Repository(), targetRef.Repository(), digestHex, meta, targetRef.String()); err != nil {
+		if err := promoteImageToContent(m.paths, sourceRef.Repository(), digestHex, meta); err != nil {
 			return nil, fmt.Errorf("create image alias: %w", err)
 		}
 	}

@@ -44,6 +44,26 @@ func TestTotalReadyImageBytesFromMetadata_DeduplicatesHardLinkedAliases(t *testi
 	require.Equal(t, int64(len("shared-rootfs")), total)
 }
 
+func TestTotalReadyImageBytesFromMetadata_DeduplicatesMalformedAliases(t *testing.T) {
+	t.Parallel()
+
+	imagesDir := t.TempDir()
+	malformedDir := filepath.Join(imagesDir, "a-malformed", "digest")
+	validDir := filepath.Join(imagesDir, "b-valid", "digest")
+	require.NoError(t, os.MkdirAll(malformedDir, 0o755))
+	require.NoError(t, os.MkdirAll(validDir, 0o755))
+
+	rootfs := filepath.Join(malformedDir, "rootfs.erofs")
+	require.NoError(t, os.WriteFile(rootfs, []byte("shared-rootfs"), 0o644))
+	require.NoError(t, os.Link(rootfs, filepath.Join(validDir, "rootfs.erofs")))
+	require.NoError(t, os.WriteFile(filepath.Join(malformedDir, "metadata.json"), []byte("{not-json"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(validDir, "metadata.json"), []byte(`{"status":"ready","size_bytes":13}`), 0o644))
+
+	total, err := totalReadyImageBytesFromMetadata(imagesDir)
+	require.NoError(t, err)
+	require.Equal(t, int64(len("shared-rootfs")), total)
+}
+
 func TestTotalReadyImageBytesFromMetadata_UsesRootfsFallbackForReadyImageWithoutSize(t *testing.T) {
 	t.Parallel()
 

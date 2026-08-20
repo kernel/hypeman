@@ -62,6 +62,30 @@ func TestFailedLegacyImageUsesReadyContent(t *testing.T) {
 	require.Equal(t, p.ImageContentPath(digest), digestPath(p, repository, digest))
 }
 
+func TestReadyContentDoesNotFallBackToLegacyDisk(t *testing.T) {
+	p := paths.New(t.TempDir())
+	repository := "docker.io/library/alpine"
+	digest := "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+	legacyDir := p.ImageDigestDir(repository, digest)
+	require.NoError(t, os.MkdirAll(legacyDir, 0o755))
+	require.NoError(t, writeMetadataFile(p.ImageMetadata(repository, digest), &imageMetadata{
+		Name:   repository + ":latest",
+		Digest: "sha256:" + digest,
+		Status: StatusReady,
+	}))
+	require.NoError(t, os.WriteFile(p.ImageDigestPath(repository, digest), []byte("legacy rootfs"), 0o644))
+	require.NoError(t, writeMetadataFile(p.ImageContentMetadata(digest), &imageMetadata{
+		Name:   repository + ":latest",
+		Digest: "sha256:" + digest,
+		Status: StatusReady,
+	}))
+
+	require.Equal(t, p.ImageContentMetadata(digest), metadataPath(p, repository, digest))
+	require.Equal(t, p.ImageContentPath(digest), digestPath(p, repository, digest))
+	_, err := readMetadata(p, repository, digest)
+	require.ErrorContains(t, err, "disk image missing")
+}
+
 func TestWriteMetadataUsesContentWhenLegacyDirectoryIsEmpty(t *testing.T) {
 	p := paths.New(t.TempDir())
 	repository := "docker.io/library/alpine"

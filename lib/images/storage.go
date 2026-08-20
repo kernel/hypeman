@@ -77,10 +77,6 @@ func (m *imageMetadata) toImage() *Image {
 	return img
 }
 
-// The compatibility readers are in the parent PR; this child enables new
-// content-layout writes after those readers are deployed.
-const contentLayoutEnabled = true
-
 // legacyDigestDir returns the directory used by the original image layout.
 func legacyDigestDir(p *paths.Paths, repository, digestHex string) string {
 	return p.ImageDigestDir(repository, digestHex)
@@ -91,16 +87,52 @@ func contentDigestDir(p *paths.Paths, digestHex string) string {
 	return p.ImageContentDir(digestHex)
 }
 
-// digestDir returns the directory for a specific digest, preferring the new
-// content-addressed layout and falling back to the legacy repository layout.
+// imageLayout contains the paths for one complete metadata/rootfs pair.
+type imageLayout struct {
+	dir      string
+	metadata string
+	disk     string
+	content  bool
+}
+
+// resolveImageLayout selects one layout for all operations on a digest. A
+// complete legacy image remains authoritative while content is incomplete;
+// once content metadata is ready, content becomes canonical even if its disk
+// is missing so callers report the corruption instead of mixing layouts.
+func resolveImageLayout(p *paths.Paths, repository, digestHex string) imageLayout {
+	legacy := imageLayout{
+		dir:      legacyDigestDir(p, repository, digestHex),
+		metadata: p.ImageMetadata(repository, digestHex),
+		disk:     p.ImageDigestPath(repository, digestHex),
+	}
+	content := imageLayout{
+		dir:      contentDigestDir(p, digestHex),
+		metadata: p.ImageContentMetadata(digestHex),
+		disk:     p.ImageContentPath(digestHex),
+		content:  true,
+	}
+
+	if legacyImageExists(p, repository, digestHex) {
+		contentStatus, contentOK := metadataStatus(content.metadata)
+		if !contentOK || contentStatus != StatusReady {
+			return legacy
+		}
+	}
+	if pathExists(content.metadata) || pathExists(content.disk) {
+		return content
+	}
+	return legacy
+}
+
+func pathExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+// digestDir returns the directory for a specific digest, using the same layout
+// selection as metadata and disk lookup.
 func digestDir(p *paths.Paths, repository, digestHex string) string {
-	if useLegacyLayoutForRead(p, repository, digestHex) {
-		return legacyDigestDir(p, repository, digestHex)
-	}
-	if _, err := os.Stat(p.ImageContentMetadata(digestHex)); err == nil {
-		return contentDigestDir(p, digestHex)
-	}
-	return legacyDigestDir(p, repository, digestHex)
+	return resolveImageLayout(p, repository, digestHex).dir
 }
 
 // contentDigestPath returns the rootfs path for a newly written image.
@@ -126,35 +158,9 @@ func metadataStatus(path string) (string, bool) {
 	return meta.Status, true
 }
 
-// useLegacyLayoutForRead keeps a complete ready legacy image authoritative over
-// an incomplete content record for the same digest. Once the content record is
-// ready, it becomes the canonical representation, including when the legacy
-// record is failed or pending.
-func useLegacyLayoutForRead(p *paths.Paths, repository, digestHex string) bool {
-	if !legacyImageExists(p, repository, digestHex) {
-		return false
-	}
-	contentPath := p.ImageContentMetadata(digestHex)
-	if _, err := os.Stat(contentPath); errors.Is(err, os.ErrNotExist) {
-		return true
-	}
-	legacyStatus, legacyOK := metadataStatus(p.ImageMetadata(repository, digestHex))
-	contentStatus, contentOK := metadataStatus(contentPath)
-	return legacyOK && legacyStatus == StatusReady && (!contentOK || contentStatus != StatusReady)
-}
-
-// digestPath returns the path to the rootfs disk file for a digest. A complete
-// ready legacy image takes precedence over an incomplete content record, while
-// ready content is canonical for all other cases.
+// digestPath returns the rootfs path for a digest using the selected layout.
 func digestPath(p *paths.Paths, repository, digestHex string) string {
-	if useLegacyLayoutForRead(p, repository, digestHex) {
-		return p.ImageDigestPath(repository, digestHex)
-	}
-	contentPath := p.ImageContentPath(digestHex)
-	if _, err := os.Stat(contentPath); err == nil {
-		return contentPath
-	}
-	return p.ImageDigestPath(repository, digestHex)
+	return resolveImageLayout(p, repository, digestHex).disk
 }
 
 // GetDiskPath returns the filesystem path to an image's rootfs disk file (public for instances manager)
@@ -171,17 +177,10 @@ func GetDiskPath(p *paths.Paths, imageName string, digest string) (string, error
 	return digestPath(p, ref.Repository(), digestHex), nil
 }
 
-// metadataPath returns the path to metadata.json for a digest, using the same
-// layout selection as digestPath.
+// metadataPath returns the path to metadata.json for a digest using the
+// selected layout.
 func metadataPath(p *paths.Paths, repository, digestHex string) string {
-	if useLegacyLayoutForRead(p, repository, digestHex) {
-		return p.ImageMetadata(repository, digestHex)
-	}
-	contentPath := p.ImageContentMetadata(digestHex)
-	if _, err := os.Stat(contentPath); err == nil {
-		return contentPath
-	}
-	return p.ImageMetadata(repository, digestHex)
+	return resolveImageLayout(p, repository, digestHex).metadata
 }
 
 // newTagSymlinkPath returns the path to a tag in the repository namespace.
@@ -205,11 +204,7 @@ func usesLegacyLayout(p *paths.Paths, repository, digestHex string) bool {
 }
 
 func contentLayoutForWrite(p *paths.Paths, repository, digestHex string) bool {
-	if contentLayoutEnabled {
-		return !usesLegacyLayout(p, repository, digestHex)
-	}
-	_, err := os.Stat(p.ImageContentMetadata(digestHex))
-	return err == nil
+	return !usesLegacyLayout(p, repository, digestHex)
 }
 
 // writeMetadata writes metadata for a digest.
@@ -271,86 +266,7 @@ func readMetadata(p *paths.Paths, repository, digestHex string) (*imageMetadata,
 	return &meta, nil
 }
 
-func cloneReadyImageLegacy(p *paths.Paths, sourceRepository, targetRepository, digestHex string, sourceMeta *imageMetadata, targetName string) error {
-	sourceDiskPath := digestPath(p, sourceRepository, digestHex)
-	if _, err := os.Stat(sourceDiskPath); err != nil {
-		return fmt.Errorf("stat source disk: %w", err)
-	}
-	targetDir := digestDir(p, targetRepository, digestHex)
-	if err := os.MkdirAll(targetDir, 0755); err != nil {
-		return fmt.Errorf("create target digest directory: %w", err)
-	}
-	targetMeta := *sourceMeta
-	targetMeta.Name = targetName
-	data, err := json.MarshalIndent(&targetMeta, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal target metadata: %w", err)
-	}
-	diskTemp, err := os.CreateTemp(targetDir, ".rootfs-*")
-	if err != nil {
-		return fmt.Errorf("create temporary target disk: %w", err)
-	}
-	diskTempPath := diskTemp.Name()
-	if err := diskTemp.Close(); err != nil {
-		_ = os.Remove(diskTempPath)
-		return fmt.Errorf("close temporary target disk: %w", err)
-	}
-	if err := os.Remove(diskTempPath); err != nil {
-		return fmt.Errorf("remove temporary target disk: %w", err)
-	}
-	if err := os.Link(sourceDiskPath, diskTempPath); err != nil {
-		return fmt.Errorf("link source disk: %w", err)
-	}
-	installed := false
-	defer func() {
-		if !installed {
-			_ = os.Remove(diskTempPath)
-		}
-	}()
-	metadataTemp, err := os.CreateTemp(targetDir, ".metadata-*")
-	if err != nil {
-		return fmt.Errorf("create temporary target metadata: %w", err)
-	}
-	metadataTempPath := metadataTemp.Name()
-	if err := metadataTemp.Chmod(0644); err != nil {
-		_ = metadataTemp.Close()
-		_ = os.Remove(metadataTempPath)
-		return fmt.Errorf("chmod temporary target metadata: %w", err)
-	}
-	if _, err := metadataTemp.Write(data); err != nil {
-		_ = metadataTemp.Close()
-		_ = os.Remove(metadataTempPath)
-		return fmt.Errorf("write temporary target metadata: %w", err)
-	}
-	if err := metadataTemp.Close(); err != nil {
-		_ = os.Remove(metadataTempPath)
-		return fmt.Errorf("close temporary target metadata: %w", err)
-	}
-	metadataInstalled := false
-	defer func() {
-		if !metadataInstalled {
-			_ = os.Remove(metadataTempPath)
-		}
-	}()
-	if err := os.Rename(diskTempPath, digestPath(p, targetRepository, digestHex)); err != nil {
-		return fmt.Errorf("install target disk: %w", err)
-	}
-	installed = true
-	if err := os.Rename(metadataTempPath, p.ImageMetadata(targetRepository, digestHex)); err != nil {
-		return fmt.Errorf("install target metadata: %w", err)
-	}
-	metadataInstalled = true
-	return nil
-}
-
-func cloneReadyImage(p *paths.Paths, sourceRepository, targetRepository, digestHex string, sourceMeta *imageMetadata, targetName string) error {
-	if !contentLayoutEnabled && usesLegacyLayout(p, sourceRepository, digestHex) {
-		return cloneReadyImageLegacy(p, sourceRepository, targetRepository, digestHex, sourceMeta, targetName)
-	}
-	return cloneReadyImageContent(p, sourceRepository, targetRepository, digestHex, sourceMeta, targetName)
-}
-
-func cloneReadyImageContent(p *paths.Paths, sourceRepository, targetRepository, digestHex string, sourceMeta *imageMetadata, targetName string) error {
+func promoteImageToContent(p *paths.Paths, sourceRepository, digestHex string, sourceMeta *imageMetadata) error {
 	contentDir := contentDigestDir(p, digestHex)
 	contentReady := false
 	if contentMeta, err := readMetadata(p, "", digestHex); err == nil {
@@ -419,8 +335,6 @@ func cloneReadyImageContent(p *paths.Paths, sourceRepository, targetRepository, 
 		}
 	}
 
-	_ = targetRepository
-	_ = targetName
 	return nil
 }
 
@@ -434,36 +348,55 @@ func cloneReadyImageContent(p *paths.Paths, sourceRepository, targetRepository, 
 // amd64) and was non-recoverable. Always repointing is symmetric and matches
 // Docker; callers repoint unconditionally on a ready digest.
 func createTagSymlink(p *paths.Paths, repository, tag, digestHex string) error {
-	linkPath := tagSymlinkPath(p, repository, tag)
+	layout := resolveImageLayout(p, repository, digestHex)
+	linkPath := p.ImageTagSymlink(repository, tag)
 	targetPath := digestHex // Relative path (just the digest hex)
-
-	// Use repository references for content-addressed images. Legacy images keep
-	// their original tag location until they are promoted by a cross-repository tag.
-	contentPath := p.ImageContentPath(digestHex)
-	newLayout := false
-	if _, err := os.Stat(contentPath); err == nil {
+	if layout.content {
 		linkPath = newTagSymlinkPath(p, repository, tag)
 		var err error
-		targetPath, err = filepath.Rel(filepath.Dir(linkPath), p.ImageContentDir(digestHex))
+		targetPath, err = filepath.Rel(filepath.Dir(linkPath), layout.dir)
 		if err != nil {
 			return fmt.Errorf("calculate content symlink target: %w", err)
 		}
-		newLayout = true
 	}
 	if err := os.MkdirAll(filepath.Dir(linkPath), 0755); err != nil {
 		return fmt.Errorf("create parent directory: %w", err)
 	}
 
-	// Remove references in either layout so retagging does not leave a stale alias.
-	_ = os.Remove(newTagSymlinkPath(p, repository, tag))
-	_ = os.Remove(p.ImageTagSymlink(repository, tag))
-	if !newLayout {
-		linkPath = p.ImageTagSymlink(repository, tag)
+	linkTemp, err := os.CreateTemp(filepath.Dir(linkPath), ".tag-*")
+	if err != nil {
+		return fmt.Errorf("create temporary tag symlink: %w", err)
 	}
-	if err := os.Symlink(targetPath, linkPath); err != nil {
+	linkTempPath := linkTemp.Name()
+	if err := linkTemp.Close(); err != nil {
+		_ = os.Remove(linkTempPath)
+		return fmt.Errorf("close temporary tag symlink: %w", err)
+	}
+	if err := os.Remove(linkTempPath); err != nil {
+		return fmt.Errorf("remove temporary tag symlink: %w", err)
+	}
+	installed := false
+	defer func() {
+		if !installed {
+			_ = os.Remove(linkTempPath)
+		}
+	}()
+
+	if err := os.Symlink(targetPath, linkTempPath); err != nil {
 		return fmt.Errorf("create symlink: %w", err)
 	}
+	if err := os.Rename(linkTempPath, linkPath); err != nil {
+		return fmt.Errorf("install tag symlink: %w", err)
+	}
+	installed = true
 
+	stalePath := p.ImageTagSymlink(repository, tag)
+	if stalePath == linkPath {
+		stalePath = newTagSymlinkPath(p, repository, tag)
+	}
+	if err := os.Remove(stalePath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove stale tag symlink: %w", err)
+	}
 	return nil
 }
 

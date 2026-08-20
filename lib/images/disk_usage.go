@@ -29,7 +29,7 @@ func totalReadyImageBytesFromMetadata(imagesDir string) (int64, error) {
 
 		data, err := os.ReadFile(path)
 		if err != nil {
-			rootfsBytes, fallbackErr := totalRootfsBytesInDigestDir(filepath.Dir(path))
+			rootfsBytes, fallbackErr := totalUniqueRootfsBytesInDigestDir(filepath.Dir(path), &seenRootfs)
 			if fallbackErr == nil {
 				total += rootfsBytes
 				return nil
@@ -39,7 +39,7 @@ func totalReadyImageBytesFromMetadata(imagesDir string) (int64, error) {
 
 		var meta imageMetadata
 		if err := json.Unmarshal(data, &meta); err != nil {
-			rootfsBytes, fallbackErr := totalRootfsBytesInDigestDir(filepath.Dir(path))
+			rootfsBytes, fallbackErr := totalUniqueRootfsBytesInDigestDir(filepath.Dir(path), &seenRootfs)
 			if fallbackErr == nil {
 				total += rootfsBytes
 				return nil
@@ -192,6 +192,48 @@ func totalRootfsBytesInDigestDir(digestDir string) (int64, error) {
 		total += info.Size()
 	}
 	if total == 0 {
+		return 0, os.ErrNotExist
+	}
+	return total, nil
+}
+
+func totalUniqueRootfsBytesInDigestDir(digestDir string, seen *[]os.FileInfo) (int64, error) {
+	rootfsPaths, err := filepath.Glob(filepath.Join(digestDir, "rootfs.*"))
+	if err != nil {
+		return 0, err
+	}
+	if len(rootfsPaths) == 0 {
+		return 0, os.ErrNotExist
+	}
+
+	var total int64
+	found := false
+	for _, rootfsPath := range rootfsPaths {
+		info, err := os.Stat(rootfsPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return 0, err
+		}
+		if info.IsDir() {
+			continue
+		}
+		found = true
+		duplicate := false
+		for _, existing := range *seen {
+			if os.SameFile(info, existing) {
+				duplicate = true
+				break
+			}
+		}
+		if duplicate {
+			continue
+		}
+		*seen = append(*seen, info)
+		total += info.Size()
+	}
+	if !found {
 		return 0, os.ErrNotExist
 	}
 	return total, nil
