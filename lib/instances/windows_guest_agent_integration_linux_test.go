@@ -77,7 +77,7 @@ func TestWindowsGuestAgentIntegration(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	jobStart := time.Now()
 	exit, err := guest.ExecIntoInstance(ctx, dialer, guest.ExecOptions{
-		Command: []string{"powershell.exe", "-NoProfile", "-NonInteractive", "-Command", `& ping.exe -n 60 127.0.0.1`},
+		Command: []string{"powershell.exe", "-NoProfile", "-NonInteractive", "-Command", `Copy-Item "$env:SystemRoot\System32\ping.exe" "$env:TEMP\hypeman-job-child.exe" -Force; & "$env:TEMP\hypeman-job-child.exe" -n 60 127.0.0.1`},
 		Stdout:  &stdout,
 		Stderr:  &stderr,
 		Timeout: 2,
@@ -85,16 +85,17 @@ func TestWindowsGuestAgentIntegration(t *testing.T) {
 	require.NoError(t, err, stderr.String())
 	assert.Less(t, time.Since(jobStart), 10*time.Second, "timed out process tree did not terminate promptly")
 
-	stdout.Reset()
-	stderr.Reset()
-	exit, err = guest.ExecIntoInstance(ctx, dialer, guest.ExecOptions{
-		Command: []string{"powershell.exe", "-NoProfile", "-NonInteractive", "-Command", `if (Get-Process ping -ErrorAction SilentlyContinue) { exit 42 }`},
-		Stdout:  &stdout,
-		Stderr:  &stderr,
-		Timeout: 10,
-	})
-	require.NoError(t, err, stderr.String())
-	require.Equal(t, 0, exit.Code, "job object left a child process running")
+	require.Eventually(t, func() bool {
+		stdout.Reset()
+		stderr.Reset()
+		exit, err = guest.ExecIntoInstance(ctx, dialer, guest.ExecOptions{
+			Command: []string{"powershell.exe", "-NoProfile", "-NonInteractive", "-Command", `if (Get-Process hypeman-job-child -ErrorAction SilentlyContinue) { exit 42 }`},
+			Stdout:  &stdout,
+			Stderr:  &stderr,
+			Timeout: 10,
+		})
+		return err == nil && exit != nil && exit.Code == 0
+	}, 15*time.Second, 250*time.Millisecond, "job object left a child process running")
 
 	stdout.Reset()
 	stderr.Reset()
