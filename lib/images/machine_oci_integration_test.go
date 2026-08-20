@@ -63,12 +63,7 @@ func waitForMachineImage(t *testing.T, manager Manager, name string) *Image {
 }
 
 func TestMachineArtifactsPullFromOCI(t *testing.T) {
-	if _, err := exec.LookPath("qemu-img"); err != nil {
-		if os.Getenv("CI") == "true" {
-			t.Fatal("qemu-img is required in CI")
-		}
-		t.Skip("qemu-img is unavailable")
-	}
+	requireQEMUImg(t)
 
 	registry := httptest.NewServer(gcrregistry.New())
 	defer registry.Close()

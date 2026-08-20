@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -11,6 +12,16 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func requireQEMUImg(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("qemu-img"); err != nil {
+		if os.Getenv("CI") == "true" && runtime.GOOS == "linux" {
+			t.Fatal("qemu-img is required in Linux CI")
+		}
+		t.Skip("qemu-img is unavailable")
+	}
+}
 
 func windowsMachineMetadata(kind MachineImageKind, diskPath, base string) *containerMetadata {
 	format := "raw"
@@ -64,12 +75,7 @@ func TestMachineArtifactDiskRejectsSymlinkEscape(t *testing.T) {
 }
 
 func TestMaterializeRejectsExternalDiskReferences(t *testing.T) {
-	if _, err := exec.LookPath("qemu-img"); err != nil {
-		if os.Getenv("CI") == "true" {
-			t.Fatal("qemu-img is required in CI")
-		}
-		t.Skip("qemu-img is unavailable")
-	}
+	requireQEMUImg(t)
 
 	p := paths.New(t.TempDir())
 	m := &manager{paths: p}
@@ -107,12 +113,7 @@ func TestMaterializeRejectsExternalDiskReferences(t *testing.T) {
 }
 
 func TestMaterializeWindowsBaseFormats(t *testing.T) {
-	if _, err := exec.LookPath("qemu-img"); err != nil {
-		if os.Getenv("CI") == "true" {
-			t.Fatal("qemu-img is required in CI")
-		}
-		t.Skip("qemu-img is unavailable")
-	}
+	requireQEMUImg(t)
 
 	formats := []struct {
 		label string
@@ -151,12 +152,7 @@ func TestMaterializeWindowsBaseFormats(t *testing.T) {
 }
 
 func TestMaterializeWindowsBaseAndPersona(t *testing.T) {
-	if _, err := exec.LookPath("qemu-img"); err != nil {
-		if os.Getenv("CI") == "true" {
-			t.Fatal("qemu-img is required in CI")
-		}
-		t.Skip("qemu-img is unavailable")
-	}
+	requireQEMUImg(t)
 
 	p := paths.New(t.TempDir())
 	m := &manager{paths: p}
