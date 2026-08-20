@@ -17,12 +17,10 @@ import (
 )
 
 const (
-	addressFamilyIPv4       = 2
-	gaaFlagIncludePrefixes  = 0x10
-	dnsSettingsVersion1     = 1
-	dnsSettingNameServer    = 0x2
-	windowsErrorBufferLarge = syscall.Errno(111)
-	windowsErrorNotFound    = syscall.Errno(1168)
+	addressFamilyIPv4      = 2
+	gaaFlagIncludePrefixes = 0x10
+	dnsSettingsVersion1    = 1
+	dnsSettingNameServer   = 0x2
 )
 
 var (
@@ -35,6 +33,7 @@ var (
 	createForwardEntryProc       = ipHelperDLL.NewProc("CreateIpForwardEntry2")
 	deleteForwardEntryProc       = ipHelperDLL.NewProc("DeleteIpForwardEntry2")
 	setInterfaceDNSSettingsProc  = ipHelperDLL.NewProc("SetInterfaceDnsSettings")
+	convertInterfaceLuidProc     = ipHelperDLL.NewProc("ConvertInterfaceLuidToGuid")
 )
 
 type dnsInterfaceSettings struct {
@@ -80,7 +79,7 @@ func (s *guestServer) ReconfigureNetwork(ctx context.Context, req *pb.Reconfigur
 		return nil, err
 	}
 	if len(req.DnsServers) > 0 {
-		if err := configureWindowsDNS(adapter.NetworkGUID, req.DnsServers); err != nil {
+		if err := configureWindowsDNS(adapter.InterfaceGUID, req.DnsServers); err != nil {
 			return nil, err
 		}
 	}
@@ -88,10 +87,10 @@ func (s *guestServer) ReconfigureNetwork(ctx context.Context, req *pb.Reconfigur
 }
 
 type windowsAdapterInfo struct {
-	Luid        uint64
-	Index       uint32
-	NetworkGUID windows.GUID
-	IPv4        []net.IP
+	Luid          uint64
+	Index         uint32
+	InterfaceGUID windows.GUID
+	IPv4          []net.IP
 }
 
 func waitForWindowsAdapter(ctx context.Context, mac net.HardwareAddr, name string) (*windowsAdapterInfo, error) {
@@ -119,7 +118,7 @@ func findWindowsAdapter(mac net.HardwareAddr, name string) (*windowsAdapterInfo,
 		buffer := make([]byte, size)
 		first := (*windows.IpAdapterAddresses)(unsafe.Pointer(&buffer[0]))
 		err := windows.GetAdaptersAddresses(addressFamilyIPv4, gaaFlagIncludePrefixes, 0, first, &size)
-		if err == windowsErrorBufferLarge {
+		if err == windows.ERROR_BUFFER_OVERFLOW {
 			continue
 		}
 		if err != nil {
@@ -129,7 +128,13 @@ func findWindowsAdapter(mac net.HardwareAddr, name string) (*windowsAdapterInfo,
 			physical := net.HardwareAddr(adapter.PhysicalAddress[:adapter.PhysicalAddressLength])
 			friendlyName := windows.UTF16PtrToString(adapter.FriendlyName)
 			if strings.EqualFold(physical.String(), mac.String()) && (name == "" || strings.EqualFold(name, friendlyName)) {
-				result := &windowsAdapterInfo{Luid: adapter.Luid, Index: adapter.IfIndex, NetworkGUID: adapter.NetworkGuid}
+				result := &windowsAdapterInfo{Luid: adapter.Luid, Index: adapter.IfIndex}
+				if code, _, _ := convertInterfaceLuidProc.Call(
+					uintptr(unsafe.Pointer(&result.Luid)),
+					uintptr(unsafe.Pointer(&result.InterfaceGUID)),
+				); code != 0 {
+					return nil, fmt.Errorf("convert Windows interface LUID to GUID: %w", syscall.Errno(code))
+				}
 				for address := adapter.FirstUnicastAddress; address != nil; address = address.Next {
 					if ipv4 := address.Address.IP().To4(); ipv4 != nil {
 						result.IPv4 = append(result.IPv4, append(net.IP(nil), ipv4...))
@@ -149,7 +154,7 @@ func configureWindowsAddresses(adapter *windowsAdapterInfo, ipv4 net.IP, prefix 
 		row.InterfaceLuid = adapter.Luid
 		row.InterfaceIndex = adapter.Index
 		copyRawIPv4(unsafe.Pointer(&row.Address), address)
-		if code, _, _ := deleteUnicastAddressProc.Call(uintptr(unsafe.Pointer(&row))); code != 0 && syscall.Errno(code) != windowsErrorNotFound {
+		if code, _, _ := deleteUnicastAddressProc.Call(uintptr(unsafe.Pointer(&row))); code != 0 && syscall.Errno(code) != windows.ERROR_NOT_FOUND {
 			return fmt.Errorf("delete Windows IPv4 address: %w", syscall.Errno(code))
 		}
 	}
@@ -164,7 +169,7 @@ func configureWindowsAddresses(adapter *windowsAdapterInfo, ipv4 net.IP, prefix 
 			destination := (*windows.RawSockaddrInet4)(unsafe.Pointer(&route.DestinationPrefix.Prefix))
 			if route.InterfaceLuid == adapter.Luid && route.DestinationPrefix.PrefixLength == 0 && destination.Addr == [4]byte{} {
 				row := route
-				if code, _, _ := deleteForwardEntryProc.Call(uintptr(unsafe.Pointer(&row))); code != 0 && syscall.Errno(code) != windowsErrorNotFound {
+				if code, _, _ := deleteForwardEntryProc.Call(uintptr(unsafe.Pointer(&row))); code != 0 && syscall.Errno(code) != windows.ERROR_NOT_FOUND {
 					return fmt.Errorf("delete Windows default route: %w", syscall.Errno(code))
 				}
 			}

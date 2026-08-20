@@ -487,6 +487,12 @@ func reconfigureGuestNetworkConfig(ctx context.Context, stored *StoredMetadata, 
 	if err != nil {
 		return err
 	}
+	if isWindowsPlatform(stored.Platform) {
+		cfg.dns, err = parseWindowsDNSServers(netConfig.DNS)
+		if err != nil {
+			return err
+		}
+	}
 
 	dialer, err := hypervisor.NewVsockDialer(stored.HypervisorType, stored.VsockSocket, stored.VsockCID)
 	if err != nil {
@@ -570,15 +576,19 @@ func guestNetworkReconfigureConfig(netConfig *network.NetworkConfig) (*guestNetw
 	if err != nil {
 		return nil, err
 	}
+	return &guestNetworkConfig{ip: ip, mac: mac, gateway: gateway, prefix: prefix}, nil
+}
+
+func parseWindowsDNSServers(value string) ([]string, error) {
 	var dns []string
-	for _, server := range strings.FieldsFunc(netConfig.DNS, func(r rune) bool { return r == ',' || r == ' ' }) {
+	for _, server := range strings.FieldsFunc(value, func(r rune) bool { return r == ',' || r == ' ' }) {
 		server = strings.TrimSpace(server)
 		if net.ParseIP(server).To4() == nil {
-			return nil, fmt.Errorf("invalid DNS server %q", server)
+			return nil, fmt.Errorf("invalid Windows DNS server %q", server)
 		}
 		dns = append(dns, server)
 	}
-	return &guestNetworkConfig{ip: ip, mac: mac, gateway: gateway, dns: dns, prefix: prefix}, nil
+	return dns, nil
 }
 
 func guestNetworkReconfigureCommand(alloc *network.Allocation) (string, error) {

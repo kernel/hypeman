@@ -30,19 +30,20 @@ func TestNetworkConfigFromAllocation_PreservesDNS(t *testing.T) {
 	assert.Equal(t, alloc.TAPDevice, cfg.TAPDevice)
 }
 
-func TestGuestNetworkReconfigureConfigParsesDNS(t *testing.T) {
+func TestWindowsDNSServerParsingDoesNotAffectLinuxConfig(t *testing.T) {
 	t.Parallel()
 
+	dns, err := parseWindowsDNSServers("1.1.1.1, 8.8.8.8")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"1.1.1.1", "8.8.8.8"}, dns)
+	_, err = parseWindowsDNSServers("2606:4700:4700::1111")
+	require.ErrorContains(t, err, "invalid Windows DNS server")
+
 	cfg, err := guestNetworkReconfigureConfig(&network.NetworkConfig{
-		IP: "10.102.146.62", MAC: "02:00:00:85:17:c8", Gateway: "10.102.0.1", Netmask: "255.255.0.0", DNS: "1.1.1.1, 8.8.8.8",
+		IP: "10.102.146.62", MAC: "02:00:00:85:17:c8", Gateway: "10.102.0.1", Netmask: "255.255.0.0", DNS: "2606:4700:4700::1111",
 	})
 	require.NoError(t, err)
-	assert.Equal(t, []string{"1.1.1.1", "8.8.8.8"}, cfg.dns)
-
-	_, err = guestNetworkReconfigureConfig(&network.NetworkConfig{
-		IP: "10.102.146.62", MAC: "02:00:00:85:17:c8", Gateway: "10.102.0.1", Netmask: "255.255.0.0", DNS: "not-an-address",
-	})
-	require.ErrorContains(t, err, "invalid DNS server")
+	assert.Empty(t, cfg.dns)
 }
 
 func TestGuestNetworkReconfigureCommand_AppliesAllocatedMAC(t *testing.T) {
