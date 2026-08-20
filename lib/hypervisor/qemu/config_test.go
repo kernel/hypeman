@@ -222,7 +222,11 @@ func TestProfilesValidateFirmwareAndDiskFormats(t *testing.T) {
 		Firmware: &hypervisor.FirmwareConfig{CodePath: "/code", VarsPath: "/vars"},
 		Disks:    []hypervisor.DiskConfig{{Path: "/disk", Format: hypervisor.DiskFormatQCOW2}},
 	}
-	assert.NoError(t, StandardProfile{}.validateConfig(uefi))
+	if standardMachineType() == MachineTypeQ35 {
+		assert.NoError(t, StandardProfile{}.validateConfig(uefi))
+	} else {
+		assert.ErrorContains(t, StandardProfile{}.validateConfig(uefi), "supported only by qemu/q35 on amd64")
+	}
 	assert.ErrorContains(t, MicroVMProfile{}.validateConfig(uefi), "does not support uefi boot")
 }
 
