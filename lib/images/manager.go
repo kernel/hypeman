@@ -48,6 +48,8 @@ type Manager interface {
 	GetImage(ctx context.Context, name string) (*Image, error)
 	// TagImage creates or updates a local tag for an existing image.
 	TagImage(ctx context.Context, source, target string) (*Image, error)
+	// DeleteImage removes local tags in the reference's repository. Shared
+	// content remains available by digest while other local references exist.
 	DeleteImage(ctx context.Context, name string) error
 	RecoverInterruptedBuilds()
 	// TotalImageBytes returns the total size of all ready images on disk.

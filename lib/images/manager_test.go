@@ -232,6 +232,9 @@ func TestTagImage(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "docker.io/library/busybox:stable", resolvedAlias.Name)
 	require.Equal(t, got.Digest, resolvedAlias.Digest)
+	resolvedDigest, err := mgr.GetImage(ctx, digestRef)
+	require.NoError(t, err)
+	require.Equal(t, got.Digest, resolvedDigest.Digest)
 
 	require.NoError(t, mgr.DeleteImage(ctx, "docker.io/library/busybox:stable"))
 	_, err = os.Stat(p.ImageContentDir(digestHex))

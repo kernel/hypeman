@@ -411,13 +411,17 @@ func listTags(p *paths.Paths, repository string) ([]string, error) {
 	return tags, nil
 }
 
-// listAllMetadata returns one metadata record per digest across all repositories.
+// listAllMetadata returns one metadata record per tag across all repositories.
 // Tagged images are discovered through tag symlinks, and digest-only images are
 // discovered directly from their metadata.json files.
 func listAllMetadata(p *paths.Paths) ([]*imageMetadata, error) {
 	imagesDir := p.ImagesDir()
 	seen := make(map[string]struct{})
 	contentDigests := make(map[string]struct{})
+	taggedDigests := make(map[string]struct{})
+	taggedContentDigests := make(map[string]struct{})
+	metadataRefs := make([]metadataReference, 0)
+	seenMetadataRefs := make(map[string]struct{})
 	metas := make([]*imageMetadata, 0)
 
 	err := filepath.Walk(imagesDir, func(path string, info os.FileInfo, err error) error {
@@ -457,15 +461,19 @@ func listAllMetadata(p *paths.Paths) ([]*imageMetadata, error) {
 				repository = filepath.Dir(rel)
 				tag = filepath.Base(path)
 			}
-			return appendMetadataForTag(p, repository, tag, digestHex, seen, &metas)
+			return appendMetadataForTag(p, repository, tag, digestHex, seen, taggedDigests, taggedContentDigests, &metas)
 		case !info.IsDir() && info.Name() == "metadata.json":
 			digestHex := filepath.Base(filepath.Dir(path))
 			repository, err := filepath.Rel(imagesDir, filepath.Dir(filepath.Dir(path)))
 			if err != nil {
 				return nil
 			}
-
-			return appendMetadataIfNew(p, repository, digestHex, seen, &metas)
+			key := repository + "@" + digestHex
+			if _, ok := seenMetadataRefs[key]; !ok {
+				seenMetadataRefs[key] = struct{}{}
+				metadataRefs = append(metadataRefs, metadataReference{repository: repository, digestHex: digestHex})
+			}
+			return nil
 		default:
 			return nil
 		}
@@ -474,12 +482,16 @@ func listAllMetadata(p *paths.Paths) ([]*imageMetadata, error) {
 	if err != nil && !os.IsNotExist(err) {
 		return nil, fmt.Errorf("walk images directory: %w", err)
 	}
-	seenContentDigests := make(map[string]struct{}, len(metas))
-	for _, meta := range metas {
-		seenContentDigests[strings.TrimPrefix(meta.Digest, "sha256:")] = struct{}{}
+	for _, ref := range metadataRefs {
+		if _, tagged := taggedDigests[ref.repository+"@"+ref.digestHex]; tagged {
+			continue
+		}
+		if err := appendMetadataIfNew(p, ref.repository, ref.digestHex, seen, &metas); err != nil {
+			return nil, err
+		}
 	}
 	for digestHex := range contentDigests {
-		if _, found := seenContentDigests[digestHex]; found {
+		if _, found := taggedContentDigests[digestHex]; found {
 			continue
 		}
 		if err := appendContentMetadataIfNew(p, digestHex, seen, &metas); err != nil {
@@ -488,6 +500,11 @@ func listAllMetadata(p *paths.Paths) ([]*imageMetadata, error) {
 	}
 
 	return metas, nil
+}
+
+type metadataReference struct {
+	repository string
+	digestHex  string
 }
 
 func appendMetadataIfNew(p *paths.Paths, repository, digestHex string, seen map[string]struct{}, metas *[]*imageMetadata) error {
@@ -520,9 +537,9 @@ func appendContentMetadataIfNew(p *paths.Paths, digestHex string, seen map[strin
 	return nil
 }
 
-func appendMetadataForTag(p *paths.Paths, repository, tag, digestHex string, seen map[string]struct{}, metas *[]*imageMetadata) error {
-	key := repository + "@" + digestHex
-	if _, ok := seen[key]; ok {
+func appendMetadataForTag(p *paths.Paths, repository, tag, digestHex string, seen, taggedDigests, taggedContentDigests map[string]struct{}, metas *[]*imageMetadata) error {
+	tagKey := repository + ":" + tag
+	if _, ok := seen[tagKey]; ok {
 		return nil
 	}
 	meta, err := readMetadata(p, repository, digestHex)
@@ -530,7 +547,9 @@ func appendMetadataForTag(p *paths.Paths, repository, tag, digestHex string, see
 		return nil
 	}
 	meta.Name = repository + ":" + tag
-	seen[key] = struct{}{}
+	seen[tagKey] = struct{}{}
+	taggedDigests[repository+"@"+digestHex] = struct{}{}
+	taggedContentDigests[digestHex] = struct{}{}
 	*metas = append(*metas, meta)
 	return nil
 }

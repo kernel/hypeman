@@ -124,8 +124,12 @@ func TestListAllMetadataContentLayout(t *testing.T) {
 
 	metas, err := listAllMetadata(p)
 	require.NoError(t, err)
-	require.Len(t, metas, 1)
-	require.Equal(t, "docker.io/library/alpine:latest", metas[0].Name)
+	require.Len(t, metas, 2)
+	names := []string{metas[0].Name, metas[1].Name}
+	require.ElementsMatch(t, []string{
+		"docker.io/library/alpine:latest",
+		"docker.io/library/alpine:stable",
+	}, names)
 }
 
 func TestImageMetadataToImage_ClonesMetadata(t *testing.T) {
