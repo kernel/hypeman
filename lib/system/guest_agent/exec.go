@@ -11,7 +11,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/creack/pty"
 	pb "github.com/kernel/hypeman/lib/guest"
 )
 
@@ -30,13 +29,12 @@ func (s *guestServer) Exec(stream pb.GuestService_ExecServer) error {
 		return fmt.Errorf("first message must be ExecStart")
 	}
 
-	command := start.Command
-	if len(command) == 0 {
-		command = []string{"/bin/sh"}
+	if len(start.Command) == 0 {
+		start.Command = defaultCommand()
 	}
 
 	log.Printf("[guest-agent] exec: command=%v tty=%v cwd=%s timeout=%d",
-		command, start.Tty, start.Cwd, start.TimeoutSeconds)
+		start.Command, start.Tty, start.Cwd, start.TimeoutSeconds)
 
 	// Create context with timeout if specified
 	ctx := context.Background()
@@ -60,6 +58,11 @@ func (s *guestServer) executeNoTTY(ctx context.Context, stream pb.GuestService_E
 	}
 
 	cmd := exec.CommandContext(ctx, start.Command[0], start.Command[1:]...)
+	cleanup, err := configureExecCommand(cmd, start.Session)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
 
 	// Set up environment (no TTY defaults for non-TTY mode)
 	cmd.Env = s.buildEnv(start.Env, false)
@@ -153,113 +156,6 @@ func (s *guestServer) executeNoTTY(ctx context.Context, stream pb.GuestService_E
 	}
 
 	log.Printf("[guest-agent] command finished with exit code: %d", exitCode)
-
-	// Send exit code
-	return stream.Send(&pb.ExecResponse{
-		Response: &pb.ExecResponse_ExitCode{ExitCode: exitCode},
-	})
-}
-
-// executeTTY executes command with TTY
-func (s *guestServer) executeTTY(ctx context.Context, stream pb.GuestService_ExecServer, start *pb.ExecStart) error {
-	// Run command directly with PTY - guest-agent is already running in container namespace
-	// This ensures PTY and shell are in the same namespace, fixing Ctrl+C signal handling
-	if len(start.Command) == 0 {
-		return fmt.Errorf("empty command")
-	}
-
-	cmd := exec.CommandContext(ctx, start.Command[0], start.Command[1:]...)
-
-	// Set up environment (TTY mode adds TERM default)
-	cmd.Env = s.buildEnv(start.Env, true)
-
-	// Set up working directory
-	if start.Cwd != "" {
-		cmd.Dir = start.Cwd
-	}
-
-	// Set up initial window size (use defaults if not specified)
-	ws := &pty.Winsize{
-		Rows: uint16(start.Rows),
-		Cols: uint16(start.Cols),
-	}
-	if ws.Rows == 0 {
-		ws.Rows = 24
-	}
-	if ws.Cols == 0 {
-		ws.Cols = 80
-	}
-
-	// Start with PTY and initial window size
-	ptmx, err := pty.StartWithSize(cmd, ws)
-	if err != nil {
-		return fmt.Errorf("start pty: %w", err)
-	}
-	defer ptmx.Close()
-
-	// Mutex to protect concurrent stream.Send calls (gRPC streams are not thread-safe)
-	var sendMu sync.Mutex
-
-	// Use WaitGroup to ensure all output is sent before exit code
-	var wg sync.WaitGroup
-
-	// Handle stdin and resize in background
-	go func() {
-		for {
-			req, err := stream.Recv()
-			if err != nil {
-				return
-			}
-
-			if data := req.GetStdin(); data != nil {
-				ptmx.Write(data)
-			}
-
-			// Handle window resize
-			if resize := req.GetResize(); resize != nil {
-				pty.Setsize(ptmx, &pty.Winsize{
-					Rows: uint16(resize.Rows),
-					Cols: uint16(resize.Cols),
-				})
-			}
-		}
-	}()
-
-	// Stream output
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		buf := make([]byte, 32*1024)
-		for {
-			n, err := ptmx.Read(buf)
-			if n > 0 {
-				sendMu.Lock()
-				stream.Send(&pb.ExecResponse{
-					Response: &pb.ExecResponse_Stdout{Stdout: buf[:n]},
-				})
-				sendMu.Unlock()
-			}
-			if err != nil {
-				return
-			}
-		}
-	}()
-
-	// Wait for command or context cancellation
-	waitErr := cmd.Wait()
-
-	// Wait for all output to be sent
-	wg.Wait()
-
-	exitCode := int32(0)
-	if cmd.ProcessState != nil {
-		exitCode = int32(cmd.ProcessState.ExitCode())
-	} else if waitErr != nil {
-		// If killed by timeout, exit with 124 (GNU timeout convention)
-		exitCode = 124
-	}
-
-	log.Printf("[guest-agent] TTY command finished with exit code: %d", exitCode)
 
 	// Send exit code
 	return stream.Send(&pb.ExecResponse{

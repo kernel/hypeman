@@ -34,6 +34,11 @@ message ExecRequest {
   }
 }
 
+enum ExecSession {
+  EXEC_SESSION_SYSTEM = 0;
+  EXEC_SESSION_DESKTOP = 1;
+}
+
 // ExecStart initiates command execution
 message ExecStart {
   repeated string command = 1;        // Command and arguments
@@ -43,6 +48,7 @@ message ExecStart {
   int32 timeout_seconds = 5;          // Execution timeout in seconds (0 = no timeout)
   uint32 rows = 6;                    // Initial terminal rows (0 = default 24)
   uint32 cols = 7;                    // Initial terminal cols (0 = default 80)
+  ExecSession session = 8;            // SYSTEM service session or active desktop user
 }
 
 // WindowSize represents terminal window dimensions for resize events

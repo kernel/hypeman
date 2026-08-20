@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -40,6 +41,7 @@ type ExecRequest struct {
 	WaitForAgent int32             `json:"wait_for_agent,omitempty"` // seconds to wait for guest agent to be ready
 	Rows         uint32            `json:"rows,omitempty"`           // Initial terminal rows (0 = default)
 	Cols         uint32            `json:"cols,omitempty"`           // Initial terminal cols (0 = default)
+	Session      string            `json:"session,omitempty"`        // system (default) or desktop (Windows)
 }
 
 // ResizeMessage represents a window resize control message
@@ -106,9 +108,22 @@ func (s *ApiService) ExecHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Default command if not specified
+	session := guest.ExecSession_EXEC_SESSION_SYSTEM
+	switch strings.ToLower(execReq.Session) {
+	case "", "system":
+	case "desktop":
+		session = guest.ExecSession_EXEC_SESSION_DESKTOP
+	default:
+		ws.WriteMessage(websocket.TextMessage, []byte(`{"error":"session must be system or desktop"}`))
+		return
+	}
+
 	if len(execReq.Command) == 0 {
-		execReq.Command = []string{"/bin/sh"}
+		if strings.HasPrefix(inst.Platform, "windows/") {
+			execReq.Command = []string{"cmd.exe"}
+		} else {
+			execReq.Command = []string{"/bin/sh"}
+		}
 	}
 
 	// Get JWT subject for audit logging (if available)
@@ -170,6 +185,7 @@ func (s *ApiService) ExecHandler(w http.ResponseWriter, r *http.Request) {
 		WaitForAgent: time.Duration(execReq.WaitForAgent) * time.Second,
 		Rows:         execReq.Rows,
 		Cols:         execReq.Cols,
+		Session:      session,
 		ResizeChan:   resizeChan,
 	})
 

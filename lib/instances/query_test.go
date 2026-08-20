@@ -438,6 +438,26 @@ func TestHydrateBootMarkersUsesGuestAgentProbeWhenReadyMarkerMissing(t *testing.
 	assert.Equal(t, 1, probeCalls)
 }
 
+func TestHydrateBootMarkersUsesWindowsGuestAgentAsBootMarker(t *testing.T) {
+	t.Parallel()
+
+	readyAt := time.Date(2026, 3, 8, 12, 0, 2, 0, time.UTC)
+	m := &manager{
+		paths: paths.New(t.TempDir()),
+		now:   func() time.Time { return readyAt },
+		guestAgentReadyProbe: func(context.Context, *StoredMetadata) bool {
+			return true
+		},
+	}
+	meta := &StoredMetadata{Id: "windows-instance", Platform: "windows/amd64"}
+	meta.Phases.Record(phasetracking.PhaseInitializing, readyAt.Add(-time.Second))
+
+	require.True(t, m.hydrateBootMarkersFromLogs(context.Background(), meta))
+	require.Equal(t, readyAt, *meta.ProgramStartedAt)
+	require.Equal(t, readyAt, *meta.GuestAgentReadyAt)
+	assert.Equal(t, StateRunning, deriveRunningState(meta))
+}
+
 func TestParseBootMarkers_IgnoresStaleMarkersBeforeBootStart(t *testing.T) {
 	t.Parallel()
 
