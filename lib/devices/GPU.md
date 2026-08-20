@@ -284,22 +284,32 @@ NVRM: GPU 0000:00:03.0: RmInitAdapter failed! (0x22:0x65:884)
 (0x65 = timeout; the guest's init requests are never answered, and
 `/proc/interrupts` shows the GPU's MSI-X vectors allocated but idle).
 
-Hypeman detects this automatically: the guest kernel writes that line to the
-serial console, which lands in the instance's `logs/app.log`, and the vGPU
-sentinel controller scans that file for every vendor VFIO instance. A match
-quarantines the VF in `<data-dir>/gpu/vf-health.json` (it survives restarts):
-the VF is excluded from placement and from advertised profile availability,
-and its parent GPU becomes overflow-only so it drains toward the SR-IOV
-cycle. The conviction is logged at error level (`quarantined wedged vGPU VF`)
-and counted in `hypeman_instances_vgpu_sentinel_convictions_total`;
+Hypeman detects this automatically: the guest agent watches the guest kernel
+log (`/dev/kmsg`) for that line and reports it as a `HYPEMAN-GPU-INIT-FAILED`
+marker — the same guest-to-host channel as the other `HYPEMAN-*` markers,
+landing in the instance's `logs/app.log` — and the vGPU sentinel controller
+scans that file for every vendor VFIO instance. A match quarantines the VF in
+`<data-dir>/gpu/vf-health.json` (it survives restarts): the VF is excluded
+from placement and from advertised profile availability, and its parent GPU
+becomes overflow-only so it drains toward the SR-IOV cycle. The conviction is
+logged at error level (`quarantined wedged vGPU VF`) and counted in
+`hypeman_instances_vgpu_sentinel_convictions_total`;
 `hypeman_instances_vgpu_quarantined_vfs` gauges the current quarantine count.
-A burst of convictions (more than 3 in 15 minutes) pauses auto-conviction, so
-a systemic non-wedge init failure — e.g. a guest/host driver mismatch rolling
-out — cannot quarantine the fleet.
+A burst of convictions (more than 3 in 15 minutes) pauses auto-conviction —
+the guest agent keeps re-emitting the marker while the failure persists, so a
+paused conviction lands once the window clears — so a systemic non-wedge init
+failure (e.g. a guest/host driver mismatch rolling out) cannot quarantine the
+fleet before an operator sees it.
+
+Detection requires the hypeman guest agent: an image that skips the agent
+never reports, so a wedge hit exclusively by such images stays undetected in
+v1. The marker also rides a guest-writable channel — a root guest could forge
+it and quarantine its own VF; the conviction brake bounds the blast radius,
+and the quarantine only ever removes capacity, never touches the instance.
 
 The wedge-creating kill itself leaves no host-side log: no kernel error, no
 XID, no plugin crash. Detection therefore happens on the next boot that lands
-on the VF, whose guest emits the sentinel ~27s after spawn.
+on the VF, whose guest driver starts failing ~27s after spawn.
 
 The trigger is a SIGKILL delivered to QEMU while the vGPU plugin is
 still initializing the VF (roughly the first seconds after process start):
@@ -316,23 +326,32 @@ External SIGKILLs (OOM killer, manual `kill -9`) can still trigger it.
 Confirm by assigning the same profile on a different VF: if that guest
 initializes, the VF is wedged, not the driver stack. Remediate by cycling
 SR-IOV on the parent GPU (this destroys and recreates all of its VFs, so it
-requires no vGPU assignments on that GPU):
+requires no vGPU assignments on that GPU). The DCGM quiesce is not optional:
+with `nv-hostengine`/`dcgm-exporter` holding the GPUs open, `sriov-manage -d`
+fails with `Cannot obtain unbindLock` on first contact.
 
 ```bash
+# 1. Quiesce the services holding the GPU (required for the unbind lock).
+systemctl stop nvidia-dcgm-exporter nvidia-dcgm
+
+# 2. Cycle SR-IOV on the parent GPU.
 /usr/lib/nvidia/sriov-manage -d <parent-gpu-pci-addr>
 /usr/lib/nvidia/sriov-manage -e <parent-gpu-pci-addr>
+
+# 3. Restart the quiesced services.
+systemctl start nvidia-dcgm nvidia-dcgm-exporter
 ```
 
 After the cycle, boot a verification instance on the recovered VF and confirm
-its guest reaches the driver (no sentinel in its app log), then clear the
-quarantine by removing the VF's entry from `<data-dir>/gpu/vf-health.json`
-and restarting hypeman.
+its guest reaches the driver (no `HYPEMAN-GPU-INIT-FAILED` in its app log),
+then clear the quarantine by removing the VF's entry from
+`<data-dir>/gpu/vf-health.json` and restarting hypeman immediately — the
+running process keeps the quarantine in memory, and a conviction landing
+before the restart re-persists it over your edit.
 
 Do not unbind/rebind the VF from the nvidia driver — it breaks the
 nvidia-vgpu-vfio core-device registration (`vfio_pci_core_device not found`)
 and the VF stops accepting assignments entirely until the SR-IOV cycle.
-Services holding the GPU (DCGM, persistenced) must be stopped for the cycle
-to obtain the unbind lock.
 
 ### vGPU assignment fails
 

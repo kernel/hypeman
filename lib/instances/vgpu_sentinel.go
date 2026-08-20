@@ -26,19 +26,30 @@ const (
 	// the host harder than the failure itself, so auto-conviction pauses.
 	vgpuSentinelBrakeWindow = 15 * time.Minute
 	vgpuSentinelBrakeLimit  = 3
+
+	// vgpuSentinelMaxLineBytes bounds how much of an unterminated trailing
+	// line a scan will buffer and re-read. Marker lines are short; anything
+	// this long is console spam and is skipped once complete reading it
+	// becomes unreasonable.
+	vgpuSentinelMaxLineBytes = 64 * 1024
 )
 
-// vgpuSentinelPattern matches the guest NVIDIA driver's init-failure line as
-// it arrives on the serial console. The full "NVRM: ... RmInitAdapter
-// failed!" shape is required: the bare token also appears in echoed exec
-// command lines, and the trailing (stage:status:line) tuple is
-// driver-build-specific, so neither is safe to match.
-var vgpuSentinelPattern = regexp.MustCompile(`NVRM: .*RmInitAdapter failed!`)
+// vgpuSentinelPattern matches the guest agent's HYPEMAN-GPU-INIT-FAILED
+// report as it arrives on the serial console (the agent observes the NVIDIA
+// driver's RmInitAdapter failure in the guest kernel log and emits this
+// marker — the same guest-to-host channel as the other HYPEMAN-* markers).
+// The full marker shape including the nvrm field is required: a bare token
+// could appear in echoed exec command lines.
+var vgpuSentinelPattern = regexp.MustCompile(`HYPEMAN-GPU-INIT-FAILED ts=\S+ nvrm="`)
 
 type vgpuSentinelTarget struct {
 	instanceID string
 	vfAddress  string
 	appLogPath string
+	// assignedAt identifies one assignment epoch: it changes whenever the
+	// instance acquires a vGPU, so a tail from a previous boot or a previous
+	// VF is never carried into the next one.
+	assignedAt string
 }
 
 type vgpuSentinelStore interface {
@@ -46,8 +57,10 @@ type vgpuSentinelStore interface {
 }
 
 type vgpuSentinelTail struct {
-	offset int64
-	done   bool
+	vfAddress  string
+	assignedAt string
+	offset     int64
+	done       bool
 }
 
 // VGPUSentinelController scans the serial console log of vendor VFIO vGPU
@@ -56,14 +69,16 @@ type vgpuSentinelTail struct {
 // failing — so a match quarantines the VF, removing it from placement until
 // an operator cycles the parent GPU.
 type VGPUSentinelController struct {
-	store       vgpuSentinelStore
-	log         *slog.Logger
-	interval    time.Duration
-	now         func() time.Time
-	quarantine  func(devices.VFQuarantine) (devices.VFHealthRecord, error)
-	convictions metric.Int64Counter
-	tails       map[string]*vgpuSentinelTail
-	recent      []time.Time
+	store         vgpuSentinelStore
+	log           *slog.Logger
+	interval      time.Duration
+	now           func() time.Time
+	quarantine    func(devices.VFQuarantine) (devices.VFHealthRecord, bool, error)
+	isQuarantined func(string) bool
+	hostFramework func() devices.VGPUFramework
+	convictions   metric.Int64Counter
+	tails         map[string]*vgpuSentinelTail
+	recent        []time.Time
 }
 
 func NewVGPUSentinelController(manager Manager, meter metric.Meter, log *slog.Logger) (*VGPUSentinelController, error) {
@@ -95,17 +110,35 @@ func NewVGPUSentinelController(manager Manager, meter metric.Meter, log *slog.Lo
 	}
 
 	return &VGPUSentinelController{
-		store:       store,
-		log:         log.With("controller", "vgpu_sentinel"),
-		interval:    vgpuSentinelScanInterval,
-		now:         time.Now,
-		quarantine:  devices.QuarantineVF,
+		store:         store,
+		log:           log.With("controller", "vgpu_sentinel"),
+		interval:      vgpuSentinelScanInterval,
+		now:           time.Now,
+		quarantine:    devices.QuarantineVF,
+		isQuarantined: devices.IsVFQuarantined,
+		hostFramework: func() devices.VGPUFramework {
+			framework, _, err := devices.DiscoverVGPU()
+			if err != nil {
+				// Fail open: a transient discovery error must not disable
+				// detection on a vendor VFIO host.
+				return devices.VGPUFrameworkVendorVFIO
+			}
+			return framework
+		},
 		convictions: convictions,
 		tails:       make(map[string]*vgpuSentinelTail),
 	}, nil
 }
 
 func (c *VGPUSentinelController) Run(ctx context.Context) error {
+	// Wedges only exist on vendor VFIO hosts; scanning instance metadata
+	// every interval on mdev and CPU-only hosts would be pure overhead. The
+	// framework is fixed for the lifetime of the process (SR-IOV provisioning
+	// precedes hypeman startup), so this is a one-time gate.
+	if framework := c.hostFramework(); framework != devices.VGPUFrameworkVendorVFIO {
+		c.log.Info("vGPU sentinel controller idle: host has no vendor VFIO framework", "framework", string(framework))
+		return nil
+	}
 	c.log.Info("vGPU sentinel controller started")
 	ticker := time.NewTicker(c.interval)
 	defer ticker.Stop()
@@ -139,8 +172,11 @@ func (c *VGPUSentinelController) scanOnce(ctx context.Context) {
 
 func (c *VGPUSentinelController) scanTarget(ctx context.Context, target vgpuSentinelTarget) {
 	tail := c.tails[target.instanceID]
-	if tail == nil {
-		tail = &vgpuSentinelTail{}
+	if tail == nil || tail.vfAddress != target.vfAddress || tail.assignedAt != target.assignedAt {
+		// A new assignment (stop/start, possibly on a different VF) writes a
+		// fresh log; a tail finished for the previous assignment must not
+		// suppress scanning the new one.
+		tail = &vgpuSentinelTail{vfAddress: target.vfAddress, assignedAt: target.assignedAt}
 		c.tails[target.instanceID] = tail
 	}
 	if tail.done {
@@ -159,9 +195,20 @@ func (c *VGPUSentinelController) scanTarget(ctx context.Context, target vgpuSent
 }
 
 // convict quarantines the target's VF, subject to the conviction brake.
-// It reports whether scanning for this instance is finished; a failed
-// quarantine leaves the tail open so the recurring sentinel retries it.
+// It reports whether scanning for this instance is finished; a failed or
+// brake-suppressed quarantine leaves the tail open so the recurring report
+// retries it — the brake pauses auto-conviction, it must not permanently
+// drop a conviction.
 func (c *VGPUSentinelController) convict(ctx context.Context, target vgpuSentinelTarget, line string) bool {
+	if c.isQuarantined(target.vfAddress) {
+		// Already out of placement — typically a rescan of a standing
+		// victim's log after a controller restart. Not a new wedge: no
+		// metric, no brake accounting.
+		c.log.InfoContext(ctx, "vGPU sentinel matched an already-quarantined VF",
+			"vf", target.vfAddress, "instance_id", target.instanceID)
+		return true
+	}
+
 	now := c.now()
 	recent := c.recent[:0]
 	for _, t := range c.recent {
@@ -180,10 +227,10 @@ func (c *VGPUSentinelController) convict(ctx context.Context, target vgpuSentine
 			"window", vgpuSentinelBrakeWindow.String(),
 		)
 		c.convictions.Add(ctx, 1, metric.WithAttributes(attribute.String("result", "suppressed")))
-		return true
+		return false
 	}
 
-	record, err := c.quarantine(devices.VFQuarantine{
+	record, existed, err := c.quarantine(devices.VFQuarantine{
 		VFAddress:    target.vfAddress,
 		InstanceID:   target.instanceID,
 		SentinelLine: line,
@@ -192,6 +239,10 @@ func (c *VGPUSentinelController) convict(ctx context.Context, target vgpuSentine
 		c.log.ErrorContext(ctx, "failed to quarantine wedged vGPU VF",
 			"vf", target.vfAddress, "instance_id", target.instanceID, "error", err)
 		return false
+	}
+	if existed {
+		// Lost a conviction race; the VF is already quarantined.
+		return true
 	}
 	c.recent = append(c.recent, now)
 	c.log.ErrorContext(ctx, "quarantined wedged vGPU VF",
@@ -234,6 +285,11 @@ func scanForSentinel(path string, offset *int64) (string, bool, error) {
 		line, err := reader.ReadString('\n')
 		if err != nil {
 			if errors.Is(err, io.EOF) {
+				// An oversized unterminated line would otherwise be buffered
+				// again on every scan; skip it once it exceeds the bound.
+				if len(line) > vgpuSentinelMaxLineBytes {
+					*offset += int64(len(line))
+				}
 				return "", false, nil
 			}
 			return "", false, err
@@ -264,10 +320,15 @@ func (m *manager) listVGPUSentinelTargets(ctx context.Context) ([]vgpuSentinelTa
 		if meta.GPUFramework != devices.VGPUFrameworkVendorVFIO || meta.GPUDevicePath == "" {
 			continue
 		}
+		assignedAt := ""
+		if meta.GPUAssignedAt != nil {
+			assignedAt = meta.GPUAssignedAt.UTC().Format(time.RFC3339Nano)
+		}
 		targets = append(targets, vgpuSentinelTarget{
 			instanceID: id,
 			vfAddress:  filepath.Base(meta.GPUDevicePath),
 			appLogPath: m.paths.InstanceAppLog(id),
+			assignedAt: assignedAt,
 		})
 	}
 	return targets, nil

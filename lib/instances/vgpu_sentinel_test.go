@@ -15,18 +15,20 @@ import (
 	"go.opentelemetry.io/otel/metric/noop"
 )
 
-const testSentinelLine = "[   27.031415] NVRM: GPU 0000:e3:00.4: RmInitAdapter failed! (0x22:0x65:884)\n"
+const testSentinelLine = "2026/08/20 15:04:05 [guest-agent] HYPEMAN-GPU-INIT-FAILED ts=2026-08-20T15:04:05.123456789Z nvrm=\"NVRM: GPU 0000:e3:00.4: RmInitAdapter failed! (0x22:0x65:884)\"\n"
 
 func TestVGPUSentinelPattern(t *testing.T) {
 	t.Parallel()
 
 	assert.True(t, vgpuSentinelPattern.MatchString(testSentinelLine))
-	// Tuple values are driver-build-specific; the match must not depend on them.
-	assert.True(t, vgpuSentinelPattern.MatchString("[  47.2] NVRM: GPU 0000:e3:00.4: RmInitAdapter failed! (0x26:0xffff:1482)"))
 
-	// Echoed exec command lines carry the bare token on the same console.
-	assert.False(t, vgpuSentinelPattern.MatchString("$ dmesg | grep -c RmInitAdapter"))
-	assert.False(t, vgpuSentinelPattern.MatchString("[    7.1] NVRM: loading NVIDIA UNIX Open Kernel Module for x86_64"))
+	// The raw guest kernel line is not the conviction signal: the guest
+	// agent observes it in the guest and reports the marker instead.
+	assert.False(t, vgpuSentinelPattern.MatchString("[   27.031415] NVRM: GPU 0000:e3:00.4: RmInitAdapter failed! (0x22:0x65:884)"))
+
+	// Echoed exec command lines can carry the bare token on the same console.
+	assert.False(t, vgpuSentinelPattern.MatchString("$ dmesg | grep -c HYPEMAN-GPU-INIT-FAILED"))
+	assert.False(t, vgpuSentinelPattern.MatchString("2026/08/20 15:04:05 [guest-agent] HYPEMAN-AGENT-READY ts=2026-08-20T15:04:05Z"))
 }
 
 type fakeSentinelStore struct {
@@ -47,12 +49,13 @@ func newTestSentinelController(t *testing.T, store vgpuSentinelStore) (*VGPUSent
 		log:      slog.New(slog.DiscardHandler),
 		interval: time.Hour,
 		now:      time.Now,
-		quarantine: func(q devices.VFQuarantine) (devices.VFHealthRecord, error) {
+		quarantine: func(q devices.VFQuarantine) (devices.VFHealthRecord, bool, error) {
 			quarantined = append(quarantined, q)
-			return devices.VFHealthRecord{VFAddress: q.VFAddress, WedgeCount: 1}, nil
+			return devices.VFHealthRecord{VFAddress: q.VFAddress, WedgeCount: 1}, false, nil
 		},
-		convictions: counter,
-		tails:       make(map[string]*vgpuSentinelTail),
+		isQuarantined: func(string) bool { return false },
+		convictions:   counter,
+		tails:         make(map[string]*vgpuSentinelTail),
 	}
 	return c, &quarantined
 }
@@ -78,12 +81,12 @@ func TestVGPUSentinelControllerConvictsOnce(t *testing.T) {
 	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_WRONLY, 0644)
 	require.NoError(t, err)
 	// A partial line without its newline must not convict yet.
-	_, err = f.WriteString("[   27.03] NVRM: GPU 0000:e3:00.4: RmInitAdapter failed")
+	_, err = f.WriteString("2026/08/20 15:04:05 [guest-agent] HYPEMAN-GPU-INIT-FAILED ts=2026-08-20T15:04:05Z nvrm=\"NVRM: GPU 0000:e3:00.4: RmInitAdapter fail")
 	require.NoError(t, err)
 	c.scanOnce(ctx)
 	assert.Empty(t, *quarantined)
 
-	_, err = f.WriteString("! (0x22:0x65:884)\n")
+	_, err = f.WriteString("ed! (0x22:0x65:884)\"\n")
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
 	c.scanOnce(ctx)
@@ -92,7 +95,8 @@ func TestVGPUSentinelControllerConvictsOnce(t *testing.T) {
 	assert.Equal(t, "instance-1", (*quarantined)[0].InstanceID)
 	assert.Contains(t, (*quarantined)[0].SentinelLine, "RmInitAdapter failed!")
 
-	// The sentinel recurs every ~20s; a convicted instance is not re-convicted.
+	// The guest agent re-emits the marker while the failure persists; a
+	// convicted instance is not re-convicted.
 	appendSentinelLine(t, logPath)
 	c.scanOnce(ctx)
 	assert.Len(t, *quarantined, 1)
@@ -111,8 +115,8 @@ func TestVGPUSentinelControllerRetriesFailedQuarantine(t *testing.T) {
 	c, quarantined := newTestSentinelController(t, store)
 	quarantineErr := errors.New("persist failed")
 	realQuarantine := c.quarantine
-	c.quarantine = func(devices.VFQuarantine) (devices.VFHealthRecord, error) {
-		return devices.VFHealthRecord{}, quarantineErr
+	c.quarantine = func(devices.VFQuarantine) (devices.VFHealthRecord, bool, error) {
+		return devices.VFHealthRecord{}, false, quarantineErr
 	}
 	ctx := context.Background()
 
@@ -120,7 +124,7 @@ func TestVGPUSentinelControllerRetriesFailedQuarantine(t *testing.T) {
 	assert.Empty(t, *quarantined)
 	assert.False(t, c.tails["instance-1"].done)
 
-	// The next recurrence of the sentinel retries the quarantine.
+	// The next recurrence of the marker retries the quarantine.
 	c.quarantine = realQuarantine
 	appendSentinelLine(t, logPath)
 	c.scanOnce(ctx)
@@ -128,7 +132,7 @@ func TestVGPUSentinelControllerRetriesFailedQuarantine(t *testing.T) {
 	assert.True(t, c.tails["instance-1"].done)
 }
 
-func TestVGPUSentinelControllerBrakeSuppressesConvictionBursts(t *testing.T) {
+func TestVGPUSentinelControllerBrakePausesConvictionBursts(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
@@ -143,14 +147,88 @@ func TestVGPUSentinelControllerBrakeSuppressesConvictionBursts(t *testing.T) {
 		})
 	}
 	c, quarantined := newTestSentinelController(t, &fakeSentinelStore{targets: targets})
+	base := time.Now()
+	c.now = func() time.Time { return base }
 
 	c.scanOnce(context.Background())
 	// The burst converts to convictions up to the limit; the rest are
-	// suppressed rather than quarantining the whole host.
+	// suppressed rather than quarantining the whole host, and their tails
+	// stay open — the brake pauses conviction, it does not drop it.
 	assert.Len(t, *quarantined, vgpuSentinelBrakeLimit)
+	suppressed := 0
 	for _, target := range targets {
-		assert.True(t, c.tails[target.instanceID].done)
+		if !c.tails[target.instanceID].done {
+			suppressed++
+			// The guest agent re-emits the marker while the failure persists.
+			appendSentinelLine(t, target.appLogPath)
+		}
 	}
+	assert.Equal(t, 1, suppressed)
+
+	// Within the window the suppression holds.
+	c.scanOnce(context.Background())
+	assert.Len(t, *quarantined, vgpuSentinelBrakeLimit)
+
+	// Once the window clears, the next re-emission convicts.
+	c.now = func() time.Time { return base.Add(vgpuSentinelBrakeWindow + time.Second) }
+	for _, target := range targets {
+		if !c.tails[target.instanceID].done {
+			appendSentinelLine(t, target.appLogPath)
+		}
+	}
+	c.scanOnce(context.Background())
+	assert.Len(t, *quarantined, vgpuSentinelBrakeLimit+1)
+}
+
+func TestVGPUSentinelControllerSkipsQuarantinedVFs(t *testing.T) {
+	t.Parallel()
+
+	logPath := filepath.Join(t.TempDir(), "app.log")
+	require.NoError(t, os.WriteFile(logPath, []byte(testSentinelLine), 0644))
+	store := &fakeSentinelStore{targets: []vgpuSentinelTarget{{
+		instanceID: "instance-1",
+		vfAddress:  "0000:e3:00.4",
+		appLogPath: logPath,
+	}}}
+	c, quarantined := newTestSentinelController(t, store)
+	c.isQuarantined = func(vf string) bool { return vf == "0000:e3:00.4" }
+
+	// A rescan of a standing victim's log after a controller restart must
+	// not re-convict a persisted quarantine: no brake accounting, no metric,
+	// and the tail closes.
+	c.scanOnce(context.Background())
+	assert.Empty(t, *quarantined)
+	assert.Empty(t, c.recent)
+	assert.True(t, c.tails["instance-1"].done)
+}
+
+func TestVGPUSentinelControllerRescansNewAssignment(t *testing.T) {
+	t.Parallel()
+
+	logPath := filepath.Join(t.TempDir(), "app.log")
+	require.NoError(t, os.WriteFile(logPath, []byte(testSentinelLine), 0644))
+	store := &fakeSentinelStore{targets: []vgpuSentinelTarget{{
+		instanceID: "instance-1",
+		vfAddress:  "0000:e3:00.4",
+		appLogPath: logPath,
+		assignedAt: "2026-08-20T15:00:00Z",
+	}}}
+	c, quarantined := newTestSentinelController(t, store)
+	ctx := context.Background()
+
+	c.scanOnce(ctx)
+	require.Len(t, *quarantined, 1)
+	require.True(t, c.tails["instance-1"].done)
+
+	// A stop/start acquires a new assignment (possibly a different VF) and
+	// archives the log; the finished tail from the previous assignment must
+	// not suppress scanning the new boot.
+	require.NoError(t, os.WriteFile(logPath, []byte(testSentinelLine), 0644))
+	store.targets[0].vfAddress = "0000:e3:00.5"
+	store.targets[0].assignedAt = "2026-08-20T16:00:00Z"
+	c.scanOnce(ctx)
+	require.Len(t, *quarantined, 2)
+	assert.Equal(t, "0000:e3:00.5", (*quarantined)[1].VFAddress)
 }
 
 func TestVGPUSentinelControllerDropsStaleTails(t *testing.T) {

@@ -32,6 +32,11 @@ type vfHealthStore struct {
 	mu      sync.Mutex
 	path    string
 	records map[string]VFHealthRecord
+	// loadErr remembers a failed load of an existing state file. While set,
+	// mutations are refused: persisting the empty in-memory store would
+	// permanently clobber every previously persisted quarantine. Mutating
+	// calls retry the load first so a transient read error self-heals.
+	loadErr error
 }
 
 var vfHealth = &vfHealthStore{records: make(map[string]VFHealthRecord)}
@@ -42,36 +47,62 @@ func initVFHealthStore(path string) error {
 	vfHealth.mu.Lock()
 	defer vfHealth.mu.Unlock()
 	vfHealth.path = path
-	vfHealth.records = make(map[string]VFHealthRecord)
+	return vfHealth.loadLocked()
+}
 
-	data, err := os.ReadFile(path)
+func (s *vfHealthStore) loadLocked() error {
+	s.records = make(map[string]VFHealthRecord)
+	s.loadErr = nil
+
+	data, err := os.ReadFile(s.path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
 		}
-		return fmt.Errorf("read VF health state: %w", err)
+		s.loadErr = fmt.Errorf("read VF health state: %w", err)
+		return s.loadErr
 	}
 	var records []VFHealthRecord
 	if err := json.Unmarshal(data, &records); err != nil {
-		return fmt.Errorf("unmarshal VF health state: %w", err)
+		s.loadErr = fmt.Errorf("unmarshal VF health state: %w", err)
+		return s.loadErr
 	}
 	for _, record := range records {
-		vfHealth.records[record.VFAddress] = record
+		s.records[record.VFAddress] = record
 	}
 	return nil
 }
 
+// ensureLoadedLocked retries a previously failed load. Mutations must not
+// proceed on a store that failed to load its existing state file.
+func (s *vfHealthStore) ensureLoadedLocked() error {
+	if s.loadErr == nil {
+		return nil
+	}
+	return s.loadLocked()
+}
+
 // QuarantineVF records a wedge conviction for a VF and persists it. It takes
 // the vGPU placement lock so a convicted VF is never concurrently selected
-// for a new assignment. Repeat convictions on the same VF increment its
-// wedge count and keep the original quarantine time.
-func QuarantineVF(q VFQuarantine) (VFHealthRecord, error) {
+// for a new assignment. A conviction of an already-quarantined VF returns
+// the existing record unchanged with existed=true — one wedge produces one
+// record no matter how many victim boots report it.
+func QuarantineVF(q VFQuarantine) (VFHealthRecord, bool, error) {
 	var record VFHealthRecord
+	var existed bool
 	var err error
 	withVGPUPlacementLock(func() {
-		record, err = vfHealth.quarantine(q)
+		record, existed, err = vfHealth.quarantine(q)
 	})
-	return record, err
+	return record, existed, err
+}
+
+// IsVFQuarantined reports whether a quarantine record exists for the VF.
+func IsVFQuarantined(vfAddress string) bool {
+	vfHealth.mu.Lock()
+	defer vfHealth.mu.Unlock()
+	_, ok := vfHealth.records[vfAddress]
+	return ok
 }
 
 // ClearVFQuarantine removes a VF's quarantine record, returning whether one
@@ -98,29 +129,35 @@ func QuarantinedVFs() []VFHealthRecord {
 	return records
 }
 
-func (s *vfHealthStore) quarantine(q VFQuarantine) (VFHealthRecord, error) {
+func (s *vfHealthStore) quarantine(q VFQuarantine) (VFHealthRecord, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	record, ok := s.records[q.VFAddress]
-	if !ok {
-		record = VFHealthRecord{
-			VFAddress:     q.VFAddress,
-			QuarantinedAt: time.Now().UTC(),
-		}
+	if err := s.ensureLoadedLocked(); err != nil {
+		return VFHealthRecord{}, false, err
 	}
-	record.WedgeCount++
-	record.InstanceID = q.InstanceID
-	record.SentinelLine = q.SentinelLine
+	if record, ok := s.records[q.VFAddress]; ok {
+		return record, true, nil
+	}
+	record := VFHealthRecord{
+		VFAddress:     q.VFAddress,
+		InstanceID:    q.InstanceID,
+		SentinelLine:  q.SentinelLine,
+		WedgeCount:    1,
+		QuarantinedAt: time.Now().UTC(),
+	}
 	s.records[q.VFAddress] = record
 	if err := s.persistLocked(); err != nil {
-		return record, err
+		return record, false, err
 	}
-	return record, nil
+	return record, false, nil
 }
 
 func (s *vfHealthStore) clear(vfAddress string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.ensureLoadedLocked(); err != nil {
+		return false, err
+	}
 	if _, ok := s.records[vfAddress]; !ok {
 		return false, nil
 	}

@@ -54,6 +54,10 @@ func main() {
 
 	startClockKeeper()
 
+	if hasNVIDIADevice() {
+		go watchGPUInitFailure()
+	}
+
 	// Create gRPC server
 	grpcServer := grpc.NewServer()
 	pb.RegisterGuestServiceServer(grpcServer, &guestServer{})
