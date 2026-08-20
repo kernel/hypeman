@@ -42,13 +42,13 @@ func (m *manager) forkInstance(ctx context.Context, id string, req ForkInstanceR
 	if err != nil {
 		return nil, "", false, err
 	}
-	if err := rejectWindowsSnapshotLifecycle(meta.Platform, "fork"); err != nil {
-		return nil, "", false, err
-	}
 	source := m.toInstance(ctx, meta)
 	targetState, err := resolveForkTargetState(req.TargetState, source.State)
 	if err != nil {
 		return nil, "", false, err
+	}
+	if isWindowsPlatform(source.Platform) && source.State == StateRunning && targetState != StateStopped {
+		return nil, "", false, fmt.Errorf("%w: Windows forks from a running source require target_state=%s", ErrNotSupported, StateStopped)
 	}
 
 	switch source.State {
@@ -141,9 +141,13 @@ func ensureGuestAgentReadyForForkPhase(ctx context.Context, inst *StoredMetadata
 		return fmt.Errorf("create vsock dialer for %s readiness check: %w", phase, err)
 	}
 
+	command := []string{"true"}
+	if isWindowsPlatform(inst.Platform) {
+		command = []string{"cmd.exe", "/d", "/c", "exit", "0"}
+	}
 	var stdout, stderr bytes.Buffer
 	exit, err := guest.ExecIntoInstance(ctx, dialer, guest.ExecOptions{
-		Command:      []string{"true"},
+		Command:      command,
 		Stdout:       &stdout,
 		Stderr:       &stderr,
 		WaitForAgent: 120 * time.Second,
@@ -215,6 +219,9 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 
 	source := m.toInstance(ctx, meta)
 	stored := &meta.StoredMetadata
+	if err := validateWindowsForkPolicy(stored); err != nil {
+		return nil, false, err
+	}
 
 	switch source.State {
 	case StateStopped, StateStandby:
@@ -308,14 +315,16 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 		forkMeta.Phases.Record(phasetracking.PhaseStopped, now)
 	}
 
-	// Keep the original CID for snapshot-based forks. Rewriting CID in restored
-	// memory snapshots is not reliable across hypervisors. Concurrent standby
-	// fork prepare is currently enabled only for Firecracker, whose host vsock
-	// dialer routes through the per-VM UDS path rather than this metadata CID.
+	// Keep the original CID for snapshot-based forks. Windows' restored VioSock
+	// driver retains the CID captured in guest memory until the next cold boot.
 	if source.State == StateStandby {
 		forkMeta.VsockCID = stored.VsockCID
 	} else {
 		forkMeta.VsockCID = generateVsockCID(forkID)
+	}
+
+	if err := m.prepareWindowsForkIdentity(&forkMeta); err != nil {
+		return nil, false, err
 	}
 
 	if forkMeta.NetworkEnabled {

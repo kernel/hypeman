@@ -23,6 +23,9 @@ service GuestService {
 
   // ReconfigureNetwork updates the guest network identity without spawning shell commands
   rpc ReconfigureNetwork(ReconfigureNetworkRequest) returns (ReconfigureNetworkResponse);
+
+  // RebindIdentity assigns a forked guest a new machine identity.
+  rpc RebindIdentity(RebindIdentityRequest) returns (RebindIdentityResponse);
 }
 
 // ExecRequest represents messages from client to server
@@ -176,3 +179,11 @@ message ReconfigureNetworkRequest {
 
 // ReconfigureNetworkResponse acknowledges the network reconfiguration request
 message ReconfigureNetworkResponse {}
+
+message RebindIdentityRequest {
+  string instance_id = 1;
+}
+
+message RebindIdentityResponse {
+  string machine_id = 1;
+}

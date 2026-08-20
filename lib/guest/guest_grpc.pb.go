@@ -25,6 +25,7 @@ const (
 	GuestService_StatPath_FullMethodName           = "/guest.GuestService/StatPath"
 	GuestService_Shutdown_FullMethodName           = "/guest.GuestService/Shutdown"
 	GuestService_ReconfigureNetwork_FullMethodName = "/guest.GuestService/ReconfigureNetwork"
+	GuestService_RebindIdentity_FullMethodName     = "/guest.GuestService/RebindIdentity"
 )
 
 // GuestServiceClient is the client API for GuestService service.
@@ -45,6 +46,8 @@ type GuestServiceClient interface {
 	Shutdown(ctx context.Context, in *ShutdownRequest, opts ...grpc.CallOption) (*ShutdownResponse, error)
 	// ReconfigureNetwork updates the guest network identity without spawning shell commands
 	ReconfigureNetwork(ctx context.Context, in *ReconfigureNetworkRequest, opts ...grpc.CallOption) (*ReconfigureNetworkResponse, error)
+	// RebindIdentity assigns a forked guest a new machine identity.
+	RebindIdentity(ctx context.Context, in *RebindIdentityRequest, opts ...grpc.CallOption) (*RebindIdentityResponse, error)
 }
 
 type guestServiceClient struct {
@@ -130,6 +133,16 @@ func (c *guestServiceClient) ReconfigureNetwork(ctx context.Context, in *Reconfi
 	return out, nil
 }
 
+func (c *guestServiceClient) RebindIdentity(ctx context.Context, in *RebindIdentityRequest, opts ...grpc.CallOption) (*RebindIdentityResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RebindIdentityResponse)
+	err := c.cc.Invoke(ctx, GuestService_RebindIdentity_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // GuestServiceServer is the server API for GuestService service.
 // All implementations must embed UnimplementedGuestServiceServer
 // for forward compatibility.
@@ -148,6 +161,8 @@ type GuestServiceServer interface {
 	Shutdown(context.Context, *ShutdownRequest) (*ShutdownResponse, error)
 	// ReconfigureNetwork updates the guest network identity without spawning shell commands
 	ReconfigureNetwork(context.Context, *ReconfigureNetworkRequest) (*ReconfigureNetworkResponse, error)
+	// RebindIdentity assigns a forked guest a new machine identity.
+	RebindIdentity(context.Context, *RebindIdentityRequest) (*RebindIdentityResponse, error)
 	mustEmbedUnimplementedGuestServiceServer()
 }
 
@@ -175,6 +190,9 @@ func (UnimplementedGuestServiceServer) Shutdown(context.Context, *ShutdownReques
 }
 func (UnimplementedGuestServiceServer) ReconfigureNetwork(context.Context, *ReconfigureNetworkRequest) (*ReconfigureNetworkResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ReconfigureNetwork not implemented")
+}
+func (UnimplementedGuestServiceServer) RebindIdentity(context.Context, *RebindIdentityRequest) (*RebindIdentityResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RebindIdentity not implemented")
 }
 func (UnimplementedGuestServiceServer) mustEmbedUnimplementedGuestServiceServer() {}
 func (UnimplementedGuestServiceServer) testEmbeddedByValue()                      {}
@@ -276,6 +294,24 @@ func _GuestService_ReconfigureNetwork_Handler(srv interface{}, ctx context.Conte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _GuestService_RebindIdentity_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RebindIdentityRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GuestServiceServer).RebindIdentity(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GuestService_RebindIdentity_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GuestServiceServer).RebindIdentity(ctx, req.(*RebindIdentityRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // GuestService_ServiceDesc is the grpc.ServiceDesc for GuestService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -294,6 +330,10 @@ var GuestService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ReconfigureNetwork",
 			Handler:    _GuestService_ReconfigureNetwork_Handler,
+		},
+		{
+			MethodName: "RebindIdentity",
+			Handler:    _GuestService_RebindIdentity_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

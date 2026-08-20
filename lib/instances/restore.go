@@ -43,9 +43,6 @@ func (m *manager) restoreInstance(
 		return nil, err
 	}
 
-	if err := rejectWindowsSnapshotLifecycle(meta.Platform, "restore from standby"); err != nil {
-		return nil, err
-	}
 	inst := m.toInstance(ctx, meta)
 	stored := &meta.StoredMetadata
 	ctx = enrichInstancesTrace(ctx, attribute.String("hypervisor", string(stored.HypervisorType)))
@@ -60,6 +57,9 @@ func (m *manager) restoreInstance(
 	if !inst.HasSnapshot {
 		log.ErrorContext(ctx, "no snapshot available", "instance_id", id)
 		return nil, fmt.Errorf("no snapshot available for instance %s", id)
+	}
+	if err := m.ensureWindowsVsockCIDAvailable(ctx, stored); err != nil {
+		return nil, err
 	}
 
 	// 2a. Validate the instance's image (rootfs) still exists before reserving
@@ -360,6 +360,14 @@ func (m *manager) restoreInstance(
 			return nil, fmt.Errorf("configure guest network after restore: %w", err)
 		}
 		reconfigureSpanEnd(nil)
+	}
+	if stored.WindowsIdentityPending {
+		if err := rebindWindowsIdentity(ctx, stored); err != nil {
+			_ = hv.Shutdown(ctx)
+			m.rollbackAdmissionAllocationActive(stored)
+			releaseNetwork()
+			return nil, fmt.Errorf("rebind Windows fork identity: %w", err)
+		}
 	}
 	releaseRestoreSlotOnce()
 

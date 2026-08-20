@@ -392,6 +392,9 @@ func (m *manager) createInstance(
 		HealthCheck:              cloneHealthCheckPolicy(req.HealthCheck),
 		RestartPolicy:            cloneRestartPolicy(req.RestartPolicy),
 	}
+	if windows {
+		stored.WindowsBitLockerPolicy = imageInfo.Machine.BitLocker
+	}
 
 	// 12. Ensure directories
 	log.DebugContext(ctx, "creating instance directories", "instance_id", id)

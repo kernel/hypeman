@@ -54,6 +54,9 @@ func (m *manager) startInstance(
 	stored.ExitMessage = ""
 	stored.ProgramStartedAt = nil
 	stored.GuestAgentReadyAt = nil
+	if isWindowsPlatform(stored.Platform) {
+		stored.VsockCID = generateVsockCID(fmt.Sprintf("%s:%d", stored.Id, time.Now().UnixNano()))
+	}
 	if len(req.Entrypoint) > 0 {
 		stored.Entrypoint = req.Entrypoint
 	}
@@ -235,6 +238,17 @@ func (m *manager) startInstance(
 			return nil, fmt.Errorf("configure Windows guest network: %w", err)
 		}
 		networkSpanEnd(nil)
+	}
+	if stored.WindowsIdentityPending {
+		if err := rebindWindowsIdentity(ctx, stored); err != nil {
+			_, _ = m.stopInstance(ctx, id)
+			return nil, fmt.Errorf("rebind Windows fork identity: %w", err)
+		}
+		meta = &metadata{StoredMetadata: *stored}
+		if err := m.saveMetadata(meta); err != nil {
+			_, _ = m.stopInstance(ctx, id)
+			return nil, fmt.Errorf("save rebound Windows identity: %w", err)
+		}
 	}
 
 	// Return instance state from current metadata without forcing a log scan.
