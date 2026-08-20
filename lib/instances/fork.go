@@ -323,7 +323,10 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 		forkMeta.VsockCID = generateVsockCID(forkID)
 	}
 
-	if err := m.prepareWindowsForkIdentity(&forkMeta); err != nil {
+	// QEMU memory snapshots contain the TPM's permanent and volatile state.
+	// Resetting the copied directory is therefore only meaningful for cold forks.
+	resetWindowsTPM := source.State != StateStandby
+	if err := m.prepareWindowsForkIdentity(&forkMeta, resetWindowsTPM); err != nil {
 		return nil, false, err
 	}
 

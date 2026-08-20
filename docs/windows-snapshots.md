@@ -8,7 +8,9 @@ Standby pauses QEMU, captures memory and device state, stops QEMU and swtpm, and
 
 ## Fork identity
 
-A fork receives independent disk and NVRAM files. Hypeman removes the copied TPM state before the child starts, so swtpm initializes a new TPM rather than cloning the parent's identity. The Windows guest agent then writes a new `MachineGuid` and records the child instance ID before the child is returned.
+A fork receives independent disk and NVRAM files. A stopped fork removes the copied TPM state before cold boot, so swtpm initializes a new endorsement key and TPM identity. A memory fork retains the parent's TPM identity because QEMU includes the TPM's permanent and volatile state in its migration stream. Workloads that depend on unique TPM attestation must use stopped forks.
+
+The Windows guest agent writes a new `MachineGuid` and records the child instance ID before the child is returned. Memory forks retain the source SID and hostname, and services that cached `MachineGuid` before standby may observe the previous value until the next cold boot.
 
 Fork admission requires the persona OCI label:
 
@@ -23,7 +25,7 @@ Stopped forks cold-boot with a unique vsock CID and can run concurrently. A stan
 ## Integration gates
 
 - `TestWindowsStandbyRestoreIntegration` verifies identity-preserving standby/restore and the stopped snapshot restore/fork APIs.
-- `TestWindowsStandbyForkIntegration` verifies a captured desktop memory fork, inherited guest state, fresh machine identity and TPM state, and independent NVRAM/disk files.
-- `TestWindowsForkIntegration` verifies independent guest writes and cold-booted stopped forks.
+- `TestWindowsStandbyForkIntegration` verifies a captured desktop memory fork, inherited guest and TPM endorsement-key state, a fresh `MachineGuid`, and independent NVRAM/disk files.
+- `TestWindowsForkIntegration` verifies independent guest writes and a fresh TPM endorsement key for cold-booted stopped forks.
 
 The private Windows fixture and its license are not stored in this repository.
