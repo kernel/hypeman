@@ -1328,6 +1328,7 @@ type ReconfigureNetworkRequest struct {
 	Ipv4          string                 `protobuf:"bytes,3,opt,name=ipv4,proto3" json:"ipv4,omitempty"`                                        // New IPv4 address without prefix
 	Prefix        uint32                 `protobuf:"varint,4,opt,name=prefix,proto3" json:"prefix,omitempty"`                                   // IPv4 prefix length
 	Gateway       string                 `protobuf:"bytes,5,opt,name=gateway,proto3" json:"gateway,omitempty"`                                  // Default gateway IPv4 address
+	DnsServers    []string               `protobuf:"bytes,6,rep,name=dns_servers,json=dnsServers,proto3" json:"dns_servers,omitempty"`          // DNS server IPv4 addresses
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1395,6 +1396,13 @@ func (x *ReconfigureNetworkRequest) GetGateway() string {
 		return x.Gateway
 	}
 	return ""
+}
+
+func (x *ReconfigureNetworkRequest) GetDnsServers() []string {
+	if x != nil {
+		return x.DnsServers
+	}
+	return nil
 }
 
 // ReconfigureNetworkResponse acknowledges the network reconfiguration request
@@ -1527,13 +1535,15 @@ const file_lib_guest_guest_proto_rawDesc = "" +
 	"\x05error\x18\b \x01(\tR\x05error\")\n" +
 	"\x0fShutdownRequest\x12\x16\n" +
 	"\x06signal\x18\x01 \x01(\x05R\x06signal\"\x12\n" +
-	"\x10ShutdownResponse\"\x9a\x01\n" +
+	"\x10ShutdownResponse\"\xbb\x01\n" +
 	"\x19ReconfigureNetworkRequest\x12%\n" +
 	"\x0einterface_name\x18\x01 \x01(\tR\rinterfaceName\x12\x10\n" +
 	"\x03mac\x18\x02 \x01(\tR\x03mac\x12\x12\n" +
 	"\x04ipv4\x18\x03 \x01(\tR\x04ipv4\x12\x16\n" +
 	"\x06prefix\x18\x04 \x01(\rR\x06prefix\x12\x18\n" +
-	"\agateway\x18\x05 \x01(\tR\agateway\"\x1c\n" +
+	"\agateway\x18\x05 \x01(\tR\agateway\x12\x1f\n" +
+	"\vdns_servers\x18\x06 \x03(\tR\n" +
+	"dnsServers\"\x1c\n" +
 	"\x1aReconfigureNetworkResponse*@\n" +
 	"\vExecSession\x12\x17\n" +
 	"\x13EXEC_SESSION_SYSTEM\x10\x00\x12\x18\n" +

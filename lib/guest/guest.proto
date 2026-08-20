@@ -171,6 +171,7 @@ message ReconfigureNetworkRequest {
   string ipv4 = 3;            // New IPv4 address without prefix
   uint32 prefix = 4;          // IPv4 prefix length
   string gateway = 5;         // Default gateway IPv4 address
+  repeated string dns_servers = 6; // DNS server IPv4 addresses
 }
 
 // ReconfigureNetworkResponse acknowledges the network reconfiguration request

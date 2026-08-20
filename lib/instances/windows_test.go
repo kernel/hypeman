@@ -32,6 +32,7 @@ func TestValidateWindowsCreate(t *testing.T) {
 	image := windowsImageFixture()
 	windowsCaps := hypervisor.Capabilities{SupportsUEFIBoot: true, SupportsTPM: true}
 	require.NoError(t, validateWindowsCreate(CreateInstanceRequest{}, image, windowsCaps))
+	require.NoError(t, validateWindowsCreate(CreateInstanceRequest{NetworkEnabled: true}, image, windowsCaps))
 
 	tests := []struct {
 		name string
@@ -39,7 +40,6 @@ func TestValidateWindowsCreate(t *testing.T) {
 		caps hypervisor.Capabilities
 	}{
 		{name: "missing boot capabilities"},
-		{name: "networking", caps: windowsCaps, req: CreateInstanceRequest{NetworkEnabled: true}},
 		{name: "small memory", caps: windowsCaps, req: CreateInstanceRequest{Size: 2 << 30}},
 		{name: "one CPU", caps: windowsCaps, req: CreateInstanceRequest{Vcpus: 1}},
 		{name: "command", caps: windowsCaps, req: CreateInstanceRequest{Cmd: []string{"cmd.exe"}}},

@@ -157,6 +157,7 @@ type ReconfigureNetworkOptions struct {
 	IPv4          string
 	Prefix        uint32
 	Gateway       string
+	DNSServers    []string
 	WaitForAgent  time.Duration
 }
 
@@ -240,6 +241,7 @@ func reconfigureNetworkOnce(ctx context.Context, dialer hypervisor.VsockDialer, 
 		Ipv4:          opts.IPv4,
 		Prefix:        opts.Prefix,
 		Gateway:       opts.Gateway,
+		DnsServers:    opts.DNSServers,
 	})
 	finishGuestNetworkStepSpan(span, err)
 	if err != nil {
