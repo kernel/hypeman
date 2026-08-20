@@ -109,6 +109,9 @@ func TestWindowsForkIntegration(t *testing.T) {
 
 func setupWindowsSnapshotIntegration(t *testing.T) (*manager, *paths.Paths, *images.Image) {
 	t.Helper()
+	if os.Getenv("HYPEMAN_RUN_WINDOWS_SNAPSHOT_INTEGRATION") != "1" {
+		t.Skip("run by the dedicated Windows snapshots CI gate")
+	}
 	fixture := os.Getenv("HYPEMAN_WINDOWS_TEST_AGENT_PERSONA")
 	if fixture == "" {
 		fixture = "/ci/windows/persona-agent.qcow2"
