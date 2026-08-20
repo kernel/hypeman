@@ -137,6 +137,7 @@ jobs:
 
       - name: Test Windows machine images
         run: |
+          make build-embedded
           TEST_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
           for attempt in 1 2 3; do
             if sudo env \
