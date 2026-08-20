@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"syscall"
 )
 
 // totalReadyImageBytesFromMetadata sums ready image sizes directly from metadata.json files.
@@ -14,7 +15,7 @@ import (
 // files found in the digest directory so we do not undercount host disk usage.
 func totalReadyImageBytesFromMetadata(imagesDir string) (int64, error) {
 	var total int64
-	seenRootfs := make([]os.FileInfo, 0)
+	seenRootfs := make(map[rootfsIdentity]struct{})
 
 	err := filepath.Walk(imagesDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -29,7 +30,7 @@ func totalReadyImageBytesFromMetadata(imagesDir string) (int64, error) {
 
 		data, err := os.ReadFile(path)
 		if err != nil {
-			rootfsBytes, fallbackErr := totalUniqueRootfsBytesInDigestDir(filepath.Dir(path), &seenRootfs)
+			rootfsBytes, fallbackErr := totalUniqueRootfsBytesInDigestDir(filepath.Dir(path), seenRootfs)
 			if fallbackErr == nil {
 				total += rootfsBytes
 				return nil
@@ -39,7 +40,7 @@ func totalReadyImageBytesFromMetadata(imagesDir string) (int64, error) {
 
 		var meta imageMetadata
 		if err := json.Unmarshal(data, &meta); err != nil {
-			rootfsBytes, fallbackErr := totalUniqueRootfsBytesInDigestDir(filepath.Dir(path), &seenRootfs)
+			rootfsBytes, fallbackErr := totalUniqueRootfsBytesInDigestDir(filepath.Dir(path), seenRootfs)
 			if fallbackErr == nil {
 				total += rootfsBytes
 				return nil
@@ -56,17 +57,9 @@ func totalReadyImageBytesFromMetadata(imagesDir string) (int64, error) {
 				if statErr != nil {
 					continue
 				}
-				duplicate := false
-				for _, seen := range seenRootfs {
-					if os.SameFile(rootfsInfo, seen) {
-						duplicate = true
-						break
-					}
-				}
-				if duplicate {
+				if !markUniqueRootfs(rootfsInfo, seenRootfs) {
 					return nil
 				}
-				seenRootfs = append(seenRootfs, rootfsInfo)
 				break
 			}
 
@@ -197,7 +190,25 @@ func totalRootfsBytesInDigestDir(digestDir string) (int64, error) {
 	return total, nil
 }
 
-func totalUniqueRootfsBytesInDigestDir(digestDir string, seen *[]os.FileInfo) (int64, error) {
+type rootfsIdentity struct {
+	dev uint64
+	ino uint64
+}
+
+func markUniqueRootfs(info os.FileInfo, seen map[rootfsIdentity]struct{}) bool {
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return true
+	}
+	identity := rootfsIdentity{dev: uint64(stat.Dev), ino: uint64(stat.Ino)}
+	if _, exists := seen[identity]; exists {
+		return false
+	}
+	seen[identity] = struct{}{}
+	return true
+}
+
+func totalUniqueRootfsBytesInDigestDir(digestDir string, seen map[rootfsIdentity]struct{}) (int64, error) {
 	rootfsPaths, err := filepath.Glob(filepath.Join(digestDir, "rootfs.*"))
 	if err != nil {
 		return 0, err
@@ -220,17 +231,9 @@ func totalUniqueRootfsBytesInDigestDir(digestDir string, seen *[]os.FileInfo) (i
 			continue
 		}
 		found = true
-		duplicate := false
-		for _, existing := range *seen {
-			if os.SameFile(info, existing) {
-				duplicate = true
-				break
-			}
-		}
-		if duplicate {
+		if !markUniqueRootfs(info, seen) {
 			continue
 		}
-		*seen = append(*seen, info)
 		total += info.Size()
 	}
 	if !found {

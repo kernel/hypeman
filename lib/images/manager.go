@@ -465,10 +465,7 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef, credentials 
 
 	m.updateStatusByDigest(ref, StatusConverting, nil, buildID)
 
-	diskPath := m.paths.ImageDigestPath(ref.Repository(), ref.DigestHex())
-	if contentLayoutForWrite(m.paths, ref.Repository(), ref.DigestHex()) {
-		diskPath = contentDigestPath(m.paths, ref.DigestHex())
-	}
+	diskPath := resolveImageLayout(m.paths, ref.Repository(), ref.DigestHex()).disk
 	// Use default image format (erofs on Linux, ext4 on Darwin)
 	convertStart := time.Now()
 	diskSize, err := ExportRootfs(tempDir, diskPath, DefaultImageFormat)
@@ -720,15 +717,6 @@ func (m *manager) TagImage(ctx context.Context, source, target string) (*Image, 
 	return &img, nil
 }
 
-func contentIsDigestOnly(p *paths.Paths, digestHex string) bool {
-	meta, err := readMetadata(p, "", digestHex)
-	if err != nil {
-		return false
-	}
-	ref, err := ParseNormalizedRef(meta.Name)
-	return err == nil && ref.IsDigest()
-}
-
 func (m *manager) DeleteImage(ctx context.Context, name string) error {
 	// Parse and normalize the reference
 	ref, err := ParseNormalizedRef(name)
@@ -748,23 +736,10 @@ func (m *manager) DeleteImage(ctx context.Context, name string) error {
 		if _, err := readMetadata(m.paths, repository, digestHex); err != nil {
 			return err
 		}
-		contentImage := false
-		if _, err := os.Stat(m.paths.ImageContentMetadata(digestHex)); err == nil {
-			contentImage = true
-		}
 		if err := deleteTagsForDigest(m.paths, repository, digestHex); err != nil {
 			return err
 		}
-		if contentImage {
-			refs, err := contentTagsForDigest(m.paths, digestHex)
-			if err != nil {
-				return err
-			}
-			if len(refs) > 0 {
-				return nil
-			}
-		}
-		if err := deleteDigest(m.paths, repository, digestHex); err != nil {
+		if err := removeDigestIfUnreferenced(m.paths, repository, digestHex, false); err != nil {
 			return err
 		}
 		m.refreshDiskUsageTotals()
@@ -791,24 +766,8 @@ func (m *manager) DeleteImage(ctx context.Context, name string) error {
 		return nil
 	}
 
-	contentImage := false
-	if _, err := os.Stat(m.paths.ImageContentMetadata(digestHex)); err == nil {
-		contentImage = true
-	}
-	if contentImage {
-		refs, err := contentTagsForDigest(m.paths, digestHex)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to count content tags for digest %s: %v\n", digestHex, err)
-			return nil
-		}
-		if len(refs) > 0 || contentIsDigestOnly(m.paths, digestHex) {
-			return nil
-		}
-		count = 0
-	}
 	if count == 0 {
-		// Digest is orphaned, delete it
-		if err := deleteDigest(m.paths, repository, digestHex); err != nil {
+		if err := removeDigestIfUnreferenced(m.paths, repository, digestHex, true); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: failed to delete orphaned digest %s: %v\n", digestHex, err)
 			return nil
 		}

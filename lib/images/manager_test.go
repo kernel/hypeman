@@ -504,6 +504,56 @@ func TestDeleteImagePreservesSharedDigest(t *testing.T) {
 	require.True(t, os.IsNotExist(err), "digest directory should be deleted when last tag is removed")
 }
 
+func TestDeleteDigestRemovesLegacyTreeWhenContentIsReferenced(t *testing.T) {
+	p := paths.New(t.TempDir())
+	mgr, err := NewManager(p, 1, nil)
+	require.NoError(t, err)
+
+	const (
+		legacyRepo  = "docker.io/library/alpine"
+		contentRepo = "registry.example.com/app"
+		digest      = "1111111111111111111111111111111111111111111111111111111111111111"
+	)
+	digestRef := legacyRepo + "@sha256:" + digest
+	seedReadyDigestOnlyImageMetadata(t, p, digestRef, nil)
+	require.NoError(t, writeMetadataFile(p.ImageContentMetadata(digest), &imageMetadata{
+		Name:   contentRepo + ":latest",
+		Digest: "sha256:" + digest,
+		Status: StatusReady,
+	}))
+	require.NoError(t, os.WriteFile(p.ImageContentPath(digest), []byte("content rootfs"), 0o644))
+	require.NoError(t, createTagSymlink(p, contentRepo, "latest", digest))
+
+	require.NoError(t, mgr.DeleteImage(context.Background(), digestRef))
+	_, err = os.Stat(p.ImageDigestDir(legacyRepo, digest))
+	require.ErrorIs(t, err, os.ErrNotExist)
+	_, err = os.Stat(p.ImageContentDir(digest))
+	require.NoError(t, err)
+}
+
+func TestDeleteDigestPreservesInFlightContentPull(t *testing.T) {
+	p := paths.New(t.TempDir())
+	mgr, err := NewManager(p, 1, nil)
+	require.NoError(t, err)
+
+	const (
+		repository = "docker.io/library/alpine"
+		digest     = "2222222222222222222222222222222222222222222222222222222222222222"
+	)
+	digestRef := repository + "@sha256:" + digest
+	require.NoError(t, writeMetadataFile(p.ImageContentMetadata(digest), &imageMetadata{
+		Name:    repository + ":latest",
+		Digest:  "sha256:" + digest,
+		Status:  StatusPulling,
+		BuildID: "in-flight-build",
+	}))
+	require.NoError(t, os.WriteFile(p.ImageContentPath(digest), []byte("partial rootfs"), 0o644))
+
+	require.NoError(t, mgr.DeleteImage(context.Background(), digestRef))
+	require.FileExists(t, p.ImageContentMetadata(digest))
+	require.FileExists(t, p.ImageContentPath(digest))
+}
+
 func TestNormalizedRefParsing(t *testing.T) {
 	tests := []struct {
 		input      string
@@ -711,7 +761,7 @@ func TestImportLocalImageFromOCICache(t *testing.T) {
 	t.Logf("Disk path verified: %s (%d bytes)", diskPath, diskStat.Size())
 }
 
-func TestDeleteAndRecreateDuringBuildTail(t *testing.T) {
+func TestDeletePreservesInFlightBuild(t *testing.T) {
 	origFormat := DefaultImageFormat
 	DefaultImageFormat = FormatCpio
 	defer func() { DefaultImageFormat = origFormat }()
@@ -787,7 +837,7 @@ func TestDeleteAndRecreateDuringBuildTail(t *testing.T) {
 	require.Equal(t, 1, *recreatedAgain.QueuePosition)
 	latestMeta, err := readMetadata(p, repo, digestHex)
 	require.NoError(t, err)
-	require.NotEqual(t, currentMeta.BuildID, latestMeta.BuildID)
+	require.Equal(t, currentMeta.BuildID, latestMeta.BuildID)
 	currentMeta = latestMeta
 
 	waitCtx, cancelWait := context.WithCancel(ctx)
