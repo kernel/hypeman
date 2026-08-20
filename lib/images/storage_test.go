@@ -35,6 +35,28 @@ func TestLegacyImageIsNotShadowedByContentMetadata(t *testing.T) {
 	require.Equal(t, p.ImageDigestPath(repository, digest), digestPath(p, repository, digest))
 }
 
+func TestListAllMetadataDeduplicatesDualLayouts(t *testing.T) {
+	p := paths.New(t.TempDir())
+	repository := "docker.io/library/alpine"
+	digest := "9999999999999999999999999999999999999999999999999999999999999999"
+	meta := &imageMetadata{
+		Name:   repository + "@sha256:" + digest,
+		Digest: "sha256:" + digest,
+		Status: StatusReady,
+	}
+
+	require.NoError(t, os.MkdirAll(p.ImageDigestDir(repository, digest), 0o755))
+	require.NoError(t, writeMetadataFile(p.ImageMetadata(repository, digest), meta))
+	require.NoError(t, os.WriteFile(p.ImageDigestPath(repository, digest), []byte("legacy rootfs"), 0o644))
+	require.NoError(t, writeMetadataFile(p.ImageContentMetadata(digest), meta))
+	require.NoError(t, os.WriteFile(p.ImageContentPath(digest), []byte("content rootfs"), 0o644))
+
+	metas, err := listAllMetadata(p)
+	require.NoError(t, err)
+	require.Len(t, metas, 1)
+	require.Equal(t, meta.Digest, metas[0].Digest)
+}
+
 func TestFailedLegacyImageUsesReadyContent(t *testing.T) {
 	p := paths.New(t.TempDir())
 	repository := "docker.io/library/alpine"

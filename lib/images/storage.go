@@ -482,6 +482,7 @@ func listAllMetadata(p *paths.Paths) ([]*imageMetadata, error) {
 	if err != nil && !os.IsNotExist(err) {
 		return nil, fmt.Errorf("walk images directory: %w", err)
 	}
+	seenDigests := make(map[string]struct{}, len(metas))
 	for _, ref := range metadataRefs {
 		if _, tagged := taggedDigests[ref.repository+"@"+ref.digestHex]; tagged {
 			continue
@@ -489,9 +490,13 @@ func listAllMetadata(p *paths.Paths) ([]*imageMetadata, error) {
 		if err := appendMetadataIfNew(p, ref.repository, ref.digestHex, seen, &metas); err != nil {
 			return nil, err
 		}
+		seenDigests[ref.digestHex] = struct{}{}
 	}
 	for digestHex := range contentDigests {
 		if _, found := taggedContentDigests[digestHex]; found {
+			continue
+		}
+		if _, found := seenDigests[digestHex]; found {
 			continue
 		}
 		if err := appendContentMetadataIfNew(p, digestHex, seen, &metas); err != nil {
