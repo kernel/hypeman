@@ -703,7 +703,7 @@ func TestKillHypervisorEscalatesToSIGKILLWhenSIGTERMIgnored(t *testing.T) {
 	assert.ErrorIs(t, syscall.Kill(pid, 0), syscall.ESRCH, "SIGTERM-ignoring hypervisor must still be hard-killed")
 }
 
-func TestKillHypervisorHardKillsVGPUHypervisorPastInit(t *testing.T) {
+func TestKillHypervisorSIGTERMsRunningVGPUHypervisor(t *testing.T) {
 	markerPath := filepath.Join(t.TempDir(), "terminated")
 	pid, identity := startTrapProcess(t, "touch "+markerPath+"; exit 0")
 	socketPath := filepath.Join(t.TempDir(), "missing.sock")
@@ -719,6 +719,27 @@ func TestKillHypervisorHardKillsVGPUHypervisorPastInit(t *testing.T) {
 		},
 	}))
 
+	require.Eventually(t, func() bool {
+		return syscall.Kill(pid, 0) == syscall.ESRCH
+	}, 5*time.Second, 10*time.Millisecond)
+	assert.FileExists(t, markerPath, "Running reports true before guest driver init completes, so vGPU hypervisors get SIGTERM in every state")
+}
+
+func TestKillHypervisorHardKillsNonVGPUHypervisor(t *testing.T) {
+	markerPath := filepath.Join(t.TempDir(), "terminated")
+	pid, identity := startTrapProcess(t, "touch "+markerPath+"; exit 0")
+	socketPath := filepath.Join(t.TempDir(), "missing.sock")
+
+	m := &manager{}
+	require.NoError(t, m.killHypervisor(context.Background(), &Instance{
+		State: StateRunning,
+		StoredMetadata: StoredMetadata{
+			Id:                        "kill-test",
+			HypervisorProcessIdentity: identity,
+			SocketPath:                socketPath,
+		},
+	}))
+
 	assert.ErrorIs(t, syscall.Kill(pid, 0), syscall.ESRCH)
-	assert.NoFileExists(t, markerPath, "running vGPU hypervisors keep the direct SIGKILL path")
+	assert.NoFileExists(t, markerPath, "non-vGPU hypervisors keep the direct SIGKILL path")
 }
