@@ -20,6 +20,9 @@ import (
 )
 
 func TestWindowsGuestAgentIntegration(t *testing.T) {
+	if os.Getenv("HYPEMAN_RUN_WINDOWS_GUEST_CONTROL_INTEGRATION") != "1" {
+		t.Skip("run by the dedicated Windows guest-control CI gate")
+	}
 	fixture := os.Getenv("HYPEMAN_WINDOWS_TEST_AGENT_PERSONA")
 	if fixture == "" {
 		fixture = "/ci/windows/persona-agent.qcow2"
