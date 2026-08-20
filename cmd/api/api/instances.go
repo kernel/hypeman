@@ -884,6 +884,8 @@ func (s *ApiService) GetInstanceLogs(ctx context.Context, request oapi.GetInstan
 			source = instances.LogSourceVMM
 		case oapi.Hypeman:
 			source = instances.LogSourceHypeman
+		case oapi.Swtpm:
+			source = instances.LogSourceSWTPM
 		}
 	}
 

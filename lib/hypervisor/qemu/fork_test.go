@@ -34,7 +34,16 @@ func TestPrepareFork_RewritesSnapshotConfig(t *testing.T) {
 		VsockSocket:   sourceDir + "/vsock/vsock.sock",
 		KernelPath:    sourceDir + "/kernel/vmlinuz",
 		InitrdPath:    sourceDir + "/kernel/initrd",
-		KernelArgs:    "console=ttyS0 root=" + sourceDir + "/rootfs note=keep-" + sourceDir + "-as-substring",
+		Firmware: &hypervisor.FirmwareConfig{
+			CodePath:   sourceDir + "/OVMF_CODE.fd",
+			VarsPath:   sourceDir + "/OVMF_VARS.fd",
+			SecureBoot: true,
+		},
+		TPM: &hypervisor.TPMConfig{
+			SocketPath: sourceDir + "/swtpm.sock",
+			StateDir:   sourceDir + "/tpm",
+		},
+		KernelArgs: "console=ttyS0 root=" + sourceDir + "/rootfs note=keep-" + sourceDir + "-as-substring",
 		Disks: []hypervisor.DiskConfig{
 			{Path: sourceDir + "/overlay.raw"},
 			{Path: "/volumes/volume-data.raw"},
@@ -77,6 +86,12 @@ func TestPrepareFork_RewritesSnapshotConfig(t *testing.T) {
 	assert.Equal(t, targetDir+"/logs/fork-app.log", updated.SerialLogPath)
 	assert.Equal(t, targetDir+"/kernel/vmlinuz", updated.KernelPath)
 	assert.Equal(t, targetDir+"/kernel/initrd", updated.InitrdPath)
+	require.NotNil(t, updated.Firmware)
+	assert.Equal(t, targetDir+"/OVMF_CODE.fd", updated.Firmware.CodePath)
+	assert.Equal(t, targetDir+"/OVMF_VARS.fd", updated.Firmware.VarsPath)
+	require.NotNil(t, updated.TPM)
+	assert.Equal(t, targetDir+"/swtpm.sock", updated.TPM.SocketPath)
+	assert.Equal(t, targetDir+"/tpm", updated.TPM.StateDir)
 	assert.Equal(t, initial.KernelArgs, updated.KernelArgs)
 	assert.Equal(t, targetDir+"/overlay.raw", updated.Disks[0].Path)
 	assert.Equal(t, "/volumes/volume-data.raw", updated.Disks[1].Path, "non-instance paths should remain unchanged")

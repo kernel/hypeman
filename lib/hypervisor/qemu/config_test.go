@@ -81,6 +81,35 @@ func TestBuildArgs_Disks(t *testing.T) {
 	assert.Contains(t, args, "virtio-blk-pci,drive=drive1")
 }
 
+func TestBuildArgs_UEFISecureBootTPMAndQCOW2(t *testing.T) {
+	cfg := hypervisor.VMConfig{
+		VCPUs:       2,
+		MemoryBytes: 1024 * 1024 * 1024,
+		BootMode:    hypervisor.BootModeUEFI,
+		Firmware: &hypervisor.FirmwareConfig{
+			CodePath:   "/firmware/OVMF_CODE.fd",
+			VarsPath:   "/instance/OVMF_VARS.fd",
+			SecureBoot: true,
+		},
+		TPM: &hypervisor.TPMConfig{
+			SocketPath: "/instance/swtpm.sock",
+			StateDir:   "/instance/tpm",
+		},
+		Disks: []hypervisor.DiskConfig{{Path: "/instance/windows.qcow2", Format: hypervisor.DiskFormatQCOW2}},
+	}
+
+	args := buildArgs(cfg, MachineTypeQ35)
+	assert.Contains(t, args, "q35,accel=kvm,smm=on")
+	assert.Contains(t, args, "if=pflash,format=raw,unit=0,file=/firmware/OVMF_CODE.fd,readonly=on")
+	assert.Contains(t, args, "if=pflash,format=raw,unit=1,file=/instance/OVMF_VARS.fd")
+	assert.Contains(t, args, "driver=cfi.pflash01,property=secure,value=on")
+	assert.Contains(t, args, "file=/instance/windows.qcow2,format=qcow2,if=none,id=drive0")
+	assert.Contains(t, args, "socket,id=chrtpm,path=/instance/swtpm.sock")
+	assert.Contains(t, args, "emulator,id=tpm0,chardev=chrtpm")
+	assert.Contains(t, args, "tpm-crb,tpmdev=tpm0")
+	assert.NotContains(t, args, "-kernel")
+}
+
 func TestBuildArgs_Network(t *testing.T) {
 	cfg := hypervisor.VMConfig{
 		VCPUs:       1,
@@ -185,6 +214,25 @@ func TestBuildArgs_MicroVM(t *testing.T) {
 	for _, arg := range args {
 		assert.NotContains(t, arg, "-pci", "microvm cannot use PCI transport")
 	}
+}
+
+func TestProfilesValidateFirmwareAndDiskFormats(t *testing.T) {
+	uefi := hypervisor.VMConfig{
+		BootMode: hypervisor.BootModeUEFI,
+		Firmware: &hypervisor.FirmwareConfig{CodePath: "/code", VarsPath: "/vars"},
+		Disks:    []hypervisor.DiskConfig{{Path: "/disk", Format: hypervisor.DiskFormatQCOW2}},
+	}
+	standard := StandardProfile{}
+	if standardMachineType() == MachineTypeQ35 {
+		assert.True(t, standard.capabilities().SupportsUEFIBoot)
+		assert.True(t, standard.capabilities().SupportsTPM)
+		assert.NoError(t, standard.validateConfig(uefi))
+	} else {
+		assert.False(t, standard.capabilities().SupportsUEFIBoot)
+		assert.False(t, standard.capabilities().SupportsTPM)
+		assert.ErrorContains(t, standard.validateConfig(uefi), "does not support UEFI boot on this host")
+	}
+	assert.ErrorContains(t, MicroVMProfile{}.validateConfig(uefi), "does not support uefi boot")
 }
 
 func TestBuildArgs_GuestMemoryBalloon(t *testing.T) {
