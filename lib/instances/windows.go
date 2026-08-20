@@ -57,7 +57,7 @@ func validateWindowsCreate(req CreateInstanceRequest, image *images.Image, caps 
 
 func validateWindowsForkPolicy(stored *StoredMetadata) error {
 	if stored != nil && isWindowsPlatform(stored.Platform) && stored.WindowsBitLockerPolicy != "disabled" {
-		return fmt.Errorf("%w: Windows forks require a persona declared with %s=disabled", ErrNotSupported, images.MachineImageBitLockerLabel)
+		return fmt.Errorf("%w: Windows forks require an image declared with %s=disabled", ErrNotSupported, images.MachineImageBitLockerLabel)
 	}
 	return nil
 }

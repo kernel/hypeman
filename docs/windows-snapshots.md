@@ -12,20 +12,12 @@ A fork receives independent disk and NVRAM files. A stopped fork removes the cop
 
 The Windows guest agent writes a new `MachineGuid` and records the child instance ID before the child is returned. Memory forks retain the source SID and hostname, and services that cached `MachineGuid` before standby may observe the previous value until the next cold boot.
 
-Fork admission requires the persona OCI label:
+Fork admission requires the image OCI label:
 
 ```text
 io.hypeman.machine-image.bitlocker=disabled
 ```
 
-Personas marked `reseal-required`, unlabeled personas, and unknown policies can still use same-instance snapshots, but cannot be forked. Hypeman does not expose a child whose encrypted disk was cloned without resealing it to the child's TPM.
+Images marked `reseal-required`, unlabeled images, and unknown policies can still use same-instance snapshots, but cannot be forked. Hypeman does not expose a child whose encrypted disk was cloned without resealing it to the child's TPM.
 
 Stopped forks cold-boot with a unique vsock CID and can run concurrently. A standby snapshot contains the Windows VioSock driver's current CID in guest memory, so a memory-restored child initially retains that CID. The source and child must not be restored concurrently until the child has been stopped and cold-started; Hypeman reports a state error instead of allowing QEMU to fail with a CID collision. Creating a running fork directly from a running Windows source therefore requires `target_state=Stopped`.
-
-## Integration gates
-
-- `TestWindowsStandbyRestoreIntegration` verifies identity-preserving standby/restore and the stopped snapshot restore/fork APIs.
-- `TestWindowsStandbyForkIntegration` verifies a captured desktop memory fork, inherited guest and TPM endorsement-key state, a fresh `MachineGuid`, and independent NVRAM/disk files.
-- `TestWindowsForkIntegration` verifies independent guest writes and a fresh TPM endorsement key for cold-booted stopped forks.
-
-The private Windows fixture and its license are not stored in this repository.
