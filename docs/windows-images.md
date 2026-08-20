@@ -13,6 +13,7 @@ A machine image uses these OCI config labels:
 | `io.hypeman.machine-image.base` | omitted | digest-pinned base reference |
 | `io.hypeman.machine-image.tpm` | `2.0` | `2.0` |
 | `io.hypeman.machine-image.secure-boot` | `required` | `required` |
+| `io.hypeman.machine-image.bitlocker` | omitted | `disabled` for forkable personas; `reseal-required` otherwise |
 
 The base must be pulled before its dependent Windows images. A base cannot be deleted while any cached image references its digest. Instance references are not tracked by the image cache, matching existing Linux behavior: do not delete a base while a dependent Windows instance exists.
 

@@ -942,6 +942,32 @@ func CopyFromInstance(ctx context.Context, dialer hypervisor.VsockDialer, opts C
 	return nil
 }
 
+func RebindInstanceIdentity(ctx context.Context, dialer hypervisor.VsockDialer, instanceID string, waitForAgent time.Duration) (string, error) {
+	deadline := time.Now().Add(waitForAgent)
+	for {
+		conn, err := GetOrCreateConn(ctx, dialer)
+		if err == nil {
+			attemptCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+			resp, rpcErr := NewGuestServiceClient(conn).RebindIdentity(attemptCtx, &RebindIdentityRequest{InstanceId: instanceID})
+			cancel()
+			if rpcErr == nil {
+				return resp.MachineId, nil
+			}
+			err = fmt.Errorf("rebind guest identity: %w", rpcErr)
+		}
+		retryable := isRetryableConnectionError(err) || status.Code(err) == codes.DeadlineExceeded
+		if !retryable || waitForAgent == 0 || time.Now().After(deadline) {
+			return "", err
+		}
+		CloseConn(dialer.Key())
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(guestExecSlowRetryInterval):
+		}
+	}
+}
+
 // ShutdownInstance sends a shutdown signal to the guest VM's init process (PID 1).
 // The guest-agent forwards the signal to init, which forwards it to the entrypoint.
 // sig is the signal number to send (0 = SIGTERM default).
