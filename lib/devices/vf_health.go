@@ -82,6 +82,23 @@ func (s *vfHealthStore) ensureLoadedLocked() error {
 	return s.loadLocked()
 }
 
+// checkedAddresses returns the quarantined VF addresses, retrying a failed
+// load first. Placement must not run against an empty record set that only
+// exists because the state file was unreadable: that would put every
+// previously quarantined VF back into rotation.
+func (s *vfHealthStore) checkedAddresses() (map[string]struct{}, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.ensureLoadedLocked(); err != nil {
+		return nil, fmt.Errorf("VF health state unavailable: %w", err)
+	}
+	addresses := make(map[string]struct{}, len(s.records))
+	for address := range s.records {
+		addresses[address] = struct{}{}
+	}
+	return addresses, nil
+}
+
 // QuarantineVF records a wedge conviction for a VF and persists it. It takes
 // the vGPU placement lock so a convicted VF is never concurrently selected
 // for a new assignment. A conviction of an already-quarantined VF returns
@@ -147,7 +164,11 @@ func (s *vfHealthStore) quarantine(q VFQuarantine) (VFHealthRecord, bool, error)
 	}
 	s.records[q.VFAddress] = record
 	if err := s.persistLocked(); err != nil {
-		return record, false, err
+		// A quarantine is only real once it is on disk. Keeping the record in
+		// memory would make the next report look like a repeat conviction and
+		// end retries, leaving nothing persisted for the next restart.
+		delete(s.records, q.VFAddress)
+		return VFHealthRecord{}, false, err
 	}
 	return record, false, nil
 }
@@ -163,17 +184,6 @@ func (s *vfHealthStore) clear(vfAddress string) (bool, error) {
 	}
 	delete(s.records, vfAddress)
 	return true, s.persistLocked()
-}
-
-// snapshotAddresses returns the set of quarantined VF addresses.
-func (s *vfHealthStore) snapshotAddresses() map[string]struct{} {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	addresses := make(map[string]struct{}, len(s.records))
-	for address := range s.records {
-		addresses[address] = struct{}{}
-	}
-	return addresses
 }
 
 func (s *vfHealthStore) persistLocked() error {

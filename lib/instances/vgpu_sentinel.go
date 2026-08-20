@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/devices"
+	"github.com/kernel/hypeman/lib/logger"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 )
@@ -38,9 +39,9 @@ const (
 // report as it arrives on the serial console (the agent observes the NVIDIA
 // driver's RmInitAdapter failure in the guest kernel log and emits this
 // marker — the same guest-to-host channel as the other HYPEMAN-* markers).
-// The full marker shape including the nvrm field is required: a bare token
-// could appear in echoed exec command lines.
-var vgpuSentinelPattern = regexp.MustCompile(`HYPEMAN-GPU-INIT-FAILED ts=\S+ nvrm="`)
+// The full marker shape through the quoted NVRM payload is required: a bare
+// token or a truncated marker could appear in echoed exec command lines.
+var vgpuSentinelPattern = regexp.MustCompile(`HYPEMAN-GPU-INIT-FAILED ts=\S+ nvrm="NVRM: [^"]*RmInitAdapter failed![^"]*"`)
 
 type vgpuSentinelTarget struct {
 	instanceID string
@@ -315,6 +316,11 @@ func (m *manager) listVGPUSentinelTargets(ctx context.Context) ([]vgpuSentinelTa
 		id := filepath.Base(filepath.Dir(file))
 		meta, err := m.loadMetadata(id)
 		if err != nil {
+			if !errors.Is(err, ErrNotFound) {
+				// An unreadable record removes its VF from detection; say so
+				// rather than silently shrinking coverage.
+				logger.FromContext(ctx).WarnContext(ctx, "vGPU sentinel skipping unreadable instance metadata", "instance_id", id, "error", err)
+			}
 			continue
 		}
 		if meta.GPUFramework != devices.VGPUFrameworkVendorVFIO || meta.GPUDevicePath == "" {

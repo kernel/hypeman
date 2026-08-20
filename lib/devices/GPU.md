@@ -342,12 +342,14 @@ systemctl stop nvidia-dcgm-exporter nvidia-dcgm
 systemctl start nvidia-dcgm nvidia-dcgm-exporter
 ```
 
-After the cycle, boot a verification instance on the recovered VF and confirm
-its guest reaches the driver (no `HYPEMAN-GPU-INIT-FAILED` in its app log),
-then clear the quarantine by removing the VF's entry from
+After the cycle, clear the quarantine by removing the VF's entry from
 `<data-dir>/gpu/vf-health.json` and restarting hypeman immediately — the
 running process keeps the quarantine in memory, and a conviction landing
-before the restart re-persists it over your edit.
+before the restart re-persists it over your edit. Then boot a GPU instance as
+verification: placement excludes quarantined VFs, so the recovered VF cannot
+be targeted while its entry exists, and there is no VF-pin API — clearing
+first is safe because the sentinel automatically re-quarantines the VF if the
+cycle did not cure it (every cycle in hardware validation did).
 
 Do not unbind/rebind the VF from the nvidia driver — it breaks the
 nvidia-vgpu-vfio core-device registration (`vfio_pci_core_device not found`)

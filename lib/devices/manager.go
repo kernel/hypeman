@@ -87,7 +87,7 @@ type manager struct {
 // Use SetLivenessChecker after construction to enable accurate orphan detection.
 func NewManager(p *paths.Paths) Manager {
 	if err := initVFHealthStore(p.VFHealthState()); err != nil {
-		slog.Default().Error("failed to load VF health state; persisted quarantines are not in effect", "error", err)
+		slog.Default().Error("failed to load VF health state; vGPU placement is disabled until the state file is repaired or removed", "error", err)
 	}
 	return &manager{
 		paths:      p,

@@ -72,6 +72,46 @@ func TestClearVFQuarantine(t *testing.T) {
 	assert.False(t, cleared)
 }
 
+func TestQuarantineVFRollsBackOnPersistFailure(t *testing.T) {
+	resetVFHealthStore(t)
+	// Point the store below a path component that is a file, so persisting
+	// fails at MkdirAll.
+	blocker := filepath.Join(t.TempDir(), "blocker")
+	require.NoError(t, os.WriteFile(blocker, nil, 0644))
+	vfHealth.path = filepath.Join(blocker, "vf-health.json")
+
+	_, _, err := QuarantineVF(VFQuarantine{VFAddress: "0000:e3:00.4"})
+	require.Error(t, err)
+
+	// A quarantine is only real once persisted: the failed record must not
+	// linger in memory, or the retried conviction would be treated as a
+	// repeat and never reach disk.
+	assert.False(t, IsVFQuarantined("0000:e3:00.4"))
+	assert.Empty(t, QuarantinedVFs())
+}
+
+func TestCheckedAddressesFailsClosedOnUnloadedState(t *testing.T) {
+	path := resetVFHealthStore(t)
+
+	_, _, err := QuarantineVF(VFQuarantine{VFAddress: "0000:e3:00.4"})
+	require.NoError(t, err)
+
+	require.NoError(t, os.WriteFile(path, []byte("not json"), 0644))
+	require.Error(t, initVFHealthStore(path))
+
+	// Placement must not run against a record set that is only empty because
+	// the state file was unreadable.
+	_, err = vfHealth.checkedAddresses()
+	require.Error(t, err)
+
+	// A repaired file self-heals on the next placement attempt.
+	restored := `[{"vf_address":"0000:e3:00.4","wedge_count":1,"quarantined_at":"2026-08-20T00:00:00Z"}]`
+	require.NoError(t, os.WriteFile(path, []byte(restored), 0644))
+	addresses, err := vfHealth.checkedAddresses()
+	require.NoError(t, err)
+	assert.Contains(t, addresses, "0000:e3:00.4")
+}
+
 func TestQuarantineVFRefusesToClobberUnloadedState(t *testing.T) {
 	path := resetVFHealthStore(t)
 

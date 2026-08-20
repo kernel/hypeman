@@ -112,7 +112,10 @@ func (s vendorVFIOSysfs) discoverVFs() ([]VirtualFunction, error) {
 // available_instances. This is a best-effort snapshot because creating on one
 // VF may revoke the type from siblings that share its GPU framebuffer.
 func (s vendorVFIOSysfs) listProfiles(vfs []VirtualFunction) ([]GPUProfile, error) {
-	quarantined := vfHealth.snapshotAddresses()
+	quarantined, err := vfHealth.checkedAddresses()
+	if err != nil {
+		return nil, err
+	}
 	profilesByType := make(map[string]profileMetadata)
 	creatableVFs := make(map[string]int)
 	for _, vf := range vfs {
@@ -316,7 +319,10 @@ func (s vendorVFIOSysfs) reconcile(ctx context.Context, protectedDevicePaths map
 }
 
 func (s vendorVFIOSysfs) selectLeastLoadedVF(vfs []VirtualFunction, profileType string) (string, error) {
-	quarantined := vfHealth.snapshotAddresses()
+	quarantined, err := vfHealth.checkedAddresses()
+	if err != nil {
+		return "", err
+	}
 	usageByGPU := make(map[string]int)
 	unknownUsageByGPU := make(map[string]bool)
 	quarantinedByGPU := make(map[string]int)

@@ -26,8 +26,11 @@ func TestVGPUSentinelPattern(t *testing.T) {
 	// agent observes it in the guest and reports the marker instead.
 	assert.False(t, vgpuSentinelPattern.MatchString("[   27.031415] NVRM: GPU 0000:e3:00.4: RmInitAdapter failed! (0x22:0x65:884)"))
 
-	// Echoed exec command lines can carry the bare token on the same console.
+	// Echoed exec command lines can carry the bare token, a truncated marker,
+	// or a marker-shaped line without the NVRM payload on the same console.
 	assert.False(t, vgpuSentinelPattern.MatchString("$ dmesg | grep -c HYPEMAN-GPU-INIT-FAILED"))
+	assert.False(t, vgpuSentinelPattern.MatchString("$ echo 'HYPEMAN-GPU-INIT-FAILED ts=x nvrm=\"'"))
+	assert.False(t, vgpuSentinelPattern.MatchString("HYPEMAN-GPU-INIT-FAILED ts=2026-08-20T15:04:05Z nvrm=\"something else\""))
 	assert.False(t, vgpuSentinelPattern.MatchString("2026/08/20 15:04:05 [guest-agent] HYPEMAN-AGENT-READY ts=2026-08-20T15:04:05Z"))
 }
 

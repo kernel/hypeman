@@ -179,6 +179,19 @@ func (m *manager) startInstance(
 		}
 	}
 
+	// Archive the previous boot's serial log before any new vGPU assignment
+	// is persisted: the sentinel controller keys its tail on the assignment
+	// epoch, so an old log left in place would be rescanned from the top as
+	// the new boot's output and could replay a wedge report against the
+	// fresh VF. For GPU instances a failed archive is therefore fatal.
+	if err := m.archiveAppLogForBoot(id); err != nil {
+		if stored.GPUProfile != "" {
+			log.ErrorContext(ctx, "failed to archive app log before start", "instance_id", id, "error", err)
+			return nil, fmt.Errorf("archive app log before start: %w", err)
+		}
+		log.WarnContext(ctx, "failed to archive app log before start", "instance_id", id, "error", err)
+	}
+
 	// 4b. Recreate the vGPU if this instance had a GPU profile
 	// Note: GPU availability was already validated in step 2b
 	if stored.GPUProfile != "" {
@@ -226,10 +239,6 @@ func (m *manager) startInstance(
 		return nil, fmt.Errorf("create config disk: %w", err)
 	}
 	configDiskSpanEnd(nil)
-
-	if err := m.archiveAppLogForBoot(id); err != nil {
-		log.WarnContext(ctx, "failed to archive app log before start", "instance_id", id, "error", err)
-	}
 
 	// 6. Start hypervisor and boot VM (reuses logic from create)
 	bootStart := time.Now().UTC()
