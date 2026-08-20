@@ -31,6 +31,9 @@ func requireWindowsConfigDependency(t *testing.T, path, description string) stri
 }
 
 func TestWindowsConfigIntegration(t *testing.T) {
+	if os.Getenv("HYPEMAN_RUN_WINDOWS_CONFIG_INTEGRATION") != "1" {
+		t.Skip("run by the dedicated Windows config CI gate")
+	}
 	requireWindowsConfigDependency(t, "/dev/kvm", "KVM")
 	if _, err := exec.LookPath("qemu-system-x86_64"); err != nil {
 		requireWindowsConfigDependency(t, "", "qemu-system-x86_64")
