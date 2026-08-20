@@ -30,6 +30,12 @@ The launchable Windows image already defines its virtual disk size, so instance 
 
 A Windows VM remains `Initializing` until its guest agent answers over VioSock. This avoids treating firmware completion as application readiness.
 
+### Windows networking
+
+Windows uses the same host-side TAP allocation as Linux. Once the guest agent is reachable, the manager sends the complete allocation through the typed `ReconfigureNetwork` RPC. The agent selects the virtio-net adapter by MAC address, replaces stale IPv4 addresses and default routes, and applies DNS through native Windows APIs. It never invokes the Linux shell-command fallback.
+
+Create treats network configuration as part of readiness and tears down a VM if it fails. Start reapplies the current allocation because a stopped instance may receive a different address or MAC before its next boot.
+
 ### Why Config Disk? (configdisk.go)
 
 **What:** Read-only erofs disk with instance configuration
