@@ -2,7 +2,7 @@
 
 package egressproxy
 
-func applyEgressEnforcement(instanceID, sourceIP, gatewayIP string, proxyPort int, blockAllTCPEgress bool) error {
+func applyEgressEnforcement(instanceID, sourceIP, tapDevice, gatewayIP string, proxyPort int, blockAllTCPEgress bool) error {
 	_ = blockAllTCPEgress
 	return nil
 }

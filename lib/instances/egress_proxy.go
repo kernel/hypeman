@@ -293,6 +293,7 @@ func (m *manager) maybeRegisterEgressProxy(ctx context.Context, stored *StoredMe
 	guestCfg, err := svc.RegisterInstance(ctx, netConfig.Gateway, egressproxy.InstanceConfig{
 		InstanceID:        stored.Id,
 		SourceIP:          netConfig.IP,
+		TAPDevice:         netConfig.TAPDevice,
 		BlockAllTCPEgress: stored.NetworkEgress.EnforcementMode != EgressEnforcementModeHTTPHTTPSOnly,
 		HeaderInjectRules: rules,
 	})

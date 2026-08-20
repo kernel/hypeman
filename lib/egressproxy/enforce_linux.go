@@ -11,20 +11,29 @@ import (
 )
 
 const (
-	enforcementSuffixPort80    = "80"
-	enforcementSuffixPort443   = "443"
-	enforcementSuffixAllTCP    = "all-tcp"
-	enforcementSuffixHostTCP   = "host-tcp"
-	enforcementSuffixHostDNS   = "host-dns"
-	enforcementSuffixHostProxy = "host-proxy"
+	enforcementSuffixPort80       = "80"
+	enforcementSuffixPort443      = "443"
+	enforcementSuffixAllTCP       = "all-tcp"
+	enforcementSuffixHostTCP      = "host-tcp"
+	enforcementSuffixHostDNS      = "host-dns"
+	enforcementSuffixHostProxy    = "host-proxy"
+	enforcementSuffixForwardSpoof = "forward-spoof"
+	enforcementSuffixHostSpoof    = "host-spoof"
 )
 
-func applyEgressEnforcement(instanceID, sourceIP, gatewayIP string, proxyPort int, blockAllTCPEgress bool) error {
-	if instanceID == "" || net.ParseIP(sourceIP).To4() == nil || net.ParseIP(gatewayIP).To4() == nil || proxyPort <= 0 {
+func applyEgressEnforcement(instanceID, sourceIP, tapDevice, gatewayIP string, proxyPort int, blockAllTCPEgress bool) error {
+	if instanceID == "" || net.ParseIP(sourceIP).To4() == nil || tapDevice == "" || net.ParseIP(gatewayIP).To4() == nil || proxyPort <= 0 {
 		return fmt.Errorf("invalid egress enforcement inputs")
 	}
 
 	removeEgressRules(instanceID)
+	if err := insertAntiSpoofRule("FORWARD", sourceIP, tapDevice, enforcementComment(instanceID, enforcementSuffixForwardSpoof)); err != nil {
+		return fmt.Errorf("insert forwarded anti-spoof enforcement: %w", err)
+	}
+	if err := insertAntiSpoofRule("INPUT", sourceIP, tapDevice, enforcementComment(instanceID, enforcementSuffixHostSpoof)); err != nil {
+		removeEgressRules(instanceID)
+		return fmt.Errorf("insert host anti-spoof enforcement: %w", err)
+	}
 	if blockAllTCPEgress {
 		if err := insertRejectAllTCPRule(sourceIP, enforcementComment(instanceID, enforcementSuffixAllTCP)); err != nil {
 			return fmt.Errorf("insert all-tcp egress enforcement: %w", err)
@@ -73,6 +82,8 @@ func removeEgressRules(instanceID string) {
 		{chain: "INPUT", suffix: enforcementSuffixHostTCP},
 		{chain: "INPUT", suffix: enforcementSuffixHostDNS},
 		{chain: "INPUT", suffix: enforcementSuffixHostProxy},
+		{chain: "FORWARD", suffix: enforcementSuffixForwardSpoof},
+		{chain: "INPUT", suffix: enforcementSuffixHostSpoof},
 	} {
 		_ = removeRuleByComment(rule.chain, enforcementComment(instanceID, rule.suffix))
 	}
@@ -92,6 +103,10 @@ func insertRejectHostTCPRule(sourceIP, comment string) error {
 
 func insertAcceptHostTCPRule(sourceIP string, port int, comment string) error {
 	return insertIptablesRule(acceptHostTCPRuleArgs(sourceIP, port, comment))
+}
+
+func insertAntiSpoofRule(chain, sourceIP, tapDevice, comment string) error {
+	return insertIptablesRule(antiSpoofRuleArgs(chain, sourceIP, tapDevice, comment))
 }
 
 func insertIptablesRule(arguments []string) error {
@@ -145,6 +160,16 @@ func acceptHostTCPRuleArgs(sourceIP string, port int, comment string) []string {
 		"-m", "conntrack", "--ctstate", "NEW",
 		"-m", "comment", "--comment", comment,
 		"-j", "ACCEPT",
+	}
+}
+
+func antiSpoofRuleArgs(chain, sourceIP, tapDevice, comment string) []string {
+	return []string{
+		"-I", chain, "1",
+		"-m", "physdev", "--physdev-in", tapDevice,
+		"!", "-s", sourceIP,
+		"-m", "comment", "--comment", comment,
+		"-j", "DROP",
 	}
 }
 

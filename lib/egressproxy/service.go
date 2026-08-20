@@ -217,7 +217,7 @@ func (s *Service) RegisterInstance(ctx context.Context, gatewayIP string, cfg In
 		return GuestConfig{}, err
 	}
 
-	if err := applyEgressEnforcement(cfg.InstanceID, cfg.SourceIP, gatewayIP, s.listenPort, cfg.BlockAllTCPEgress); err != nil {
+	if err := applyEgressEnforcement(cfg.InstanceID, cfg.SourceIP, cfg.TAPDevice, gatewayIP, s.listenPort, cfg.BlockAllTCPEgress); err != nil {
 		log.WarnContext(ctx, "failed to apply egress proxy enforcement", "instance_id", cfg.InstanceID, "error", err)
 		opErr = err
 		return GuestConfig{}, err

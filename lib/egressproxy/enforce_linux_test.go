@@ -48,4 +48,12 @@ func TestRejectRuleArgsMatchSourceAddress(t *testing.T) {
 		"-m", "comment", "--comment", "hypeman-egress-instance-host-proxy",
 		"-j", "ACCEPT",
 	}, acceptHostTCPRuleArgs("10.102.1.2", 18080, "hypeman-egress-instance-host-proxy"))
+
+	require.Equal(t, []string{
+		"-I", "FORWARD", "1",
+		"-m", "physdev", "--physdev-in", "hype-instance",
+		"!", "-s", "10.102.1.2",
+		"-m", "comment", "--comment", "hypeman-egress-instance-forward-spoof",
+		"-j", "DROP",
+	}, antiSpoofRuleArgs("FORWARD", "10.102.1.2", "hype-instance", "hypeman-egress-instance-forward-spoof"))
 }

@@ -22,6 +22,7 @@ var (
 type InstanceConfig struct {
 	InstanceID        string
 	SourceIP          string
+	TAPDevice         string
 	BlockAllTCPEgress bool
 	HeaderInjectRules []HeaderInjectRuleConfig
 }
