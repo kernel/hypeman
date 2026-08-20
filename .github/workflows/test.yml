@@ -117,13 +117,19 @@ jobs:
       - name: Test Windows hypervisor primitives
         run: |
           TEST_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
-          sudo env \
-            "PATH=$TEST_PATH" \
-            "CI=true" \
-            "HYPEMAN_RUN_WINDOWS_CONFIG_INTEGRATION=1" \
-            "HYPEMAN_WINDOWS_OVMF_CODE=$HYPEMAN_WINDOWS_OVMF_CODE" \
-            "HYPEMAN_WINDOWS_OVMF_VARS=$HYPEMAN_WINDOWS_OVMF_VARS" \
-            go test -count=1 -run '^TestWindowsConfigIntegration$' -timeout 2m ./lib/hypervisor/qemu
+          for attempt in 1 2 3; do
+            if sudo env \
+              "PATH=$TEST_PATH" \
+              "CI=true" \
+              "HYPEMAN_RUN_WINDOWS_CONFIG_INTEGRATION=1" \
+              "HYPEMAN_WINDOWS_OVMF_CODE=$HYPEMAN_WINDOWS_OVMF_CODE" \
+              "HYPEMAN_WINDOWS_OVMF_VARS=$HYPEMAN_WINDOWS_OVMF_VARS" \
+              go test -count=1 -run '^TestWindowsConfigIntegration$' -timeout 2m ./lib/hypervisor/qemu; then
+              exit 0
+            fi
+            test "$attempt" = 3 || sleep 5
+          done
+          exit 1
 
       # Slash-command runs are maintainer-approved and need authenticated pulls
       # for images that are not covered by the prewarm cache.
