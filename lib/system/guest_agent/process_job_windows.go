@@ -52,13 +52,16 @@ func attachProcessJob(ctx context.Context, process *os.Process, timeout time.Dur
 
 	done := make(chan struct{})
 	var doneOnce sync.Once
-	var closeOnce sync.Once
-	closeJob := func() {
-		closeOnce.Do(func() { _ = windows.CloseHandle(job) })
+	var terminateOnce sync.Once
+	terminateJob := func() {
+		terminateOnce.Do(func() {
+			_ = windows.TerminateJobObject(job, 124)
+			_ = windows.CloseHandle(job)
+		})
 	}
 	cleanup := func() {
 		doneOnce.Do(func() { close(done) })
-		closeJob()
+		terminateJob()
 	}
 	go func() {
 		var timeoutC <-chan time.Time
@@ -69,11 +72,9 @@ func attachProcessJob(ctx context.Context, process *os.Process, timeout time.Dur
 		}
 		select {
 		case <-ctx.Done():
-			_ = windows.TerminateJobObject(job, 124)
-			closeJob()
+			terminateJob()
 		case <-timeoutC:
-			_ = windows.TerminateJobObject(job, 124)
-			closeJob()
+			terminateJob()
 		case <-done:
 		}
 	}()
