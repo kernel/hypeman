@@ -96,6 +96,9 @@ func (m *manager) createInstance(
 		log.ErrorContext(ctx, "invalid create request", "error", err)
 		return nil, err
 	}
+	if err := validateExpiresAt(req.ExpiresAt, m.nowUTC()); err != nil {
+		return nil, err
+	}
 	if req.GPU != nil && req.GPU.Profile != "" && !devices.Capabilities().SupportsVGPU {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidRequest, devices.ErrVGPUNotSupportedOnMacOS)
 	}
@@ -172,6 +175,17 @@ func (m *manager) createInstance(
 	ctx = enrichInstancesTrace(ctx, attribute.String("instance_id", id))
 	log.DebugContext(ctx, "generated instance ID", "instance_id", id)
 
+	// Keep the reaper from deleting metadata while creation is still in flight.
+	instanceLock, ownsInstanceLock := m.loadOrStoreInstanceLock(id)
+	removeInstanceLockOnFailure := ownsInstanceLock
+	instanceLock.Lock()
+	defer func() {
+		if retErr != nil && removeInstanceLockOnFailure {
+			m.instanceLocks.CompareAndDelete(id, instanceLock)
+		}
+		instanceLock.Unlock()
+	}()
+
 	// 4. Generate vsock configuration
 	vsockCID := generateVsockCID(id)
 	vsockSocket := m.paths.InstanceSocket(id, hypervisor.VsockSocketNameForType(hvType))
@@ -179,6 +193,7 @@ func (m *manager) createInstance(
 
 	// 5. Check instance doesn't already exist
 	if _, err := m.loadMetadata(id); err == nil {
+		removeInstanceLockOnFailure = false
 		return nil, ErrAlreadyExists
 	}
 
@@ -329,6 +344,11 @@ func (m *manager) createInstance(
 	}
 
 	// 11. Create instance metadata
+	createdAt := m.nowUTC()
+	expiresAt, err := resolveCreateExpiration(req, createdAt)
+	if err != nil {
+		return nil, err
+	}
 	stored := &StoredMetadata{
 		Id:                       id,
 		Name:                     req.Name,
@@ -347,7 +367,8 @@ func (m *manager) createInstance(
 		NetworkEnabled:           req.NetworkEnabled,
 		NetworkEgress:            cloneNetworkEgressPolicy(req.NetworkEgress),
 		Credentials:              cloneCredentialPolicies(req.Credentials),
-		CreatedAt:                time.Now(),
+		CreatedAt:                createdAt,
+		ExpiresAt:                expiresAt,
 		StartedAt:                nil,
 		StoppedAt:                nil,
 		ProgramStartedAt:         nil,
@@ -561,6 +582,21 @@ func (m *manager) createInstance(
 	return &finalInst, nil
 }
 
+func resolveCreateExpiration(req CreateInstanceRequest, now time.Time) (*time.Time, error) {
+	if req.ExpiresAt != nil {
+		if err := validateExpiresAt(req.ExpiresAt, now); err != nil {
+			return nil, err
+		}
+		expiresAt := req.ExpiresAt.UTC()
+		return &expiresAt, nil
+	}
+	if req.TTL == 0 {
+		return nil, nil
+	}
+	expiresAt := now.Add(req.TTL)
+	return &expiresAt, nil
+}
+
 // validateCreateRequest validates the create instance request.
 // The request is mutated in-place to persist normalized egress/credential policy fields.
 func validateCreateRequest(req *CreateInstanceRequest) error {
@@ -584,6 +620,12 @@ func validateCreateRequest(req *CreateInstanceRequest) error {
 	}
 	if req.Vcpus < 0 {
 		return fmt.Errorf("vcpus cannot be negative")
+	}
+	if req.TTL < 0 {
+		return fmt.Errorf("%w: ttl cannot be negative", ErrInvalidRequest)
+	}
+	if req.TTL > 0 && req.ExpiresAt != nil {
+		return fmt.Errorf("%w: ttl and expires_at are mutually exclusive", ErrInvalidRequest)
 	}
 	if req.NetworkEgress != nil && req.NetworkEgress.Enabled {
 		if !req.NetworkEnabled {
