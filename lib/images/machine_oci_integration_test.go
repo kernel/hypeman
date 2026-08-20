@@ -88,21 +88,21 @@ func TestMachineArtifactsPullFromOCI(t *testing.T) {
 	readyBase := waitForMachineImage(t, manager, createdBase.Name)
 	require.Equal(t, MachineImageWindowsBase, readyBase.Machine.Kind)
 
-	personaFile := filepath.Join(t.TempDir(), "persona.qcow2")
-	output, err := exec.Command("qemu-img", "create", "-f", "qcow2", personaFile, "4M").CombinedOutput()
+	imageFile := filepath.Join(t.TempDir(), "image.qcow2")
+	output, err := exec.Command("qemu-img", "create", "-f", "qcow2", imageFile, "4M").CombinedOutput()
 	require.NoError(t, err, "%s", output)
-	personaBytes, err := os.ReadFile(personaFile)
+	imageBytes, err := os.ReadFile(imageFile)
 	require.NoError(t, err)
 	baseReference := baseTag.Context().Name() + "@" + readyBase.Digest
-	personaLabels := windowsMachineMetadata(MachineImageWindowsPersona, "hypeman/persona.qcow2", baseReference).Labels
-	personaImage := machineArtifactOCIImage(t, "hypeman/persona.qcow2", personaBytes, personaLabels)
-	personaTag, err := name.NewTag(registry.Listener.Addr().String()+"/windows/persona:test", name.Insecure)
+	imageLabels := windowsMachineMetadata(MachineImageWindowsImage, "hypeman/image.qcow2", baseReference).Labels
+	ociImage := machineArtifactOCIImage(t, "hypeman/image.qcow2", imageBytes, imageLabels)
+	imageTag, err := name.NewTag(registry.Listener.Addr().String()+"/windows/image:test", name.Insecure)
 	require.NoError(t, err)
-	require.NoError(t, remote.Write(personaTag, personaImage))
+	require.NoError(t, remote.Write(imageTag, ociImage))
 
-	createdPersona, err := manager.CreateImage(context.Background(), CreateImageRequest{Name: personaTag.String(), Platform: "windows/amd64"})
+	createdImage, err := manager.CreateImage(context.Background(), CreateImageRequest{Name: imageTag.String(), Platform: "windows/amd64"})
 	require.NoError(t, err)
-	readyPersona := waitForMachineImage(t, manager, createdPersona.Name)
-	require.Equal(t, MachineImageWindowsPersona, readyPersona.Machine.Kind)
-	require.Equal(t, readyBase.Machine.VirtualSize, readyPersona.Machine.VirtualSize)
+	readyImage := waitForMachineImage(t, manager, createdImage.Name)
+	require.Equal(t, MachineImageWindowsImage, readyImage.Machine.Kind)
+	require.Equal(t, readyBase.Machine.VirtualSize, readyImage.Machine.VirtualSize)
 }

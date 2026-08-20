@@ -133,7 +133,8 @@ func (m *manager) createInstance(
 	}
 	windows := isWindowsPlatform(imageInfo.Platform)
 	if windows {
-		if err := validateWindowsCreate(req, imageInfo, hvType); err != nil {
+		caps, _ := hypervisor.CapabilitiesForType(hvType)
+		if err := validateWindowsCreate(req, imageInfo, caps); err != nil {
 			return nil, err
 		}
 	}

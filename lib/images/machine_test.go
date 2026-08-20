@@ -25,7 +25,7 @@ func requireQEMUImg(t *testing.T) {
 
 func windowsMachineMetadata(kind MachineImageKind, diskPath, base string) *containerMetadata {
 	format := "raw"
-	if kind == MachineImageWindowsPersona {
+	if kind == MachineImageWindowsImage {
 		format = "qcow2"
 	}
 	return &containerMetadata{
@@ -48,13 +48,13 @@ func TestParseMachineImage(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, MachineImageWindowsBase, base.Kind)
 
-	persona, err := parseMachineImage(windowsMachineMetadata(
-		MachineImageWindowsPersona,
+	image, err := parseMachineImage(windowsMachineMetadata(
+		MachineImageWindowsImage,
 		"hypeman/disk.qcow2",
 		"registry.example/base@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 	))
 	require.NoError(t, err)
-	assert.Equal(t, MachineImageWindowsPersona, persona.Kind)
+	assert.Equal(t, MachineImageWindowsImage, image.Kind)
 
 	_, err = parseMachineImage(&containerMetadata{OS: "windows", Architecture: "amd64", Labels: map[string]string{}})
 	assert.ErrorContains(t, err, "ordinary Windows container images are not bootable")
@@ -99,16 +99,16 @@ func TestMaterializeRejectsExternalDiskReferences(t *testing.T) {
 	external := filepath.Join(root, "hypeman", "external.qcow2")
 	output, err = exec.Command("qemu-img", "create", "-f", "qcow2", "-o", "data_file="+dataFile+",data_file_raw=on", external, "4M").CombinedOutput()
 	require.NoError(t, err, "%s", output)
-	persona := windowsMachineMetadata(
-		MachineImageWindowsPersona,
+	image := windowsMachineMetadata(
+		MachineImageWindowsImage,
 		"hypeman/external.qcow2",
 		"registry.example/windows/base@sha256:"+strings.Repeat("6", 64),
 	)
-	machine, err = parseMachineImage(persona)
+	machine, err = parseMachineImage(image)
 	require.NoError(t, err)
-	personaRef, err := ParseNormalizedRef("registry.example/windows/persona@sha256:" + strings.Repeat("7", 64))
+	imageRef, err := ParseNormalizedRef("registry.example/windows/image@sha256:" + strings.Repeat("7", 64))
 	require.NoError(t, err)
-	_, err = m.materializeMachineImage(root, machine, machineDiskPath(p, personaRef.Repository(), personaRef.DigestHex(), machine.Kind))
+	_, err = m.materializeMachineImage(root, machine, machineDiskPath(p, imageRef.Repository(), imageRef.DigestHex(), machine.Kind))
 	assert.ErrorContains(t, err, "unsupported data-file feature")
 }
 
@@ -151,7 +151,7 @@ func TestMaterializeWindowsBaseFormats(t *testing.T) {
 	}
 }
 
-func TestMaterializeWindowsBaseAndPersona(t *testing.T) {
+func TestMaterializeWindowsBaseAndImage(t *testing.T) {
 	requireQEMUImg(t)
 
 	p := paths.New(t.TempDir())
@@ -180,26 +180,26 @@ func TestMaterializeWindowsBaseAndPersona(t *testing.T) {
 		SizeBytes: 4 << 20,
 	}))
 
-	personaDigest := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-	personaRef, err := ParseNormalizedRef("registry.example/windows/persona@sha256:" + personaDigest)
+	imageDigest := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	imageRef, err := ParseNormalizedRef("registry.example/windows/image@sha256:" + imageDigest)
 	require.NoError(t, err)
-	personaRoot := t.TempDir()
-	require.NoError(t, os.MkdirAll(filepath.Join(personaRoot, "hypeman"), 0755))
-	personaSource := filepath.Join(personaRoot, "hypeman", "disk.qcow2")
-	output, err := exec.Command("qemu-img", "create", "-f", "qcow2", personaSource, "4M").CombinedOutput()
+	imageRoot := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(imageRoot, "hypeman"), 0755))
+	imageSource := filepath.Join(imageRoot, "hypeman", "disk.qcow2")
+	output, err := exec.Command("qemu-img", "create", "-f", "qcow2", imageSource, "4M").CombinedOutput()
 	require.NoError(t, err, "%s", output)
 
-	personaMachine, err := parseMachineImage(windowsMachineMetadata(
-		MachineImageWindowsPersona,
+	imageMachine, err := parseMachineImage(windowsMachineMetadata(
+		MachineImageWindowsImage,
 		"hypeman/disk.qcow2",
 		baseRef.String(),
 	))
 	require.NoError(t, err)
-	_, err = m.materializeMachineImage(personaRoot, personaMachine, machineDiskPath(p, personaRef.Repository(), personaDigest, personaMachine.Kind))
+	_, err = m.materializeMachineImage(imageRoot, imageMachine, machineDiskPath(p, imageRef.Repository(), imageDigest, imageMachine.Kind))
 	require.NoError(t, err)
 
-	personaPath := machineDiskPath(p, personaRef.Repository(), personaDigest, MachineImageWindowsPersona)
-	info, err := inspectQEMUImage(personaPath, "qcow2")
+	imagePath := machineDiskPath(p, imageRef.Repository(), imageDigest, MachineImageWindowsImage)
+	info, err := inspectQEMUImage(imagePath, "qcow2")
 	require.NoError(t, err)
 	assert.Equal(t, "qcow2", info.Format)
 	assert.Equal(t, "raw", info.BackingFileFormat)
@@ -207,15 +207,15 @@ func TestMaterializeWindowsBaseAndPersona(t *testing.T) {
 
 	baseMeta, err := readMetadata(p, baseRef.Repository(), baseDigest)
 	require.NoError(t, err)
-	personaMeta := &imageMetadata{
-		Name:      personaRef.String(),
-		Digest:    "sha256:" + personaDigest,
+	imageMeta := &imageMetadata{
+		Name:      imageRef.String(),
+		Digest:    "sha256:" + imageDigest,
 		Platform:  "windows/amd64",
 		Status:    StatusReady,
-		Machine:   personaMachine,
+		Machine:   imageMachine,
 		SizeBytes: info.VirtualSize,
 	}
-	require.NoError(t, writeMetadata(p, personaRef.Repository(), personaDigest, personaMeta))
+	require.NoError(t, writeMetadata(p, imageRef.Repository(), imageDigest, imageMeta))
 	assert.ErrorContains(t, m.ensureNoMachineDependents(baseRef.Repository(), baseDigest), "depends on it")
 	assert.ErrorContains(t, m.DeleteImage(t.Context(), baseRef.String()), "depends on it")
 	assert.DirExists(t, p.ImageDigestDir(baseRef.Repository(), baseDigest))

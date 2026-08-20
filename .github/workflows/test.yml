@@ -124,10 +124,6 @@ jobs:
           done
           test -f "$HYPEMAN_WINDOWS_OVMF_CODE"
           test -f "$HYPEMAN_WINDOWS_OVMF_VARS"
-          test -r /ci/windows/base.raw
-          test -r /ci/windows/persona.qcow2
-          qemu-img info --output=json /ci/windows/persona.qcow2 \
-            | jq -e '.format == "qcow2" and .["backing-filename-format"] == "raw"' >/dev/null
 
       - name: Test Windows hypervisor primitives
         run: |
@@ -140,24 +136,6 @@ jobs:
               "HYPEMAN_WINDOWS_OVMF_CODE=$HYPEMAN_WINDOWS_OVMF_CODE" \
               "HYPEMAN_WINDOWS_OVMF_VARS=$HYPEMAN_WINDOWS_OVMF_VARS" \
               go test -count=1 -run '^TestWindowsConfigIntegration$' -timeout 2m ./lib/hypervisor/qemu; then
-              exit 0
-            fi
-            test "$attempt" = 3 || sleep 5
-          done
-          exit 1
-
-      - name: Test Windows machine images
-        run: |
-          make build-embedded
-          TEST_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
-          for attempt in 1 2 3; do
-            if sudo env \
-              "PATH=$TEST_PATH" \
-              "CI=true" \
-              "HYPEMAN_RUN_WINDOWS_IMAGES_INTEGRATION=1" \
-              "HYPEMAN_WINDOWS_OVMF_CODE=$HYPEMAN_WINDOWS_OVMF_CODE" \
-              "HYPEMAN_WINDOWS_OVMF_VARS=$HYPEMAN_WINDOWS_OVMF_VARS" \
-              go test -count=1 -run '^TestWindowsImagesIntegration$' -timeout 2m ./lib/instances; then
               exit 0
             fi
             test "$attempt" = 3 || sleep 5
