@@ -23,6 +23,9 @@ import (
 )
 
 func TestWindowsNetworkingIntegration(t *testing.T) {
+	if os.Getenv("HYPEMAN_RUN_WINDOWS_NETWORKING_INTEGRATION") != "1" {
+		t.Skip("run by the dedicated Windows networking CI gate")
+	}
 	fixture := os.Getenv("HYPEMAN_WINDOWS_TEST_AGENT_PERSONA")
 	if fixture == "" {
 		fixture = "/ci/windows/persona-agent.qcow2"
