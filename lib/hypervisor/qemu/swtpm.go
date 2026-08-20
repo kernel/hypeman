@@ -11,6 +11,8 @@ import (
 	"github.com/kernel/hypeman/lib/hypervisor"
 )
 
+const swtpmSocketWaitTimeout = 30 * time.Second
+
 func startSWTPM(config *hypervisor.TPMConfig, instanceDir string) (*startedProcess, error) {
 	if config == nil {
 		return nil, nil
@@ -56,7 +58,7 @@ func startSWTPM(config *hypervisor.TPMConfig, instanceDir string) (*startedProce
 	if err != nil {
 		return nil, fmt.Errorf("start swtpm: %w", err)
 	}
-	if err := waitForSocketFileOrExit(config.SocketPath, socketWaitTimeout, proc); err != nil {
+	if err := waitForSocketFileOrExit(config.SocketPath, swtpmSocketWaitTimeout, proc); err != nil {
 		proc.cleanup()
 		if logData, readErr := os.ReadFile(logPath); readErr == nil && len(logData) > 0 {
 			const maxLogBytes = 32 << 10

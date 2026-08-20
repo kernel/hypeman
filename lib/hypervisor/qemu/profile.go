@@ -25,16 +25,14 @@ func (StandardProfile) machineType() (MachineType, error) {
 	return standardMachineType(), nil
 }
 func (StandardProfile) capabilities() hypervisor.Capabilities {
-	return qemuCapabilities(true)
+	supportsFirmware := standardMachineType() == MachineTypeQ35
+	return qemuCapabilities(true, supportsFirmware)
 }
-func (StandardProfile) validateConfig(cfg hypervisor.VMConfig) error {
+func (p StandardProfile) validateConfig(cfg hypervisor.VMConfig) error {
 	if err := hypervisor.ValidateBootConfig(cfg); err != nil {
 		return err
 	}
-	if cfg.EffectiveBootMode() == hypervisor.BootModeUEFI && standardMachineType() != MachineTypeQ35 {
-		return fmt.Errorf("UEFI boot is currently supported only by qemu/q35 on amd64")
-	}
-	return nil
+	return validateProfileCapabilities(p.hypervisorType(), p.capabilities(), cfg)
 }
 func (StandardProfile) requiresStoredMachineType() bool { return false }
 func (StandardProfile) requiresStoredVersion() bool     { return false }
@@ -48,7 +46,7 @@ func (MicroVMProfile) machineType() (MachineType, error) {
 	return microVMMachineType()
 }
 func (MicroVMProfile) capabilities() hypervisor.Capabilities {
-	return qemuCapabilities(false)
+	return qemuCapabilities(false, false)
 }
 func (MicroVMProfile) validateConfig(cfg hypervisor.VMConfig) error {
 	if err := hypervisor.ValidateDirectRawConfig("qemu-microvm", cfg); err != nil {
@@ -76,7 +74,17 @@ func (MicroVMProfile) validateConfig(cfg hypervisor.VMConfig) error {
 func (MicroVMProfile) requiresStoredMachineType() bool { return true }
 func (MicroVMProfile) requiresStoredVersion() bool     { return true }
 
-func qemuCapabilities(supportsPCI bool) hypervisor.Capabilities {
+func validateProfileCapabilities(name hypervisor.Type, caps hypervisor.Capabilities, cfg hypervisor.VMConfig) error {
+	if cfg.EffectiveBootMode() == hypervisor.BootModeUEFI && !caps.SupportsUEFIBoot {
+		return fmt.Errorf("%s does not support UEFI boot on this host", name)
+	}
+	if cfg.TPM != nil && !caps.SupportsTPM {
+		return fmt.Errorf("%s does not support TPM devices", name)
+	}
+	return nil
+}
+
+func qemuCapabilities(supportsPCI, supportsFirmware bool) hypervisor.Capabilities {
 	return hypervisor.Capabilities{
 		SupportsSnapshot: true,
 		// PrepareFork rewrites the saved QEMU VM config for forks (fork.go);
@@ -86,6 +94,8 @@ func qemuCapabilities(supportsPCI bool) hypervisor.Capabilities {
 		SupportsBalloonControl:      true,
 		SupportsPause:               true,
 		SupportsVsock:               true,
+		SupportsUEFIBoot:            supportsFirmware,
+		SupportsTPM:                 supportsFirmware,
 		SupportsGPUPassthrough:      supportsPCI,
 		SupportsDiskIOLimit:         true,
 		SupportsGracefulVMMShutdown: true,

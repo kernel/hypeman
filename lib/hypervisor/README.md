@@ -37,6 +37,8 @@ if hv.Capabilities().SupportsSnapshot {
 }
 ```
 
+Capabilities also describe boot requirements such as UEFI firmware and TPM support. Guest compatibility is checked against these properties instead of hard-coding a hypervisor type. Resource requirements and image policy remain guest-level validation concerns.
+
 ## Platform Differences
 
 ### Linux (Cloud Hypervisor, QEMU)

@@ -378,6 +378,12 @@ type Capabilities struct {
 	// SupportsVsock indicates if vsock communication is available
 	SupportsVsock bool
 
+	// SupportsUEFIBoot indicates if firmware boot is available.
+	SupportsUEFIBoot bool
+
+	// SupportsTPM indicates if a software TPM can be attached at boot.
+	SupportsTPM bool
+
 	// SupportsGPUPassthrough indicates if PCI device passthrough is available
 	SupportsGPUPassthrough bool
 

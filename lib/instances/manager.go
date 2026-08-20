@@ -781,7 +781,7 @@ func (m *manager) StreamInstanceLogs(ctx context.Context, id string, tail int, f
 	return m.streamInstanceLogs(ctx, id, tail, follow, source)
 }
 
-// RotateLogs rotates all instance logs (app, vmm, hypeman) that exceed maxBytes
+// RotateLogs rotates all instance logs that exceed maxBytes
 func (m *manager) RotateLogs(ctx context.Context, maxBytes int64, maxFiles int) error {
 	instances, err := m.listInstances(ctx)
 	if err != nil {
@@ -790,11 +790,11 @@ func (m *manager) RotateLogs(ctx context.Context, maxBytes int64, maxFiles int) 
 
 	var lastErr error
 	for _, inst := range instances {
-		// Rotate all three log types
 		logPaths := []string{
 			m.paths.InstanceAppLog(inst.Id),
 			m.paths.InstanceVMMLog(inst.Id),
 			m.paths.InstanceHypemanLog(inst.Id),
+			m.paths.InstanceSWTPMLog(inst.Id),
 		}
 		for _, logPath := range logPaths {
 			if err := rotateLogIfNeeded(logPath, maxBytes, maxFiles); err != nil {
