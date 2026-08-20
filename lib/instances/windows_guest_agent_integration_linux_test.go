@@ -23,9 +23,9 @@ func TestWindowsGuestAgentIntegration(t *testing.T) {
 	if os.Getenv("HYPEMAN_RUN_WINDOWS_GUEST_CONTROL_INTEGRATION") != "1" {
 		t.Skip("run by the dedicated Windows guest-control CI gate")
 	}
-	fixture := os.Getenv("HYPEMAN_WINDOWS_TEST_AGENT_PERSONA")
+	fixture := os.Getenv("HYPEMAN_WINDOWS_TEST_AGENT_IMAGE")
 	if fixture == "" {
-		fixture = "/ci/windows/persona-agent.qcow2"
+		fixture = "/ci/windows/image-agent.qcow2"
 	}
 	if _, err := os.Stat(fixture); err != nil {
 		if os.Getenv("CI") == "true" {
@@ -39,12 +39,12 @@ func TestWindowsGuestAgentIntegration(t *testing.T) {
 	p := paths.New(dataDir)
 	const digestHex = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
 	image := &images.Image{
-		Name:     "registry.example/windows/persona:guest-agent-integration",
+		Name:     "registry.example/windows/image:guest-agent-integration",
 		Digest:   "sha256:" + digestHex,
 		Platform: "windows/amd64",
 		Status:   images.StatusReady,
 		Machine: &images.MachineImage{
-			Kind:        images.MachineImageWindowsPersona,
+			Kind:        images.MachineImageWindowsImage,
 			Base:        "registry.example/windows/base@sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
 			TPM:         "2.0",
 			SecureBoot:  "required",
@@ -52,10 +52,10 @@ func TestWindowsGuestAgentIntegration(t *testing.T) {
 		},
 	}
 	manager.imageManager = windowsFixtureImageManager{image: image}
-	personaPath, err := images.GetMachineDiskPath(p, image.Name, image.Digest, image.Machine)
+	imagePath, err := images.GetMachineDiskPath(p, image.Name, image.Digest, image.Machine)
 	require.NoError(t, err)
-	require.NoError(t, forkvm.CopyRegularFile(fixture, personaPath))
-	require.NoError(t, os.Chmod(personaPath, 0444))
+	require.NoError(t, forkvm.CopyRegularFile(fixture, imagePath))
+	require.NoError(t, os.Chmod(imagePath, 0444))
 
 	ctx := context.Background()
 	instance, err := manager.CreateInstance(ctx, CreateInstanceRequest{
