@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -29,6 +30,11 @@ const (
 	gpuReportThrottle = 30 * time.Second
 
 	kmsgReopenDelay = 5 * time.Second
+
+	// kmsgOpenRetryDelay paces reopen attempts after a failed /dev/kmsg
+	// open, so a guest where the open fails does not silently lose wedge
+	// detection for its whole lifetime.
+	kmsgOpenRetryDelay = time.Minute
 )
 
 // hasNVIDIADevice reports whether any PCI function belongs to NVIDIA. A vGPU
@@ -59,8 +65,9 @@ func watchGPUInitFailure() {
 	for {
 		f, err := os.Open(kmsgPath)
 		if err != nil {
-			log.Printf("[guest-agent] cannot open %s for GPU init watch: %v", kmsgPath, err)
-			return
+			log.Printf("[guest-agent] cannot open %s for GPU init watch (retrying): %v", kmsgPath, err)
+			time.Sleep(kmsgOpenRetryDelay)
+			continue
 		}
 		scanKmsg(f, func(msg string) {
 			if time.Since(lastReport) < gpuReportThrottle {
@@ -90,12 +97,25 @@ func scanKmsg(r io.Reader, report func(msg string)) {
 }
 
 // gpuInitFailureMessage extracts the message from a /dev/kmsg record
-// ("<prefix>;<message>") and reports whether it is the NVIDIA driver's
-// init-failure line. The full line shape is required — the trailing
-// (stage:status:line) tuple is driver-build-specific and unsafe to match.
+// ("<priority>,<seq>,<ts>,<flags>;<message>") and reports whether it is the
+// NVIDIA driver's init-failure line. Only kernel records match: the priority
+// field encodes facility*8+level, kernel printk is always facility 0, and
+// the kernel assigns userspace /dev/kmsg writers LOG_USER or higher (a
+// facility-0 prefix from userspace is coerced to LOG_USER), so a process
+// inside the guest cannot forge a matching record. The full line shape is
+// required — the trailing (stage:status:line) tuple is driver-build-specific
+// and unsafe to match.
 func gpuInitFailureMessage(record string) (string, bool) {
-	_, msg, found := strings.Cut(record, ";")
+	prefix, msg, found := strings.Cut(record, ";")
 	if !found {
+		return "", false
+	}
+	priority, _, found := strings.Cut(prefix, ",")
+	if !found {
+		return "", false
+	}
+	value, err := strconv.ParseUint(priority, 10, 32)
+	if err != nil || value>>3 != 0 {
 		return "", false
 	}
 	msg = strings.TrimSpace(msg)
