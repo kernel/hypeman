@@ -28,10 +28,11 @@ const (
 	vgpuSentinelBrakeWindow = 15 * time.Minute
 	vgpuSentinelBrakeLimit  = 3
 
-	// vgpuSentinelMaxLineBytes bounds how much of an unterminated trailing
-	// line a scan will buffer and re-read. Marker lines are short; anything
-	// this long is console spam and is skipped once complete reading it
-	// becomes unreasonable.
+	// vgpuSentinelMaxLineBytes bounds how much of any single log line a scan
+	// holds in memory. The log is guest-controlled console output; marker
+	// lines are a few hundred bytes, so anything longer is console spam and
+	// is discarded — including its later-arriving tail — without ever being
+	// buffered whole.
 	vgpuSentinelMaxLineBytes = 64 * 1024
 )
 
@@ -61,7 +62,11 @@ type vgpuSentinelTail struct {
 	vfAddress  string
 	assignedAt string
 	offset     int64
-	done       bool
+	// skippingLongLine marks that offset sits inside a line that exceeded
+	// vgpuSentinelMaxLineBytes; content is discarded until its newline so an
+	// oversized line's tail is never parsed as a fresh line.
+	skippingLongLine bool
+	done             bool
 }
 
 // VGPUSentinelController scans the serial console log of vendor VFIO vGPU
@@ -183,7 +188,7 @@ func (c *VGPUSentinelController) scanTarget(ctx context.Context, target vgpuSent
 	if tail.done {
 		return
 	}
-	line, found, err := scanForSentinel(target.appLogPath, &tail.offset)
+	line, found, err := scanForSentinel(target.appLogPath, tail)
 	if err != nil {
 		c.log.WarnContext(ctx, "vGPU sentinel scan failed to read app log",
 			"instance_id", target.instanceID, "error", err)
@@ -256,11 +261,14 @@ func (c *VGPUSentinelController) convict(ctx context.Context, target vgpuSentine
 	return true
 }
 
-// scanForSentinel reads complete lines from offset onward, advancing offset
-// and returning the first sentinel match. A partial trailing line is left
-// unconsumed for the next scan. An offset past the file size means the log
-// was archived for a new boot, so the scan restarts from the top.
-func scanForSentinel(path string, offset *int64) (string, bool, error) {
+// scanForSentinel reads complete lines from the tail's offset onward,
+// advancing the offset and returning the first sentinel match. A partial
+// trailing line is left unconsumed for the next scan. An offset past the
+// file size means the log was archived for a new boot, so the scan restarts
+// from the top. Memory is bounded by the line cap: a line that overflows the
+// read buffer cannot be a marker, so it is consumed — across scans if its
+// newline has not arrived yet — without ever being held whole.
+func scanForSentinel(path string, tail *vgpuSentinelTail) (string, bool, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -274,30 +282,39 @@ func scanForSentinel(path string, offset *int64) (string, bool, error) {
 	if err != nil {
 		return "", false, err
 	}
-	if info.Size() < *offset {
-		*offset = 0
+	if info.Size() < tail.offset {
+		tail.offset = 0
+		tail.skippingLongLine = false
 	}
-	if _, err := f.Seek(*offset, io.SeekStart); err != nil {
+	if _, err := f.Seek(tail.offset, io.SeekStart); err != nil {
 		return "", false, err
 	}
 
-	reader := bufio.NewReader(f)
+	reader := bufio.NewReaderSize(f, vgpuSentinelMaxLineBytes)
 	for {
-		line, err := reader.ReadString('\n')
-		if err != nil {
-			if errors.Is(err, io.EOF) {
-				// An oversized unterminated line would otherwise be buffered
-				// again on every scan; skip it once it exceeds the bound.
-				if len(line) > vgpuSentinelMaxLineBytes {
-					*offset += int64(len(line))
-				}
-				return "", false, nil
+		line, err := reader.ReadSlice('\n')
+		switch {
+		case err == nil:
+			tail.offset += int64(len(line))
+			if tail.skippingLongLine {
+				tail.skippingLongLine = false
+				continue
 			}
+			if vgpuSentinelPattern.Match(line) {
+				return strings.TrimSpace(string(line)), true, nil
+			}
+		case errors.Is(err, bufio.ErrBufferFull):
+			tail.offset += int64(len(line))
+			tail.skippingLongLine = true
+		case errors.Is(err, io.EOF):
+			// A partial trailing line stays unconsumed for the next scan,
+			// unless it is the tail of an oversized line being discarded.
+			if tail.skippingLongLine {
+				tail.offset += int64(len(line))
+			}
+			return "", false, nil
+		default:
 			return "", false, err
-		}
-		*offset += int64(len(line))
-		if vgpuSentinelPattern.MatchString(line) {
-			return strings.TrimSpace(line), true, nil
 		}
 	}
 }

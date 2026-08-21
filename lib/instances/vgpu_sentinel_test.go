@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -253,6 +254,82 @@ func TestVGPUSentinelControllerDropsStaleTails(t *testing.T) {
 	store.targets = nil
 	c.scanOnce(ctx)
 	assert.NotContains(t, c.tails, "instance-1")
+}
+
+// The marker is a few hundred bytes, so a line that overflows the read
+// buffer is guest console spam by definition: it must not convict even when
+// it embeds a marker, must never be buffered whole, and its tail — arriving
+// on a later scan — must not be parsed as a fresh line.
+func TestScanForSentinelDiscardsOversizedLines(t *testing.T) {
+	t.Parallel()
+
+	logPath := filepath.Join(t.TempDir(), "app.log")
+	tail := &vgpuSentinelTail{}
+
+	// An oversized terminated line with an embedded marker: skipped whole.
+	huge := strings.Repeat("x", vgpuSentinelMaxLineBytes) + testSentinelLine
+	require.NoError(t, os.WriteFile(logPath, []byte(huge), 0644))
+	line, found, err := scanForSentinel(logPath, tail)
+	require.NoError(t, err)
+	assert.False(t, found, "a marker inside an oversized line must not convict")
+	assert.Empty(t, line)
+
+	// A short marker line after the oversized one still convicts.
+	appendSentinelLine(t, logPath)
+	line, found, err = scanForSentinel(logPath, tail)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Contains(t, line, "RmInitAdapter failed!")
+}
+
+func TestScanForSentinelDiscardsOversizedLineTailAcrossScans(t *testing.T) {
+	t.Parallel()
+
+	logPath := filepath.Join(t.TempDir(), "app.log")
+	tail := &vgpuSentinelTail{}
+
+	// An oversized line still missing its newline: the scan enters skip mode.
+	require.NoError(t, os.WriteFile(logPath, []byte(strings.Repeat("x", vgpuSentinelMaxLineBytes+10)), 0644))
+	_, found, err := scanForSentinel(logPath, tail)
+	require.NoError(t, err)
+	assert.False(t, found)
+	assert.True(t, tail.skippingLongLine)
+
+	// The line's tail arrives later carrying a marker shape; it is still the
+	// same oversized line, so it must be discarded, not parsed as fresh.
+	appendSentinelLine(t, logPath)
+	_, found, err = scanForSentinel(logPath, tail)
+	require.NoError(t, err)
+	assert.False(t, found, "the tail of an oversized line must not convict")
+	assert.False(t, tail.skippingLongLine)
+
+	// The next genuine marker line convicts.
+	appendSentinelLine(t, logPath)
+	line, found, err := scanForSentinel(logPath, tail)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Contains(t, line, "RmInitAdapter failed!")
+}
+
+func TestScanForSentinelResetsSkipStateOnTruncatedLog(t *testing.T) {
+	t.Parallel()
+
+	logPath := filepath.Join(t.TempDir(), "app.log")
+	tail := &vgpuSentinelTail{}
+
+	require.NoError(t, os.WriteFile(logPath, []byte(strings.Repeat("x", vgpuSentinelMaxLineBytes+10)), 0644))
+	_, _, err := scanForSentinel(logPath, tail)
+	require.NoError(t, err)
+	require.True(t, tail.skippingLongLine)
+
+	// Rotation truncates the file under the tail; the restart from the top
+	// must clear the skip state or a marker in the fresh log would be lost.
+	require.NoError(t, os.WriteFile(logPath, []byte(testSentinelLine), 0644))
+	line, found, err := scanForSentinel(logPath, tail)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Contains(t, line, "RmInitAdapter failed!")
+	assert.False(t, tail.skippingLongLine)
 }
 
 func appendSentinelLine(t *testing.T, path string) {
