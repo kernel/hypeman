@@ -309,24 +309,27 @@ func (m *manager) createInstance(
 
 	// Handle vGPU profile request
 	if req.GPU != nil && req.GPU.Profile != "" {
-		log.InfoContext(ctx, "creating vGPU", "instance_id", id, "profile", req.GPU.Profile)
-		gpuDevice, err = m.createVGPUDevice(ctx, req.GPU.Profile, id)
-		if err != nil {
-			stub := StoredMetadata{
+		// Identity fields a retention record keeps when rollback cannot
+		// release the assignment, so it lists as a recognizable, deletable
+		// instance. Create has already failed on a nil starter by this point.
+		retentionStub := func() StoredMetadata {
+			return StoredMetadata{
 				Id:                id,
 				Name:              req.Name,
 				Image:             req.Image,
 				ResolvedImage:     resolvedImageRef,
 				Platform:          imageInfo.Platform,
-				CreatedAt:         time.Now(),
+				CreatedAt:         m.nowUTC(),
 				HypervisorType:    hvType,
 				HypervisorVersion: hvVersion,
+				SocketPath:        m.paths.InstanceSocket(id, starter.SocketName()),
 				DataDir:           m.paths.InstanceDir(id),
 			}
-			if starterErr == nil {
-				stub.SocketPath = m.paths.InstanceSocket(id, starter.SocketName())
-			}
-			retainedVGPU = retainedVGPUFromCreateError(stub, m.nowUTC(), err)
+		}
+		log.InfoContext(ctx, "creating vGPU", "instance_id", id, "profile", req.GPU.Profile)
+		gpuDevice, err = m.createVGPUDevice(ctx, req.GPU.Profile, id)
+		if err != nil {
+			retainedVGPU = retainedVGPUFromCreateError(retentionStub(), m.nowUTC(), err)
 			log.ErrorContext(ctx, "failed to create vGPU", "profile", req.GPU.Profile, "error", err)
 			return nil, wrapCreateVGPUErr(req.GPU.Profile, err)
 		}
@@ -351,23 +354,13 @@ func (m *manager) createInstance(
 				log.WarnContext(ctx, "failed to destroy vGPU on cleanup", "instance_id", id, "uuid", gpuDevice.MdevUUID, "error", err)
 				retainedVGPU = stored
 				if retainedVGPU == nil {
-					retainedVGPU = &StoredMetadata{
-						Id:                id,
-						Name:              req.Name,
-						Image:             req.Image,
-						ResolvedImage:     resolvedImageRef,
-						Platform:          imageInfo.Platform,
-						CreatedAt:         time.Now(),
-						HypervisorType:    hvType,
-						HypervisorVersion: hvVersion,
-						SocketPath:        m.paths.InstanceSocket(id, starter.SocketName()),
-						DataDir:           m.paths.InstanceDir(id),
-						GPUProfile:        gpuDevice.ProfileName,
-						GPUFramework:      gpuDevice.Framework,
-						GPUDevicePath:     gpuDevice.SysfsPath,
-						GPUMdevUUID:       gpuDevice.MdevUUID,
-						GPUAssignedAt:     gpuAssignedAt,
-					}
+					stub := retentionStub()
+					stub.GPUProfile = gpuDevice.ProfileName
+					stub.GPUFramework = gpuDevice.Framework
+					stub.GPUDevicePath = gpuDevice.SysfsPath
+					stub.GPUMdevUUID = gpuDevice.MdevUUID
+					stub.GPUAssignedAt = gpuAssignedAt
+					retainedVGPU = &stub
 				}
 			}
 		})
