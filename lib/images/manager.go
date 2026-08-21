@@ -776,14 +776,12 @@ func (m *manager) DeleteImage(ctx context.Context, name string) error {
 	// Check if the digest is now orphaned (no other tags reference it)
 	count, err := countTagsForDigest(m.paths, repository, digestHex)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to count tags for digest %s: %v\n", digestHex, err)
-		return nil
+		return fmt.Errorf("count tags for digest %s: %w", digestHex, err)
 	}
 
 	if count == 0 {
 		if err := removeDigestIfUnreferenced(m.paths, repository, digestHex, true); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to delete orphaned digest %s: %v\n", digestHex, err)
-			return nil
+			return fmt.Errorf("delete orphaned digest %s: %w", digestHex, err)
 		}
 		m.refreshDiskUsageTotals()
 	}

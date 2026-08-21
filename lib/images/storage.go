@@ -299,18 +299,25 @@ func promoteImageToContent(p *paths.Paths, sourceRepository, digestHex string, s
 			}
 			staged = append(staged, ref)
 		}
-		for _, ref := range staged {
+		for i, ref := range staged {
 			if err := os.Rename(ref.tempPath, ref.linkPath); err != nil {
+				if rollbackErr := rollbackTagSymlinks(staged[:i]); rollbackErr != nil {
+					return errors.Join(fmt.Errorf("promote legacy tag: %w", err), rollbackErr)
+				}
 				return fmt.Errorf("promote legacy tag: %w", err)
 			}
 		}
+		staleClean := true
 		for _, ref := range staged {
 			if err := removeStaleTagSymlink(p, &ref); err != nil {
-				return err
+				staleClean = false
+				fmt.Fprintf(os.Stderr, "Warning: failed to remove stale tag symlink %s: %v\n", ref.tag, err)
 			}
 		}
-		if err := os.RemoveAll(legacyDir); err != nil {
-			return fmt.Errorf("remove legacy digest directory: %w", err)
+		if staleClean {
+			if err := os.RemoveAll(legacyDir); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: failed to remove legacy digest directory %s: %v\n", digestHex, err)
+			}
 		}
 	}
 
@@ -333,12 +340,18 @@ func installAtomically(path string, install func(string) error) error {
 	return os.Rename(tempPath, path)
 }
 
+type symlinkState struct {
+	exists bool
+	target string
+}
+
 type stagedTagSymlink struct {
 	repository string
 	tag        string
 	linkPath   string
 	tempDir    string
 	tempPath   string
+	previous   symlinkState
 }
 
 func stageTagSymlink(p *paths.Paths, repository, tag, digestHex string) (stagedTagSymlink, error) {
@@ -352,6 +365,10 @@ func stageTagSymlink(p *paths.Paths, repository, tag, digestHex string) (stagedT
 		if err != nil {
 			return stagedTagSymlink{}, fmt.Errorf("calculate content symlink target: %w", err)
 		}
+	}
+	previous, err := readSymlinkState(linkPath)
+	if err != nil {
+		return stagedTagSymlink{}, err
 	}
 	if err := os.MkdirAll(filepath.Dir(linkPath), 0755); err != nil {
 		return stagedTagSymlink{}, fmt.Errorf("create parent directory: %w", err)
@@ -371,7 +388,44 @@ func stageTagSymlink(p *paths.Paths, repository, tag, digestHex string) (stagedT
 		linkPath:   linkPath,
 		tempDir:    tempDir,
 		tempPath:   tempPath,
+		previous:   previous,
 	}, nil
+}
+
+func readSymlinkState(path string) (symlinkState, error) {
+	target, err := os.Readlink(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return symlinkState{}, nil
+		}
+		return symlinkState{}, fmt.Errorf("read existing tag symlink: %w", err)
+	}
+	return symlinkState{exists: true, target: target}, nil
+}
+
+func restoreSymlinkState(path string, state symlinkState) error {
+	if !state.exists {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove tag symlink during rollback: %w", err)
+		}
+		return nil
+	}
+	if err := installAtomically(path, func(tempPath string) error {
+		return os.Symlink(state.target, tempPath)
+	}); err != nil {
+		return fmt.Errorf("restore tag symlink during rollback: %w", err)
+	}
+	return nil
+}
+
+func rollbackTagSymlinks(refs []stagedTagSymlink) error {
+	var rollbackErrs []error
+	for i := len(refs) - 1; i >= 0; i-- {
+		if err := restoreSymlinkState(refs[i].linkPath, refs[i].previous); err != nil {
+			rollbackErrs = append(rollbackErrs, err)
+		}
+	}
+	return errors.Join(rollbackErrs...)
 }
 
 func removeStaleTagSymlink(p *paths.Paths, ref *stagedTagSymlink) error {
@@ -404,8 +458,7 @@ func createTagSymlink(p *paths.Paths, repository, tag, digestHex string) error {
 		return fmt.Errorf("install tag symlink: %w", err)
 	}
 	if err := removeStaleTagSymlink(p, &ref); err != nil {
-		_ = os.RemoveAll(ref.tempDir)
-		return err
+		fmt.Fprintf(os.Stderr, "Warning: failed to remove stale tag symlink %s: %v\n", tag, err)
 	}
 	_ = os.RemoveAll(ref.tempDir)
 	return nil
@@ -441,348 +494,4 @@ func resolveTag(p *paths.Paths, repository, tag string) (string, error) {
 	}
 
 	return digestHex, nil
-}
-
-// listTags returns all tags for a repository
-func listTags(p *paths.Paths, repository string) ([]string, error) {
-	dirs := []string{filepath.Join(p.ImageRepositoriesDir(), repository), p.ImageRepositoryDir(repository)}
-	seen := make(map[string]struct{})
-	tags := make([]string, 0)
-	for _, repoDir := range dirs {
-		entries, err := os.ReadDir(repoDir)
-		if err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
-			return nil, fmt.Errorf("read repository directory: %w", err)
-		}
-		for _, entry := range entries {
-			path := filepath.Join(repoDir, entry.Name())
-			info, err := os.Lstat(path)
-			if err != nil || info.Mode()&os.ModeSymlink == 0 {
-				continue
-			}
-			if _, ok := seen[entry.Name()]; ok {
-				continue
-			}
-			seen[entry.Name()] = struct{}{}
-			tags = append(tags, entry.Name())
-		}
-	}
-	return tags, nil
-}
-
-// listAllMetadata returns one metadata record per tag across all repositories.
-// Tagged images are discovered through tag symlinks, and digest-only images are
-// discovered directly from their metadata.json files.
-func listAllMetadata(p *paths.Paths) ([]*imageMetadata, error) {
-	imagesDir := p.ImagesDir()
-	seen := make(map[string]struct{})
-	contentDigests := make(map[string]struct{})
-	taggedDigests := make(map[string]struct{})
-	taggedContentDigests := make(map[string]struct{})
-	metadataRefs := make([]metadataReference, 0)
-	seenMetadataRefs := make(map[string]struct{})
-	metas := make([]*imageMetadata, 0)
-
-	err := filepath.Walk(imagesDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return nil // Skip errors
-		}
-		rel, err := filepath.Rel(imagesDir, path)
-		if err != nil {
-			return nil
-		}
-		parts := strings.Split(rel, string(filepath.Separator))
-		if len(parts) > 0 && parts[0] == "content" {
-			if info.IsDir() {
-				return nil
-			}
-			if info.Name() != "metadata.json" {
-				return nil
-			}
-			digestHex := filepath.Base(filepath.Dir(path))
-			contentDigests[digestHex] = struct{}{}
-			return nil
-		}
-
-		switch {
-		case info.Mode()&os.ModeSymlink != 0:
-			digestHex, err := os.Readlink(path)
-			if err != nil {
-				return nil // Skip invalid symlinks
-			}
-			digestHex = filepath.Base(digestHex)
-
-			var repository, tag string
-			if len(parts) > 1 && parts[0] == "repositories" {
-				repository = filepath.Join(parts[1 : len(parts)-1]...)
-				tag = parts[len(parts)-1]
-			} else {
-				repository = filepath.Dir(rel)
-				tag = filepath.Base(path)
-			}
-			return appendMetadataForTag(p, repository, tag, digestHex, seen, taggedDigests, taggedContentDigests, &metas)
-		case !info.IsDir() && info.Name() == "metadata.json":
-			digestHex := filepath.Base(filepath.Dir(path))
-			repository, err := filepath.Rel(imagesDir, filepath.Dir(filepath.Dir(path)))
-			if err != nil {
-				return nil
-			}
-			key := repository + "@" + digestHex
-			if _, ok := seenMetadataRefs[key]; !ok {
-				seenMetadataRefs[key] = struct{}{}
-				metadataRefs = append(metadataRefs, metadataReference{repository: repository, digestHex: digestHex})
-			}
-			return nil
-		default:
-			return nil
-		}
-	})
-
-	if err != nil && !os.IsNotExist(err) {
-		return nil, fmt.Errorf("walk images directory: %w", err)
-	}
-	seenDigests := make(map[string]struct{}, len(metas))
-	for _, ref := range metadataRefs {
-		if _, tagged := taggedDigests[ref.repository+"@"+ref.digestHex]; tagged {
-			continue
-		}
-		if err := appendMetadataIfNew(p, ref.repository, ref.digestHex, seen, &metas); err != nil {
-			return nil, err
-		}
-		seenDigests[ref.digestHex] = struct{}{}
-	}
-	for digestHex := range contentDigests {
-		if _, found := taggedContentDigests[digestHex]; found {
-			continue
-		}
-		if _, found := seenDigests[digestHex]; found {
-			continue
-		}
-		if err := appendContentMetadataIfNew(p, digestHex, seen, &metas); err != nil {
-			return nil, err
-		}
-	}
-
-	return metas, nil
-}
-
-type metadataReference struct {
-	repository string
-	digestHex  string
-}
-
-func appendMetadataIfNew(p *paths.Paths, repository, digestHex string, seen map[string]struct{}, metas *[]*imageMetadata) error {
-	key := repository + "@" + digestHex
-	if _, ok := seen[key]; ok {
-		return nil
-	}
-
-	meta, err := readMetadata(p, repository, digestHex)
-	if err != nil {
-		return nil // Skip if metadata can't be read
-	}
-
-	seen[key] = struct{}{}
-	*metas = append(*metas, meta)
-	return nil
-}
-
-func appendContentMetadataIfNew(p *paths.Paths, digestHex string, seen map[string]struct{}, metas *[]*imageMetadata) error {
-	key := "@" + digestHex
-	if _, ok := seen[key]; ok {
-		return nil
-	}
-	meta, err := readContentMetadata(p, digestHex)
-	if err != nil {
-		return nil
-	}
-	seen[key] = struct{}{}
-	*metas = append(*metas, meta)
-	return nil
-}
-
-func appendMetadataForTag(p *paths.Paths, repository, tag, digestHex string, seen, taggedDigests, taggedContentDigests map[string]struct{}, metas *[]*imageMetadata) error {
-	tagKey := repository + ":" + tag
-	if _, ok := seen[tagKey]; ok {
-		return nil
-	}
-	meta, err := readMetadata(p, repository, digestHex)
-	if err != nil {
-		return nil
-	}
-	meta.Name = repository + ":" + tag
-	seen[tagKey] = struct{}{}
-	taggedDigests[repository+"@"+digestHex] = struct{}{}
-	taggedContentDigests[digestHex] = struct{}{}
-	*metas = append(*metas, meta)
-	return nil
-}
-
-// digestExists checks if a digest directory exists
-func digestExists(p *paths.Paths, repository, digestHex string) bool {
-	dir := digestDir(p, repository, digestHex)
-	_, err := os.Stat(dir)
-	return err == nil
-}
-
-// deleteTag removes a tag symlink in either supported layout (does not delete
-// the digest directory).
-func deleteTag(p *paths.Paths, repository, tag string) error {
-	pathsToRemove := []string{
-		p.ImageRepositoryTagSymlink(repository, tag),
-		p.ImageTagSymlink(repository, tag),
-	}
-	found := false
-	for _, linkPath := range pathsToRemove {
-		if _, err := os.Lstat(linkPath); err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
-			return fmt.Errorf("stat symlink: %w", err)
-		}
-		found = true
-		if err := os.Remove(linkPath); err != nil {
-			return fmt.Errorf("remove symlink: %w", err)
-		}
-	}
-	if !found {
-		return ErrNotFound
-	}
-	return nil
-}
-
-// countTagsForDigest counts how many tags in a repository point to a given digest
-func countTagsForDigest(p *paths.Paths, repository, digestHex string) (int, error) {
-	tags, err := listTags(p, repository)
-	if err != nil {
-		return 0, err
-	}
-
-	count := 0
-	for _, tag := range tags {
-		target, err := resolveTag(p, repository, tag)
-		if err != nil {
-			continue
-		}
-		if target == digestHex {
-			count++
-		}
-	}
-	return count, nil
-}
-
-func deleteTagsForDigest(p *paths.Paths, repository, digestHex string) error {
-	tags, err := listTags(p, repository)
-	if err != nil {
-		return err
-	}
-
-	for _, tag := range tags {
-		target, err := resolveTag(p, repository, tag)
-		if err != nil {
-			continue
-		}
-		if target != digestHex {
-			continue
-		}
-		if err := deleteTag(p, repository, tag); err != nil && !errors.Is(err, ErrNotFound) {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func contentTagsForDigest(p *paths.Paths, digestHex string) ([]string, error) {
-	root := p.ImageRepositoriesDir()
-	refs := make([]string, 0)
-	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() || info.Mode()&os.ModeSymlink == 0 {
-			return nil
-		}
-		rel, err := filepath.Rel(root, path)
-		if err != nil {
-			return nil
-		}
-		parts := strings.Split(rel, string(filepath.Separator))
-		if len(parts) < 2 {
-			return nil
-		}
-		repository := filepath.Join(parts[:len(parts)-1]...)
-		tag := parts[len(parts)-1]
-		target, err := resolveTag(p, repository, tag)
-		if err == nil && target == digestHex {
-			refs = append(refs, path)
-		}
-		return nil
-	})
-	if err != nil && !os.IsNotExist(err) {
-		return nil, fmt.Errorf("walk content tags: %w", err)
-	}
-	return refs, nil
-}
-
-func contentMetadataStatus(p *paths.Paths, digestHex string) (string, error) {
-	data, err := os.ReadFile(p.ImageContentMetadata(digestHex))
-	if err != nil {
-		return "", err
-	}
-	var meta imageMetadata
-	if err := json.Unmarshal(data, &meta); err != nil {
-		return "", fmt.Errorf("unmarshal content metadata: %w", err)
-	}
-	return meta.Status, nil
-}
-
-func contentPullInProgress(p *paths.Paths, digestHex string) bool {
-	status, err := contentMetadataStatus(p, digestHex)
-	if err != nil {
-		return false
-	}
-	switch status {
-	case StatusPending, StatusPulling, StatusConverting:
-		return true
-	default:
-		return false
-	}
-}
-
-func contentIsDigestOnly(p *paths.Paths, digestHex string) bool {
-	meta, err := readContentMetadata(p, digestHex)
-	if err != nil {
-		return false
-	}
-	ref, err := ParseNormalizedRef(meta.Name)
-	return err == nil && ref.IsDigest()
-}
-
-// removeDigestIfUnreferenced removes the repository-local legacy tree and
-// removes shared content only when no tag or active pull still references it.
-// Digest-only content is retained when removing a tag, but an explicit digest
-// deletion removes it.
-func removeDigestIfUnreferenced(p *paths.Paths, repository, digestHex string, preserveDigestOnly bool) error {
-	if err := os.RemoveAll(p.ImageDigestDir(repository, digestHex)); err != nil {
-		return fmt.Errorf("remove legacy digest directory: %w", err)
-	}
-
-	contentDir := p.ImageContentDir(digestHex)
-	if _, err := os.Stat(contentDir); os.IsNotExist(err) {
-		return nil
-	} else if err != nil {
-		return fmt.Errorf("stat content digest directory: %w", err)
-	}
-
-	refs, err := contentTagsForDigest(p, digestHex)
-	if err != nil {
-		return err
-	}
-	if len(refs) > 0 || contentPullInProgress(p, digestHex) || (preserveDigestOnly && contentIsDigestOnly(p, digestHex)) {
-		return nil
-	}
-	if err := os.RemoveAll(contentDir); err != nil {
-		return fmt.Errorf("remove content digest directory: %w", err)
-	}
-	return nil
 }
