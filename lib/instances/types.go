@@ -115,6 +115,7 @@ type StoredMetadata struct {
 
 	// Timestamps (stored for historical tracking)
 	CreatedAt time.Time
+	ExpiresAt *time.Time // Absolute expiration time; nil disables expiration
 	StartedAt *time.Time // Boot epoch start time (set on create/start; preserved across standby restore)
 	StoppedAt *time.Time // Last time VM was stopped
 
@@ -274,6 +275,8 @@ type CreateInstanceRequest struct {
 	AutoStandby              *autostandby.Policy         // Optional automatic standby policy
 	HealthCheck              *healthcheck.Policy         // Optional workload health check policy
 	RestartPolicy            *restartpolicy.Policy       // Optional whole-instance restart policy
+	TTL                      *time.Duration              // Optional lifetime from creation; zero disables expiration
+	ExpiresAt                *time.Time                  // Optional absolute expiration time; mutually exclusive with TTL
 	AllowSystemVolumeMounts  bool                        // Internal only: permits attaching reserved system volumes. Never populated from API requests.
 	SystemVolumeMountPaths   []string                    // Internal only: exact system paths reserved volumes may mount at.
 }
@@ -291,6 +294,8 @@ type UpdateInstanceRequest struct {
 	HealthCheck      *healthcheck.Policy   // Replaces the persisted health check policy when non-nil
 	RestartPolicy    *restartpolicy.Policy // Replaces the persisted restart policy when non-nil
 	RestartPolicySet bool                  // True when restart policy was present in the update request
+	TTL              *time.Duration        // Relative lifetime from when the update is committed; zero disables expiration
+	ExpiresAt        *time.Time            // Absolute expiration time; mutually exclusive with TTL
 }
 
 // ForkInstanceRequest is the domain request for forking an instance.

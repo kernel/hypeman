@@ -30,7 +30,32 @@ func TestValidateUpdateInstanceRequest(t *testing.T) {
 		err := validateUpdateInstanceRequest(baseMeta, UpdateInstanceRequest{})
 		require.Error(t, err)
 		assert.ErrorIs(t, err, ErrInvalidRequest)
-		assert.Contains(t, err.Error(), "env, auto_standby, health_check, and/or restart_policy")
+		assert.Contains(t, err.Error(), "env, auto_standby, health_check, restart_policy, ttl, and/or expires_at")
+	})
+
+	t.Run("allows disabling expiration", func(t *testing.T) {
+		ttl := time.Duration(0)
+		err := validateUpdateInstanceRequest(baseMeta, UpdateInstanceRequest{TTL: &ttl})
+		require.NoError(t, err)
+	})
+
+	t.Run("rejects conflicting expiration fields", func(t *testing.T) {
+		ttl := time.Hour
+		expiresAt := time.Now().Add(time.Hour)
+		err := validateUpdateInstanceRequest(baseMeta, UpdateInstanceRequest{TTL: &ttl, ExpiresAt: &expiresAt})
+		require.ErrorIs(t, err, ErrInvalidRequest)
+	})
+
+	t.Run("rejects negative ttl", func(t *testing.T) {
+		ttl := -time.Second
+		err := validateUpdateInstanceRequest(baseMeta, UpdateInstanceRequest{TTL: &ttl})
+		require.ErrorIs(t, err, ErrInvalidRequest)
+	})
+
+	t.Run("rejects past absolute expiration consistently", func(t *testing.T) {
+		now := time.Now()
+		_, _, err := resolveExpirationUpdate(baseMeta, UpdateInstanceRequest{ExpiresAt: &now}, now)
+		require.ErrorIs(t, err, ErrInvalidExpiresAt)
 	})
 
 	t.Run("rejects instances without credential backed envs", func(t *testing.T) {
@@ -400,4 +425,155 @@ func TestManagerUpdateInstanceHealthCheckOnlyPublishesLifecycleUpdate(t *testing
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for lifecycle update event")
 	}
+}
+
+func TestManagerUpdateInstanceTTLIsRelativeToUpdate(t *testing.T) {
+	t.Parallel()
+
+	m, _ := setupTestManager(t)
+	requestTime := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	commitTime := requestTime.Add(2 * time.Minute)
+	nowCalls := 0
+	m.now = func() time.Time {
+		nowCalls++
+		if nowCalls == 1 {
+			return requestTime
+		}
+		return commitTime
+	}
+	id := "inst-update-ttl"
+	require.NoError(t, m.ensureDirectories(id))
+	oldExpiration := requestTime.Add(time.Hour)
+	require.NoError(t, m.saveMetadata(&metadata{StoredMetadata: StoredMetadata{
+		Id:        id,
+		Name:      id,
+		CreatedAt: requestTime.Add(-24 * time.Hour),
+		ExpiresAt: &oldExpiration,
+		DataDir:   m.paths.InstanceDir(id),
+	}}))
+
+	ttl := 6 * time.Hour
+	updated, err := m.UpdateInstance(context.Background(), id, UpdateInstanceRequest{TTL: &ttl})
+	require.NoError(t, err)
+	require.NotNil(t, updated.ExpiresAt)
+	assert.GreaterOrEqual(t, nowCalls, 2)
+	assert.Equal(t, commitTime.Add(ttl), *updated.ExpiresAt)
+
+	restarted := &manager{paths: m.paths}
+	persisted, err := restarted.loadMetadata(id)
+	require.NoError(t, err)
+	require.NotNil(t, persisted.ExpiresAt)
+	assert.Equal(t, commitTime.Add(ttl), *persisted.ExpiresAt)
+}
+
+func TestManagerUpdateInstanceRejectsExpirationThatPassesBeforeCommit(t *testing.T) {
+	t.Parallel()
+
+	m, _ := setupTestManager(t)
+	requestTime := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	commitTime := requestTime.Add(2 * time.Minute)
+	nowCalls := 0
+	m.now = func() time.Time {
+		nowCalls++
+		if nowCalls == 1 {
+			return requestTime
+		}
+		return commitTime
+	}
+	id := "inst-expires-during-update"
+	expiresAt := requestTime.Add(time.Minute)
+	require.NoError(t, m.ensureDirectories(id))
+	require.NoError(t, m.saveMetadata(&metadata{StoredMetadata: StoredMetadata{
+		Id:        id,
+		Name:      id,
+		CreatedAt: requestTime.Add(-time.Hour),
+		ExpiresAt: &expiresAt,
+		DataDir:   m.paths.InstanceDir(id),
+	}}))
+
+	ttl := time.Hour
+	_, err := m.UpdateInstance(context.Background(), id, UpdateInstanceRequest{TTL: &ttl})
+	require.ErrorIs(t, err, ErrInstanceExpired)
+	assert.GreaterOrEqual(t, nowCalls, 2)
+
+	persisted, err := m.loadMetadata(id)
+	require.NoError(t, err)
+	require.NotNil(t, persisted.ExpiresAt)
+	assert.Equal(t, expiresAt, *persisted.ExpiresAt)
+}
+
+func TestManagerUpdateInstanceDisablePreventsStaleReaperDelete(t *testing.T) {
+	t.Parallel()
+
+	manager, _ := setupTestManager(t)
+	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	manager.now = func() time.Time { return now }
+	id := "inst-disable-expiration"
+	require.NoError(t, manager.ensureDirectories(id))
+	expiresAt := now.Add(time.Minute)
+	require.NoError(t, manager.saveMetadata(&metadata{StoredMetadata: StoredMetadata{
+		Id:        id,
+		Name:      id,
+		CreatedAt: now.Add(-time.Hour),
+		ExpiresAt: &expiresAt,
+		DataDir:   manager.paths.InstanceDir(id),
+	}}))
+
+	disable := time.Duration(0)
+	updated, err := manager.UpdateInstance(context.Background(), id, UpdateInstanceRequest{TTL: &disable})
+	require.NoError(t, err)
+	assert.Nil(t, updated.ExpiresAt)
+
+	now = now.Add(2 * time.Hour)
+	manager.reapExpiredInstances(context.Background())
+	_, err = manager.loadMetadata(id)
+	require.NoError(t, err)
+}
+
+func TestManagerUpdateInstanceExpirationLosesAfterDeadline(t *testing.T) {
+	t.Parallel()
+
+	manager, _ := setupTestManager(t)
+	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	manager.now = func() time.Time { return now }
+	id := "inst-expired-before-update"
+	require.NoError(t, manager.ensureDirectories(id))
+	expiresAt := now
+	require.NoError(t, manager.saveMetadata(&metadata{StoredMetadata: StoredMetadata{
+		Id:        id,
+		Name:      id,
+		CreatedAt: now.Add(-time.Hour),
+		ExpiresAt: &expiresAt,
+		DataDir:   manager.paths.InstanceDir(id),
+	}}))
+
+	ttl := time.Hour
+	_, err := manager.UpdateInstance(context.Background(), id, UpdateInstanceRequest{TTL: &ttl})
+	require.ErrorIs(t, err, ErrInstanceExpired)
+}
+
+func TestManagerUpdateInstanceExpirationLosesAfterReaperDelete(t *testing.T) {
+	t.Parallel()
+
+	manager, _ := setupTestManager(t)
+	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	manager.now = func() time.Time { return now }
+	id := "inst-reaped-before-update"
+	require.NoError(t, manager.ensureDirectories(id))
+	expiresAt := now
+	require.NoError(t, manager.saveMetadata(&metadata{StoredMetadata: StoredMetadata{
+		Id:        id,
+		Name:      id,
+		CreatedAt: now.Add(-time.Hour),
+		ExpiresAt: &expiresAt,
+		DataDir:   manager.paths.InstanceDir(id),
+	}}))
+
+	deleted, err := manager.reapExpiredInstance(context.Background(), id)
+	require.NoError(t, err)
+	require.True(t, deleted)
+
+	ttl := time.Hour
+	_, err = manager.UpdateInstance(context.Background(), id, UpdateInstanceRequest{TTL: &ttl})
+	require.ErrorIs(t, err, ErrNotFound)
 }

@@ -577,6 +577,11 @@ func TestForkInstanceFromStandbyCancelsCompressionJobAndCopiesRawMemory(t *testi
 
 	sourceID := "fork-standby-compressed-src"
 	createStandbySnapshotSourceFixture(t, manager, sourceID, sourceID, manager.defaultHypervisor)
+	expiresAt := time.Now().Add(time.Hour)
+	sourceMeta, err := manager.loadMetadata(sourceID)
+	require.NoError(t, err)
+	sourceMeta.ExpiresAt = &expiresAt
+	require.NoError(t, manager.saveMetadata(sourceMeta))
 
 	rawPath := filepath.Join(manager.paths.InstanceSnapshotLatest(sourceID), "memory-ranges")
 	require.NoError(t, os.WriteFile(rawPath, []byte("some guest memory"), 0o644))
@@ -584,7 +589,7 @@ func TestForkInstanceFromStandbyCancelsCompressionJobAndCopiesRawMemory(t *testi
 	require.NoError(t, os.MkdirAll(filepath.Dir(snapshotConfigPath), 0o755))
 	require.NoError(t, os.WriteFile(snapshotConfigPath, []byte(`{}`), 0o644))
 
-	_, _, err := compressSnapshotMemoryFile(ctx, rawPath, snapshotstore.SnapshotCompressionConfig{
+	_, _, err = compressSnapshotMemoryFile(ctx, rawPath, snapshotstore.SnapshotCompressionConfig{
 		Enabled:   true,
 		Algorithm: snapshotstore.SnapshotCompressionAlgorithmZstd,
 		Level:     intPtr(1),
@@ -619,6 +624,7 @@ func TestForkInstanceFromStandbyCancelsCompressionJobAndCopiesRawMemory(t *testi
 	}, true)
 	require.NoError(t, err)
 	require.NotNil(t, forked)
+	assert.Nil(t, forked.ExpiresAt)
 
 	assert.True(t, canceled.Load(), "standby compression job should be canceled before copying the source guest directory")
 
@@ -671,6 +677,7 @@ func TestCloneStoredMetadataForFork_DeepCopiesReferenceFields(t *testing.T) {
 	t.Parallel()
 	startedAt := time.Now().Add(-2 * time.Minute)
 	stoppedAt := time.Now().Add(-1 * time.Minute)
+	expiresAt := time.Now().Add(time.Hour)
 	notBefore := time.Now().Add(5 * time.Minute)
 	pid := 1234
 	exitCode := 17
@@ -687,6 +694,7 @@ func TestCloneStoredMetadataForFork_DeepCopiesReferenceFields(t *testing.T) {
 		Devices:       []string{"0000:01:00.0"},
 		Entrypoint:    []string{"/bin/sh", "-c"},
 		Cmd:           []string{"echo", "hello"},
+		ExpiresAt:     &expiresAt,
 		StartedAt:     &startedAt,
 		StoppedAt:     &stoppedAt,
 		HypervisorPID: &pid,
@@ -741,6 +749,7 @@ func TestCloneStoredMetadataForFork_DeepCopiesReferenceFields(t *testing.T) {
 	now := time.Now()
 	*cloned.PendingStandbyCompression.Policy.Level = 1
 	cloned.PendingStandbyCompression.NotBefore = now
+	*cloned.ExpiresAt = now
 	*cloned.StartedAt = now
 	*cloned.StoppedAt = now
 
@@ -760,6 +769,7 @@ func TestCloneStoredMetadataForFork_DeepCopiesReferenceFields(t *testing.T) {
 	require.NotNil(t, src.PendingStandbyCompression.Policy.Level)
 	require.Equal(t, 3, *src.PendingStandbyCompression.Policy.Level)
 	require.Equal(t, notBefore, src.PendingStandbyCompression.NotBefore)
+	require.Equal(t, expiresAt, *src.ExpiresAt)
 	require.Equal(t, startedAt, *src.StartedAt)
 	require.Equal(t, stoppedAt, *src.StoppedAt)
 }
