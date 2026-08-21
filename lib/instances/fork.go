@@ -220,10 +220,7 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 		return nil, false, fmt.Errorf("%w: cannot fork from state %s (must be Stopped or Standby)", ErrInvalidState, source.State)
 	}
 	if stored.GPURetainedForCleanup {
-		// A delete-only retention stub from a failed create has no boot
-		// configuration, so a fork of it could never boot. Delete the stub to
-		// release its retained vGPU assignment.
-		return nil, false, fmt.Errorf("%w: instance retains a vGPU assignment from a failed create and has no boot configuration; delete it to release the assignment", ErrInvalidState)
+		return nil, false, errVGPURetentionStub
 	}
 
 	if !supportValidated {
