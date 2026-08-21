@@ -149,8 +149,14 @@ func VFHealthStoreUnavailable() bool {
 func QuarantinedVFs() []VFHealthRecord {
 	vfHealth.mu.Lock()
 	defer vfHealth.mu.Unlock()
-	records := make([]VFHealthRecord, 0, len(vfHealth.records))
-	for _, record := range vfHealth.records {
+	return vfHealth.sortedRecordsLocked()
+}
+
+// sortedRecordsLocked returns every quarantine record ordered by VF address.
+// The caller must hold s.mu.
+func (s *vfHealthStore) sortedRecordsLocked() []VFHealthRecord {
+	records := make([]VFHealthRecord, 0, len(s.records))
+	for _, record := range s.records {
 		records = append(records, record)
 	}
 	sort.Slice(records, func(i, j int) bool { return records[i].VFAddress < records[j].VFAddress })
@@ -201,12 +207,7 @@ func (s *vfHealthStore) persistLocked() error {
 	if s.path == "" {
 		return nil
 	}
-	records := make([]VFHealthRecord, 0, len(s.records))
-	for _, record := range s.records {
-		records = append(records, record)
-	}
-	sort.Slice(records, func(i, j int) bool { return records[i].VFAddress < records[j].VFAddress })
-	data, err := json.MarshalIndent(records, "", "  ")
+	data, err := json.MarshalIndent(s.sortedRecordsLocked(), "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal VF health state: %w", err)
 	}
@@ -214,11 +215,36 @@ func (s *vfHealthStore) persistLocked() error {
 		return fmt.Errorf("create VF health state dir: %w", err)
 	}
 	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+	if err != nil {
+		return fmt.Errorf("create VF health state: %w", err)
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		os.Remove(tmp)
 		return fmt.Errorf("write VF health state: %w", err)
 	}
+	// A quarantine is only real once it is on disk: sync before rename so a
+	// host crash cannot leave an empty or partial file where a durable
+	// conviction should be.
+	if err := f.Sync(); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return fmt.Errorf("sync VF health state: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(tmp)
+		return fmt.Errorf("close VF health state: %w", err)
+	}
 	if err := os.Rename(tmp, s.path); err != nil {
+		os.Remove(tmp)
 		return fmt.Errorf("rename VF health state: %w", err)
+	}
+	// Sync the directory so the rename itself survives a crash. Best-effort
+	// — a directory sync failure is not worth failing the conviction over.
+	if dir, err := os.Open(filepath.Dir(s.path)); err == nil {
+		_ = dir.Sync()
+		_ = dir.Close()
 	}
 	return nil
 }
