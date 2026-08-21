@@ -214,6 +214,29 @@ func TestResolveImageForCreateWithoutPlatformLegacyEmptyForcesHostResolve(t *tes
 	}
 }
 
+func TestResolveImageForCreateWithoutPlatformIgnoresCachedWindowsImage(t *testing.T) {
+	t.Parallel()
+
+	createPlatform := ""
+	resolver := createImageResolverFake{
+		getImage: func(context.Context, string) (*images.Image, error) {
+			return &images.Image{Platform: "windows/amd64", Status: images.StatusReady}, nil
+		},
+		createImage: func(_ context.Context, req images.CreateImageRequest) (*images.Image, error) {
+			createPlatform = req.Platform
+			return &images.Image{Name: req.Name, Digest: "sha256:linux", Platform: images.HostPlatformString(), Status: images.StatusReady}, nil
+		},
+	}
+
+	_, err := resolveImageForCreate(context.Background(), resolver, "registry.example/desktop:test", "", slog.Default())
+	if err != nil {
+		t.Fatalf("resolve image: %v", err)
+	}
+	if createPlatform != images.HostPlatformString() {
+		t.Fatalf("cached Windows image must not satisfy an implicit host-platform create; got %q", createPlatform)
+	}
+}
+
 // A no-platform create must NOT trust a tag pointer that resolves to a non-host
 // arch (last-pull-wins can point the tag at an emulated variant). It must
 // re-resolve the host variant explicitly and never silently emulate.

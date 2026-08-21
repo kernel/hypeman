@@ -164,20 +164,22 @@ func (m *manager) startInstance(
 		})
 	}
 
-	// 5. Regenerate config disk with new network configuration
-	instForConfig := &Instance{StoredMetadata: *stored}
-	log.DebugContext(ctx, "regenerating config disk", "instance_id", id)
-	configDiskCtx, configDiskSpanEnd := m.startLifecycleStep(ctx, "create_config_disk",
-		attribute.String("instance_id", id),
-		attribute.String("hypervisor", string(stored.HypervisorType)),
-		attribute.String("operation", "create_config_disk"),
-	)
-	if err := m.createConfigDisk(configDiskCtx, instForConfig, imageInfo, netConfig, proxyGuestConfig); err != nil {
-		configDiskSpanEnd(err)
-		log.ErrorContext(ctx, "failed to create config disk", "instance_id", id, "error", err)
-		return nil, fmt.Errorf("create config disk: %w", err)
+	// 5. Regenerate the Linux config disk with new network configuration.
+	if !isWindowsPlatform(stored.Platform) {
+		instForConfig := &Instance{StoredMetadata: *stored}
+		log.DebugContext(ctx, "regenerating config disk", "instance_id", id)
+		configDiskCtx, configDiskSpanEnd := m.startLifecycleStep(ctx, "create_config_disk",
+			attribute.String("instance_id", id),
+			attribute.String("hypervisor", string(stored.HypervisorType)),
+			attribute.String("operation", "create_config_disk"),
+		)
+		if err := m.createConfigDisk(configDiskCtx, instForConfig, imageInfo, netConfig, proxyGuestConfig); err != nil {
+			configDiskSpanEnd(err)
+			log.ErrorContext(ctx, "failed to create config disk", "instance_id", id, "error", err)
+			return nil, fmt.Errorf("create config disk: %w", err)
+		}
+		configDiskSpanEnd(nil)
 	}
-	configDiskSpanEnd(nil)
 
 	if err := m.archiveAppLogForBoot(id); err != nil {
 		log.WarnContext(ctx, "failed to archive app log before start", "instance_id", id, "error", err)
