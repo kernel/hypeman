@@ -13,12 +13,9 @@ import (
 	pb "github.com/kernel/hypeman/lib/guest"
 )
 
-func (s *guestServer) executeNoTTY(ctx context.Context, stream pb.GuestService_ExecServer, start *pb.ExecStart) error {
+func (s *guestServer) executeSystemNoTTY(ctx context.Context, stream pb.GuestService_ExecServer, start *pb.ExecStart) error {
 	if len(start.Command) == 0 {
 		return fmt.Errorf("empty command")
-	}
-	if start.Session == pb.ExecSession_EXEC_SESSION_DESKTOP {
-		return s.executeDesktopNoTTY(ctx, stream, start)
 	}
 
 	cmd := execCommand(ctx, start.Command[0], start.Command[1:]...)
@@ -77,74 +74,6 @@ func (s *guestServer) executeNoTTY(ctx context.Context, stream pb.GuestService_E
 	}()
 
 	waitErr := cmd.Wait()
-	return sendCapturedCommandResult(stream, stdoutFile, stderrFile, cmd.ProcessState, waitErr)
-}
-
-func (s *guestServer) executeDesktopNoTTY(ctx context.Context, stream pb.GuestService_ExecServer, start *pb.ExecStart) error {
-	stdinRead, stdinWrite, err := os.Pipe()
-	if err != nil {
-		return fmt.Errorf("create desktop command stdin: %w", err)
-	}
-	stdoutFile, err := os.CreateTemp("", "hypeman-exec-stdout-*")
-	if err != nil {
-		stdinRead.Close()
-		stdinWrite.Close()
-		return fmt.Errorf("create stdout capture: %w", err)
-	}
-	defer func() {
-		stdoutFile.Close()
-		os.Remove(stdoutFile.Name())
-	}()
-	stderrFile, err := os.CreateTemp("", "hypeman-exec-stderr-*")
-	if err != nil {
-		stdinRead.Close()
-		stdinWrite.Close()
-		return fmt.Errorf("create stderr capture: %w", err)
-	}
-	defer func() {
-		stderrFile.Close()
-		os.Remove(stderrFile.Name())
-	}()
-
-	process, cleanup, err := startDesktopProcess(
-		ctx,
-		start.Command,
-		s.buildEnv(start.Env, false),
-		start.Cwd,
-		stdinRead,
-		stdoutFile,
-		stderrFile,
-		start.TimeoutSeconds,
-	)
-	stdinRead.Close()
-	if err != nil {
-		stdinWrite.Close()
-		return err
-	}
-	defer cleanup()
-	go func() {
-		defer stdinWrite.Close()
-		for {
-			req, err := stream.Recv()
-			if err != nil {
-				return
-			}
-			if data := req.GetStdin(); data != nil {
-				_, _ = stdinWrite.Write(data)
-			}
-		}
-	}()
-
-	processState, waitErr := process.Wait()
-	return sendCapturedCommandResult(stream, stdoutFile, stderrFile, processState, waitErr)
-}
-
-func sendCapturedCommandResult(
-	stream pb.GuestService_ExecServer,
-	stdoutFile, stderrFile *os.File,
-	processState *os.ProcessState,
-	waitErr error,
-) error {
 	if _, err := stdoutFile.Seek(0, io.SeekStart); err != nil {
 		return fmt.Errorf("rewind stdout capture: %w", err)
 	}
@@ -171,8 +100,8 @@ func sendCapturedCommandResult(
 	}
 
 	exitCode := int32(0)
-	if processState != nil {
-		exitCode = int32(processState.ExitCode())
+	if cmd.ProcessState != nil {
+		exitCode = int32(cmd.ProcessState.ExitCode())
 	} else if waitErr != nil {
 		exitCode = 124
 	}
