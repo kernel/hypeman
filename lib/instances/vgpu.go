@@ -176,7 +176,7 @@ func (m *manager) releaseStoredVGPU(ctx context.Context, stored *StoredMetadata)
 // assignment without a PID, or unverifiable process ownership returns an error
 // so the requester retains its assignment for a later retry.
 func (m *manager) vgpuAssignmentClaimedByLiveInstance(ctx context.Context, excludeID, devicePath string) (bool, error) {
-	files, err := m.listMetadataFilesWithStatErrors(true)
+	files, err := m.listMetadataFilesStrict()
 	if err != nil {
 		return false, fmt.Errorf("list instances for vGPU release check: %w", err)
 	}
