@@ -92,6 +92,9 @@ func DestroyVGPU(ctx context.Context, assignment VGPUAssignment) error {
 	case VGPUFrameworkMdev:
 		mdevUUID := assignment.MdevUUID
 		if mdevUUID == "" {
+			if assignment.DevicePath == "" {
+				return nil
+			}
 			mdevUUID = filepath.Base(assignment.DevicePath)
 		}
 		return DestroyMdev(ctx, mdevUUID)
