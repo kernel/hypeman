@@ -134,6 +134,17 @@ func ClearVFQuarantine(vfAddress string) (bool, error) {
 	return cleared, err
 }
 
+// VFHealthStoreUnavailable reports whether the persisted VF health state
+// failed to load. While true, quarantine mutations are refused and vGPU
+// placement fails closed — and the in-memory record set is empty, so the
+// quarantine gauge would otherwise read zero exactly when quarantines exist
+// but are unreadable. Surface this state instead of hiding it.
+func VFHealthStoreUnavailable() bool {
+	vfHealth.mu.Lock()
+	defer vfHealth.mu.Unlock()
+	return vfHealth.loadErr != nil
+}
+
 // QuarantinedVFs returns all quarantine records, ordered by VF address.
 func QuarantinedVFs() []VFHealthRecord {
 	vfHealth.mu.Lock()

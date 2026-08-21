@@ -114,6 +114,24 @@ func NewVGPUSentinelController(manager Manager, meter metric.Meter, log *slog.Lo
 	if err != nil {
 		return nil, err
 	}
+	// The quarantined-VFs gauge reads zero when the state file is unreadable
+	// — exactly the state where quarantines exist but are unloadable and vGPU
+	// placement is failing closed — so that condition gets its own signal.
+	_, err = meter.Int64ObservableGauge(
+		"hypeman_instances_vgpu_vf_health_store_unavailable",
+		metric.WithDescription("1 when the persisted VF health state failed to load; quarantine mutations are refused and vGPU placement is disabled until it is repaired"),
+		metric.WithInt64Callback(func(_ context.Context, o metric.Int64Observer) error {
+			if devices.VFHealthStoreUnavailable() {
+				o.Observe(1)
+			} else {
+				o.Observe(0)
+			}
+			return nil
+		}),
+	)
+	if err != nil {
+		return nil, err
+	}
 
 	return &VGPUSentinelController{
 		store:         store,
