@@ -64,9 +64,9 @@ The virtio-win provider assigns its Winsock address-family number dynamically. T
 Commands run in one of two explicit sessions:
 
 - `SYSTEM` inherits the service account and is used for automation.
-- `DESKTOP` obtains a token for the active interactive session so UI processes appear on that desktop.
+- `DESKTOP` obtains a token for the active interactive session and launches non-interactive commands on `winsta0\default` so UI processes appear on that desktop.
 
-Interactive commands use ConPTY and accept terminal input and resize messages through the existing streaming Exec RPC. Non-interactive commands use ordinary redirected handles.
+Interactive commands use ConPTY and accept terminal input and resize messages through the existing streaming Exec RPC. ConPTY supports the `SYSTEM` session only; desktop commands must be non-interactive because the ConPTY dependency does not expose Windows desktop selection. Non-interactive commands use ordinary redirected handles.
 
 Windows has no Unix process-group equivalent. Commands start suspended, are assigned to a kill-on-close Job Object, and are then resumed. Closing the RPC, reaching its timeout, or completing cleanup synchronously terminates the job, including descendants, so a command cannot leave a child process behind. Starting suspended closes the race where the root process could spawn a child before job assignment.
 

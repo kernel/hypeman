@@ -19,6 +19,9 @@ func (s *guestServer) executeTTY(ctx context.Context, stream pb.GuestService_Exe
 	if len(start.Command) == 0 {
 		return fmt.Errorf("empty command")
 	}
+	if start.Session == pb.ExecSession_EXEC_SESSION_DESKTOP {
+		return fmt.Errorf("desktop ConPTY sessions are not supported; use a system session or non-TTY desktop exec")
+	}
 
 	console, err := pty.New()
 	if err != nil {

@@ -19,6 +19,11 @@ func (s *guestServer) executeTTY(ctx context.Context, stream pb.GuestService_Exe
 	}
 
 	cmd := exec.CommandContext(ctx, start.Command[0], start.Command[1:]...)
+	cleanup, err := configureExecCommand(cmd, start.Session)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
 	cmd.Env = s.buildEnv(start.Env, true)
 	cmd.Dir = start.Cwd
 

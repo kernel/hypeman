@@ -13,23 +13,17 @@ import (
 	pb "github.com/kernel/hypeman/lib/guest"
 )
 
+type runningWindowsCommand struct {
+	stdin   io.WriteCloser
+	wait    func() (*os.ProcessState, error)
+	cleanup func()
+}
+
 func (s *guestServer) executeNoTTY(ctx context.Context, stream pb.GuestService_ExecServer, start *pb.ExecStart) error {
 	if len(start.Command) == 0 {
 		return fmt.Errorf("empty command")
 	}
 
-	cmd := execCommand(ctx, start.Command[0], start.Command[1:]...)
-	cleanup, err := configureExecCommand(cmd, start.Session)
-	if err != nil {
-		return err
-	}
-	defer cleanup()
-	cmd.Env = s.buildEnv(start.Env, false)
-	if start.Cwd != "" {
-		cmd.Dir = start.Cwd
-	}
-
-	stdin, _ := cmd.StdinPipe()
 	stdoutFile, err := os.CreateTemp("", "hypeman-exec-stdout-*")
 	if err != nil {
 		return fmt.Errorf("create stdout capture: %w", err)
@@ -46,34 +40,27 @@ func (s *guestServer) executeNoTTY(ctx context.Context, stream pb.GuestService_E
 		stderrFile.Close()
 		os.Remove(stderrFile.Name())
 	}()
-	cmd.Stdout = stdoutFile
-	cmd.Stderr = stderrFile
 
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("start command: %w", err)
-	}
-	jobCleanup, err := attachProcessJob(ctx, cmd.Process, time.Duration(start.TimeoutSeconds)*time.Second)
+	running, err := s.startNoTTYCommand(ctx, start, stdoutFile, stderrFile)
 	if err != nil {
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
-		return fmt.Errorf("attach process job: %w", err)
+		return err
 	}
-	defer jobCleanup()
+	defer running.cleanup()
 
 	go func() {
-		defer stdin.Close()
+		defer running.stdin.Close()
 		for {
 			req, err := stream.Recv()
 			if err != nil {
 				return
 			}
 			if data := req.GetStdin(); data != nil {
-				_, _ = stdin.Write(data)
+				_, _ = running.stdin.Write(data)
 			}
 		}
 	}()
 
-	waitErr := cmd.Wait()
+	processState, waitErr := running.wait()
 	if _, err := stdoutFile.Seek(0, io.SeekStart); err != nil {
 		return fmt.Errorf("rewind stdout capture: %w", err)
 	}
@@ -100,11 +87,83 @@ func (s *guestServer) executeNoTTY(ctx context.Context, stream pb.GuestService_E
 	}
 
 	exitCode := int32(0)
-	if cmd.ProcessState != nil {
-		exitCode = int32(cmd.ProcessState.ExitCode())
+	if processState != nil {
+		exitCode = int32(processState.ExitCode())
 	} else if waitErr != nil {
 		exitCode = 124
 	}
 	log.Printf("[guest-agent] command finished with exit code: %d", exitCode)
 	return stream.Send(&pb.ExecResponse{Response: &pb.ExecResponse_ExitCode{ExitCode: exitCode}})
+}
+
+func (s *guestServer) startNoTTYCommand(
+	ctx context.Context,
+	start *pb.ExecStart,
+	stdout, stderr *os.File,
+) (*runningWindowsCommand, error) {
+	if start.Session == pb.ExecSession_EXEC_SESSION_DESKTOP {
+		stdinRead, stdinWrite, err := os.Pipe()
+		if err != nil {
+			return nil, fmt.Errorf("create desktop command stdin: %w", err)
+		}
+		process, cleanup, err := startDesktopProcess(
+			ctx,
+			start.Command,
+			s.buildEnv(start.Env, false),
+			start.Cwd,
+			stdinRead,
+			stdout,
+			stderr,
+			start.TimeoutSeconds,
+		)
+		stdinRead.Close()
+		if err != nil {
+			stdinWrite.Close()
+			return nil, err
+		}
+		return &runningWindowsCommand{
+			stdin:   stdinWrite,
+			wait:    process.Wait,
+			cleanup: cleanup,
+		}, nil
+	}
+
+	cmd := execCommand(ctx, start.Command[0], start.Command[1:]...)
+	configureCleanup, err := configureExecCommand(cmd, start.Session)
+	if err != nil {
+		return nil, err
+	}
+	cmd.Env = s.buildEnv(start.Env, false)
+	if start.Cwd != "" {
+		cmd.Dir = start.Cwd
+	}
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		configureCleanup()
+		return nil, fmt.Errorf("create command stdin: %w", err)
+	}
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+	if err := cmd.Start(); err != nil {
+		configureCleanup()
+		return nil, fmt.Errorf("start command: %w", err)
+	}
+	jobCleanup, err := attachProcessJob(ctx, cmd.Process, time.Duration(start.TimeoutSeconds)*time.Second)
+	if err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		configureCleanup()
+		return nil, fmt.Errorf("attach process job: %w", err)
+	}
+	return &runningWindowsCommand{
+		stdin: stdin,
+		wait: func() (*os.ProcessState, error) {
+			err := cmd.Wait()
+			return cmd.ProcessState, err
+		},
+		cleanup: func() {
+			jobCleanup()
+			configureCleanup()
+		},
+	}, nil
 }

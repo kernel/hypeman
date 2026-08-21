@@ -132,15 +132,49 @@ func TestWindowsGuestAgentIntegration(t *testing.T) {
 	assert.Contains(t, stdout.String(), "HYPEMAN_CONPTY_OK")
 
 	stdout.Reset()
+	stderr.Reset()
+	const desktopIdentityScript = `
+Add-Type -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using System.Text;
+public static class DesktopIdentity {
+    [DllImport("user32.dll")] public static extern IntPtr GetProcessWindowStation();
+    [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
+    [DllImport("user32.dll")] public static extern IntPtr GetThreadDesktop(uint threadId);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    public static extern bool GetUserObjectInformation(IntPtr handle, int index, StringBuilder value, uint length, out uint needed);
+    public static string Name(IntPtr handle) {
+        var value = new StringBuilder(256);
+        uint needed;
+        if (!GetUserObjectInformation(handle, 2, value, 512, out needed)) throw new Win32Exception();
+        return value.ToString();
+    }
+}
+'@
+[Console]::Out.Write(
+    [DesktopIdentity]::Name([DesktopIdentity]::GetProcessWindowStation()) + "\\" +
+    [DesktopIdentity]::Name([DesktopIdentity]::GetThreadDesktop([DesktopIdentity]::GetCurrentThreadId())))
+`
 	exit, err = guest.ExecIntoInstance(ctx, dialer, guest.ExecOptions{
-		Command: []string{"cmd.exe", "/d", "/c", "echo", "HYPEMAN_DESKTOP_OK"},
+		Command: []string{"powershell.exe", "-NoProfile", "-NonInteractive", "-Command", desktopIdentityScript},
 		Stdout:  &stdout,
+		Stderr:  &stderr,
 		Session: guest.ExecSession_EXEC_SESSION_DESKTOP,
 		Timeout: 30,
 	})
-	require.NoError(t, err)
+	require.NoError(t, err, stderr.String())
 	require.Equal(t, 0, exit.Code)
-	assert.Contains(t, stdout.String(), "HYPEMAN_DESKTOP_OK")
+	assert.Equal(t, `WinSta0\Default`, stdout.String())
+
+	_, err = guest.ExecIntoInstance(ctx, dialer, guest.ExecOptions{
+		Command: []string{"cmd.exe"},
+		TTY:     true,
+		Session: guest.ExecSession_EXEC_SESSION_DESKTOP,
+		Timeout: 30,
+	})
+	assert.ErrorContains(t, err, "desktop ConPTY sessions are not supported")
 
 	source := filepath.Join(t.TempDir(), "roundtrip.txt")
 	require.NoError(t, os.WriteFile(source, []byte("HYPEMAN_COPY_OK"), 0644))
