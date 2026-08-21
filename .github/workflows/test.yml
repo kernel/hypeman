@@ -140,9 +140,6 @@ jobs:
           mkdir "$work/source"
           tar -xzf "$work/source.tar.gz" --strip-components=1 -C "$work/source"
           make -C "$work/source" build-windows-guest-agent
-          if ! command -v ntfs-3g >/dev/null; then
-            timeout 300s sudo apt-get install -y ntfs-3g
-          fi
 
           exec 9>/run/lock/hypeman-windows-fixture.lock
           flock 9
@@ -163,7 +160,7 @@ jobs:
           done
           test -n "$partition"
           mkdir "$work/mount"
-          sudo mount -t ntfs-3g "$partition" "$work/mount"
+          sudo mount -t ntfs3 "$partition" "$work/mount"
           target=$(sudo find "$work/mount" -type f -iname 'hypeman-guest-agent.exe' -print -quit)
           test -n "$target"
           sudo install -m 0755 "$work/source/lib/system/guest_agent/hypeman-guest-agent.exe" "$target"
