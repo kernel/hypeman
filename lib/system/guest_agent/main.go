@@ -3,20 +3,19 @@ package main
 import (
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
 	"time"
 
 	pb "github.com/kernel/hypeman/lib/guest"
-	"github.com/mdlayher/vsock"
 	"google.golang.org/grpc"
 )
 
 const (
-	readySentinelPrefix  = "HYPEMAN-AGENT-READY"
-	defaultReadyFilePath = "/run/hypeman/guest-agent-ready"
-	readyFDEnv           = "HYPEMAN_AGENT_READY_FD"
+	readySentinelPrefix = "HYPEMAN-AGENT-READY"
+	readyFDEnv          = "HYPEMAN_AGENT_READY_FD"
 )
 
 // guestServer implements the gRPC GuestService
@@ -25,12 +24,17 @@ type guestServer struct {
 }
 
 func main() {
-	// Listen on vsock port 2222 with retries
-	var l *vsock.Listener
+	if err := runPlatform(runGuestAgent); err != nil {
+		log.Fatalf("[guest-agent] failed: %v", err)
+	}
+}
+
+func runGuestAgent() error {
+	var l net.Listener
 	var err error
 
 	for i := 0; i < 10; i++ {
-		l, err = vsock.Listen(2222, nil)
+		l, err = listenVSock(2222)
 		if err == nil {
 			break
 		}
@@ -39,7 +43,7 @@ func main() {
 	}
 
 	if err != nil {
-		log.Fatalf("[guest-agent] failed to listen on vsock port 2222 after retries: %v", err)
+		return fmt.Errorf("listen on vsock port 2222 after retries: %w", err)
 	}
 	defer l.Close()
 
@@ -60,14 +64,15 @@ func main() {
 
 	// Serve gRPC over vsock
 	if err := grpcServer.Serve(l); err != nil {
-		log.Fatalf("[guest-agent] gRPC server failed: %v", err)
+		return fmt.Errorf("serve gRPC: %w", err)
 	}
+	return nil
 }
 
 func writeReadyFile() error {
 	path := os.Getenv("HYPEMAN_AGENT_READY_FILE")
 	if path == "" {
-		path = defaultReadyFilePath
+		path = defaultReadyFilePath()
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err

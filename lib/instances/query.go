@@ -316,7 +316,13 @@ func (m *manager) hydrateBootMarkersFromLogs(ctx context.Context, stored *Stored
 		stored.GuestAgentReadyAt = guestAgentReadyAt
 		hydrated = true
 	}
-	if needAgent && stored.GuestAgentReadyAt == nil && stored.ProgramStartedAt != nil && m.hydrateGuestAgentReadyFromProbe(ctx, stored) {
+	if isWindowsPlatform(stored.Platform) && (needProgram || needAgent) && m.hydrateGuestAgentReadyFromProbe(ctx, stored) {
+		if stored.ProgramStartedAt == nil {
+			startedAt := *stored.GuestAgentReadyAt
+			stored.ProgramStartedAt = &startedAt
+		}
+		hydrated = true
+	} else if needAgent && stored.GuestAgentReadyAt == nil && stored.ProgramStartedAt != nil && m.hydrateGuestAgentReadyFromProbe(ctx, stored) {
 		hydrated = true
 	}
 	if hydrated {
@@ -446,8 +452,12 @@ func probeGuestAgentReady(ctx context.Context, stored *StoredMetadata) bool {
 	probeCtx, cancel := context.WithTimeout(ctx, guestAgentReadyProbeTimeout)
 	defer cancel()
 
+	command := []string{"/bin/true"}
+	if isWindowsPlatform(stored.Platform) {
+		command = []string{"cmd.exe", "/d", "/c", "exit", "0"}
+	}
 	exit, err := guest.ExecIntoInstance(probeCtx, dialer, guest.ExecOptions{
-		Command:      []string{"/bin/true"},
+		Command:      command,
 		Timeout:      int32(guestAgentReadyProbeTimeout / time.Second),
 		WaitForAgent: guestAgentReadyProbeWait,
 	})

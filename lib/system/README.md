@@ -55,6 +55,23 @@ Instance B (running): kernel ch-6.12.8-kernel-1.2-20251213
 Both work independently
 ```
 
+## Windows guest service
+
+Windows images install `hypeman-guest-agent.exe` as the automatic `HypemanGuestAgent` LocalSystem service alongside the signed virtio-win VioSock driver. It serves the same gRPC guest protocol as Linux on port 2222, so host readiness, exec, copy, stat, networking, identity, and shutdown operations do not require a Windows-specific transport contract.
+
+The virtio-win provider assigns its Winsock address-family number dynamically. The service opens `\\.\Viosock`, queries that family through the driver's `IOCTL_VM_SOCKETS_GET_AF`, and wraps the resulting Winsock handles as Go `net.Listener` and `net.Conn` values. Go's `net` package does not natively create sockets for this provider. Connection deadlines are currently no-ops; RPC cancellation closes the connection, and the service does not promise independent socket-level read or write deadlines.
+
+Commands run in one of two explicit sessions:
+
+- `SYSTEM` inherits the service account and is used for automation.
+- `DESKTOP` obtains a token for the active interactive session and launches non-interactive commands on `winsta0\default` so UI processes appear on that desktop.
+
+Interactive commands use ConPTY and accept terminal input and resize messages through the existing streaming Exec RPC. ConPTY supports the `SYSTEM` session only; desktop commands must be non-interactive because the ConPTY dependency does not expose Windows desktop selection. Non-interactive commands use ordinary redirected handles.
+
+Windows has no Unix process-group equivalent. Commands start suspended, are assigned to a kill-on-close Job Object, and are then resumed. Closing the RPC, reaching its timeout, or completing cleanup synchronously terminates the job, including descendants, so a command cannot leave a child process behind. Starting suspended closes the race where the root process could spawn a child before job assignment.
+
+The generated executable and Windows driver packages are release inputs and are not committed to this repository.
+
 ## Go Init Binary
 
 The init binary (`lib/system/init/`) is a Go program that runs as PID 1 in the guest VM.
