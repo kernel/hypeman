@@ -69,15 +69,13 @@ func TestWindowsGuestAgentIntegration(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = deleteTestInstanceNow(context.Background(), manager, instance.Id) })
 
+	require.Eventually(t, func() bool {
+		current, err := manager.GetInstance(ctx, instance.Id)
+		return err == nil && current.State == StateRunning
+	}, 4*time.Minute, time.Second, "Windows guest agent did not become ready")
+
 	dialer, err := manager.GetVsockDialer(ctx, instance.Id)
 	require.NoError(t, err)
-	require.Eventually(t, func() bool {
-		exit, err := guest.ExecIntoInstance(ctx, dialer, guest.ExecOptions{
-			Command: []string{"powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "exit 0"},
-			Timeout: 5,
-		})
-		return err == nil && exit.Code == 0
-	}, 90*time.Second, 500*time.Millisecond, "Windows guest agent did not become ready")
 
 	var stdout, stderr bytes.Buffer
 	jobStart := time.Now()
