@@ -235,6 +235,12 @@ lib/system/guest_agent/guest-agent: lib/system/guest_agent/*.go
 	@echo "Building guest-agent for Linux..."
 	cd lib/system/guest_agent && CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o guest-agent .
 
+lib/system/guest_agent/hypeman-guest-agent.exe: lib/system/guest_agent/*.go
+	@echo "Building guest-agent for Windows..."
+	cd lib/system/guest_agent && CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o hypeman-guest-agent.exe .
+
+build-windows-guest-agent: lib/system/guest_agent/hypeman-guest-agent.exe
+
 # Build init binary (runs as PID 1 in guest VM) for embedding
 # Cross-compile for Linux since it runs inside the VM
 lib/system/init/init: lib/system/init/*.go

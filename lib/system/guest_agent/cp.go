@@ -7,7 +7,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"syscall"
 	"time"
 
 	pb "github.com/kernel/hypeman/lib/guest"
@@ -140,7 +139,7 @@ func (s *guestServer) CopyToGuest(stream pb.GuestService_CopyToGuestServer) erro
 	// Only chown when both UID and GID are explicitly set (non-zero)
 	// to avoid accidentally setting one to root (0) when only the other is specified
 	if start.Uid > 0 && start.Gid > 0 {
-		if err := os.Chown(start.Path, int(start.Uid), int(start.Gid)); err != nil {
+		if err := setFileOwnership(start.Path, start.Uid, start.Gid); err != nil {
 			log.Printf("[guest-agent] warning: failed to set ownership on %s: %v", start.Path, err)
 		}
 	}
@@ -210,11 +209,7 @@ func (s *guestServer) copyFromGuestFile(fullPath, relativePath string, info os.F
 	}
 
 	// Extract UID/GID from file info
-	var uid, gid uint32
-	if stat, ok := info.Sys().(*syscall.Stat_t); ok {
-		uid = stat.Uid
-		gid = stat.Gid
-	}
+	uid, gid := fileOwnership(info)
 
 	// Send header
 	header := &pb.CopyFromGuestHeader{
@@ -361,12 +356,7 @@ func (s *guestServer) copyFromGuestDir(rootPath string, followLinks bool, stream
 		isFinal := i == len(entries)-1
 
 		if e.info.IsDir() {
-			// Extract UID/GID from file info
-			var uid, gid uint32
-			if stat, ok := e.info.Sys().(*syscall.Stat_t); ok {
-				uid = stat.Uid
-				gid = stat.Gid
-			}
+			uid, gid := fileOwnership(e.info)
 
 			// Send directory header
 			if err := stream.Send(&pb.CopyFromGuestResponse{

@@ -147,6 +147,7 @@ type ExecOptions struct {
 	WaitForAgent time.Duration      // Max time to wait for agent to be ready (0 = no wait, fail immediately)
 	Rows         uint32             // Initial terminal rows (0 = default 24)
 	Cols         uint32             // Initial terminal cols (0 = default 80)
+	Session      ExecSession        // SYSTEM service session or active Windows desktop session
 	ResizeChan   <-chan *WindowSize // Optional: channel to receive resize events (pointer to avoid copying mutex)
 }
 
@@ -477,6 +478,7 @@ func execIntoInstanceOnce(ctx context.Context, dialer hypervisor.VsockDialer, op
 				TimeoutSeconds: opts.Timeout,
 				Rows:           opts.Rows,
 				Cols:           opts.Cols,
+				Session:        opts.Session,
 			},
 		},
 	}); err != nil {

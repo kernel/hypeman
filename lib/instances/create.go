@@ -385,7 +385,7 @@ func (m *manager) createInstance(
 		Entrypoint:               req.Entrypoint,
 		Cmd:                      req.Cmd,
 		SkipKernelHeaders:        req.SkipKernelHeaders,
-		SkipGuestAgent:           req.SkipGuestAgent || windows,
+		SkipGuestAgent:           req.SkipGuestAgent,
 		EnableRosetta:            enableRosetta,
 		SnapshotPolicy:           cloneSnapshotPolicy(req.SnapshotPolicy),
 		AutoStandby:              cloneAutoStandbyPolicy(req.AutoStandby),
