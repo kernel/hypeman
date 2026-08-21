@@ -368,19 +368,11 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 		// errors.Is case would match the cause and hide the pending vGPU cleanup.
 		case errors.As(err, &vgpuPending):
 			log.ErrorContext(ctx, "failed to create instance", "error", err, "image", request.Body.Image)
-			message := fmt.Sprintf("failed to create instance: %v; vGPU release failed during rollback and instance %s retains the assignment, delete it to retry", vgpuPending.Err, vgpuPending.InstanceID)
-			innerCode := "vgpu_retained_instance"
-			if !vgpuPending.Retained {
-				message = fmt.Sprintf("failed to create instance: %v; vGPU release failed during rollback and the retention record for instance %s could not be saved; the assignment is recovered on the next startup reconcile", vgpuPending.Err, vgpuPending.InstanceID)
-				innerCode = "vgpu_unretained_instance"
-			}
+			message, inner := vgpuCleanupPendingDetail(vgpuPending, "create", "delete it to retry")
 			return oapi.CreateInstance500JSONResponse{
-				Code:    "vgpu_cleanup_pending",
-				Message: message,
-				InnerError: &oapi.ErrorDetail{
-					Code:    lo.ToPtr(innerCode),
-					Message: lo.ToPtr(vgpuPending.InstanceID),
-				},
+				Code:       "vgpu_cleanup_pending",
+				Message:    message,
+				InnerError: inner,
 			}, nil
 		case errors.Is(err, instances.ErrImageNotReady):
 			return oapi.CreateInstance400JSONResponse{
@@ -441,6 +433,22 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 		}
 	}
 	return oapi.CreateInstance201JSONResponse(instanceToOAPI(*inst)), nil
+}
+
+// vgpuCleanupPendingDetail renders a pending vGPU cleanup into the message
+// and inner error detail shared by the create and start handlers. The
+// retained guidance names the verb-specific way to release the assignment.
+func vgpuCleanupPendingDetail(pending *instances.VGPUCleanupPendingError, action, retainedGuidance string) (string, *oapi.ErrorDetail) {
+	message := fmt.Sprintf("failed to %s instance: %v; vGPU release failed during rollback and instance %s retains the assignment, %s", action, pending.Err, pending.InstanceID, retainedGuidance)
+	innerCode := "vgpu_retained_instance"
+	if !pending.Retained {
+		message = fmt.Sprintf("failed to %s instance: %v; vGPU release failed during rollback and the retention record for instance %s could not be saved; the assignment is recovered on the next startup reconcile", action, pending.Err, pending.InstanceID)
+		innerCode = "vgpu_unretained_instance"
+	}
+	return message, &oapi.ErrorDetail{
+		Code:    lo.ToPtr(innerCode),
+		Message: lo.ToPtr(pending.InstanceID),
+	}
 }
 
 // GetInstance gets instance details
@@ -859,19 +867,11 @@ func (s *ApiService) StartInstance(ctx context.Context, request oapi.StartInstan
 		// errors.Is case would match the cause and hide the pending vGPU cleanup.
 		case errors.As(err, &vgpuPending):
 			log.ErrorContext(ctx, "failed to start instance", "error", err)
-			message := fmt.Sprintf("failed to start instance: %v; vGPU release failed during rollback and instance %s retains the assignment, delete it or retry start to release it", vgpuPending.Err, vgpuPending.InstanceID)
-			innerCode := "vgpu_retained_instance"
-			if !vgpuPending.Retained {
-				message = fmt.Sprintf("failed to start instance: %v; vGPU release failed during rollback and the retention record for instance %s could not be saved; the assignment is recovered on the next startup reconcile", vgpuPending.Err, vgpuPending.InstanceID)
-				innerCode = "vgpu_unretained_instance"
-			}
+			message, inner := vgpuCleanupPendingDetail(vgpuPending, "start", "delete it or retry start to release it")
 			return oapi.StartInstance500JSONResponse{
-				Code:    "vgpu_cleanup_pending",
-				Message: message,
-				InnerError: &oapi.ErrorDetail{
-					Code:    lo.ToPtr(innerCode),
-					Message: lo.ToPtr(vgpuPending.InstanceID),
-				},
+				Code:       "vgpu_cleanup_pending",
+				Message:    message,
+				InnerError: inner,
 			}, nil
 		case errors.Is(err, instances.ErrInvalidState):
 			return oapi.StartInstance409JSONResponse{
