@@ -470,6 +470,14 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef, credentials 
 		m.updateStatusByDigest(ref, StatusFailed, err, buildID)
 		return
 	}
+	if machine != nil {
+		if err := m.recordMachineDependency(ref, machine, buildID); err != nil {
+			if !errors.Is(err, errStaleBuild) {
+				m.updateStatusByDigest(ref, StatusFailed, err, buildID)
+			}
+			return
+		}
+	}
 
 	convertStart := time.Now()
 	var diskSize int64
