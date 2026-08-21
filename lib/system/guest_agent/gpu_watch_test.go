@@ -2,8 +2,10 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"log"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -77,6 +79,46 @@ func TestScanKmsgReportsEachFailureRecord(t *testing.T) {
 	}, "\n") + "\n"
 
 	var got []string
-	scanKmsg(strings.NewReader(records), func(msg string) { got = append(got, msg) })
+	require.NoError(t, scanKmsg(strings.NewReader(records), func(msg string) { got = append(got, msg) }))
 	assert.Len(t, got, 2)
+}
+
+// kmsgConn mimics /dev/kmsg read(2) semantics: each read returns exactly one
+// record, and a buffer smaller than the record fails with EINVAL without
+// consuming it.
+type kmsgConn struct {
+	records []string
+	pos     int
+}
+
+func (k *kmsgConn) Read(p []byte) (int, error) {
+	if k.pos >= len(k.records) {
+		return 0, io.EOF
+	}
+	rec := k.records[k.pos]
+	if len(p) < len(rec) {
+		return 0, syscall.EINVAL
+	}
+	k.pos++
+	return copy(p, rec), nil
+}
+
+// A record larger than bufio's default 4 KiB buffer must not wedge the scan:
+// /dev/kmsg rejects a short read with EINVAL without consuming the record,
+// so an undersized buffer would replay into the same record on every reopen
+// and never reach a failure line behind it.
+func TestScanKmsgReadsOversizedRecords(t *testing.T) {
+	oversized := "6,1,100,-;" + strings.Repeat("x", 5000) + "\n"
+	failure := "3,2,200,-;NVRM: GPU 0000:00:03.0: RmInitAdapter failed! (0x22:0x65:884)\n"
+
+	var got []string
+	require.NoError(t, scanKmsg(&kmsgConn{records: []string{oversized, failure}},
+		func(msg string) { got = append(got, msg) }))
+	assert.Len(t, got, 1)
+
+	// A record beyond even the sized buffer surfaces the EINVAL instead of
+	// ending the scan silently, so the watcher logs the wedge.
+	huge := "6,3,300,-;" + strings.Repeat("x", kmsgRecordBufferBytes) + "\n"
+	err := scanKmsg(&kmsgConn{records: []string{huge}}, func(string) {})
+	assert.ErrorIs(t, err, syscall.EINVAL)
 }

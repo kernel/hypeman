@@ -2,12 +2,14 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"io"
 	"log"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -39,6 +41,14 @@ const (
 	gpuReportRepeats = 3
 
 	kmsgReopenDelay = 5 * time.Second
+
+	// kmsgRecordBufferBytes must be at least the kernel's maximum /dev/kmsg
+	// record size (CONSOLE_EXT_LOG_MAX, 8 KiB): each read(2) returns exactly
+	// one record and fails with EINVAL — without consuming the record — when
+	// the buffer is smaller. bufio's default 4 KiB buffer would wedge the
+	// watcher on the first oversized record, with every reopen replaying the
+	// ring back into it, silently losing all detection behind it.
+	kmsgRecordBufferBytes = 8192
 
 	// kmsgOpenRetryDelay paces reopen attempts after a failed /dev/kmsg
 	// open, so a guest where the open fails does not silently lose wedge
@@ -78,7 +88,7 @@ func watchGPUInitFailure() {
 			time.Sleep(kmsgOpenRetryDelay)
 			continue
 		}
-		scanKmsg(f, func(msg string) {
+		err = scanKmsg(f, func(msg string) {
 			if time.Since(lastReport) < gpuReportThrottle {
 				return
 			}
@@ -86,6 +96,9 @@ func watchGPUInitFailure() {
 			emitGPUInitFailureReport(msg)
 		})
 		_ = f.Close()
+		if err != nil && !errors.Is(err, syscall.EPIPE) {
+			log.Printf("[guest-agent] GPU init watch read %s failed (reopening): %v", kmsgPath, err)
+		}
 		time.Sleep(kmsgReopenDelay)
 	}
 }
@@ -100,16 +113,20 @@ func emitGPUInitFailureReport(msg string) {
 }
 
 // scanKmsg reads /dev/kmsg records from r and calls report for each GPU
-// init-failure message.
-func scanKmsg(r io.Reader, report func(msg string)) {
-	reader := bufio.NewReader(r)
+// init-failure message. It returns the error that ended the scan, nil on
+// EOF.
+func scanKmsg(r io.Reader, report func(msg string)) error {
+	reader := bufio.NewReaderSize(r, kmsgRecordBufferBytes)
 	for {
 		record, err := reader.ReadString('\n')
 		if msg, ok := gpuInitFailureMessage(record); ok {
 			report(msg)
 		}
 		if err != nil {
-			return
+			if errors.Is(err, io.EOF) {
+				return nil
+			}
+			return err
 		}
 	}
 }
