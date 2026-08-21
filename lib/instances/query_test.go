@@ -42,6 +42,47 @@ func TestListInstancesForReconcileFailsOnInvalidMetadata(t *testing.T) {
 	assert.Equal(t, "valid", listed[0].Id)
 }
 
+// A concurrent delete can remove an instance between the reconcile listing
+// and its metadata load. A vanished record cannot claim a VF, so it must be
+// skipped like the release claim scan does — failing instead would zero the
+// grace-period retry and silently disable the vendor VFIO sweep whenever it
+// races a delete.
+func TestListInstancesForReconcileSkipsInstanceDeletedDuringListing(t *testing.T) {
+	m := &manager{paths: paths.New(t.TempDir())}
+
+	for _, id := range []string{"aaa-ghost", "zzz-live"} {
+		require.NoError(t, m.ensureDirectories(id))
+		require.NoError(t, m.saveMetadata(&metadata{StoredMetadata: StoredMetadata{
+			Id:        id,
+			Name:      id,
+			CreatedAt: time.Now(),
+			DataDir:   m.paths.InstanceDir(id),
+		}}))
+	}
+
+	// loadMetadata takes the snapshot-alias read lock, so holding the
+	// mutation lock parks the reconcile between listing and loading — the
+	// window a concurrent delete lands in.
+	unlock := hypervisor.LockSnapshotSourceAliasMutation()
+	type result struct {
+		listed []Instance
+		err    error
+	}
+	done := make(chan result, 1)
+	go func() {
+		listed, err := m.ListInstancesForReconcile(context.Background())
+		done <- result{listed, err}
+	}()
+	time.Sleep(100 * time.Millisecond)
+	require.NoError(t, os.Remove(m.paths.InstanceMetadata("aaa-ghost")))
+	unlock()
+
+	res := <-done
+	require.NoError(t, res.err)
+	require.Len(t, res.listed, 1)
+	assert.Equal(t, "zzz-live", res.listed[0].Id)
+}
+
 func TestParseExitSentinelLine(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

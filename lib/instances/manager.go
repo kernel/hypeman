@@ -2,6 +2,7 @@ package instances
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -742,7 +743,7 @@ func (m *manager) DefaultHypervisor() hypervisor.Type {
 // needs raw metadata fields, and hydration would query the hypervisor of
 // every instance on the host before the API serves.
 func (m *manager) ListInstancesForReconcile(ctx context.Context) ([]Instance, error) {
-	files, err := m.listMetadataFilesWithStatErrors(true)
+	files, err := m.listMetadataFilesStrict()
 	if err != nil {
 		return nil, err
 	}
@@ -751,6 +752,13 @@ func (m *manager) ListInstancesForReconcile(ctx context.Context) ([]Instance, er
 		id := filepath.Base(filepath.Dir(file))
 		meta, err := m.loadMetadata(id)
 		if err != nil {
+			if errors.Is(err, ErrNotFound) {
+				// Deleted between listing and load; a vanished record cannot
+				// claim a VF. Failing here instead would zero the grace-period
+				// retry and disable the vendor VFIO sweep whenever it races a
+				// concurrent delete.
+				continue
+			}
 			return nil, fmt.Errorf("load metadata for instance %s: %w", id, err)
 		}
 		result = append(result, Instance{StoredMetadata: meta.StoredMetadata})
