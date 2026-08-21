@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 
 	"github.com/kernel/hypeman/lib/logger"
 )
@@ -425,7 +426,9 @@ func (s vendorVFIOSysfs) vfioDeviceInUse(vfAddress string, openPaths map[string]
 // isVFIOGroupInUse which skips them. That is deliberate: this scan authorizes
 // clearing current_vgpu_type on a VF path that is reused across assignments,
 // so an incomplete scan must fail the release (which retains metadata for a
-// later retry) rather than risk a false "not in use" answer.
+// later retry) rather than risk a false "not in use" answer. The exception
+// is a process that exits mid-scan (ENOENT/ESRCH): a dead process holds
+// nothing open, so skipping it cannot produce that false answer.
 func (s vendorVFIOSysfs) openVFIOPaths() (map[string]struct{}, error) {
 	processes, err := os.ReadDir(s.procPath)
 	if err != nil {
@@ -440,7 +443,7 @@ func (s vendorVFIOSysfs) openVFIOPaths() (map[string]struct{}, error) {
 		fdPath := filepath.Join(s.procPath, process.Name(), "fd")
 		fds, err := os.ReadDir(fdPath)
 		if err != nil {
-			if os.IsNotExist(err) {
+			if os.IsNotExist(err) || errors.Is(err, syscall.ESRCH) {
 				continue
 			}
 			return nil, fmt.Errorf("read process %s file descriptors: %w", process.Name(), err)
@@ -448,7 +451,7 @@ func (s vendorVFIOSysfs) openVFIOPaths() (map[string]struct{}, error) {
 		for _, fd := range fds {
 			target, err := os.Readlink(filepath.Join(fdPath, fd.Name()))
 			if err != nil {
-				if os.IsNotExist(err) {
+				if os.IsNotExist(err) || errors.Is(err, syscall.ESRCH) {
 					continue
 				}
 				return nil, fmt.Errorf("read process %s file descriptor %s: %w", process.Name(), fd.Name(), err)
