@@ -431,15 +431,23 @@ func TestManagerUpdateInstanceTTLIsRelativeToUpdate(t *testing.T) {
 	t.Parallel()
 
 	m, _ := setupTestManager(t)
-	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
-	m.now = func() time.Time { return now }
+	requestTime := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	commitTime := requestTime.Add(2 * time.Minute)
+	nowCalls := 0
+	m.now = func() time.Time {
+		nowCalls++
+		if nowCalls == 1 {
+			return requestTime
+		}
+		return commitTime
+	}
 	id := "inst-update-ttl"
 	require.NoError(t, m.ensureDirectories(id))
-	oldExpiration := now.Add(time.Hour)
+	oldExpiration := requestTime.Add(time.Hour)
 	require.NoError(t, m.saveMetadata(&metadata{StoredMetadata: StoredMetadata{
 		Id:        id,
 		Name:      id,
-		CreatedAt: now.Add(-24 * time.Hour),
+		CreatedAt: requestTime.Add(-24 * time.Hour),
 		ExpiresAt: &oldExpiration,
 		DataDir:   m.paths.InstanceDir(id),
 	}}))
@@ -448,13 +456,50 @@ func TestManagerUpdateInstanceTTLIsRelativeToUpdate(t *testing.T) {
 	updated, err := m.UpdateInstance(context.Background(), id, UpdateInstanceRequest{TTL: &ttl})
 	require.NoError(t, err)
 	require.NotNil(t, updated.ExpiresAt)
-	assert.Equal(t, now.Add(ttl), *updated.ExpiresAt)
+	assert.GreaterOrEqual(t, nowCalls, 2)
+	assert.Equal(t, commitTime.Add(ttl), *updated.ExpiresAt)
 
 	restarted := &manager{paths: m.paths}
 	persisted, err := restarted.loadMetadata(id)
 	require.NoError(t, err)
 	require.NotNil(t, persisted.ExpiresAt)
-	assert.Equal(t, now.Add(ttl), *persisted.ExpiresAt)
+	assert.Equal(t, commitTime.Add(ttl), *persisted.ExpiresAt)
+}
+
+func TestManagerUpdateInstanceRejectsExpirationThatPassesBeforeCommit(t *testing.T) {
+	t.Parallel()
+
+	m, _ := setupTestManager(t)
+	requestTime := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	commitTime := requestTime.Add(2 * time.Minute)
+	nowCalls := 0
+	m.now = func() time.Time {
+		nowCalls++
+		if nowCalls == 1 {
+			return requestTime
+		}
+		return commitTime
+	}
+	id := "inst-expires-during-update"
+	expiresAt := requestTime.Add(time.Minute)
+	require.NoError(t, m.ensureDirectories(id))
+	require.NoError(t, m.saveMetadata(&metadata{StoredMetadata: StoredMetadata{
+		Id:        id,
+		Name:      id,
+		CreatedAt: requestTime.Add(-time.Hour),
+		ExpiresAt: &expiresAt,
+		DataDir:   m.paths.InstanceDir(id),
+	}}))
+
+	ttl := time.Hour
+	_, err := m.UpdateInstance(context.Background(), id, UpdateInstanceRequest{TTL: &ttl})
+	require.ErrorIs(t, err, ErrInstanceExpired)
+	assert.GreaterOrEqual(t, nowCalls, 2)
+
+	persisted, err := m.loadMetadata(id)
+	require.NoError(t, err)
+	require.NotNil(t, persisted.ExpiresAt)
+	assert.Equal(t, expiresAt, *persisted.ExpiresAt)
 }
 
 func TestManagerUpdateInstanceDisablePreventsStaleReaperDelete(t *testing.T) {

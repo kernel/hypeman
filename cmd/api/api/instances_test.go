@@ -315,8 +315,8 @@ func (m *captureCreateManager) CreateInstance(ctx context.Context, req instances
 
 	now := time.Now()
 	expiresAt := req.ExpiresAt
-	if req.TTL > 0 {
-		resolved := now.Add(req.TTL)
+	if req.TTL != nil && *req.TTL > 0 {
+		resolved := now.Add(*req.TTL)
 		expiresAt = &resolved
 	}
 	return &instances.Instance{
@@ -356,7 +356,8 @@ func TestCreateInstance_TTL(t *testing.T) {
 	created, ok := resp.(oapi.CreateInstance201JSONResponse)
 	require.True(t, ok)
 	require.NotNil(t, mockMgr.lastReq)
-	assert.Equal(t, 90*time.Minute, mockMgr.lastReq.TTL)
+	require.NotNil(t, mockMgr.lastReq.TTL)
+	assert.Equal(t, 90*time.Minute, *mockMgr.lastReq.TTL)
 	require.NotNil(t, created.ExpiresAt)
 	assert.Equal(t, created.CreatedAt.Add(90*time.Minute), *created.ExpiresAt)
 }
@@ -377,7 +378,8 @@ func TestCreateInstance_ZeroTTLDisablesExpiration(t *testing.T) {
 	require.NoError(t, err)
 	created, ok := resp.(oapi.CreateInstance201JSONResponse)
 	require.True(t, ok)
-	assert.Zero(t, mockMgr.lastReq.TTL)
+	require.NotNil(t, mockMgr.lastReq.TTL)
+	assert.Zero(t, *mockMgr.lastReq.TTL)
 	assert.Nil(t, created.ExpiresAt)
 }
 

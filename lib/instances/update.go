@@ -53,17 +53,13 @@ func (m *manager) updateInstance(ctx context.Context, id string, req UpdateInsta
 	if err := validateUpdateInstanceRequest(meta, req); err != nil {
 		return nil, err
 	}
-	expiresAt, expirationSet, err := resolveExpirationUpdate(meta, req, m.nowUTC())
-	if err != nil {
+	if err := validateExpirationUpdate(meta, req, m.nowUTC()); err != nil {
 		return nil, err
 	}
 	if len(req.Env) > 0 && inst.State != StateRunning && inst.State != StateInitializing {
 		return nil, fmt.Errorf("%w: instance must be running or initializing to update env (current state: %s)", ErrInvalidState, inst.State)
 	}
 	nextMeta := deepCopyMetadata(meta)
-	if expirationSet {
-		nextMeta.ExpiresAt = expiresAt
-	}
 	if req.AutoStandby != nil {
 		nextMeta.AutoStandby = cloneAutoStandbyPolicy(req.AutoStandby)
 	}
@@ -76,6 +72,9 @@ func (m *manager) updateInstance(ctx context.Context, id string, req UpdateInsta
 		nextMeta.RestartStatus = restartStatusAfterPolicyUpdate(nextMeta.RestartStatus)
 	}
 	if len(req.Env) == 0 {
+		if err := applyExpirationUpdateAtCommit(nextMeta, req, m.nowUTC()); err != nil {
+			return nil, err
+		}
 		if err := m.saveMetadata(nextMeta); err != nil {
 			return nil, fmt.Errorf("save metadata: %w", err)
 		}
@@ -108,7 +107,13 @@ func (m *manager) updateInstance(ctx context.Context, id string, req UpdateInsta
 		return nil, fmt.Errorf("egress proxy service unavailable")
 	}
 
-	if err := applyUpdatedInstanceEnv(ctx, log, id, nextMeta, prevEnv, nextEnv, m.saveMetadata, svc); err != nil {
+	saveAtCommit := func(meta *metadata) error {
+		if err := applyExpirationUpdateAtCommit(meta, req, m.nowUTC()); err != nil {
+			return err
+		}
+		return m.saveMetadata(meta)
+	}
+	if err := applyUpdatedInstanceEnv(ctx, log, id, nextMeta, prevEnv, nextEnv, saveAtCommit, svc); err != nil {
 		return nil, err
 	}
 
@@ -121,12 +126,33 @@ func (m *manager) updateInstance(ctx context.Context, id string, req UpdateInsta
 	return updated, nil
 }
 
-func resolveExpirationUpdate(meta *metadata, req UpdateInstanceRequest, now time.Time) (*time.Time, bool, error) {
+func applyExpirationUpdateAtCommit(meta *metadata, req UpdateInstanceRequest, now time.Time) error {
+	expiresAt, expirationSet, err := resolveExpirationUpdate(meta, req, now)
+	if err != nil {
+		return err
+	}
+	if expirationSet {
+		meta.ExpiresAt = expiresAt
+	}
+	return nil
+}
+
+func validateExpirationUpdate(meta *metadata, req UpdateInstanceRequest, now time.Time) error {
 	if req.TTL == nil && req.ExpiresAt == nil {
-		return nil, false, nil
+		return nil
 	}
 	if instanceExpired(&meta.StoredMetadata, now) {
-		return nil, false, fmt.Errorf("%w: expiration deadline has passed", ErrInstanceExpired)
+		return fmt.Errorf("%w: expiration deadline has passed", ErrInstanceExpired)
+	}
+	return validateExpiresAt(req.ExpiresAt, now)
+}
+
+func resolveExpirationUpdate(meta *metadata, req UpdateInstanceRequest, now time.Time) (*time.Time, bool, error) {
+	if err := validateExpirationUpdate(meta, req, now); err != nil {
+		return nil, false, err
+	}
+	if req.TTL == nil && req.ExpiresAt == nil {
+		return nil, false, nil
 	}
 	if req.TTL != nil {
 		if *req.TTL == 0 {
@@ -134,9 +160,6 @@ func resolveExpirationUpdate(meta *metadata, req UpdateInstanceRequest, now time
 		}
 		expiresAt := now.Add(*req.TTL)
 		return &expiresAt, true, nil
-	}
-	if err := validateExpiresAt(req.ExpiresAt, now); err != nil {
-		return nil, false, err
 	}
 	expiresAt := req.ExpiresAt.UTC()
 	return &expiresAt, true, nil

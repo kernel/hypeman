@@ -15,7 +15,8 @@ func TestResolveCreateExpiration(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
-	expiresAt, err := resolveCreateExpiration(CreateInstanceRequest{TTL: 6 * time.Hour}, now)
+	ttl := 6 * time.Hour
+	expiresAt, err := resolveCreateExpiration(CreateInstanceRequest{TTL: &ttl}, now)
 	require.NoError(t, err)
 	require.NotNil(t, expiresAt)
 	assert.Equal(t, now.Add(6*time.Hour), *expiresAt)
@@ -27,6 +28,16 @@ func TestResolveCreateExpiration(t *testing.T) {
 	past := now.Add(-time.Second)
 	_, err = resolveCreateExpiration(CreateInstanceRequest{ExpiresAt: &past}, now)
 	require.ErrorIs(t, err, ErrInvalidExpiresAt)
+
+	zero := time.Duration(0)
+	future := now.Add(time.Hour)
+	err = validateCreateRequest(&CreateInstanceRequest{
+		Name:      "conflicting-expiration",
+		Image:     "alpine",
+		TTL:       &zero,
+		ExpiresAt: &future,
+	})
+	require.ErrorIs(t, err, ErrInvalidRequest)
 }
 
 func TestInstanceExpired(t *testing.T) {
@@ -178,7 +189,7 @@ func TestTTLReaperDeleteTimeoutDoesNotBlockSweep(t *testing.T) {
 		paths:                  p,
 		now:                    func() time.Time { return now },
 		lifecycleEvents:        newLifecycleSubscribersWithBufferSize(defaultLifecycleEventBufferSize),
-		ttlReaperDeleteTimeout: 10 * time.Millisecond,
+		ttlReaperDeleteTimeout: 100 * time.Millisecond,
 	}
 	expiredAt := now.Add(-time.Minute)
 	for _, id := range []string{"a-timeout", "b-deleted"} {
@@ -192,23 +203,35 @@ func TestTTLReaperDeleteTimeoutDoesNotBlockSweep(t *testing.T) {
 		}}))
 	}
 
-	var calls []string
-	m.deleteInstanceFn = func(ctx context.Context, id string) error {
-		calls = append(calls, id)
+	calls := make(chan string, 2)
+	releaseStuckDelete := make(chan struct{})
+	stuckDeleteDone := make(chan struct{})
+	m.deleteInstanceFn = func(_ context.Context, id string) error {
+		calls <- id
 		if id == "a-timeout" {
-			<-ctx.Done()
-			return ctx.Err()
+			<-releaseStuckDelete
+			err := m.deleteInstanceData(id)
+			close(stuckDeleteDone)
+			return err
 		}
 		return m.deleteInstanceData(id)
 	}
 
 	m.reapExpiredInstances(context.Background())
 
-	assert.Equal(t, []string{"a-timeout", "b-deleted"}, calls)
+	assert.Equal(t, "a-timeout", <-calls)
+	assert.Equal(t, "b-deleted", <-calls)
 	_, err := os.Stat(p.InstanceDir("a-timeout"))
 	require.NoError(t, err)
 	_, err = os.Stat(p.InstanceDir("b-deleted"))
 	require.ErrorIs(t, err, os.ErrNotExist)
+
+	close(releaseStuckDelete)
+	select {
+	case <-stuckDeleteDone:
+	case <-time.After(time.Second):
+		t.Fatal("timed-out deletion did not finish after release")
+	}
 }
 
 func TestReapExpiredInstanceSkipsBusyCreateLock(t *testing.T) {

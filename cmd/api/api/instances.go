@@ -140,7 +140,7 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 			Message: "ttl and expires_at are mutually exclusive",
 		}, nil
 	}
-	var ttl time.Duration
+	var ttl *time.Duration
 	if request.Body.Ttl != nil {
 		parsedTTL, err := parseTTL(*request.Body.Ttl)
 		if err != nil {
@@ -149,7 +149,7 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 				Message: err.Error(),
 			}, nil
 		}
-		ttl = parsedTTL
+		ttl = &parsedTTL
 	}
 
 	// Parse network enabled (default: true)

@@ -275,7 +275,7 @@ type CreateInstanceRequest struct {
 	AutoStandby              *autostandby.Policy         // Optional automatic standby policy
 	HealthCheck              *healthcheck.Policy         // Optional workload health check policy
 	RestartPolicy            *restartpolicy.Policy       // Optional whole-instance restart policy
-	TTL                      time.Duration               // Optional lifetime from creation; zero disables expiration
+	TTL                      *time.Duration              // Optional lifetime from creation; zero disables expiration
 	ExpiresAt                *time.Time                  // Optional absolute expiration time; mutually exclusive with TTL
 	AllowSystemVolumeMounts  bool                        // Internal only: permits attaching reserved system volumes. Never populated from API requests.
 	SystemVolumeMountPaths   []string                    // Internal only: exact system paths reserved volumes may mount at.

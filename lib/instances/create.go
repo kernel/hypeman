@@ -590,10 +590,10 @@ func resolveCreateExpiration(req CreateInstanceRequest, now time.Time) (*time.Ti
 		expiresAt := req.ExpiresAt.UTC()
 		return &expiresAt, nil
 	}
-	if req.TTL == 0 {
+	if req.TTL == nil || *req.TTL == 0 {
 		return nil, nil
 	}
-	expiresAt := now.Add(req.TTL)
+	expiresAt := now.Add(*req.TTL)
 	return &expiresAt, nil
 }
 
@@ -621,10 +621,10 @@ func validateCreateRequest(req *CreateInstanceRequest) error {
 	if req.Vcpus < 0 {
 		return fmt.Errorf("vcpus cannot be negative")
 	}
-	if req.TTL < 0 {
+	if req.TTL != nil && *req.TTL < 0 {
 		return fmt.Errorf("%w: ttl cannot be negative", ErrInvalidRequest)
 	}
-	if req.TTL > 0 && req.ExpiresAt != nil {
+	if req.TTL != nil && req.ExpiresAt != nil {
 		return fmt.Errorf("%w: ttl and expires_at are mutually exclusive", ErrInvalidRequest)
 	}
 	if req.NetworkEgress != nil && req.NetworkEgress.Enabled {

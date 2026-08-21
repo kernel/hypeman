@@ -1094,7 +1094,7 @@ components:
           type: string
           format: date-time
           nullable: true
-          description: Absolute expiration time, or null when automatic expiration is disabled.
+          description: Absolute expiration time, or null when automatic expiration is disabled. Instance TTL is cleared on fork.
           example: "2026-08-21T18:00:00Z"
         started_at:
           type: string

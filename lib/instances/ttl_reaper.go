@@ -60,17 +60,14 @@ func (m *manager) reapExpiredInstances(ctx context.Context) {
 			continue
 		}
 
-		deleteCtx, cancel := context.WithTimeout(ctx, m.instanceTTLReaperDeleteTimeout())
-		deleted, err := m.reapExpiredInstance(deleteCtx, id)
-		timedOut := errors.Is(deleteCtx.Err(), context.DeadlineExceeded)
-		cancel()
+		deleted, err := m.reapExpiredInstanceWithTimeout(ctx, id)
 
 		switch {
 		case err == nil && deleted:
 			m.recordTTLReaperDeletion(ctx, "success")
 		case err == nil:
 			continue
-		case timedOut:
+		case errors.Is(err, context.DeadlineExceeded):
 			m.recordTTLReaperDeletion(ctx, "timeout")
 			log.ErrorContext(ctx, "instance ttl reaper timed out deleting instance", "instance_id", id, "error", err)
 		case errors.Is(err, ErrNotFound):
@@ -79,6 +76,29 @@ func (m *manager) reapExpiredInstances(ctx context.Context) {
 			m.recordTTLReaperDeletion(ctx, "error")
 			log.ErrorContext(ctx, "instance ttl reaper failed to delete instance", "instance_id", id, "error", err)
 		}
+	}
+}
+
+type ttlReaperDeleteResult struct {
+	deleted bool
+	err     error
+}
+
+func (m *manager) reapExpiredInstanceWithTimeout(ctx context.Context, id string) (bool, error) {
+	deleteCtx, cancel := context.WithTimeout(ctx, m.instanceTTLReaperDeleteTimeout())
+	defer cancel()
+
+	resultCh := make(chan ttlReaperDeleteResult, 1)
+	go func() {
+		deleted, err := m.reapExpiredInstance(deleteCtx, id)
+		resultCh <- ttlReaperDeleteResult{deleted: deleted, err: err}
+	}()
+
+	select {
+	case result := <-resultCh:
+		return result.deleted, result.err
+	case <-deleteCtx.Done():
+		return false, deleteCtx.Err()
 	}
 }
 
