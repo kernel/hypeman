@@ -330,6 +330,27 @@ requires no vGPU assignments on that GPU). The DCGM quiesce is not optional:
 with `nv-hostengine`/`dcgm-exporter` holding the GPUs open, `sriov-manage -d`
 fails with `Cannot obtain unbindLock` on first contact.
 
+**Draining the parent GPU.** The quarantine only deprioritizes the card
+(overflow-only), so under capacity pressure new placements can still land on
+its healthy VFs and refill it. To actually drain the card, cordon it by
+adding every one of its VFs to `<data-dir>/gpu/vf-health.json` (copy the
+record shape of a real conviction: `vf_address` plus `quarantined_at`) and
+restarting hypeman immediately — the store loads only at startup, and a
+conviction landing before the restart re-persists the in-memory set over
+your edit. The restart does not disturb running VMs: startup reconciliation
+protects live VFs. Quarantined VFs are fully excluded from placement and
+from advertised profile availability, so the cordon holds even when every
+other card is full, and `hypeman_instances_vgpu_quarantined_vfs` reads high
+for its duration — expected, not an incident.
+
+Running instances are untouched by the cordon and drain through their normal
+lifecycle: standby is blocked for vGPU instances, so only a running VM pins
+a VF, every stop or delete releases it (never to be re-selected while
+cordoned), and the next start picks a fresh VF on another card. Monitor the
+drain by listing instances whose `gpu.device_path` sits under the parent
+GPU; once none remain, run the cycle below, then remove the card's entries
+from `vf-health.json` and restart hypeman again to uncordon.
+
 ```bash
 # 1. Quiesce the services holding the GPU (required for the unbind lock).
 systemctl stop nvidia-dcgm-exporter nvidia-dcgm
