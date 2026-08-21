@@ -100,6 +100,14 @@ jobs:
       - name: Stage Windows test fixture
         run: |
           source=/mnt/data/ci-fixtures/windows/image-agent.qcow2
+          if ! test -r "$source"; then
+            existing=$(sudo find /mnt/data/home -path '*/windows-vm-exp/build/*-agent.qcow2' -print -quit)
+            if test -n "$existing"; then
+              sudo mkdir -p "$(dirname "$source")"
+              sudo cp --reflink=auto --sparse=always "$existing" "$source"
+              sudo chmod 0444 "$source"
+            fi
+          fi
           if test -r "$source"; then
             sudo mkdir -p /ci/windows
             sudo ln -sfn "$source" /ci/windows/image-agent.qcow2
