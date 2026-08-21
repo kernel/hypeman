@@ -129,46 +129,6 @@ jobs:
             sudo ln -sfn "$fixture_dir/base.raw" /ci/windows/base.raw
           fi
 
-      - name: Refresh Windows guest agent fixture
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          work=$(mktemp -d)
-          trap 'rm -rf "$work"' EXIT
-          gh api repos/kernel/hypeman/tarball/hypeship/windows-guest-control > "$work/source.tar.gz"
-          mkdir "$work/source"
-          tar -xzf "$work/source.tar.gz" --strip-components=1 -C "$work/source"
-          make -C "$work/source" build-windows-guest-agent
-
-          exec 9>/run/lock/hypeman-windows-fixture.lock
-          flock 9
-          sudo modprobe nbd max_part=16
-          sudo qemu-nbd --disconnect /dev/nbd15 >/dev/null 2>&1 || true
-          sudo chmod u+w /mnt/data/ci-fixtures/windows/image-agent.qcow2
-          sudo qemu-nbd --connect=/dev/nbd15 /mnt/data/ci-fixtures/windows/image-agent.qcow2
-          cleanup_nbd() {
-            if mountpoint -q "$work/mount"; then sudo umount "$work/mount"; fi
-            sudo qemu-nbd --disconnect /dev/nbd15 >/dev/null 2>&1 || true
-          }
-          trap 'cleanup_nbd; rm -rf "$work"' EXIT
-          partition=
-          for _ in $(seq 1 100); do
-            partition=$(lsblk -lnpo NAME,FSTYPE /dev/nbd15 | awk '$2 == "ntfs" { print $1; exit }')
-            test -n "$partition" && break
-            sleep 0.1
-          done
-          test -n "$partition"
-          mkdir "$work/mount"
-          sudo mount -t ntfs3 "$partition" "$work/mount"
-          target=$(sudo find "$work/mount" -type f -iname 'hypeman-guest-agent.exe' -print -quit)
-          test -n "$target"
-          sudo install -m 0755 "$work/source/lib/system/guest_agent/hypeman-guest-agent.exe" "$target"
-          sudo sync "$target"
-          sudo umount "$work/mount"
-          sudo qemu-nbd --disconnect /dev/nbd15
-          trap 'rm -rf "$work"' EXIT
-
       # Slash-command runs are maintainer-approved and need authenticated pulls
       # for images that are not covered by the prewarm cache.
       - name: Login to Docker Hub
