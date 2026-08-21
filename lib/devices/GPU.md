@@ -295,17 +295,17 @@ becomes overflow-only so it drains toward the SR-IOV cycle. The conviction is
 logged at error level (`quarantined wedged vGPU VF`) and counted in
 `hypeman_instances_vgpu_sentinel_convictions_total`;
 `hypeman_instances_vgpu_quarantined_vfs` gauges the current quarantine count.
-A burst of convictions (more than 3 in 15 minutes) pauses auto-conviction —
-the guest agent keeps re-emitting the marker while the failure persists, so a
-paused conviction lands once the window clears — so a systemic non-wedge init
-failure (e.g. a guest/host driver mismatch rolling out) cannot quarantine the
-fleet before an operator sees it.
+There is no rate limit on convictions: a systemic non-wedge init failure
+(e.g. a guest/host driver mismatch) emits the same line on every VF and
+would quarantine the whole host, so such changes must be validated on a
+test host first, and the convictions counter is the signal to alert on if
+one gets through.
 
 Detection requires the hypeman guest agent: an image that skips the agent
 never reports, so a wedge hit exclusively by such images stays undetected in
 v1. The marker also rides a guest-writable channel — a root guest could forge
-it and quarantine its own VF; the conviction brake bounds the blast radius,
-and the quarantine only ever removes capacity, never touches the instance.
+it and quarantine the VF its own instance holds; the quarantine only ever
+removes capacity, never touches the instance.
 
 The wedge-creating kill itself leaves no host-side log: no kernel error, no
 XID, no plugin crash. Detection therefore happens on the next boot that lands

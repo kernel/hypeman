@@ -52,7 +52,6 @@ func newTestSentinelController(t *testing.T, store vgpuSentinelStore) (*VGPUSent
 		store:    store,
 		log:      slog.New(slog.DiscardHandler),
 		interval: time.Hour,
-		now:      time.Now,
 		quarantine: func(q devices.VFQuarantine) (devices.VFHealthRecord, bool, error) {
 			quarantined = append(quarantined, q)
 			return devices.VFHealthRecord{VFAddress: q.VFAddress, WedgeCount: 1}, false, nil
@@ -136,12 +135,16 @@ func TestVGPUSentinelControllerRetriesFailedQuarantine(t *testing.T) {
 	assert.True(t, c.tails["instance-1"].done)
 }
 
-func TestVGPUSentinelControllerBrakePausesConvictionBursts(t *testing.T) {
+// A burst of convictions across many instances is quarantined without any
+// rate limit: systemic non-wedge failures (e.g. a driver-mismatch rollout)
+// are expected to be caught on a test host before reaching production, and
+// the convictions counter is the alerting signal if one gets through.
+func TestVGPUSentinelControllerConvictsBursts(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	targets := make([]vgpuSentinelTarget, 0, vgpuSentinelBrakeLimit+1)
-	for i := 0; i < vgpuSentinelBrakeLimit+1; i++ {
+	targets := make([]vgpuSentinelTarget, 0, 5)
+	for i := 0; i < 5; i++ {
 		logPath := filepath.Join(dir, string(rune('a'+i))+".log")
 		require.NoError(t, os.WriteFile(logPath, []byte(testSentinelLine), 0644))
 		targets = append(targets, vgpuSentinelTarget{
@@ -151,37 +154,12 @@ func TestVGPUSentinelControllerBrakePausesConvictionBursts(t *testing.T) {
 		})
 	}
 	c, quarantined := newTestSentinelController(t, &fakeSentinelStore{targets: targets})
-	base := time.Now()
-	c.now = func() time.Time { return base }
 
 	c.scanOnce(context.Background())
-	// The burst converts to convictions up to the limit; the rest are
-	// suppressed rather than quarantining the whole host, and their tails
-	// stay open — the brake pauses conviction, it does not drop it.
-	assert.Len(t, *quarantined, vgpuSentinelBrakeLimit)
-	suppressed := 0
+	assert.Len(t, *quarantined, len(targets))
 	for _, target := range targets {
-		if !c.tails[target.instanceID].done {
-			suppressed++
-			// The guest agent re-emits the marker while the failure persists.
-			appendSentinelLine(t, target.appLogPath)
-		}
+		assert.True(t, c.tails[target.instanceID].done)
 	}
-	assert.Equal(t, 1, suppressed)
-
-	// Within the window the suppression holds.
-	c.scanOnce(context.Background())
-	assert.Len(t, *quarantined, vgpuSentinelBrakeLimit)
-
-	// Once the window clears, the next re-emission convicts.
-	c.now = func() time.Time { return base.Add(vgpuSentinelBrakeWindow + time.Second) }
-	for _, target := range targets {
-		if !c.tails[target.instanceID].done {
-			appendSentinelLine(t, target.appLogPath)
-		}
-	}
-	c.scanOnce(context.Background())
-	assert.Len(t, *quarantined, vgpuSentinelBrakeLimit+1)
 }
 
 func TestVGPUSentinelControllerSkipsQuarantinedVFs(t *testing.T) {
@@ -198,11 +176,9 @@ func TestVGPUSentinelControllerSkipsQuarantinedVFs(t *testing.T) {
 	c.isQuarantined = func(vf string) bool { return vf == "0000:e3:00.4" }
 
 	// A rescan of a standing victim's log after a controller restart must
-	// not re-convict a persisted quarantine: no brake accounting, no metric,
-	// and the tail closes.
+	// not re-convict a persisted quarantine: no metric, and the tail closes.
 	c.scanOnce(context.Background())
 	assert.Empty(t, *quarantined)
-	assert.Empty(t, c.recent)
 	assert.True(t, c.tails["instance-1"].done)
 }
 

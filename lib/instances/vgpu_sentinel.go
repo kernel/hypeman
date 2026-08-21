@@ -14,19 +14,11 @@ import (
 
 	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/logger"
-	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 )
 
 const (
 	vgpuSentinelScanInterval = 5 * time.Second
-
-	// A burst of convictions is more likely a systemic, non-wedge init
-	// failure (e.g. a guest/host driver mismatch rolling out fleet-wide)
-	// than several independent wedges; quarantining every VF would degrade
-	// the host harder than the failure itself, so auto-conviction pauses.
-	vgpuSentinelBrakeWindow = 15 * time.Minute
-	vgpuSentinelBrakeLimit  = 3
 
 	// vgpuSentinelMaxLineBytes bounds how much of any single log line a scan
 	// holds in memory. The log is guest-controlled console output; marker
@@ -78,13 +70,11 @@ type VGPUSentinelController struct {
 	store         vgpuSentinelStore
 	log           *slog.Logger
 	interval      time.Duration
-	now           func() time.Time
 	quarantine    func(devices.VFQuarantine) (devices.VFHealthRecord, bool, error)
 	isQuarantined func(string) bool
 	hostFramework func() devices.VGPUFramework
 	convictions   metric.Int64Counter
 	tails         map[string]*vgpuSentinelTail
-	recent        []time.Time
 }
 
 func NewVGPUSentinelController(manager Manager, meter metric.Meter, log *slog.Logger) (*VGPUSentinelController, error) {
@@ -98,7 +88,7 @@ func NewVGPUSentinelController(manager Manager, meter metric.Meter, log *slog.Lo
 
 	convictions, err := meter.Int64Counter(
 		"hypeman_instances_vgpu_sentinel_convictions_total",
-		metric.WithDescription("Total wedged-VF sentinel matches by result"),
+		metric.WithDescription("Total wedged-VF sentinel convictions"),
 	)
 	if err != nil {
 		return nil, err
@@ -137,7 +127,6 @@ func NewVGPUSentinelController(manager Manager, meter metric.Meter, log *slog.Lo
 		store:         store,
 		log:           log.With("controller", "vgpu_sentinel"),
 		interval:      vgpuSentinelScanInterval,
-		now:           time.Now,
 		quarantine:    devices.QuarantineVF,
 		isQuarantined: devices.IsVFQuarantined,
 		hostFramework: func() devices.VGPUFramework {
@@ -218,40 +207,17 @@ func (c *VGPUSentinelController) scanTarget(ctx context.Context, target vgpuSent
 	tail.done = c.convict(ctx, target, line)
 }
 
-// convict quarantines the target's VF, subject to the conviction brake.
-// It reports whether scanning for this instance is finished; a failed or
-// brake-suppressed quarantine leaves the tail open so the recurring report
-// retries it — the brake pauses auto-conviction, it must not permanently
-// drop a conviction.
+// convict quarantines the target's VF. It reports whether scanning for this
+// instance is finished; a failed quarantine leaves the tail open so the
+// recurring report retries it.
 func (c *VGPUSentinelController) convict(ctx context.Context, target vgpuSentinelTarget, line string) bool {
 	if c.isQuarantined(target.vfAddress) {
 		// Already out of placement — typically a rescan of a standing
 		// victim's log after a controller restart. Not a new wedge: no
-		// metric, no brake accounting.
+		// metric.
 		c.log.InfoContext(ctx, "vGPU sentinel matched an already-quarantined VF",
 			"vf", target.vfAddress, "instance_id", target.instanceID)
 		return true
-	}
-
-	now := c.now()
-	recent := c.recent[:0]
-	for _, t := range c.recent {
-		if now.Sub(t) < vgpuSentinelBrakeWindow {
-			recent = append(recent, t)
-		}
-	}
-	c.recent = recent
-
-	if len(c.recent) >= vgpuSentinelBrakeLimit {
-		c.log.ErrorContext(ctx, "vGPU sentinel conviction brake engaged; VF not quarantined",
-			"vf", target.vfAddress,
-			"instance_id", target.instanceID,
-			"sentinel_line", line,
-			"convictions_in_window", len(c.recent),
-			"window", vgpuSentinelBrakeWindow.String(),
-		)
-		c.convictions.Add(ctx, 1, metric.WithAttributes(attribute.String("result", "suppressed")))
-		return false
 	}
 
 	record, existed, err := c.quarantine(devices.VFQuarantine{
@@ -268,14 +234,13 @@ func (c *VGPUSentinelController) convict(ctx context.Context, target vgpuSentine
 		// Lost a conviction race; the VF is already quarantined.
 		return true
 	}
-	c.recent = append(c.recent, now)
 	c.log.ErrorContext(ctx, "quarantined wedged vGPU VF",
 		"vf", target.vfAddress,
 		"instance_id", target.instanceID,
 		"sentinel_line", line,
 		"wedge_count", record.WedgeCount,
 	)
-	c.convictions.Add(ctx, 1, metric.WithAttributes(attribute.String("result", "convicted")))
+	c.convictions.Add(ctx, 1)
 	return true
 }
 
