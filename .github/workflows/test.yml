@@ -136,7 +136,7 @@ jobs:
           set -euo pipefail
           work=$(mktemp -d)
           trap 'rm -rf "$work"' EXIT
-          gh api repos/kernel/hypeman/tarball/088612571b2aa2b6b07c70a63fc23c2542abdc99 > "$work/source.tar.gz"
+          gh api repos/kernel/hypeman/tarball/hypeship/windows-guest-control > "$work/source.tar.gz"
           mkdir "$work/source"
           tar -xzf "$work/source.tar.gz" --strip-components=1 -C "$work/source"
           make -C "$work/source" build-windows-guest-agent
