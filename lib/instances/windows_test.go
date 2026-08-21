@@ -2,6 +2,7 @@ package instances
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/kernel/hypeman/lib/autostandby"
@@ -23,6 +24,7 @@ func windowsImageFixture() *images.Image {
 			Base:        "registry.example/windows/base@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
 			TPM:         "2.0",
 			SecureBoot:  "required",
+			BitLocker:   "disabled",
 			VirtualSize: 80 << 30,
 		},
 	}
@@ -33,6 +35,8 @@ func TestValidateWindowsCreate(t *testing.T) {
 	windowsCaps := hypervisor.Capabilities{SupportsUEFIBoot: true, SupportsTPM: true}
 	require.NoError(t, validateWindowsCreate(CreateInstanceRequest{}, image, windowsCaps))
 	require.NoError(t, validateWindowsCreate(CreateInstanceRequest{NetworkEnabled: true}, image, windowsCaps))
+	require.NoError(t, validateWindowsCreate(CreateInstanceRequest{SnapshotPolicy: &SnapshotPolicy{}}, image, windowsCaps))
+	require.NoError(t, validateWindowsCreate(CreateInstanceRequest{AutoStandby: &autostandby.Policy{}}, image, windowsCaps))
 
 	tests := []struct {
 		name string
@@ -43,8 +47,6 @@ func TestValidateWindowsCreate(t *testing.T) {
 		{name: "small memory", caps: windowsCaps, req: CreateInstanceRequest{Size: 2 << 30}},
 		{name: "one CPU", caps: windowsCaps, req: CreateInstanceRequest{Vcpus: 1}},
 		{name: "command", caps: windowsCaps, req: CreateInstanceRequest{Cmd: []string{"cmd.exe"}}},
-		{name: "snapshot policy", caps: windowsCaps, req: CreateInstanceRequest{SnapshotPolicy: &SnapshotPolicy{}}},
-		{name: "auto standby", caps: windowsCaps, req: CreateInstanceRequest{AutoStandby: &autostandby.Policy{}}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -53,9 +55,27 @@ func TestValidateWindowsCreate(t *testing.T) {
 	}
 }
 
-func TestRejectWindowsSnapshotLifecycle(t *testing.T) {
-	assert.ErrorIs(t, rejectWindowsSnapshotLifecycle("windows/amd64", "fork"), ErrNotSupported)
-	assert.NoError(t, rejectWindowsSnapshotLifecycle("linux/amd64", "fork"))
+func TestPrepareWindowsForkIdentity(t *testing.T) {
+	p := paths.New(t.TempDir())
+	m := &manager{paths: p}
+	stored := &StoredMetadata{Id: "fork", Platform: "windows/amd64", WindowsBitLockerPolicy: "disabled"}
+	require.NoError(t, os.MkdirAll(p.InstanceTPMDir(stored.Id), 0700))
+	require.NoError(t, os.WriteFile(filepath.Join(p.InstanceTPMDir(stored.Id), "state"), []byte("source identity"), 0600))
+
+	require.NoError(t, m.prepareWindowsForkIdentity(stored, true))
+	assert.True(t, stored.WindowsIdentityPending)
+	entries, err := os.ReadDir(p.InstanceTPMDir(stored.Id))
+	require.NoError(t, err)
+	assert.Empty(t, entries)
+
+	require.NoError(t, os.WriteFile(filepath.Join(p.InstanceTPMDir(stored.Id), "state"), []byte("memory identity"), 0600))
+	require.NoError(t, m.prepareWindowsForkIdentity(stored, false))
+	state, err := os.ReadFile(filepath.Join(p.InstanceTPMDir(stored.Id), "state"))
+	require.NoError(t, err)
+	assert.Equal(t, "memory identity", string(state))
+
+	stored.WindowsBitLockerPolicy = ""
+	assert.ErrorIs(t, m.prepareWindowsForkIdentity(stored, true), ErrNotSupported)
 }
 
 func TestBuildWindowsHypervisorConfig(t *testing.T) {

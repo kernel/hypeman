@@ -28,19 +28,19 @@ func windowsMachineMetadata(kind MachineImageKind, diskPath, base string) *conta
 	if kind == MachineImageWindowsImage {
 		format = "qcow2"
 	}
-	return &containerMetadata{
-		OS:           "windows",
-		Architecture: "amd64",
-		Labels: map[string]string{
-			MachineImageVersionLabel:    MachineImageVersion,
-			MachineImageKindLabel:       string(kind),
-			MachineImageDiskPathLabel:   diskPath,
-			MachineImageDiskFormatLabel: format,
-			MachineImageBaseLabel:       base,
-			MachineImageTPMLabel:        "2.0",
-			MachineImageSecureBootLabel: "required",
-		},
+	labels := map[string]string{
+		MachineImageVersionLabel:    MachineImageVersion,
+		MachineImageKindLabel:       string(kind),
+		MachineImageDiskPathLabel:   diskPath,
+		MachineImageDiskFormatLabel: format,
+		MachineImageBaseLabel:       base,
+		MachineImageTPMLabel:        "2.0",
+		MachineImageSecureBootLabel: "required",
 	}
+	if kind == MachineImageWindowsImage {
+		labels[MachineImageBitLockerLabel] = "disabled"
+	}
+	return &containerMetadata{OS: "windows", Architecture: "amd64", Labels: labels}
 }
 
 func TestParseMachineImage(t *testing.T) {
@@ -55,6 +55,16 @@ func TestParseMachineImage(t *testing.T) {
 	))
 	require.NoError(t, err)
 	assert.Equal(t, MachineImageWindowsImage, image.Kind)
+	assert.Equal(t, "disabled", image.BitLocker)
+
+	invalidBitLocker := windowsMachineMetadata(
+		MachineImageWindowsImage,
+		"hypeman/disk.qcow2",
+		"registry.example/base@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	)
+	invalidBitLocker.Labels[MachineImageBitLockerLabel] = "unknown"
+	_, err = parseMachineImage(invalidBitLocker)
+	assert.ErrorContains(t, err, "unsupported Windows image BitLocker policy")
 
 	_, err = parseMachineImage(&containerMetadata{OS: "windows", Architecture: "amd64", Labels: map[string]string{}})
 	assert.ErrorContains(t, err, "ordinary Windows container images are not bootable")

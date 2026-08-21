@@ -36,6 +36,14 @@ Windows uses the same host-side TAP allocation as Linux. Once the guest agent is
 
 Create treats network configuration as part of readiness and tears down a VM if it fails. Start reapplies the current allocation because a stopped instance may receive a different address or MAC before its next boot.
 
+### Windows snapshots and forks
+
+A Windows machine consists of its writable qcow2 disk, Secure Boot NVRAM, software TPM state, saved QEMU configuration, and—while in standby—memory and device state. Same-instance restore keeps these components together so Windows identity and TPM state remain stable.
+
+Forking separates identity according to the boot path. A stopped fork receives independent disk and NVRAM files, clears copied TPM state, cold-boots with a new VioSock CID, and asks the guest agent to assign a new `MachineGuid`. A memory fork must retain the captured TPM and VioSock state from QEMU's migration stream; it receives independent files and a new `MachineGuid`, but inherits the TPM endorsement key until its next cold boot. The source and memory-restored child cannot run concurrently with the same captured CID.
+
+Fork admission requires the image to declare `io.hypeman.machine-image.bitlocker=disabled`. Other policies remain valid for same-instance snapshots but are rejected for forks because Hypeman does not reseal BitLocker keys to a child TPM.
+
 ### Why Config Disk? (configdisk.go)
 
 **What:** Read-only erofs disk with instance configuration

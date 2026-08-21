@@ -44,9 +44,6 @@ func (m *manager) standbyInstance(
 		return nil, err
 	}
 
-	if err := rejectWindowsSnapshotLifecycle(meta.Platform, "standby"); err != nil {
-		return nil, err
-	}
 	inst := m.toInstance(ctx, meta)
 	stored := &meta.StoredMetadata
 	ctx = enrichInstancesTrace(ctx, attribute.String("hypervisor", string(stored.HypervisorType)))

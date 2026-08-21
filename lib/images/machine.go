@@ -20,6 +20,7 @@ const (
 	MachineImageBaseLabel       = "io.hypeman.machine-image.base"
 	MachineImageTPMLabel        = "io.hypeman.machine-image.tpm"
 	MachineImageSecureBootLabel = "io.hypeman.machine-image.secure-boot"
+	MachineImageBitLockerLabel  = "io.hypeman.machine-image.bitlocker"
 
 	MachineImageVersion = "1"
 )
@@ -40,6 +41,7 @@ type MachineImage struct {
 	Base        string           `json:"base,omitempty"`
 	TPM         string           `json:"tpm"`
 	SecureBoot  string           `json:"secure_boot"`
+	BitLocker   string           `json:"bitlocker,omitempty"`
 	VirtualSize int64            `json:"virtual_size"`
 }
 
@@ -65,6 +67,7 @@ func parseMachineImage(meta *containerMetadata) (*MachineImage, error) {
 		Base:       strings.TrimSpace(meta.Labels[MachineImageBaseLabel]),
 		TPM:        strings.TrimSpace(meta.Labels[MachineImageTPMLabel]),
 		SecureBoot: strings.TrimSpace(meta.Labels[MachineImageSecureBootLabel]),
+		BitLocker:  strings.TrimSpace(meta.Labels[MachineImageBitLockerLabel]),
 	}
 	if machine.DiskPath == "" || filepath.IsAbs(machine.DiskPath) || !filepath.IsLocal(machine.DiskPath) {
 		return nil, fmt.Errorf("machine image disk path must be a local relative path")
@@ -87,6 +90,9 @@ func parseMachineImage(meta *containerMetadata) (*MachineImage, error) {
 			return nil, fmt.Errorf("Windows base image cannot reference another base")
 		}
 	case MachineImageWindowsImage:
+		if machine.BitLocker != "" && machine.BitLocker != "disabled" && machine.BitLocker != "reseal-required" {
+			return nil, fmt.Errorf("unsupported Windows image BitLocker policy %q", machine.BitLocker)
+		}
 		if machine.DiskFormat != "qcow2" {
 			return nil, fmt.Errorf("Windows image disk format must be qcow2")
 		}

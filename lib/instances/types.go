@@ -92,6 +92,11 @@ type StoredMetadata struct {
 	// Read-only; echoed on the instance API.
 	Platform string
 
+	// Windows machine identity and fork policy. These fields are internal and
+	// remain empty for Linux instances.
+	WindowsBitLockerPolicy string
+	WindowsIdentityPending bool
+
 	// Resources (matching Cloud Hypervisor terminology)
 	Size                     int64 // Base memory in bytes
 	HotplugSize              int64 // Hotplug memory in bytes

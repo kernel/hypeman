@@ -63,9 +63,6 @@ func (m *manager) createSnapshot(ctx context.Context, id string, req CreateSnaps
 	if err != nil {
 		return nil, err
 	}
-	if err := rejectWindowsSnapshotLifecycle(meta.Platform, "snapshot creation"); err != nil {
-		return nil, err
-	}
 	inst := m.toInstance(ctx, meta)
 	stored := &meta.StoredMetadata
 
@@ -254,9 +251,6 @@ func (m *manager) restoreSnapshot(ctx context.Context, id string, snapshotID str
 	if err != nil {
 		return nil, err
 	}
-	if err := rejectWindowsSnapshotLifecycle(rec.StoredMetadata.Platform, "snapshot restore"); err != nil {
-		return nil, err
-	}
 	if rec.Snapshot.SourceInstanceID != id {
 		return nil, fmt.Errorf("%w: snapshot %s belongs to instance %s", ErrInvalidRequest, snapshotID, rec.Snapshot.SourceInstanceID)
 	}
@@ -377,11 +371,11 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 	if err != nil {
 		return nil, err
 	}
-	if err := rejectWindowsSnapshotLifecycle(rec.StoredMetadata.Platform, "snapshot fork"); err != nil {
-		return nil, err
-	}
 	if err := validateForkVolumeSafety(rec.StoredMetadata.Volumes); err != nil {
 		return nil, fmt.Errorf("%w: snapshot requires readonly volume attachments: %v", ErrNotSupported, err)
+	}
+	if err := validateWindowsForkPolicy(&rec.StoredMetadata); err != nil {
+		return nil, err
 	}
 
 	if err := m.ensureInstanceNameAvailableForSnapshotFork(ctx, req.Name, rec.StoredMetadata.NetworkEnabled); err != nil {
@@ -391,6 +385,17 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 	targetState, err := resolveSnapshotTargetState(rec.Snapshot.Kind, req.TargetState)
 	if err != nil {
 		return nil, err
+	}
+	if isWindowsPlatform(rec.StoredMetadata.Platform) && rec.Snapshot.Kind == SnapshotKindStandby && targetState == StateRunning {
+		sourceMeta, sourceErr := m.loadMetadata(rec.Snapshot.SourceInstanceID)
+		if sourceErr == nil {
+			sourceState := m.toInstance(ctx, sourceMeta).State
+			if sourceState == StateRunning || sourceState == StateInitializing {
+				return nil, fmt.Errorf("%w: stop or standby the Windows snapshot source before restoring a running fork", ErrNotSupported)
+			}
+		} else if !errors.Is(sourceErr, ErrNotFound) {
+			return nil, sourceErr
+		}
 	}
 	targetHypervisor, err := m.resolveSnapshotTargetHypervisor(rec, req.TargetHypervisor)
 	if err != nil {
@@ -452,6 +457,12 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 		forkMeta.VsockCID = rec.StoredMetadata.VsockCID
 	} else {
 		forkMeta.VsockCID = generateVsockCID(forkID)
+	}
+	// QEMU memory snapshots contain the TPM's permanent and volatile state.
+	// Resetting the copied directory is therefore only meaningful for cold forks.
+	resetWindowsTPM := rec.Snapshot.Kind != SnapshotKindStandby
+	if err := m.prepareWindowsForkIdentity(&forkMeta, resetWindowsTPM); err != nil {
+		return nil, err
 	}
 	if forkMeta.NetworkEnabled {
 		forkMeta.IP = ""

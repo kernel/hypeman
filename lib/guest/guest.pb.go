@@ -1442,6 +1442,94 @@ func (*ReconfigureNetworkResponse) Descriptor() ([]byte, []int) {
 	return file_lib_guest_guest_proto_rawDescGZIP(), []int{18}
 }
 
+type RebindIdentityRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	InstanceId    string                 `protobuf:"bytes,1,opt,name=instance_id,json=instanceId,proto3" json:"instance_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RebindIdentityRequest) Reset() {
+	*x = RebindIdentityRequest{}
+	mi := &file_lib_guest_guest_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RebindIdentityRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RebindIdentityRequest) ProtoMessage() {}
+
+func (x *RebindIdentityRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_lib_guest_guest_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RebindIdentityRequest.ProtoReflect.Descriptor instead.
+func (*RebindIdentityRequest) Descriptor() ([]byte, []int) {
+	return file_lib_guest_guest_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *RebindIdentityRequest) GetInstanceId() string {
+	if x != nil {
+		return x.InstanceId
+	}
+	return ""
+}
+
+type RebindIdentityResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	MachineId     string                 `protobuf:"bytes,1,opt,name=machine_id,json=machineId,proto3" json:"machine_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RebindIdentityResponse) Reset() {
+	*x = RebindIdentityResponse{}
+	mi := &file_lib_guest_guest_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RebindIdentityResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RebindIdentityResponse) ProtoMessage() {}
+
+func (x *RebindIdentityResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_lib_guest_guest_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RebindIdentityResponse.ProtoReflect.Descriptor instead.
+func (*RebindIdentityResponse) Descriptor() ([]byte, []int) {
+	return file_lib_guest_guest_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *RebindIdentityResponse) GetMachineId() string {
+	if x != nil {
+		return x.MachineId
+	}
+	return ""
+}
+
 var File_lib_guest_guest_proto protoreflect.FileDescriptor
 
 const file_lib_guest_guest_proto_rawDesc = "" +
@@ -1544,17 +1632,24 @@ const file_lib_guest_guest_proto_rawDesc = "" +
 	"\agateway\x18\x05 \x01(\tR\agateway\x12\x1f\n" +
 	"\vdns_servers\x18\x06 \x03(\tR\n" +
 	"dnsServers\"\x1c\n" +
-	"\x1aReconfigureNetworkResponse*@\n" +
+	"\x1aReconfigureNetworkResponse\"8\n" +
+	"\x15RebindIdentityRequest\x12\x1f\n" +
+	"\vinstance_id\x18\x01 \x01(\tR\n" +
+	"instanceId\"7\n" +
+	"\x16RebindIdentityResponse\x12\x1d\n" +
+	"\n" +
+	"machine_id\x18\x01 \x01(\tR\tmachineId*@\n" +
 	"\vExecSession\x12\x17\n" +
 	"\x13EXEC_SESSION_SYSTEM\x10\x00\x12\x18\n" +
-	"\x14EXEC_SESSION_DESKTOP\x10\x012\xae\x03\n" +
+	"\x14EXEC_SESSION_DESKTOP\x10\x012\xfd\x03\n" +
 	"\fGuestService\x123\n" +
 	"\x04Exec\x12\x12.guest.ExecRequest\x1a\x13.guest.ExecResponse(\x010\x01\x12F\n" +
 	"\vCopyToGuest\x12\x19.guest.CopyToGuestRequest\x1a\x1a.guest.CopyToGuestResponse(\x01\x12L\n" +
 	"\rCopyFromGuest\x12\x1b.guest.CopyFromGuestRequest\x1a\x1c.guest.CopyFromGuestResponse0\x01\x12;\n" +
 	"\bStatPath\x12\x16.guest.StatPathRequest\x1a\x17.guest.StatPathResponse\x12;\n" +
 	"\bShutdown\x12\x16.guest.ShutdownRequest\x1a\x17.guest.ShutdownResponse\x12Y\n" +
-	"\x12ReconfigureNetwork\x12 .guest.ReconfigureNetworkRequest\x1a!.guest.ReconfigureNetworkResponseB'Z%github.com/onkernel/hypeman/lib/guestb\x06proto3"
+	"\x12ReconfigureNetwork\x12 .guest.ReconfigureNetworkRequest\x1a!.guest.ReconfigureNetworkResponse\x12M\n" +
+	"\x0eRebindIdentity\x12\x1c.guest.RebindIdentityRequest\x1a\x1d.guest.RebindIdentityResponseB'Z%github.com/onkernel/hypeman/lib/guestb\x06proto3"
 
 var (
 	file_lib_guest_guest_proto_rawDescOnce sync.Once
@@ -1569,7 +1664,7 @@ func file_lib_guest_guest_proto_rawDescGZIP() []byte {
 }
 
 var file_lib_guest_guest_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_lib_guest_guest_proto_msgTypes = make([]protoimpl.MessageInfo, 20)
+var file_lib_guest_guest_proto_msgTypes = make([]protoimpl.MessageInfo, 22)
 var file_lib_guest_guest_proto_goTypes = []any{
 	(ExecSession)(0),                   // 0: guest.ExecSession
 	(*ExecRequest)(nil),                // 1: guest.ExecRequest
@@ -1591,12 +1686,14 @@ var file_lib_guest_guest_proto_goTypes = []any{
 	(*ShutdownResponse)(nil),           // 17: guest.ShutdownResponse
 	(*ReconfigureNetworkRequest)(nil),  // 18: guest.ReconfigureNetworkRequest
 	(*ReconfigureNetworkResponse)(nil), // 19: guest.ReconfigureNetworkResponse
-	nil,                                // 20: guest.ExecStart.EnvEntry
+	(*RebindIdentityRequest)(nil),      // 20: guest.RebindIdentityRequest
+	(*RebindIdentityResponse)(nil),     // 21: guest.RebindIdentityResponse
+	nil,                                // 22: guest.ExecStart.EnvEntry
 }
 var file_lib_guest_guest_proto_depIdxs = []int32{
 	2,  // 0: guest.ExecRequest.start:type_name -> guest.ExecStart
 	3,  // 1: guest.ExecRequest.resize:type_name -> guest.WindowSize
-	20, // 2: guest.ExecStart.env:type_name -> guest.ExecStart.EnvEntry
+	22, // 2: guest.ExecStart.env:type_name -> guest.ExecStart.EnvEntry
 	0,  // 3: guest.ExecStart.session:type_name -> guest.ExecSession
 	6,  // 4: guest.CopyToGuestRequest.start:type_name -> guest.CopyToGuestStart
 	7,  // 5: guest.CopyToGuestRequest.end:type_name -> guest.CopyToGuestEnd
@@ -1609,14 +1706,16 @@ var file_lib_guest_guest_proto_depIdxs = []int32{
 	14, // 12: guest.GuestService.StatPath:input_type -> guest.StatPathRequest
 	16, // 13: guest.GuestService.Shutdown:input_type -> guest.ShutdownRequest
 	18, // 14: guest.GuestService.ReconfigureNetwork:input_type -> guest.ReconfigureNetworkRequest
-	4,  // 15: guest.GuestService.Exec:output_type -> guest.ExecResponse
-	8,  // 16: guest.GuestService.CopyToGuest:output_type -> guest.CopyToGuestResponse
-	10, // 17: guest.GuestService.CopyFromGuest:output_type -> guest.CopyFromGuestResponse
-	15, // 18: guest.GuestService.StatPath:output_type -> guest.StatPathResponse
-	17, // 19: guest.GuestService.Shutdown:output_type -> guest.ShutdownResponse
-	19, // 20: guest.GuestService.ReconfigureNetwork:output_type -> guest.ReconfigureNetworkResponse
-	15, // [15:21] is the sub-list for method output_type
-	9,  // [9:15] is the sub-list for method input_type
+	20, // 15: guest.GuestService.RebindIdentity:input_type -> guest.RebindIdentityRequest
+	4,  // 16: guest.GuestService.Exec:output_type -> guest.ExecResponse
+	8,  // 17: guest.GuestService.CopyToGuest:output_type -> guest.CopyToGuestResponse
+	10, // 18: guest.GuestService.CopyFromGuest:output_type -> guest.CopyFromGuestResponse
+	15, // 19: guest.GuestService.StatPath:output_type -> guest.StatPathResponse
+	17, // 20: guest.GuestService.Shutdown:output_type -> guest.ShutdownResponse
+	19, // 21: guest.GuestService.ReconfigureNetwork:output_type -> guest.ReconfigureNetworkResponse
+	21, // 22: guest.GuestService.RebindIdentity:output_type -> guest.RebindIdentityResponse
+	16, // [16:23] is the sub-list for method output_type
+	9,  // [9:16] is the sub-list for method input_type
 	9,  // [9:9] is the sub-list for extension type_name
 	9,  // [9:9] is the sub-list for extension extendee
 	0,  // [0:9] is the sub-list for field type_name
@@ -1654,7 +1753,7 @@ func file_lib_guest_guest_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_lib_guest_guest_proto_rawDesc), len(file_lib_guest_guest_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   20,
+			NumMessages:   22,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

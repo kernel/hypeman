@@ -1,11 +1,14 @@
 package instances
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/kernel/hypeman/lib/forkvm"
+	"github.com/kernel/hypeman/lib/guest"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/network"
@@ -49,16 +52,75 @@ func validateWindowsCreate(req CreateInstanceRequest, image *images.Image, caps 
 	if req.NetworkEgress != nil || len(req.Credentials) != 0 {
 		return fmt.Errorf("%w: Windows instances do not yet support managed egress or credentials", ErrInvalidRequest)
 	}
-	if req.SnapshotPolicy != nil || req.AutoStandby != nil {
-		return fmt.Errorf("%w: Windows snapshot policies are added in the snapshots phase", ErrInvalidRequest)
+	return nil
+}
+
+func validateWindowsForkPolicy(stored *StoredMetadata) error {
+	if stored != nil && isWindowsPlatform(stored.Platform) && stored.WindowsBitLockerPolicy != "disabled" {
+		return fmt.Errorf("%w: Windows forks require an image declared with %s=disabled", ErrNotSupported, images.MachineImageBitLockerLabel)
 	}
 	return nil
 }
 
-func rejectWindowsSnapshotLifecycle(platform, operation string) error {
-	if isWindowsPlatform(platform) {
-		return fmt.Errorf("%w: %s is not supported for Windows until the snapshots phase", ErrNotSupported, operation)
+func (m *manager) ensureWindowsVsockCIDAvailable(ctx context.Context, stored *StoredMetadata) error {
+	if stored == nil || !isWindowsPlatform(stored.Platform) {
+		return nil
 	}
+	instances, err := m.listInstances(ctx)
+	if err != nil {
+		return err
+	}
+	for _, instance := range instances {
+		if instance.Id == stored.Id || instance.VsockCID != stored.VsockCID {
+			continue
+		}
+		if instance.State == StateRunning || instance.State == StateInitializing {
+			return fmt.Errorf("%w: Windows snapshot restore requires instance %s with the same captured vsock CID to be stopped", ErrInvalidState, instance.Id)
+		}
+	}
+	return nil
+}
+
+func (m *manager) prepareWindowsForkIdentity(stored *StoredMetadata, resetTPM bool) error {
+	if stored == nil || !isWindowsPlatform(stored.Platform) {
+		return nil
+	}
+	if err := validateWindowsForkPolicy(stored); err != nil {
+		return err
+	}
+	if resetTPM {
+		if err := os.RemoveAll(m.paths.InstanceTPMDir(stored.Id)); err != nil {
+			return fmt.Errorf("clear forked Windows TPM state: %w", err)
+		}
+		if err := os.MkdirAll(m.paths.InstanceTPMDir(stored.Id), 0700); err != nil {
+			return fmt.Errorf("create forked Windows TPM state: %w", err)
+		}
+		if err := os.Remove(m.paths.InstanceTPMSocket(stored.Id)); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove forked Windows TPM socket: %w", err)
+		}
+	}
+	stored.WindowsIdentityPending = true
+	return nil
+}
+
+func rebindWindowsIdentity(ctx context.Context, stored *StoredMetadata) error {
+	if stored == nil || !isWindowsPlatform(stored.Platform) || !stored.WindowsIdentityPending {
+		return nil
+	}
+	dialer, err := hypervisor.NewVsockDialer(stored.HypervisorType, stored.VsockSocket, stored.VsockCID)
+	if err != nil {
+		return fmt.Errorf("create Windows identity dialer: %w", err)
+	}
+	rebindCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
+	defer cancel()
+	machineID, err := guest.RebindInstanceIdentity(rebindCtx, dialer, stored.Id, 120*time.Second)
+	if err != nil {
+		return err
+	}
+	if machineID == "" {
+		return fmt.Errorf("Windows guest agent returned an empty machine identity")
+	}
+	stored.WindowsIdentityPending = false
 	return nil
 }
 
