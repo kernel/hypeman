@@ -47,6 +47,7 @@ type vgpuSentinelTarget struct {
 
 type vgpuSentinelStore interface {
 	listVGPUSentinelTargets(ctx context.Context) ([]vgpuSentinelTarget, error)
+	getVGPUSentinelTarget(ctx context.Context, instanceID string) (vgpuSentinelTarget, bool, error)
 }
 
 type vgpuSentinelTail struct {
@@ -227,6 +228,26 @@ func (c *VGPUSentinelController) scanTarget(ctx context.Context, target vgpuSent
 // instance is finished; a failed quarantine leaves the tail open so the
 // recurring report retries it.
 func (c *VGPUSentinelController) convict(ctx context.Context, target vgpuSentinelTarget, line string) bool {
+	// The target came from a metadata snapshot taken before the log read: a
+	// stop/start racing the scan could have assigned a different VF by now,
+	// and convicting the snapshot's VF would quarantine a healthy device.
+	// Reload the assignment and convict only if it is unchanged. Start
+	// archives the previous boot's log before persisting a new assignment,
+	// so if the metadata still shows this epoch after the marker was read,
+	// the marker provably belongs to this epoch's VF. On any other outcome
+	// the tail stays open; the next scan sees the current assignment and
+	// rescans its log from the top.
+	current, ok, err := c.store.getVGPUSentinelTarget(ctx, target.instanceID)
+	if err != nil {
+		c.log.WarnContext(ctx, "vGPU sentinel could not confirm assignment before conviction",
+			"vf", target.vfAddress, "instance_id", target.instanceID, "error", err)
+		return false
+	}
+	if !ok || current.vfAddress != target.vfAddress || current.assignedAt != target.assignedAt {
+		c.log.InfoContext(ctx, "vGPU sentinel skipping conviction: assignment changed during scan",
+			"vf", target.vfAddress, "instance_id", target.instanceID)
+		return false
+	}
 	existed, err := c.quarantine(devices.VFQuarantine{
 		VFAddress:    target.vfAddress,
 		InstanceID:   target.instanceID,
@@ -320,35 +341,55 @@ func scanForSentinel(path string, tail *vgpuSentinelTail) (string, bool, error) 
 // the scan runs continuously and deriving state would query every
 // hypervisor on the host.
 func (m *manager) listVGPUSentinelTargets(ctx context.Context) ([]vgpuSentinelTarget, error) {
-	files, err := m.listMetadataFiles()
+	// The strict walk names an instance whose metadata cannot be statted; the
+	// lenient retry keeps detection running on the readable rest, so one bad
+	// instance degrades coverage loudly instead of losing it host-wide.
+	files, err := m.listMetadataFilesStrict()
 	if err != nil {
-		return nil, err
+		logger.FromContext(ctx).WarnContext(ctx, "vGPU sentinel skipping unreadable instance metadata", "error", err)
+		if files, err = m.listMetadataFiles(); err != nil {
+			return nil, err
+		}
 	}
 	targets := make([]vgpuSentinelTarget, 0, len(files))
 	for _, file := range files {
 		id := filepath.Base(filepath.Dir(file))
-		meta, err := m.loadMetadata(id)
+		target, ok, err := m.getVGPUSentinelTarget(ctx, id)
 		if err != nil {
-			if !errors.Is(err, ErrNotFound) {
-				// An unreadable record removes its VF from detection; say so
-				// rather than silently shrinking coverage.
-				logger.FromContext(ctx).WarnContext(ctx, "vGPU sentinel skipping unreadable instance metadata", "instance_id", id, "error", err)
-			}
+			// An unreadable record removes its VF from detection; say so
+			// rather than silently shrinking coverage.
+			logger.FromContext(ctx).WarnContext(ctx, "vGPU sentinel skipping unreadable instance metadata", "instance_id", id, "error", err)
 			continue
 		}
-		if meta.GPUFramework != devices.VGPUFrameworkVendorVFIO || meta.GPUDevicePath == "" {
-			continue
+		if ok {
+			targets = append(targets, target)
 		}
-		assignedAt := ""
-		if meta.GPUAssignedAt != nil {
-			assignedAt = meta.GPUAssignedAt.UTC().Format(time.RFC3339Nano)
-		}
-		targets = append(targets, vgpuSentinelTarget{
-			instanceID: id,
-			vfAddress:  filepath.Base(meta.GPUDevicePath),
-			appLogPath: m.paths.InstanceAppLog(id),
-			assignedAt: assignedAt,
-		})
 	}
 	return targets, nil
+}
+
+// getVGPUSentinelTarget returns the instance's current vendor VFIO sentinel
+// target, reporting ok=false when the instance is gone or holds no such
+// assignment.
+func (m *manager) getVGPUSentinelTarget(_ context.Context, instanceID string) (vgpuSentinelTarget, bool, error) {
+	meta, err := m.loadMetadata(instanceID)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return vgpuSentinelTarget{}, false, nil
+		}
+		return vgpuSentinelTarget{}, false, err
+	}
+	if meta.GPUFramework != devices.VGPUFrameworkVendorVFIO || meta.GPUDevicePath == "" {
+		return vgpuSentinelTarget{}, false, nil
+	}
+	assignedAt := ""
+	if meta.GPUAssignedAt != nil {
+		assignedAt = meta.GPUAssignedAt.UTC().Format(time.RFC3339Nano)
+	}
+	return vgpuSentinelTarget{
+		instanceID: instanceID,
+		vfAddress:  filepath.Base(meta.GPUDevicePath),
+		appLogPath: m.paths.InstanceAppLog(instanceID),
+		assignedAt: assignedAt,
+	}, true, nil
 }

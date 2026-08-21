@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/devices"
+	"github.com/kernel/hypeman/lib/paths"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/metric/noop"
@@ -41,6 +42,15 @@ type fakeSentinelStore struct {
 
 func (s *fakeSentinelStore) listVGPUSentinelTargets(context.Context) ([]vgpuSentinelTarget, error) {
 	return s.targets, nil
+}
+
+func (s *fakeSentinelStore) getVGPUSentinelTarget(_ context.Context, instanceID string) (vgpuSentinelTarget, bool, error) {
+	for _, target := range s.targets {
+		if target.instanceID == instanceID {
+			return target, true, nil
+		}
+	}
+	return vgpuSentinelTarget{}, false, nil
 }
 
 func newTestSentinelController(t *testing.T, store vgpuSentinelStore) (*VGPUSentinelController, *[]devices.VFQuarantine) {
@@ -230,6 +240,65 @@ func TestVGPUSentinelControllerDropsStaleTails(t *testing.T) {
 	store.targets = nil
 	c.scanOnce(ctx)
 	assert.NotContains(t, c.tails, "instance-1")
+}
+
+// A marker read against a metadata snapshot must not convict once the
+// instance's assignment has changed under the scan: the marker belonged to
+// the old epoch's VF, and the current VF may be healthy.
+func TestVGPUSentinelControllerSkipsConvictionOnChangedAssignment(t *testing.T) {
+	t.Parallel()
+
+	logPath := filepath.Join(t.TempDir(), "app.log")
+	require.NoError(t, os.WriteFile(logPath, []byte(testSentinelLine), 0644))
+	store := &fakeSentinelStore{targets: []vgpuSentinelTarget{{
+		instanceID: "instance-1",
+		vfAddress:  "0000:e3:00.5",
+		appLogPath: logPath,
+		assignedAt: "2026-08-21T00:00:10Z",
+	}}}
+	c, quarantined := newTestSentinelController(t, store)
+
+	stale := vgpuSentinelTarget{
+		instanceID: "instance-1",
+		vfAddress:  "0000:e3:00.4",
+		appLogPath: logPath,
+		assignedAt: "2026-08-21T00:00:00Z",
+	}
+	c.scanTarget(context.Background(), stale)
+	assert.Empty(t, *quarantined)
+	assert.False(t, c.tails["instance-1"].done)
+
+	// A deleted instance can no longer vouch for the marker either.
+	store.targets = nil
+	c.tails["instance-1"] = &vgpuSentinelTail{vfAddress: stale.vfAddress, assignedAt: stale.assignedAt}
+	c.scanTarget(context.Background(), stale)
+	assert.Empty(t, *quarantined)
+}
+
+func TestListVGPUSentinelTargetsSkipsUnstattableMetadata(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses directory permissions")
+	}
+
+	m := &manager{paths: paths.New(t.TempDir())}
+	assigned := time.Now().UTC()
+	for _, id := range []string{"readable", "unreadable"} {
+		require.NoError(t, m.ensureDirectories(id))
+		require.NoError(t, m.saveMetadata(&metadata{StoredMetadata: StoredMetadata{
+			Id:            id,
+			GPUFramework:  devices.VGPUFrameworkVendorVFIO,
+			GPUDevicePath: "/sys/bus/pci/devices/0000:e3:00.4",
+			GPUAssignedAt: &assigned,
+		}}))
+	}
+	instanceDir := filepath.Dir(m.paths.InstanceMetadata("unreadable"))
+	require.NoError(t, os.Chmod(instanceDir, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(instanceDir, 0o755) })
+
+	targets, err := m.listVGPUSentinelTargets(context.Background())
+	require.NoError(t, err)
+	require.Len(t, targets, 1)
+	assert.Equal(t, "readable", targets[0].instanceID)
 }
 
 // A transient discovery error fails open — the controller scans as if the
