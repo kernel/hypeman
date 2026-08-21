@@ -33,6 +33,11 @@ func (e *VGPUCleanupPendingError) Error() string {
 
 func (e *VGPUCleanupPendingError) Unwrap() error { return e.Err }
 
+// errVGPURetentionStub rejects every lifecycle verb except delete on a
+// retention stub from a failed create: the record has no boot configuration,
+// and only delete retries the release of its retained assignment.
+var errVGPURetentionStub = fmt.Errorf("%w: instance retains a vGPU assignment from a failed create and has no boot configuration; delete it to release the assignment", ErrInvalidState)
+
 func (m *manager) createVGPUDevice(ctx context.Context, profileName, instanceID string) (*devices.VGPUDevice, error) {
 	create := m.createVGPU
 	if create == nil {
@@ -58,11 +63,14 @@ func retainedVGPUFromCreateError(stub StoredMetadata, assignedAt time.Time, err 
 	if !ok {
 		return nil
 	}
+	return retainedVGPUFromDevice(stub, device, assignedAt)
+}
+
+// retainedVGPUFromDevice fills stub with device's assignment fields so a
+// failed rollback release retains a recognizable, deletable record.
+func retainedVGPUFromDevice(stub StoredMetadata, device *devices.VGPUDevice, assignedAt time.Time) *StoredMetadata {
 	stub.GPUProfile = device.ProfileName
-	stub.GPUFramework = device.Framework
-	stub.GPUDevicePath = device.SysfsPath
-	stub.GPUMdevUUID = device.MdevUUID
-	stub.GPUAssignedAt = &assignedAt
+	setStoredVGPUDevice(&stub, device, assignedAt)
 	return &stub
 }
 

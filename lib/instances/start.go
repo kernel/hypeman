@@ -48,11 +48,8 @@ func (m *manager) startInstance(
 		return nil, fmt.Errorf("%w: cannot start from state %s, must be Stopped", ErrInvalidState, inst.State)
 	}
 	if stored.GPURetainedForCleanup {
-		// A delete-only retention stub from a failed create: it carries no
-		// boot configuration, so starting it would release the retained VF
-		// and then boot an incomplete record. Delete retries the release.
 		log.ErrorContext(ctx, "refusing to start vGPU retention record", "instance_id", id)
-		return nil, fmt.Errorf("%w: instance retains a vGPU assignment from a failed create and has no boot configuration; delete it to release the assignment", ErrInvalidState)
+		return nil, errVGPURetentionStub
 	}
 
 	// Release any assignment retained by an earlier failed release and

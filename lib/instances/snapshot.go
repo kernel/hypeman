@@ -67,11 +67,7 @@ func (m *manager) createSnapshot(ctx context.Context, id string, req CreateSnaps
 	stored := &meta.StoredMetadata
 
 	if stored.GPURetainedForCleanup {
-		// A delete-only retention stub from a failed create has no boot
-		// configuration, so a snapshot of it could never be restored or
-		// forked into a bootable instance. Delete the stub to release its
-		// retained vGPU assignment.
-		return nil, fmt.Errorf("%w: instance retains a vGPU assignment from a failed create and has no boot configuration; delete it to release the assignment", ErrInvalidState)
+		return nil, errVGPURetentionStub
 	}
 	if err := validateForkVolumeSafety(stored.Volumes); err != nil {
 		return nil, fmt.Errorf("%w: snapshot requires readonly volume attachments: %v", ErrNotSupported, err)
