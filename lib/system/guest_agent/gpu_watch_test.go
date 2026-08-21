@@ -1,10 +1,13 @@
 package main
 
 import (
+	"bytes"
+	"log"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestGPUInitFailureMessage(t *testing.T) {
@@ -37,6 +40,31 @@ func TestGPUInitFailureMessage(t *testing.T) {
 	} {
 		_, ok := gpuInitFailureMessage(record)
 		assert.False(t, ok, "record %q must not match", record)
+	}
+}
+
+// One report is emitted as several identical marker lines because kernel
+// printk shares the serial console and can split a single write mid-marker
+// — and a wedged VF guarantees printk traffic at report time. Any one
+// intact copy convicts; the copies share one ts so they read as one report.
+func TestEmitGPUInitFailureReportRepeatsMarkerLines(t *testing.T) {
+	var buf bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	defer log.SetOutput(prev)
+
+	emitGPUInitFailureReport("NVRM: GPU 0000:00:03.0: RmInitAdapter failed! (0x22:0x65:884)")
+
+	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	require.Len(t, lines, gpuReportRepeats)
+	for i, line := range lines {
+		assert.Contains(t, line, "HYPEMAN-GPU-INIT-FAILED ts=")
+		assert.Contains(t, line, `nvrm="NVRM: GPU 0000:00:03.0: RmInitAdapter failed! (0x22:0x65:884)"`)
+		// Identical from the marker onward: same ts, one report.
+		assert.Equal(t,
+			lines[0][strings.Index(lines[0], "HYPEMAN"):],
+			line[strings.Index(line, "HYPEMAN"):],
+			"copy %d must be identical to the first", i)
 	}
 }
 

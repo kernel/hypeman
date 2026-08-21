@@ -29,6 +29,15 @@ const (
 	// console.
 	gpuReportThrottle = 30 * time.Second
 
+	// gpuReportRepeats is how many identical marker lines one report emits.
+	// The serial console is a shared byte stream: kernel printk bypasses the
+	// tty buffer and can split a userspace write mid-marker, and on a wedged
+	// VF the kernel is emitting NVRM errors exactly when reports are sent. A
+	// corrupted copy does not match the host's full-shape scan, so each
+	// report is several identical lines — one write each — and the host
+	// convicts on the first intact copy, ignoring the rest.
+	gpuReportRepeats = 3
+
 	kmsgReopenDelay = 5 * time.Second
 
 	// kmsgOpenRetryDelay paces reopen attempts after a failed /dev/kmsg
@@ -74,10 +83,19 @@ func watchGPUInitFailure() {
 				return
 			}
 			lastReport = time.Now()
-			log.Printf("[guest-agent] %s ts=%s nvrm=%q", gpuInitFailedSentinelPrefix, time.Now().UTC().Format(time.RFC3339Nano), msg)
+			emitGPUInitFailureReport(msg)
 		})
 		_ = f.Close()
 		time.Sleep(kmsgReopenDelay)
+	}
+}
+
+// emitGPUInitFailureReport writes one report as gpuReportRepeats identical
+// marker lines, all carrying the same ts so the host sees one report.
+func emitGPUInitFailureReport(msg string) {
+	ts := time.Now().UTC().Format(time.RFC3339Nano)
+	for range gpuReportRepeats {
+		log.Printf("[guest-agent] %s ts=%s nvrm=%q", gpuInitFailedSentinelPrefix, ts, msg)
 	}
 }
 

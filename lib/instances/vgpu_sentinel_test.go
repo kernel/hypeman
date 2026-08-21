@@ -256,6 +256,32 @@ func TestVGPUSentinelControllerDropsStaleTails(t *testing.T) {
 	assert.NotContains(t, c.tails, "instance-1")
 }
 
+// Kernel printk shares the serial console with the agent and can split a
+// marker mid-write — which is why the agent emits each report as several
+// identical lines. A corrupted copy must not convict (the strict shape is
+// what keeps echoed commands from convicting), and the intact repeat on the
+// next line must.
+func TestScanForSentinelConvictsOnIntactRepeatAfterSplitMarker(t *testing.T) {
+	t.Parallel()
+
+	logPath := filepath.Join(t.TempDir(), "app.log")
+	split := "2026/08/20 15:04:05 [guest-agent] HYPEMAN-GPU-INIT-FAILED ts=2026-08-20T15:04:05Z nvrm=\"NVRM: GPU 0000:e3:0\n" +
+		"[   27.031415] NVRM: GPU 0000:00:03.0: RmInitAdapter failed! (0x22:0x65:884)\n" +
+		"0.4: RmInitAdapter failed! (0x22:0x65:884)\"\n"
+	require.NoError(t, os.WriteFile(logPath, []byte(split), 0644))
+
+	tail := &vgpuSentinelTail{}
+	_, found, err := scanForSentinel(logPath, tail)
+	require.NoError(t, err)
+	assert.False(t, found, "neither a split marker nor the raw kernel line may convict")
+
+	appendSentinelLine(t, logPath)
+	line, found, err := scanForSentinel(logPath, tail)
+	require.NoError(t, err)
+	require.True(t, found, "the intact repeat must convict")
+	assert.Contains(t, line, "HYPEMAN-GPU-INIT-FAILED")
+}
+
 // The marker is a few hundred bytes, so a line that overflows the read
 // buffer is guest console spam by definition: it must not convict even when
 // it embeds a marker, must never be buffered whole, and its tail — arriving
