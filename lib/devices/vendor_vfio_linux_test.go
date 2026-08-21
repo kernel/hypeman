@@ -574,7 +574,7 @@ func assertFileValue(t *testing.T, path, expected string) {
 
 func TestVendorVFIOSkipsQuarantinedVF(t *testing.T) {
 	resetVFHealthStore(t)
-	_, _, err := QuarantineVF(VFQuarantine{VFAddress: "0000:82:00.4"})
+	_, err := QuarantineVF(VFQuarantine{VFAddress: "0000:82:00.4"})
 	require.NoError(t, err)
 
 	sysfs := newTestVendorVFIOSysfs(t)
@@ -589,7 +589,7 @@ func TestVendorVFIOSkipsQuarantinedVF(t *testing.T) {
 
 func TestVendorVFIONoVFWhenAllQuarantined(t *testing.T) {
 	resetVFHealthStore(t)
-	_, _, err := QuarantineVF(VFQuarantine{VFAddress: "0000:82:00.4"})
+	_, err := QuarantineVF(VFQuarantine{VFAddress: "0000:82:00.4"})
 	require.NoError(t, err)
 
 	sysfs := newTestVendorVFIOSysfs(t)
@@ -601,7 +601,7 @@ func TestVendorVFIONoVFWhenAllQuarantined(t *testing.T) {
 
 func TestVendorVFIOCardBiasAvoidsGPUWithQuarantinedVF(t *testing.T) {
 	resetVFHealthStore(t)
-	_, _, err := QuarantineVF(VFQuarantine{VFAddress: "0000:82:00.4"})
+	_, err := QuarantineVF(VFQuarantine{VFAddress: "0000:82:00.4"})
 	require.NoError(t, err)
 
 	// GPU 82 sorts first by address and has a free healthy VF, but its
@@ -630,7 +630,7 @@ func TestVendorVFIOSelectUsesTiebreakAmongFreeVFs(t *testing.T) {
 
 func TestVendorVFIOListProfilesExcludesQuarantinedFromAvailability(t *testing.T) {
 	resetVFHealthStore(t)
-	_, _, err := QuarantineVF(VFQuarantine{VFAddress: "0000:82:00.4"})
+	_, err := QuarantineVF(VFQuarantine{VFAddress: "0000:82:00.4"})
 	require.NoError(t, err)
 
 	sysfs := newTestVendorVFIOSysfs(t)

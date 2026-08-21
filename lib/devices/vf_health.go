@@ -17,7 +17,6 @@ type VFHealthRecord struct {
 	VFAddress     string    `json:"vf_address"`
 	InstanceID    string    `json:"instance_id,omitempty"`
 	SentinelLine  string    `json:"sentinel_line,omitempty"`
-	WedgeCount    int       `json:"wedge_count"`
 	QuarantinedAt time.Time `json:"quarantined_at"`
 }
 
@@ -101,37 +100,14 @@ func (s *vfHealthStore) checkedAddresses() (map[string]struct{}, error) {
 
 // QuarantineVF records a wedge conviction for a VF and persists it. It takes
 // the vGPU placement lock so a convicted VF is never concurrently selected
-// for a new assignment. A conviction of an already-quarantined VF returns
-// the existing record unchanged with existed=true — one wedge produces one
-// record no matter how many victim boots report it.
-func QuarantineVF(q VFQuarantine) (VFHealthRecord, bool, error) {
-	var record VFHealthRecord
-	var existed bool
-	var err error
+// for a new assignment. A conviction of an already-quarantined VF leaves the
+// existing record unchanged and reports existed=true — one wedge produces
+// one record no matter how many victim boots report it.
+func QuarantineVF(q VFQuarantine) (existed bool, err error) {
 	withVGPUPlacementLock(func() {
-		record, existed, err = vfHealth.quarantine(q)
+		existed, err = vfHealth.quarantine(q)
 	})
-	return record, existed, err
-}
-
-// IsVFQuarantined reports whether a quarantine record exists for the VF.
-func IsVFQuarantined(vfAddress string) bool {
-	vfHealth.mu.Lock()
-	defer vfHealth.mu.Unlock()
-	_, ok := vfHealth.records[vfAddress]
-	return ok
-}
-
-// ClearVFQuarantine removes a VF's quarantine record, returning whether one
-// existed. Callers clear a VF only after the parent GPU has been SR-IOV
-// cycled and a verification boot came back clean.
-func ClearVFQuarantine(vfAddress string) (bool, error) {
-	var cleared bool
-	var err error
-	withVGPUPlacementLock(func() {
-		cleared, err = vfHealth.clear(vfAddress)
-	})
-	return cleared, err
+	return existed, err
 }
 
 // VFHealthStoreUnavailable reports whether the persisted VF health state
@@ -163,44 +139,29 @@ func (s *vfHealthStore) sortedRecordsLocked() []VFHealthRecord {
 	return records
 }
 
-func (s *vfHealthStore) quarantine(q VFQuarantine) (VFHealthRecord, bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if err := s.ensureLoadedLocked(); err != nil {
-		return VFHealthRecord{}, false, err
-	}
-	if record, ok := s.records[q.VFAddress]; ok {
-		return record, true, nil
-	}
-	record := VFHealthRecord{
-		VFAddress:     q.VFAddress,
-		InstanceID:    q.InstanceID,
-		SentinelLine:  q.SentinelLine,
-		WedgeCount:    1,
-		QuarantinedAt: time.Now().UTC(),
-	}
-	s.records[q.VFAddress] = record
-	if err := s.persistLocked(); err != nil {
-		// A quarantine is only real once it is on disk. Keeping the record in
-		// memory would make the next report look like a repeat conviction and
-		// end retries, leaving nothing persisted for the next restart.
-		delete(s.records, q.VFAddress)
-		return VFHealthRecord{}, false, err
-	}
-	return record, false, nil
-}
-
-func (s *vfHealthStore) clear(vfAddress string) (bool, error) {
+func (s *vfHealthStore) quarantine(q VFQuarantine) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.ensureLoadedLocked(); err != nil {
 		return false, err
 	}
-	if _, ok := s.records[vfAddress]; !ok {
-		return false, nil
+	if _, ok := s.records[q.VFAddress]; ok {
+		return true, nil
 	}
-	delete(s.records, vfAddress)
-	return true, s.persistLocked()
+	s.records[q.VFAddress] = VFHealthRecord{
+		VFAddress:     q.VFAddress,
+		InstanceID:    q.InstanceID,
+		SentinelLine:  q.SentinelLine,
+		QuarantinedAt: time.Now().UTC(),
+	}
+	if err := s.persistLocked(); err != nil {
+		// A quarantine is only real once it is on disk. Keeping the record in
+		// memory would make the next report look like a repeat conviction and
+		// end retries, leaving nothing persisted for the next restart.
+		delete(s.records, q.VFAddress)
+		return false, err
+	}
+	return false, nil
 }
 
 func (s *vfHealthStore) persistLocked() error {

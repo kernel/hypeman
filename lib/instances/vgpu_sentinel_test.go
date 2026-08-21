@@ -52,13 +52,12 @@ func newTestSentinelController(t *testing.T, store vgpuSentinelStore) (*VGPUSent
 		store:    store,
 		log:      slog.New(slog.DiscardHandler),
 		interval: time.Hour,
-		quarantine: func(q devices.VFQuarantine) (devices.VFHealthRecord, bool, error) {
+		quarantine: func(q devices.VFQuarantine) (bool, error) {
 			quarantined = append(quarantined, q)
-			return devices.VFHealthRecord{VFAddress: q.VFAddress, WedgeCount: 1}, false, nil
+			return false, nil
 		},
-		isQuarantined: func(string) bool { return false },
-		convictions:   counter,
-		tails:         make(map[string]*vgpuSentinelTail),
+		convictions: counter,
+		tails:       make(map[string]*vgpuSentinelTail),
 	}
 	return c, &quarantined
 }
@@ -118,8 +117,8 @@ func TestVGPUSentinelControllerRetriesFailedQuarantine(t *testing.T) {
 	c, quarantined := newTestSentinelController(t, store)
 	quarantineErr := errors.New("persist failed")
 	realQuarantine := c.quarantine
-	c.quarantine = func(devices.VFQuarantine) (devices.VFHealthRecord, bool, error) {
-		return devices.VFHealthRecord{}, false, quarantineErr
+	c.quarantine = func(devices.VFQuarantine) (bool, error) {
+		return false, quarantineErr
 	}
 	ctx := context.Background()
 
@@ -172,13 +171,14 @@ func TestVGPUSentinelControllerSkipsQuarantinedVFs(t *testing.T) {
 		vfAddress:  "0000:e3:00.4",
 		appLogPath: logPath,
 	}}}
-	c, quarantined := newTestSentinelController(t, store)
-	c.isQuarantined = func(vf string) bool { return vf == "0000:e3:00.4" }
+	c, _ := newTestSentinelController(t, store)
+	c.quarantine = func(devices.VFQuarantine) (bool, error) {
+		return true, nil
+	}
 
-	// A rescan of a standing victim's log after a controller restart must
-	// not re-convict a persisted quarantine: no metric, and the tail closes.
+	// A rescan of a standing victim's log after a controller restart reports
+	// an existing quarantine: not a new wedge, and the tail closes.
 	c.scanOnce(context.Background())
-	assert.Empty(t, *quarantined)
 	assert.True(t, c.tails["instance-1"].done)
 }
 

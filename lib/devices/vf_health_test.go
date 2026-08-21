@@ -28,48 +28,30 @@ func resetVFHealthStore(t *testing.T) string {
 func TestQuarantineVFPersistsAcrossReload(t *testing.T) {
 	path := resetVFHealthStore(t)
 
-	record, existed, err := QuarantineVF(VFQuarantine{
+	existed, err := QuarantineVF(VFQuarantine{
 		VFAddress:    "0000:e3:00.4",
 		InstanceID:   "instance-1",
 		SentinelLine: "HYPEMAN-GPU-INIT-FAILED ts=2026-08-20T15:04:05Z nvrm=\"NVRM: GPU 0000:e3:00.4: RmInitAdapter failed! (0x22:0x65:884)\"",
 	})
 	require.NoError(t, err)
 	assert.False(t, existed)
-	assert.Equal(t, 1, record.WedgeCount)
-	assert.False(t, record.QuarantinedAt.IsZero())
-	assert.True(t, IsVFQuarantined("0000:e3:00.4"))
+	initial := QuarantinedVFs()
+	require.Len(t, initial, 1)
+	assert.False(t, initial[0].QuarantinedAt.IsZero())
 
 	// A repeat conviction (another victim boot, or a rescan after restart)
-	// returns the original record unchanged: one wedge, one record.
-	again, existed, err := QuarantineVF(VFQuarantine{VFAddress: "0000:e3:00.4", InstanceID: "instance-2"})
+	// leaves the original record unchanged: one wedge, one record.
+	existed, err = QuarantineVF(VFQuarantine{VFAddress: "0000:e3:00.4", InstanceID: "instance-2"})
 	require.NoError(t, err)
 	assert.True(t, existed)
-	assert.Equal(t, record, again)
+	assert.Equal(t, initial, QuarantinedVFs())
 
 	// Reload from disk, as a hypeman restart would.
 	require.NoError(t, initVFHealthStore(path))
 	records := QuarantinedVFs()
 	require.Len(t, records, 1)
 	assert.Equal(t, "0000:e3:00.4", records[0].VFAddress)
-	assert.Equal(t, 1, records[0].WedgeCount)
 	assert.Equal(t, "instance-1", records[0].InstanceID)
-}
-
-func TestClearVFQuarantine(t *testing.T) {
-	resetVFHealthStore(t)
-
-	_, _, err := QuarantineVF(VFQuarantine{VFAddress: "0000:e3:00.4"})
-	require.NoError(t, err)
-
-	cleared, err := ClearVFQuarantine("0000:e3:00.4")
-	require.NoError(t, err)
-	assert.True(t, cleared)
-	assert.Empty(t, QuarantinedVFs())
-	assert.False(t, IsVFQuarantined("0000:e3:00.4"))
-
-	cleared, err = ClearVFQuarantine("0000:e3:00.4")
-	require.NoError(t, err)
-	assert.False(t, cleared)
 }
 
 func TestQuarantineVFRollsBackOnPersistFailure(t *testing.T) {
@@ -80,20 +62,19 @@ func TestQuarantineVFRollsBackOnPersistFailure(t *testing.T) {
 	require.NoError(t, os.WriteFile(blocker, nil, 0644))
 	vfHealth.path = filepath.Join(blocker, "vf-health.json")
 
-	_, _, err := QuarantineVF(VFQuarantine{VFAddress: "0000:e3:00.4"})
+	_, err := QuarantineVF(VFQuarantine{VFAddress: "0000:e3:00.4"})
 	require.Error(t, err)
 
 	// A quarantine is only real once persisted: the failed record must not
 	// linger in memory, or the retried conviction would be treated as a
 	// repeat and never reach disk.
-	assert.False(t, IsVFQuarantined("0000:e3:00.4"))
 	assert.Empty(t, QuarantinedVFs())
 }
 
 func TestCheckedAddressesFailsClosedOnUnloadedState(t *testing.T) {
 	path := resetVFHealthStore(t)
 
-	_, _, err := QuarantineVF(VFQuarantine{VFAddress: "0000:e3:00.4"})
+	_, err := QuarantineVF(VFQuarantine{VFAddress: "0000:e3:00.4"})
 	require.NoError(t, err)
 
 	require.NoError(t, os.WriteFile(path, []byte("not json"), 0644))
@@ -105,7 +86,7 @@ func TestCheckedAddressesFailsClosedOnUnloadedState(t *testing.T) {
 	require.Error(t, err)
 
 	// A repaired file self-heals on the next placement attempt.
-	restored := `[{"vf_address":"0000:e3:00.4","wedge_count":1,"quarantined_at":"2026-08-20T00:00:00Z"}]`
+	restored := `[{"vf_address":"0000:e3:00.4","quarantined_at":"2026-08-20T00:00:00Z"}]`
 	require.NoError(t, os.WriteFile(path, []byte(restored), 0644))
 	addresses, err := vfHealth.checkedAddresses()
 	require.NoError(t, err)
@@ -115,7 +96,7 @@ func TestCheckedAddressesFailsClosedOnUnloadedState(t *testing.T) {
 func TestQuarantineVFRefusesToClobberUnloadedState(t *testing.T) {
 	path := resetVFHealthStore(t)
 
-	_, _, err := QuarantineVF(VFQuarantine{VFAddress: "0000:e3:00.4"})
+	_, err := QuarantineVF(VFQuarantine{VFAddress: "0000:e3:00.4"})
 	require.NoError(t, err)
 
 	// Corrupt the state file and reload, as a hypeman restart over a bad
@@ -124,7 +105,7 @@ func TestQuarantineVFRefusesToClobberUnloadedState(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte("not json"), 0644))
 	require.Error(t, initVFHealthStore(path))
 
-	_, _, err = QuarantineVF(VFQuarantine{VFAddress: "0000:e3:00.5"})
+	_, err = QuarantineVF(VFQuarantine{VFAddress: "0000:e3:00.5"})
 	require.Error(t, err)
 	data, err := os.ReadFile(path)
 	require.NoError(t, err)
@@ -132,11 +113,12 @@ func TestQuarantineVFRefusesToClobberUnloadedState(t *testing.T) {
 
 	// Once the file is readable again the next conviction self-heals: it
 	// reloads the persisted records and appends to them.
-	restored := `[{"vf_address":"0000:e3:00.4","wedge_count":1,"quarantined_at":"2026-08-20T00:00:00Z"}]`
+	restored := `[{"vf_address":"0000:e3:00.4","quarantined_at":"2026-08-20T00:00:00Z"}]`
 	require.NoError(t, os.WriteFile(path, []byte(restored), 0644))
-	_, existed, err := QuarantineVF(VFQuarantine{VFAddress: "0000:e3:00.5"})
+	existed, err := QuarantineVF(VFQuarantine{VFAddress: "0000:e3:00.5"})
 	require.NoError(t, err)
 	assert.False(t, existed)
-	assert.Len(t, QuarantinedVFs(), 2)
-	assert.True(t, IsVFQuarantined("0000:e3:00.4"), "reload must recover the previously persisted quarantine")
+	records := QuarantinedVFs()
+	require.Len(t, records, 2, "reload must recover the previously persisted quarantine")
+	assert.Equal(t, "0000:e3:00.4", records[0].VFAddress)
 }

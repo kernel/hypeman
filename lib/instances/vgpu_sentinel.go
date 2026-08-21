@@ -66,14 +66,12 @@ type vgpuSentinelTail struct {
 // failing — so a match quarantines the VF, removing it from placement until
 // an operator cycles the parent GPU.
 type VGPUSentinelController struct {
-	store         vgpuSentinelStore
-	log           *slog.Logger
-	interval      time.Duration
-	quarantine    func(devices.VFQuarantine) (devices.VFHealthRecord, bool, error)
-	isQuarantined func(string) bool
-	hostFramework func() devices.VGPUFramework
-	convictions   metric.Int64Counter
-	tails         map[string]*vgpuSentinelTail
+	store       vgpuSentinelStore
+	log         *slog.Logger
+	interval    time.Duration
+	quarantine  func(devices.VFQuarantine) (bool, error)
+	convictions metric.Int64Counter
+	tails       map[string]*vgpuSentinelTail
 }
 
 func NewVGPUSentinelController(manager Manager, meter metric.Meter, log *slog.Logger) (*VGPUSentinelController, error) {
@@ -123,20 +121,10 @@ func NewVGPUSentinelController(manager Manager, meter metric.Meter, log *slog.Lo
 	}
 
 	return &VGPUSentinelController{
-		store:         store,
-		log:           log.With("controller", "vgpu_sentinel"),
-		interval:      vgpuSentinelScanInterval,
-		quarantine:    devices.QuarantineVF,
-		isQuarantined: devices.IsVFQuarantined,
-		hostFramework: func() devices.VGPUFramework {
-			framework, _, err := devices.DiscoverVGPU()
-			if err != nil {
-				// Fail open: a transient discovery error must not disable
-				// detection on a vendor VFIO host.
-				return devices.VGPUFrameworkVendorVFIO
-			}
-			return framework
-		},
+		store:       store,
+		log:         log.With("controller", "vgpu_sentinel"),
+		interval:    vgpuSentinelScanInterval,
+		quarantine:  devices.QuarantineVF,
 		convictions: convictions,
 		tails:       make(map[string]*vgpuSentinelTail),
 	}, nil
@@ -147,7 +135,13 @@ func (c *VGPUSentinelController) Run(ctx context.Context) error {
 	// every interval on mdev and CPU-only hosts would be pure overhead. The
 	// framework is fixed for the lifetime of the process (SR-IOV provisioning
 	// precedes hypeman startup), so this is a one-time gate.
-	if framework := c.hostFramework(); framework != devices.VGPUFrameworkVendorVFIO {
+	framework, _, err := devices.DiscoverVGPU()
+	if err != nil {
+		// Fail open: a transient discovery error must not disable detection
+		// on a vendor VFIO host.
+		framework = devices.VGPUFrameworkVendorVFIO
+	}
+	if framework != devices.VGPUFrameworkVendorVFIO {
 		c.log.Info("vGPU sentinel controller idle: host has no vendor VFIO framework", "framework", string(framework))
 		return nil
 	}
@@ -210,16 +204,7 @@ func (c *VGPUSentinelController) scanTarget(ctx context.Context, target vgpuSent
 // instance is finished; a failed quarantine leaves the tail open so the
 // recurring report retries it.
 func (c *VGPUSentinelController) convict(ctx context.Context, target vgpuSentinelTarget, line string) bool {
-	if c.isQuarantined(target.vfAddress) {
-		// Already out of placement — typically a rescan of a standing
-		// victim's log after a controller restart. Not a new wedge: no
-		// metric.
-		c.log.InfoContext(ctx, "vGPU sentinel matched an already-quarantined VF",
-			"vf", target.vfAddress, "instance_id", target.instanceID)
-		return true
-	}
-
-	record, existed, err := c.quarantine(devices.VFQuarantine{
+	existed, err := c.quarantine(devices.VFQuarantine{
 		VFAddress:    target.vfAddress,
 		InstanceID:   target.instanceID,
 		SentinelLine: line,
@@ -230,14 +215,17 @@ func (c *VGPUSentinelController) convict(ctx context.Context, target vgpuSentine
 		return false
 	}
 	if existed {
-		// Lost a conviction race; the VF is already quarantined.
+		// Already out of placement — typically a rescan of a standing
+		// victim's log after a controller restart. Not a new wedge: no
+		// metric.
+		c.log.InfoContext(ctx, "vGPU sentinel matched an already-quarantined VF",
+			"vf", target.vfAddress, "instance_id", target.instanceID)
 		return true
 	}
 	c.log.ErrorContext(ctx, "quarantined wedged vGPU VF",
 		"vf", target.vfAddress,
 		"instance_id", target.instanceID,
 		"sentinel_line", line,
-		"wedge_count", record.WedgeCount,
 	)
 	c.convictions.Add(ctx, 1)
 	return true
