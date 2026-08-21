@@ -286,12 +286,11 @@ NVRM: GPU 0000:00:03.0: RmInitAdapter failed! (0x22:0x65:884)
 
 Hypeman detects this automatically: the guest agent watches the guest kernel
 log (`/dev/kmsg`) for that line and reports it as a `HYPEMAN-GPU-INIT-FAILED`
-marker — the same guest-to-host channel as the other `HYPEMAN-*` markers,
-landing in the instance's `logs/app.log` — and the vGPU sentinel controller
-scans that file for every vendor VFIO instance. A match quarantines the VF in
+marker in the instance's `logs/app.log`, which the vGPU sentinel controller
+scans for every vendor VFIO instance. A match quarantines the VF in
 `<data-dir>/gpu/vf-health.json` (it survives restarts): the VF is excluded
 from placement and from advertised profile availability, and its parent GPU
-becomes overflow-only so it drains toward the SR-IOV cycle. The conviction is
+becomes overflow-only — deprioritized for new placements. The conviction is
 logged at error level (`quarantined wedged vGPU VF`) and counted in
 `hypeman_instances_vgpu_sentinel_convictions_total`;
 `hypeman_instances_vgpu_quarantined_vfs` gauges the current quarantine count.
@@ -330,26 +329,20 @@ requires no vGPU assignments on that GPU). The DCGM quiesce is not optional:
 with `nv-hostengine`/`dcgm-exporter` holding the GPUs open, `sriov-manage -d`
 fails with `Cannot obtain unbindLock` on first contact.
 
-**Draining the parent GPU.** The quarantine only deprioritizes the card
-(overflow-only), so under capacity pressure new placements can still land on
-its healthy VFs and refill it. To actually drain the card, cordon it by
-adding every one of its VFs to `<data-dir>/gpu/vf-health.json` (copy the
-record shape of a real conviction: `vf_address` plus `quarantined_at`) and
-restarting hypeman immediately — the store loads only at startup, and a
-conviction landing before the restart re-persists the in-memory set over
-your edit. The restart does not disturb running VMs: startup reconciliation
-protects live VFs. Quarantined VFs are fully excluded from placement and
-from advertised profile availability, so the cordon holds even when every
-other card is full, and `hypeman_instances_vgpu_quarantined_vfs` reads high
-for its duration — expected, not an incident.
+Any manual edit to `vf-health.json` needs an immediate hypeman restart: the
+store loads only at startup, and a conviction landing first re-persists the
+in-memory set over your edit. The restart does not disturb running VMs —
+startup reconciliation protects live VFs.
 
-Running instances are untouched by the cordon and drain through their normal
-lifecycle: standby is blocked for vGPU instances, so only a running VM pins
-a VF, every stop or delete releases it (never to be re-selected while
-cordoned), and the next start picks a fresh VF on another card. Monitor the
-drain by listing instances whose `gpu.device_path` sits under the parent
-GPU; once none remain, run the cycle below, then remove the card's entries
-from `vf-health.json` and restart hypeman again to uncordon.
+**Draining the parent GPU.** Overflow-only is a preference, not a cordon:
+under capacity pressure new placements still land on the card's healthy VFs
+and refill it. To drain the card, quarantine all of its VFs by hand — add
+records to `vf-health.json` (the shape of a real conviction: `vf_address`
+plus `quarantined_at`) and restart. Running instances are untouched and
+drain through their normal lifecycle: standby is blocked for vGPU instances,
+so only a running VM pins a VF, and each stop or delete frees one for good.
+Monitor by listing instances whose `gpu.device_path` sits under the parent
+GPU; once none remain, run the cycle below.
 
 ```bash
 # 1. Quiesce the services holding the GPU (required for the unbind lock).
@@ -363,10 +356,8 @@ systemctl stop nvidia-dcgm-exporter nvidia-dcgm
 systemctl start nvidia-dcgm nvidia-dcgm-exporter
 ```
 
-After the cycle, clear the quarantine by removing the VF's entry from
-`<data-dir>/gpu/vf-health.json` and restarting hypeman immediately — the
-running process keeps the quarantine in memory, and a conviction landing
-before the restart re-persists it over your edit. Then boot a GPU instance as
+After the cycle, clear the quarantine by removing the card's entries from
+`vf-health.json` (restart rule above), then boot a GPU instance as
 verification: placement excludes quarantined VFs, so the recovered VF cannot
 be targeted while its entry exists, and there is no VF-pin API — clearing
 first is safe because the sentinel automatically re-quarantines the VF if the
