@@ -52,6 +52,7 @@ concurrency:
 
 permissions:
   contents: read
+  pull-requests: read
 
 env:
   STAINLESS_WORKSPACE: stainless
@@ -124,16 +125,23 @@ jobs:
             exit 0
           fi
 
-          # Merging the seal-back PR must not trigger another build. The
-          # compare API caps the file list at 300, so a full-length list might
-          # be truncated and can't prove the push was custom-code-only.
+          # Merging the generated seal-back PR must not trigger another build.
+          # Other tracking-only PRs still regenerate every target: they may
+          # update only one target and leave the others' tracking stale.
+          # The compare API caps the file list at 300, so a full-length list
+          # might be truncated and can't prove the push was custom-code-only.
           if [ "$EVENT" = "push" ] && [ -n "$BEFORE" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ]; then
             changed=$(gh api "repos/$REPO/compare/$BEFORE...$AFTER" --jq '.files[].filename')
             count=$(printf '%s\n' "$changed" | wc -l)
             if [ -n "$changed" ] && [ "$count" -lt 300 ] && ! printf '%s\n' "$changed" | grep -qvE "^${STAINLESS_WORKSPACE}/custom-code/"; then
-              echo "::notice::Only custom-code tracking files changed, skipping regeneration."
-              echo "skip=true" >> "$GITHUB_OUTPUT"
-              exit 0
+              seal_back=$(gh api "repos/$REPO/commits/$AFTER/pulls" \
+                --jq 'any(.[]; .merged_at != null and .head.ref == "stlc/seal-tracking")')
+              if [ "$seal_back" = "true" ]; then
+                echo "::notice::Only generated seal-back tracking files changed, skipping regeneration."
+                echo "skip=true" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+              echo "::notice::Tracking files changed outside the generated seal-back PR; regenerating every target."
             fi
           fi
 
