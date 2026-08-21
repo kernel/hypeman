@@ -34,9 +34,6 @@ func validateWindowsCreate(req CreateInstanceRequest, image *images.Image, caps 
 	if req.Vcpus != 0 && req.Vcpus < 2 {
 		return fmt.Errorf("%w: Windows 11 requires at least 2 vCPUs", ErrInvalidRequest)
 	}
-	if req.NetworkEnabled {
-		return fmt.Errorf("%w: Windows networking is added in the networking phase", ErrInvalidRequest)
-	}
 	if len(req.Volumes) != 0 || len(req.Devices) != 0 || req.GPU != nil {
 		return fmt.Errorf("%w: Windows instances do not yet support volumes or device passthrough", ErrInvalidRequest)
 	}

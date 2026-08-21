@@ -5,8 +5,12 @@ package instances
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -19,9 +23,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestWindowsGuestAgentIntegration(t *testing.T) {
-	if os.Getenv("HYPEMAN_RUN_WINDOWS_GUEST_CONTROL_INTEGRATION") != "1" {
-		t.Skip("run by the dedicated Windows guest-control CI gate")
+func TestWindowsLifecycleIntegration(t *testing.T) {
+	if os.Getenv("HYPEMAN_RUN_WINDOWS_LIFECYCLE_INTEGRATION") != "1" {
+		t.Skip("run by the dedicated Windows networking CI gate")
 	}
 	fixture := os.Getenv("HYPEMAN_WINDOWS_TEST_AGENT_IMAGE")
 	if fixture == "" {
@@ -29,23 +33,23 @@ func TestWindowsGuestAgentIntegration(t *testing.T) {
 	}
 	if _, err := os.Stat(fixture); err != nil {
 		if os.Getenv("CI") == "true" {
-			t.Fatalf("required Windows guest-agent fixture is missing: %s", fixture)
+			t.Fatalf("required Windows networking fixture is missing: %s", fixture)
 		}
-		t.Skipf("Windows guest-agent fixture is unavailable: %s", fixture)
+		t.Skipf("Windows networking fixture is unavailable: %s", fixture)
 	}
 	acquireHeavyIO(t)
 
 	manager, dataDir := setupTestManagerForQEMU(t)
 	p := paths.New(dataDir)
-	const digestHex = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+	const digestHex = "abababababababababababababababababababababababababababababababab"
 	image := &images.Image{
-		Name:     "registry.example/windows/image:guest-agent-integration",
+		Name:     "registry.example/windows/image:networking-integration",
 		Digest:   "sha256:" + digestHex,
 		Platform: "windows/amd64",
 		Status:   images.StatusReady,
 		Machine: &images.MachineImage{
 			Kind:        images.MachineImageWindowsImage,
-			Base:        "registry.example/windows/base@sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+			Base:        "registry.example/windows/base@sha256:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
 			TPM:         "2.0",
 			SecureBoot:  "required",
 			VirtualSize: 80 << 30,
@@ -59,22 +63,30 @@ func TestWindowsGuestAgentIntegration(t *testing.T) {
 
 	ctx := context.Background()
 	instance, err := manager.CreateInstance(ctx, CreateInstanceRequest{
-		Name:       "windows-guest-agent-integration",
-		Image:      image.Name,
-		Platform:   "windows/amd64",
-		Size:       8 << 30,
-		Vcpus:      4,
-		Hypervisor: hypervisor.TypeQEMU,
+		Name:           "windows-networking-integration",
+		Image:          image.Name,
+		Platform:       "windows/amd64",
+		Size:           8 << 30,
+		Vcpus:          4,
+		NetworkEnabled: true,
+		Hypervisor:     hypervisor.TypeQEMU,
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = deleteTestInstanceNow(context.Background(), manager, instance.Id) })
-
+	require.NotEmpty(t, instance.IP)
+	require.NotEmpty(t, instance.MAC)
 	require.Eventually(t, func() bool {
 		current, err := manager.GetInstance(ctx, instance.Id)
 		return err == nil && current.State == StateRunning
-	}, 4*time.Minute, time.Second, "Windows guest agent did not become ready")
+	}, 4*time.Minute, time.Second)
 
-	dialer, err := manager.GetVsockDialer(ctx, instance.Id)
+	assertWindowsGuestControl(t, ctx, manager, instance.Id)
+	assertWindowsNetworkReady(t, ctx, manager, instance.Id, instance.IP)
+}
+
+func assertWindowsGuestControl(t *testing.T, ctx context.Context, manager *manager, instanceID string) {
+	t.Helper()
+	dialer, err := manager.GetVsockDialer(ctx, instanceID)
 	require.NoError(t, err)
 
 	var stdout, stderr bytes.Buffer
@@ -86,7 +98,7 @@ func TestWindowsGuestAgentIntegration(t *testing.T) {
 		Timeout: 2,
 	})
 	require.NoError(t, err, stderr.String())
-	assert.Less(t, time.Since(jobStart), 10*time.Second, "timed out process tree did not terminate promptly")
+	assert.Less(t, time.Since(jobStart), 10*time.Second)
 
 	time.Sleep(5 * time.Second)
 	stdout.Reset()
@@ -156,4 +168,36 @@ func TestWindowsGuestAgentIntegration(t *testing.T) {
 	contents, err := os.ReadFile(filepath.Join(destination, "roundtrip.txt"))
 	require.NoError(t, err)
 	assert.Equal(t, "HYPEMAN_COPY_OK", string(contents))
+}
+
+func assertWindowsNetworkReady(t *testing.T, ctx context.Context, manager *manager, instanceID, expectedIP string) {
+	t.Helper()
+	dialer, err := manager.GetVsockDialer(ctx, instanceID)
+	require.NoError(t, err)
+	allocation, err := manager.networkManager.GetAllocation(ctx, instanceID)
+	require.NoError(t, err)
+	expectedDNS := strings.Join(strings.FieldsFunc(allocation.DNS, func(r rune) bool { return r == ',' || r == ' ' }), ",")
+	var stdout, stderr bytes.Buffer
+	command := fmt.Sprintf("$a=Get-NetIPAddress -AddressFamily IPv4 | Where-Object IPAddress -eq '%s'; if (-not $a) { exit 20 }; $dns=@((Get-DnsClientServerAddress -InterfaceIndex $a.InterfaceIndex -AddressFamily IPv4).ServerAddresses); if (($dns -join ',') -ne '%s') { exit 21 }; [System.Net.Dns]::GetHostAddresses('example.com') | Out-Null; [Console]::Out.Write($a.IPAddress)", expectedIP, expectedDNS)
+	exit, err := guest.ExecIntoInstance(ctx, dialer, guest.ExecOptions{
+		Command: []string{"powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command},
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+		Timeout: 30,
+	})
+	require.NoError(t, err, stderr.String())
+	require.Equal(t, 0, exit.Code, stderr.String())
+	assert.Equal(t, expectedIP, stdout.String())
+
+	require.Eventually(t, func() bool {
+		conn, err := net.DialTimeout("tcp", net.JoinHostPort(expectedIP, "3389"), time.Second)
+		if err != nil {
+			return false
+		}
+		_ = conn.Close()
+		return true
+	}, 2*time.Minute, time.Second, "RDP did not become reachable over the allocated network")
+
+	ping := exec.Command("ping", "-c", "3", "-W", "2", expectedIP)
+	require.NoError(t, ping.Run(), "allocated Windows IP did not answer ICMP")
 }

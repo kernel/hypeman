@@ -132,7 +132,7 @@ jobs:
           done
           exit 1
 
-      - name: Test Windows guest control
+      - name: Test Windows lifecycle
         run: |
           make build-embedded
           TEST_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
@@ -140,10 +140,10 @@ jobs:
             if sudo env \
               "PATH=$TEST_PATH" \
               "CI=true" \
-              "HYPEMAN_RUN_WINDOWS_GUEST_CONTROL_INTEGRATION=1" \
+              "HYPEMAN_RUN_WINDOWS_LIFECYCLE_INTEGRATION=1" \
               "HYPEMAN_WINDOWS_OVMF_CODE=$HYPEMAN_WINDOWS_OVMF_CODE" \
               "HYPEMAN_WINDOWS_OVMF_VARS=$HYPEMAN_WINDOWS_OVMF_VARS" \
-              go test -count=1 -run '^TestWindowsGuestAgentIntegration$' -timeout 2m ./lib/instances; then
+              go test -count=1 -run '^TestWindowsLifecycleIntegration$' -timeout 2m ./lib/instances; then
               exit 0
             fi
             test "$attempt" = 3 || sleep 5
