@@ -72,6 +72,8 @@ type VGPUSentinelController struct {
 	quarantine  func(devices.VFQuarantine) (bool, error)
 	convictions metric.Int64Counter
 	tails       map[string]*vgpuSentinelTail
+	// discoverFramework is overridden in tests; nil means devices.DiscoverVGPU.
+	discoverFramework func() (devices.VGPUFramework, []devices.VirtualFunction, error)
 }
 
 func NewVGPUSentinelController(manager Manager, meter metric.Meter, log *slog.Logger) (*VGPUSentinelController, error) {
@@ -134,15 +136,12 @@ func (c *VGPUSentinelController) Run(ctx context.Context) error {
 	// Wedges only exist on vendor VFIO hosts; scanning instance metadata
 	// every interval on mdev and CPU-only hosts would be pure overhead. The
 	// framework is fixed for the lifetime of the process (SR-IOV provisioning
-	// precedes hypeman startup), so this is a one-time gate.
-	framework, _, err := devices.DiscoverVGPU()
-	if err != nil {
-		// Fail open: a transient discovery error must not disable detection
-		// on a vendor VFIO host.
-		framework = devices.VGPUFrameworkVendorVFIO
-	}
-	if framework != devices.VGPUFrameworkVendorVFIO {
-		c.log.Info("vGPU sentinel controller idle: host has no vendor VFIO framework", "framework", string(framework))
+	// precedes hypeman startup), so one successful probe settles the gate. A
+	// failed probe fails open — a transient discovery error must not disable
+	// detection on a vendor VFIO host — and is retried each tick so one bad
+	// probe cannot leave a non-GPU host scanning for the process lifetime.
+	vendor, known := c.probeVendorVFIO()
+	if known && !vendor {
 		return nil
 	}
 	c.log.Info("vGPU sentinel controller started")
@@ -153,9 +152,33 @@ func (c *VGPUSentinelController) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
+			if !known {
+				if vendor, known = c.probeVendorVFIO(); known && !vendor {
+					return nil
+				}
+			}
 			c.scanOnce(ctx)
 		}
 	}
+}
+
+// probeVendorVFIO reports whether the host's vGPU framework could be
+// determined and, when known, whether it is vendor VFIO. It logs the idle
+// verdict so every exit path announces why the controller stopped.
+func (c *VGPUSentinelController) probeVendorVFIO() (vendor, known bool) {
+	discover := c.discoverFramework
+	if discover == nil {
+		discover = devices.DiscoverVGPU
+	}
+	framework, _, err := discover()
+	if err != nil {
+		return false, false
+	}
+	if framework != devices.VGPUFrameworkVendorVFIO {
+		c.log.Info("vGPU sentinel controller idle: host has no vendor VFIO framework", "framework", string(framework))
+		return false, true
+	}
+	return true, true
 }
 
 func (c *VGPUSentinelController) scanOnce(ctx context.Context) {

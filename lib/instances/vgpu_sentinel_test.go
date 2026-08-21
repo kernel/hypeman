@@ -232,6 +232,34 @@ func TestVGPUSentinelControllerDropsStaleTails(t *testing.T) {
 	assert.NotContains(t, c.tails, "instance-1")
 }
 
+// A transient discovery error fails open — the controller scans as if the
+// host were vendor VFIO — but must keep re-probing so a host that is not
+// vendor VFIO stops scanning once discovery recovers.
+func TestVGPUSentinelControllerRunReprobesFailedDiscovery(t *testing.T) {
+	t.Parallel()
+
+	c, _ := newTestSentinelController(t, &fakeSentinelStore{})
+	c.interval = time.Millisecond
+	var probes int
+	c.discoverFramework = func() (devices.VGPUFramework, []devices.VirtualFunction, error) {
+		probes++
+		if probes == 1 {
+			return devices.VGPUFrameworkNone, nil, errors.New("transient sysfs error")
+		}
+		return devices.VGPUFrameworkNone, nil, nil
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- c.Run(context.Background()) }()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run did not exit after discovery resolved to a non vendor VFIO host")
+	}
+	assert.Equal(t, 2, probes)
+}
+
 // Kernel printk shares the serial console with the agent and can split a
 // marker mid-write — which is why the agent emits each report as several
 // identical lines. A corrupted copy must not convict (the strict shape is
