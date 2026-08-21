@@ -1645,6 +1645,10 @@ components:
           maxLength: 256
           description: Exact header value required before proxying. This sensitive value is persisted and returned by the API like instance environment variables; clients should hide it by default.
           example: 0123456789abcdef0123456789abcdef
+        trust_forwarded_headers:
+          type: boolean
+          default: false
+          description: Trust the authenticated caller's X-Forwarded headers and present X-Forwarded-Host as the Host header to the target. Enable only when the caller overwrites forwarding headers from untrusted clients.
 
     IngressRule:
       type: object

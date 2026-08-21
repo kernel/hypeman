@@ -79,7 +79,8 @@ A rule can require a dedicated verification header before Caddy resolves or cont
   "tls": true,
   "request_header_auth": {
     "header": "X-Origin-Verification",
-    "value": "0123456789abcdef0123456789abcdef"
+    "value": "0123456789abcdef0123456789abcdef",
+    "trust_forwarded_headers": true
   }
 }
 ```
@@ -87,6 +88,8 @@ A rule can require a dedicated verification header before Caddy resolves or cont
 Use a cryptographically random bearer secret whose encoded value is 32–256 bytes of printable ASCII without whitespace or Caddy matcher metacharacters (`*`, `{`, `}`). For example, encode at least 32 random bytes as base64. Invalid values prevent ingress creation and configuration regeneration.
 
 Caddy requires an exact hostname and header-value match. Missing or incorrect credentials return 403 without resolving the dynamic upstream. Before proxying an authorized request, Caddy deletes the verification header so it is never delivered to the guest. The normal reverse proxy remains responsible for HTTP streaming, WebSocket upgrades, and server-sent events. An HTTP-to-HTTPS redirect does not require the header, but the HTTPS destination does.
+
+`trust_forwarded_headers` preserves the authenticated caller's `X-Forwarded-For`, `X-Forwarded-Proto`, and `X-Forwarded-Host` values and presents `X-Forwarded-Host` as the guest request's `Host`. Enable it only when the authenticated caller overwrites forwarding headers received from untrusted clients.
 
 The value is sensitive but follows the same API visibility model as instance environment variables: authenticated create, get, and list responses include it. Clients should hide it by default and require an explicit option to display it. Hypeman persists ingress metadata and generated Caddy configuration in owner-only files. The value is not included in application logs or errors.
 

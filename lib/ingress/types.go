@@ -58,8 +58,9 @@ type IngressRule struct {
 
 // RequestHeaderAuth requires an exact header value before proxying a request.
 type RequestHeaderAuth struct {
-	Header string `json:"header"`
-	Value  string `json:"value"`
+	Header                string `json:"header"`
+	Value                 string `json:"value"`
+	TrustForwardedHeaders bool   `json:"trust_forwarded_headers,omitempty"`
 }
 
 func (a *RequestHeaderAuth) Validate() error {

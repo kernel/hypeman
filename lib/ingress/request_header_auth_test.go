@@ -41,6 +41,8 @@ func TestGenerateConfigWithRequestHeaderAuth(t *testing.T) {
 	proxyHandler := handlers[1].(map[string]interface{})
 	assert.Equal(t, "reverse_proxy", proxyHandler["handler"])
 	assert.Contains(t, proxyHandler, "dynamic_upstreams")
+	assert.NotContains(t, proxyHandler, "trusted_proxies")
+	assert.NotContains(t, proxyHandler, "headers")
 	assert.NotContains(t, proxyHandler, "request_buffers")
 	assert.NotContains(t, proxyHandler, "response_buffers")
 
@@ -77,6 +79,24 @@ func TestGenerateConfigWithoutRequestHeaderAuthKeepsRouteShape(t *testing.T) {
 	handlers := route["handle"].([]interface{})
 	require.Len(t, handlers, 1)
 	assert.Equal(t, "reverse_proxy", handlers[0].(map[string]interface{})["handler"])
+}
+
+func TestGenerateConfigTrustsForwardedHeadersFromAuthenticatedCaller(t *testing.T) {
+	generator, _, cleanup := setupTestGenerator(t)
+	defer cleanup()
+	ingress := protectedTestIngress()
+	ingress.Rules[0].RequestHeaderAuth.TrustForwardedHeaders = true
+
+	data, err := generator.GenerateConfig(context.Background(), []Ingress{ingress})
+	require.NoError(t, err)
+	routes := configRoutes(t, data, 443)
+	handlers := routes[0].(map[string]interface{})["handle"].([]interface{})
+	proxy := handlers[1].(map[string]interface{})
+	assert.Equal(t, []interface{}{"0.0.0.0/0", "::/0"}, proxy["trusted_proxies"])
+	headers := proxy["headers"].(map[string]interface{})
+	request := headers["request"].(map[string]interface{})
+	set := request["set"].(map[string]interface{})
+	assert.Equal(t, []interface{}{"{http.request.header.X-Forwarded-Host}"}, set["Host"])
 }
 
 func TestRequestHeaderAuthValidationDoesNotExposeValues(t *testing.T) {
@@ -173,6 +193,7 @@ func TestRequestHeaderAuthPersistenceAndBackwardCompatibility(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, loaded.Rules[0].RequestHeaderAuth)
 	assert.Equal(t, testAuthValue, loaded.Rules[0].RequestHeaderAuth.Value)
+	assert.False(t, loaded.Rules[0].RequestHeaderAuth.TrustForwardedHeaders)
 
 	legacy := `{"id":"legacy","name":"legacy","rules":[{"match":{"hostname":"legacy.example.com"},"target":{"instance":"legacy","port":8080}}],"created_at":"2025-01-15T10:00:00Z"}`
 	require.NoError(t, os.WriteFile(p.IngressMetadata("legacy"), []byte(legacy), 0644))

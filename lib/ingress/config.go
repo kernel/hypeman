@@ -295,6 +295,14 @@ func (g *CaddyConfigGenerator) buildConfig(ctx context.Context, ingresses []Ingr
 					return nil, err
 				}
 				matcher["header"] = map[string][]string{rule.RequestHeaderAuth.Header: []string{rule.RequestHeaderAuth.Value}}
+				if rule.RequestHeaderAuth.TrustForwardedHeaders {
+					reverseProxy["trusted_proxies"] = []string{"0.0.0.0/0", "::/0"}
+					reverseProxy["headers"] = map[string]interface{}{
+						"request": map[string]interface{}{
+							"set": map[string][]string{"Host": []string{"{http.request.header.X-Forwarded-Host}"}},
+						},
+					}
+				}
 				handlers = []interface{}{
 					map[string]interface{}{
 						"handler": "headers",
