@@ -67,6 +67,7 @@ func (m *manager) retryOrphanedVGPURelease(ctx context.Context, stored StoredMet
 			"instance_id", stored.Id, "device_path", path, "attempt", attempt)
 		return
 	}
+	m.recordVGPUOrphanReleaseAbandoned(ctx)
 	log.ErrorContext(ctx, "giving up on orphaned vGPU release; VF stays allocated until startup reconciliation or manual remediation",
 		"instance_id", stored.Id, "device_path", path, "attempts", orphanedVGPUReleaseMaxAttempts)
 }
