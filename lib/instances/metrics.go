@@ -94,6 +94,7 @@ type Metrics struct {
 	lifecycleEventsDroppedTotal          metric.Int64Counter
 	forkMemFileShareFallbacksTotal       metric.Int64Counter
 	ttlReaperDeletionsTotal              metric.Int64Counter
+	vgpuOrphanReleasesAbandonedTotal     metric.Int64Counter
 	tracer                               trace.Tracer
 }
 
@@ -265,6 +266,14 @@ func newInstanceMetrics(meter metric.Meter, tracer trace.Tracer, m *manager) (*M
 	ttlReaperDeletionsTotal, err := meter.Int64Counter(
 		"hypeman_instances_ttl_reaper_deletions_total",
 		metric.WithDescription("Total number of instance TTL reaper deletion attempts"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	vgpuOrphanReleasesAbandonedTotal, err := meter.Int64Counter(
+		"hypeman_instances_vgpu_orphan_releases_abandoned_total",
+		metric.WithDescription("Total orphaned vGPU release retries that gave up, leaving the VF allocated until startup reconciliation or manual remediation"),
 	)
 	if err != nil {
 		return nil, err
@@ -464,6 +473,7 @@ func newInstanceMetrics(meter metric.Meter, tracer trace.Tracer, m *manager) (*M
 		lifecycleEventsDroppedTotal:          lifecycleEventsDroppedTotal,
 		forkMemFileShareFallbacksTotal:       forkMemFileShareFallbacksTotal,
 		ttlReaperDeletionsTotal:              ttlReaperDeletionsTotal,
+		vgpuOrphanReleasesAbandonedTotal:     vgpuOrphanReleasesAbandonedTotal,
 		tracer:                               tracer,
 	}, nil
 }
@@ -561,6 +571,17 @@ func (m *manager) recordTimeToRunning(ctx context.Context, stored *StoredMetadat
 		attrs = append(attrs, attribute.String("hypervisor", string(stored.HypervisorType)))
 	}
 	m.metrics.timeToRunning.Record(ctx, duration, metric.WithAttributes(attrs...))
+}
+
+// recordVGPUOrphanReleaseAbandoned records an orphaned vGPU release retry
+// loop giving up: the VF stays allocated (capacity silently reduced) until
+// startup reconciliation or manual remediation, so it must be visible beyond
+// a log line.
+func (m *manager) recordVGPUOrphanReleaseAbandoned(ctx context.Context) {
+	if m.metrics == nil {
+		return
+	}
+	m.metrics.vgpuOrphanReleasesAbandonedTotal.Add(ctx, 1)
 }
 
 // recordStateTransition records a state transition with hypervisor label.
