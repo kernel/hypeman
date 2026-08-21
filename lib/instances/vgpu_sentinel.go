@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"strings"
 	"time"
 
 	"github.com/kernel/hypeman/lib/devices"
@@ -245,7 +244,10 @@ func (c *VGPUSentinelController) convict(ctx context.Context, target vgpuSentine
 }
 
 // scanForSentinel reads complete lines from the tail's offset onward,
-// advancing the offset and returning the first sentinel match. A partial
+// advancing the offset and returning the first sentinel match — only the
+// matched marker, not the whole line: the surrounding bytes are
+// guest-controlled console output up to the line cap and do not belong in
+// error logs or the persisted health state. A partial
 // trailing line is left unconsumed for the next scan. An offset past the
 // file size means the log was archived for a new boot, so the scan restarts
 // from the top. Memory is bounded by the line cap: a line that overflows the
@@ -283,8 +285,8 @@ func scanForSentinel(path string, tail *vgpuSentinelTail) (string, bool, error) 
 				tail.skippingLongLine = false
 				continue
 			}
-			if vgpuSentinelPattern.Match(line) {
-				return strings.TrimSpace(string(line)), true, nil
+			if match := vgpuSentinelPattern.Find(line); match != nil {
+				return string(match), true, nil
 			}
 		case errors.Is(err, bufio.ErrBufferFull):
 			tail.offset += int64(len(line))
