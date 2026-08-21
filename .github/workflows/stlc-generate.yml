@@ -134,8 +134,13 @@ jobs:
             changed=$(gh api "repos/$REPO/compare/$BEFORE...$AFTER" --jq '.files[].filename')
             count=$(printf '%s\n' "$changed" | wc -l)
             if [ -n "$changed" ] && [ "$count" -lt 300 ] && ! printf '%s\n' "$changed" | grep -qvE "^${STAINLESS_WORKSPACE}/custom-code/"; then
-              seal_back=$(gh api "repos/$REPO/commits/$AFTER/pulls" \
-                --jq 'any(.[]; .merged_at != null and .head.ref == "stlc/seal-tracking")')
+              seal_back=$(gh api --method GET "repos/$REPO/pulls" \
+                -f state=closed \
+                -f head="${REPO%%/*}:stlc/seal-tracking" \
+                -f sort=updated \
+                -f direction=desc \
+                -f per_page=100 \
+                --jq 'any(.[]; .merged_at != null and .merge_commit_sha == env.AFTER)')
               if [ "$seal_back" = "true" ]; then
                 echo "::notice::Only generated seal-back tracking files changed, skipping regeneration."
                 echo "skip=true" >> "$GITHUB_OUTPUT"
