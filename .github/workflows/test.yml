@@ -114,7 +114,7 @@ jobs:
           image_source=$(sudo find /mnt/data/home -path '*/windows-vm-exp/build/*-agent.qcow2' -print -quit)
           base_source=$(sudo find /mnt/data/home -path '*/windows-vm-exp/build/*-golden.raw' -print -quit)
           sudo mkdir -p "$fixture_dir" /ci/windows
-          if ! test -r "$fixture_dir/image-agent.qcow2" && test -n "$image_source"; then
+          if test -n "$image_source"; then
             sudo cp --reflink=auto --sparse=always "$image_source" "$fixture_dir/image-agent.qcow2"
             sudo chmod 0444 "$fixture_dir/image-agent.qcow2"
           fi
