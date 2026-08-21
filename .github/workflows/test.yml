@@ -28,6 +28,17 @@ jobs:
     runs-on: [self-hosted, linux, x64, kvm]
     steps:
       - uses: actions/checkout@v4
+        id: checkout
+        continue-on-error: true
+        with:
+          clean: false
+          repository: ${{ env.TEST_SOURCE_REPO }}
+          ref: ${{ env.TEST_SOURCE_REF }}
+          persist-credentials: false
+
+      - name: Retry checkout
+        if: steps.checkout.outcome == 'failure'
+        uses: actions/checkout@v4
         with:
           clean: false
           repository: ${{ env.TEST_SOURCE_REPO }}
