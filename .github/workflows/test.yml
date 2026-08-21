@@ -164,10 +164,9 @@ jobs:
           test -n "$partition"
           mkdir "$work/mount"
           sudo mount -t ntfs-3g "$partition" "$work/mount"
-          target="$work/mount/Windows/System32/hypeman-guest-agent.exe"
-          test -f "$target"
-          sudo cp "$work/source/lib/system/guest_agent/hypeman-guest-agent.exe" "$target"
-          sudo chmod 0755 "$target"
+          target=$(sudo find "$work/mount" -type f -iname 'hypeman-guest-agent.exe' -print -quit)
+          test -n "$target"
+          sudo install -m 0755 "$work/source/lib/system/guest_agent/hypeman-guest-agent.exe" "$target"
           sudo sync "$target"
           sudo umount "$work/mount"
           sudo qemu-nbd --disconnect /dev/nbd15
