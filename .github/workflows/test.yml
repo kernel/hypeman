@@ -111,8 +111,8 @@ jobs:
       - name: Stage Windows test fixtures
         run: |
           fixture_dir=/mnt/data/ci-fixtures/windows
-          image_source=$(sudo find /mnt/data/home -path '*/windows-vm-exp/build/*-agent.qcow2' -print -quit)
-          base_source=$(sudo find /mnt/data/home -path '*/windows-vm-exp/build/*-golden.raw' -print -quit)
+          image_source=$(sudo find /mnt/data/home -path '*/windows-vm-exp/build/*-agent.qcow2' -print -quit 2>/dev/null || true)
+          base_source=$(sudo find /mnt/data/home -path '*/windows-vm-exp/build/*-golden.raw' -print -quit 2>/dev/null || true)
           sudo mkdir -p "$fixture_dir" /ci/windows
           if test -n "$image_source"; then
             sudo cp --reflink=auto --sparse=always "$image_source" "$fixture_dir/image-agent.qcow2"
