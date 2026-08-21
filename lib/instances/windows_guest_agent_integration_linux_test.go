@@ -73,7 +73,7 @@ func TestWindowsGuestAgentIntegration(t *testing.T) {
 	require.NoError(t, err)
 	require.Eventually(t, func() bool {
 		exit, err := guest.ExecIntoInstance(ctx, dialer, guest.ExecOptions{
-			Command: []string{"cmd.exe", "/d", "/c", "exit", "0"},
+			Command: []string{"powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "exit 0"},
 			Timeout: 5,
 		})
 		return err == nil && exit.Code == 0
