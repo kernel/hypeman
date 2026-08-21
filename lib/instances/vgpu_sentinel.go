@@ -231,19 +231,20 @@ func (c *VGPUSentinelController) convict(ctx context.Context, target vgpuSentine
 	// The target came from a metadata snapshot taken before the log read: a
 	// stop/start racing the scan could have assigned a different VF by now,
 	// and convicting the snapshot's VF would quarantine a healthy device.
-	// Reload the assignment and convict only if it is unchanged. Start
+	// Reload the assignment and skip only if a different one exists. Start
 	// archives the previous boot's log before persisting a new assignment,
-	// so if the metadata still shows this epoch after the marker was read,
-	// the marker provably belongs to this epoch's VF. On any other outcome
-	// the tail stays open; the next scan sees the current assignment and
-	// rescans its log from the top.
+	// so a marker read under this epoch's snapshot provably belongs to this
+	// epoch's VF — including when the instance was stopped or deleted after
+	// the read, which releases the assignment but cannot un-wedge the VF.
+	// On a skip or error the tail stays open; the next scan sees the current
+	// assignment and rescans its log from the top.
 	current, ok, err := c.store.getVGPUSentinelTarget(ctx, target.instanceID)
 	if err != nil {
 		c.log.WarnContext(ctx, "vGPU sentinel could not confirm assignment before conviction",
 			"vf", target.vfAddress, "instance_id", target.instanceID, "error", err)
 		return false
 	}
-	if !ok || current.vfAddress != target.vfAddress || current.assignedAt != target.assignedAt {
+	if ok && (current.vfAddress != target.vfAddress || current.assignedAt != target.assignedAt) {
 		c.log.InfoContext(ctx, "vGPU sentinel skipping conviction: assignment changed during scan",
 			"vf", target.vfAddress, "instance_id", target.instanceID)
 		return false

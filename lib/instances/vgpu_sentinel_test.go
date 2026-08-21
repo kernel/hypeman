@@ -268,11 +268,13 @@ func TestVGPUSentinelControllerSkipsConvictionOnChangedAssignment(t *testing.T) 
 	assert.Empty(t, *quarantined)
 	assert.False(t, c.tails["instance-1"].done)
 
-	// A deleted instance can no longer vouch for the marker either.
+	// A stop or delete after the marker was read releases the assignment but
+	// cannot un-wedge the VF: the marker still convicts the scanned epoch's VF.
 	store.targets = nil
 	c.tails["instance-1"] = &vgpuSentinelTail{vfAddress: stale.vfAddress, assignedAt: stale.assignedAt}
 	c.scanTarget(context.Background(), stale)
-	assert.Empty(t, *quarantined)
+	require.Len(t, *quarantined, 1)
+	assert.Equal(t, "0000:e3:00.4", (*quarantined)[0].VFAddress)
 }
 
 func TestListVGPUSentinelTargetsSkipsUnstattableMetadata(t *testing.T) {
