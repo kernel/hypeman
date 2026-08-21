@@ -111,10 +111,10 @@ jobs:
       - name: Stage Windows test fixtures
         run: |
           fixture_dir=/mnt/data/ci-fixtures/windows
-          image_source=$(sudo find /mnt/data/home -path '*/windows-vm-exp/build/*-agent.qcow2' -print -quit 2>/dev/null || true)
-          base_source=$(sudo find /mnt/data/home -path '*/windows-vm-exp/build/*-golden.raw' -print -quit 2>/dev/null || true)
+          image_source=$(sudo find /mnt/data/home -path '*/windows-vm-exp/build/*-agent.qcow2' -print -quit)
+          base_source=$(sudo find /mnt/data/home -path '*/windows-vm-exp/build/*-golden.raw' -print -quit)
           sudo mkdir -p "$fixture_dir" /ci/windows
-          if test -n "$image_source"; then
+          if ! test -r "$fixture_dir/image-agent.qcow2" && test -n "$image_source"; then
             sudo cp --reflink=auto --sparse=always "$image_source" "$fixture_dir/image-agent.qcow2"
             sudo chmod 0444 "$fixture_dir/image-agent.qcow2"
           fi
@@ -136,7 +136,7 @@ jobs:
           set -euo pipefail
           work=$(mktemp -d)
           trap 'rm -rf "$work"' EXIT
-          gh api repos/kernel/hypeman/tarball/088612571b2aa2b6b07c70a63fc23c2542abdc99 > "$work/source.tar.gz"
+          gh api repos/kernel/hypeman/tarball/hypeship/windows-guest-control > "$work/source.tar.gz"
           mkdir "$work/source"
           tar -xzf "$work/source.tar.gz" --strip-components=1 -C "$work/source"
           make -C "$work/source" build-windows-guest-agent
@@ -164,10 +164,9 @@ jobs:
           test -n "$partition"
           mkdir "$work/mount"
           sudo mount -t ntfs-3g "$partition" "$work/mount"
-          target="$work/mount/Windows/System32/hypeman-guest-agent.exe"
-          test -f "$target"
-          sudo cp "$work/source/lib/system/guest_agent/hypeman-guest-agent.exe" "$target"
-          sudo chmod 0755 "$target"
+          target=$(sudo find "$work/mount" -type f -iname 'hypeman-guest-agent.exe' -print -quit)
+          test -n "$target"
+          sudo install -m 0755 "$work/source/lib/system/guest_agent/hypeman-guest-agent.exe" "$target"
           sudo sync "$target"
           sudo umount "$work/mount"
           sudo qemu-nbd --disconnect /dev/nbd15
