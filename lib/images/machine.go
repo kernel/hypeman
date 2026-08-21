@@ -287,13 +287,28 @@ func machineDiskPathInDir(dir string, kind MachineImageKind) string {
 	return filepath.Join(dir, name)
 }
 
+func (m *manager) recordMachineDependency(ref *ResolvedRef, machine *MachineImage, buildID string) error {
+	m.createMu.Lock()
+	defer m.createMu.Unlock()
+
+	meta, err := readMetadata(m.paths, ref.Repository(), ref.DigestHex())
+	if err != nil || meta.BuildID != buildID {
+		return errStaleBuild
+	}
+	meta.Machine = machine
+	if err := writeMetadata(m.paths, ref.Repository(), ref.DigestHex(), meta); err != nil {
+		return fmt.Errorf("record machine image dependency: %w", err)
+	}
+	return nil
+}
+
 func (m *manager) ensureNoMachineDependents(repository, digestHex string) error {
 	metas, err := listAllMetadata(m.paths)
 	if err != nil {
 		return err
 	}
 	for _, meta := range metas {
-		if meta.Machine == nil || meta.Machine.Kind != MachineImageWindowsImage {
+		if meta.Status == StatusFailed || meta.Machine == nil || meta.Machine.Kind != MachineImageWindowsImage {
 			continue
 		}
 		base, err := ParseNormalizedRef(meta.Machine.Base)

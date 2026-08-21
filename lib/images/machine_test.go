@@ -151,6 +151,42 @@ func TestMaterializeWindowsBaseFormats(t *testing.T) {
 	}
 }
 
+func TestPendingWindowsImageBlocksBaseDeletion(t *testing.T) {
+	p := paths.New(t.TempDir())
+	m := &manager{paths: p}
+	baseDigest := strings.Repeat("a", 64)
+	imageDigest := strings.Repeat("b", 64)
+	baseName := "registry.example/windows/base@sha256:" + baseDigest
+	imageName := "registry.example/windows/image@sha256:" + imageDigest
+
+	require.NoError(t, writeMetadata(p, "registry.example/windows/base", baseDigest, &imageMetadata{
+		Name:     baseName,
+		Digest:   "sha256:" + baseDigest,
+		Platform: "windows/amd64",
+		Status:   StatusReady,
+		Machine:  &MachineImage{Kind: MachineImageWindowsBase},
+	}))
+	require.NoError(t, os.WriteFile(machineDiskPath(p, "registry.example/windows/base", baseDigest, MachineImageWindowsBase), []byte("base"), 0444))
+	const buildID = "pending-build"
+	require.NoError(t, writeMetadata(p, "registry.example/windows/image", imageDigest, &imageMetadata{
+		Name:     imageName,
+		Digest:   "sha256:" + imageDigest,
+		Platform: "windows/amd64",
+		Status:   StatusPending,
+		BuildID:  buildID,
+	}))
+	ref, err := ParseNormalizedRef(imageName)
+	require.NoError(t, err)
+	require.NoError(t, m.recordMachineDependency(NewResolvedRef(ref, ref.Digest()), &MachineImage{
+		Kind: MachineImageWindowsImage,
+		Base: baseName,
+	}, buildID))
+
+	err = m.DeleteImage(t.Context(), baseName)
+	assert.ErrorContains(t, err, "depends on it")
+	assert.DirExists(t, p.ImageContentDir(baseDigest))
+}
+
 func TestMaterializeWindowsBaseAndImage(t *testing.T) {
 	requireQEMUImg(t)
 
@@ -218,6 +254,6 @@ func TestMaterializeWindowsBaseAndImage(t *testing.T) {
 	require.NoError(t, writeMetadata(p, imageRef.Repository(), imageDigest, imageMeta))
 	assert.ErrorContains(t, m.ensureNoMachineDependents(baseRef.Repository(), baseDigest), "depends on it")
 	assert.ErrorContains(t, m.DeleteImage(t.Context(), baseRef.String()), "depends on it")
-	assert.DirExists(t, p.ImageDigestDir(baseRef.Repository(), baseDigest))
+	assert.DirExists(t, p.ImageContentDir(baseDigest))
 	assert.Equal(t, MachineImageWindowsBase, baseMeta.toImage().Machine.Kind)
 }
