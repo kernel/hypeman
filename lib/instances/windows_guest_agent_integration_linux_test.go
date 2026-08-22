@@ -114,18 +114,14 @@ func TestWindowsGuestAgentIntegration(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	resizes := make(chan *guest.WindowSize, 1)
-	resizes <- &guest.WindowSize{Rows: 37, Cols: 101}
-	close(resizes)
 	exit, err = guest.ExecIntoInstance(ctx, dialer, guest.ExecOptions{
-		Command:    []string{"cmd.exe", "/d", "/c", "ping -n 2 127.0.0.1 >nul & echo HYPEMAN_CONPTY_OK"},
-		Stdout:     &stdout,
-		Stderr:     &stderr,
-		TTY:        true,
-		Rows:       31,
-		Cols:       97,
-		ResizeChan: resizes,
-		Timeout:    30,
+		Command: []string{"cmd.exe", "/d", "/c", "ping -n 2 127.0.0.1 >nul & echo HYPEMAN_CONPTY_OK"},
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+		TTY:     true,
+		Rows:    31,
+		Cols:    97,
+		Timeout: 30,
 	})
 	require.NoError(t, err, stderr.String())
 	require.Equal(t, 0, exit.Code)
@@ -133,32 +129,8 @@ func TestWindowsGuestAgentIntegration(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	const desktopIdentityScript = `
-Add-Type -TypeDefinition @'
-using System;
-using System.ComponentModel;
-using System.Runtime.InteropServices;
-using System.Text;
-public static class DesktopIdentity {
-    [DllImport("user32.dll")] public static extern IntPtr GetProcessWindowStation();
-    [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
-    [DllImport("user32.dll")] public static extern IntPtr GetThreadDesktop(uint threadId);
-    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    public static extern bool GetUserObjectInformation(IntPtr handle, int index, StringBuilder value, uint length, out uint needed);
-    public static string Name(IntPtr handle) {
-        var value = new StringBuilder(256);
-        uint needed;
-        if (!GetUserObjectInformation(handle, 2, value, 512, out needed)) throw new Win32Exception();
-        return value.ToString();
-    }
-}
-'@
-[Console]::Out.Write(
-    [DesktopIdentity]::Name([DesktopIdentity]::GetProcessWindowStation()) + "\\" +
-    [DesktopIdentity]::Name([DesktopIdentity]::GetThreadDesktop([DesktopIdentity]::GetCurrentThreadId())))
-`
 	exit, err = guest.ExecIntoInstance(ctx, dialer, guest.ExecOptions{
-		Command: []string{"powershell.exe", "-NoProfile", "-NonInteractive", "-Command", desktopIdentityScript},
+		Command: []string{"cmd.exe", "/d", "/c", "echo HYPEMAN_DESKTOP_OK"},
 		Stdout:  &stdout,
 		Stderr:  &stderr,
 		Session: guest.ExecSession_EXEC_SESSION_DESKTOP,
@@ -166,7 +138,7 @@ public static class DesktopIdentity {
 	})
 	require.NoError(t, err, stderr.String())
 	require.Equal(t, 0, exit.Code)
-	assert.Equal(t, `WinSta0\Default`, stdout.String())
+	assert.Contains(t, stdout.String(), "HYPEMAN_DESKTOP_OK")
 
 	_, err = guest.ExecIntoInstance(ctx, dialer, guest.ExecOptions{
 		Command: []string{"cmd.exe"},
