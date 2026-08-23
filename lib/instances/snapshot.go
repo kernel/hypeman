@@ -607,6 +607,12 @@ func validateForkSnapshotRequest(req ForkSnapshotRequest) error {
 	if req.TargetState != "" && req.TargetState != StateStopped && req.TargetState != StateStandby && req.TargetState != StateRunning {
 		return fmt.Errorf("%w: invalid target_state %q", ErrInvalidRequest, req.TargetState)
 	}
+	// Caller-supplied tags are written into instance metadata below, so they must
+	// clear the same validation as create-instance and create-snapshot — the
+	// OpenAPI layer does not guard this direct manager path.
+	if err := tags.Validate(req.Tags); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidRequest, err)
+	}
 	return nil
 }
 
