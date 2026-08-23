@@ -530,6 +530,15 @@ components:
           $ref: "#/components/schemas/HealthCheck"
         restart_policy:
           $ref: "#/components/schemas/RestartPolicy"
+        ttl:
+          type: string
+          description: Relative lifetime from when this update is committed, in Go duration format. Use "0s" to disable automatic expiration. Mutually exclusive with expires_at.
+          example: "6h"
+        expires_at:
+          type: string
+          format: date-time
+          description: Absolute expiration time. Must be in the future and is mutually exclusive with ttl.
+          example: "2026-08-21T18:00:00Z"
 
     CreateInstanceRequest:
       type: object
@@ -601,6 +610,15 @@ components:
                     format: "Bearer ${value}"
         tags:
           $ref: "#/components/schemas/Tags"
+        ttl:
+          type: string
+          description: Relative lifetime from instance creation, in Go duration format. Use "0s" or omit both expiration fields to disable automatic expiration. Mutually exclusive with expires_at.
+          example: "24h"
+        expires_at:
+          type: string
+          format: date-time
+          description: Absolute expiration time. Must be in the future and is mutually exclusive with ttl.
+          example: "2026-08-21T18:00:00Z"
         network:
           type: object
           description: Network configuration for the instance
@@ -977,7 +995,7 @@ components:
     
     Instance:
       type: object
-      required: [id, name, image, state, created_at]
+      required: [id, name, image, state, created_at, expires_at]
       properties:
         id:
           type: string
@@ -1072,6 +1090,12 @@ components:
           format: date-time
           description: Creation timestamp (RFC3339)
           example: "2025-01-15T10:30:00Z"
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Absolute expiration time, or null when automatic expiration is disabled. Instance TTL is cleared on fork.
+          example: "2026-08-21T18:00:00Z"
         started_at:
           type: string
           format: date-time
@@ -2838,9 +2862,8 @@ paths:
     patch:
       summary: Update instance properties
       description: |
-        Update mutable properties of a running instance. Currently supports updating
-        only the environment variables referenced by existing credential policies,
-        enabling secret/key rotation without instance restart.
+        Update mutable instance properties. TTL values are relative to when the update
+        is committed. Expiration updates are rejected after the current deadline passes.
       operationId: updateInstance
       security:
         - bearerAuth: []
@@ -2877,7 +2900,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
         409:
-          description: Invalid state (instance must be running or initializing)
+          description: Invalid state or instance expiration deadline already passed
           content:
             application/json:
               schema:

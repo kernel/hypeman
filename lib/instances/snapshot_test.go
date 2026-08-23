@@ -23,6 +23,11 @@ func TestStoppedSnapshotLifecycleAndForkAfterSourceDeletion(t *testing.T) {
 	hvType := mgr.defaultHypervisor
 	sourceID := "snapshot-stopped-src"
 	createStoppedSnapshotSourceFixture(t, mgr, sourceID, "snapshot-stopped-src", hvType)
+	expiresAt := time.Now().Add(24 * time.Hour)
+	sourceMeta, err := mgr.loadMetadata(sourceID)
+	require.NoError(t, err)
+	sourceMeta.ExpiresAt = &expiresAt
+	require.NoError(t, mgr.saveMetadata(sourceMeta))
 
 	snap, err := mgr.CreateSnapshot(ctx, sourceID, CreateSnapshotRequest{
 		Kind: SnapshotKindStopped,
@@ -30,6 +35,9 @@ func TestStoppedSnapshotLifecycleAndForkAfterSourceDeletion(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, SnapshotKindStopped, snap.Kind)
+	snapshotMeta, err := mgr.loadSnapshotRecord(snap.Id)
+	require.NoError(t, err)
+	assert.Nil(t, snapshotMeta.StoredMetadata.ExpiresAt)
 
 	restored, err := mgr.RestoreSnapshot(ctx, sourceID, snap.Id, RestoreSnapshotRequest{
 		TargetState:      StateStopped,
@@ -38,6 +46,8 @@ func TestStoppedSnapshotLifecycleAndForkAfterSourceDeletion(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, StateStopped, restored.State)
 	require.Equal(t, hvType, restored.HypervisorType)
+	require.NotNil(t, restored.ExpiresAt)
+	assert.True(t, expiresAt.Equal(*restored.ExpiresAt))
 
 	require.NoError(t, mgr.DeleteInstance(ctx, sourceID))
 
@@ -53,6 +63,7 @@ func TestStoppedSnapshotLifecycleAndForkAfterSourceDeletion(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, StateStopped, forked.State)
 	require.Equal(t, hvType, forked.HypervisorType)
+	assert.Nil(t, forked.ExpiresAt)
 	t.Cleanup(func() { _ = deleteTestInstanceNow(context.Background(), mgr, forked.Id) })
 
 	require.NoError(t, mgr.DeleteSnapshot(ctx, snap.Id))

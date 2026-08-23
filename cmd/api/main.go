@@ -663,6 +663,14 @@ func run() error {
 			return restartController.StartRestartPolicyController(gctx)
 		})
 	}
+	if ttlReaper, ok := app.InstanceManager.(interface {
+		StartTTLReaper(context.Context) error
+	}); ok {
+		grp.Go(func() error {
+			logger.Info("starting instance ttl reaper")
+			return ttlReaper.StartTTLReaper(gctx)
+		})
+	}
 
 	logger.Info("hypeman initialization complete", "duration", time.Since(startupStarted))
 

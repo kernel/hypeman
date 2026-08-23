@@ -151,7 +151,7 @@ func (m *manager) createSnapshot(ctx context.Context, id string, req CreateSnaps
 				SourceHypervisor: stored.HypervisorType,
 				CreatedAt:        time.Now(),
 			},
-			StoredMetadata: cloneStoredMetadataWithoutPendingStandbyCompression(meta.StoredMetadata),
+			StoredMetadata: cloneStoredMetadataForSnapshot(meta.StoredMetadata),
 		}
 		sizeBytes, err := snapshotstore.DirectoryFileSize(snapshotGuestDir)
 		if err != nil {
@@ -203,7 +203,7 @@ func (m *manager) createSnapshot(ctx context.Context, id string, req CreateSnaps
 				SourceHypervisor: stored.HypervisorType,
 				CreatedAt:        time.Now(),
 			},
-			StoredMetadata: cloneStoredMetadataWithoutPendingStandbyCompression(meta.StoredMetadata),
+			StoredMetadata: cloneStoredMetadataForSnapshot(meta.StoredMetadata),
 		}
 		sizeBytes, err := snapshotstore.DirectoryFileSize(snapshotGuestDir)
 		if err != nil {
@@ -299,6 +299,7 @@ func (m *manager) restoreSnapshot(ctx context.Context, id string, snapshotID str
 	restored := cloneStoredMetadataWithoutPendingStandbyCompression(rec.StoredMetadata)
 	restored.Id = sourceMeta.Id
 	restored.Name = sourceMeta.Name
+	restored.ExpiresAt = sourceMeta.ExpiresAt
 	restored.DataDir = m.paths.InstanceDir(id)
 	restored.HypervisorPID = nil
 	restored.StartedAt = nil
@@ -422,6 +423,7 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 	forkMeta.Id = forkID
 	forkMeta.Name = req.Name
 	forkMeta.CreatedAt = now
+	forkMeta.ExpiresAt = nil
 	forkMeta.StartedAt = nil
 	forkMeta.StoppedAt = nil
 	forkMeta.HypervisorPID = nil
