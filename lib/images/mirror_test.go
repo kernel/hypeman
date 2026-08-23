@@ -7,6 +7,9 @@ import (
 
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/registry"
+	v1 "github.com/google/go-containerregistry/pkg/v1"
+	"github.com/google/go-containerregistry/pkg/v1/empty"
+	"github.com/google/go-containerregistry/pkg/v1/mutate"
 	"github.com/google/go-containerregistry/pkg/v1/random"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/stretchr/testify/assert"
@@ -172,4 +175,64 @@ func TestPushMirroredByTagStillMirrorsImage(t *testing.T) {
 	mirrored, err := remote.Get(dstRef)
 	require.NoError(t, err)
 	assert.False(t, mirrored.MediaType.IsIndex())
+}
+
+// The tag path does not just avoid mirroring the whole index — it resolves a
+// multi-platform index down to *the requested platform's* image. The single-
+// platform test above cannot see this, because with one manifest there is
+// nothing to pick between. Here the source tag names a two-platform index and
+// the request asks for linux/arm64: the mirror must arrive as that arm64 image,
+// not as the index and not as the other platform's amd64 image.
+func TestPushMirroredByTagResolvesMultiPlatformIndexToRequestedPlatform(t *testing.T) {
+	src := httptest.NewServer(registry.New())
+	defer src.Close()
+	dst := httptest.NewServer(registry.New())
+	defer dst.Close()
+	srcHost := strings.TrimPrefix(src.URL, "http://")
+	dstHost := strings.TrimPrefix(dst.URL, "http://")
+
+	// Two images with distinct digests (distinct sizes), each pinned to a
+	// distinct platform in the index manifest — the shape of a real multi-arch
+	// Docker Hub tag.
+	amd64Img, err := random.Image(1024, 1)
+	require.NoError(t, err)
+	arm64Img, err := random.Image(2048, 1)
+	require.NoError(t, err)
+	amd64Digest, err := amd64Img.Digest()
+	require.NoError(t, err)
+	arm64Digest, err := arm64Img.Digest()
+	require.NoError(t, err)
+	require.NotEqual(t, amd64Digest, arm64Digest, "the platforms must be distinguishable")
+
+	idx := mutate.AppendManifests(empty.Index,
+		mutate.IndexAddendum{
+			Add:        amd64Img,
+			Descriptor: v1.Descriptor{Platform: &v1.Platform{OS: "linux", Architecture: "amd64"}},
+		},
+		mutate.IndexAddendum{
+			Add:        arm64Img,
+			Descriptor: v1.Descriptor{Platform: &v1.Platform{OS: "linux", Architecture: "arm64"}},
+		},
+	)
+	srcRef, err := name.ParseReference(srcHost + "/library/multi:latest")
+	require.NoError(t, err)
+	require.NoError(t, remote.WriteIndex(srcRef, idx))
+
+	// The production tag path: fetch the tag with a requested platform, then
+	// mirror as a non-digest reference (isDigestRef=false).
+	desc, err := remote.Get(srcRef, remote.WithPlatform(v1.Platform{OS: "linux", Architecture: "arm64"}))
+	require.NoError(t, err)
+	dstRef, err := name.ParseReference(dstHost + "/library/multi:latest")
+	require.NoError(t, err)
+	digest, err := pushMirrored(desc, false, dstRef)
+	require.NoError(t, err)
+	assert.Equal(t, arm64Digest, digest,
+		"the tag path must resolve to the requested platform's image, not the index or another platform")
+	assert.NotEqual(t, amd64Digest, digest, "it must not mirror the other platform")
+
+	mirrored, err := remote.Get(dstRef)
+	require.NoError(t, err)
+	assert.False(t, mirrored.MediaType.IsIndex(),
+		"a tagged multi-platform index must arrive as a single platform-resolved image")
+	assert.Equal(t, arm64Digest, mirrored.Digest)
 }
