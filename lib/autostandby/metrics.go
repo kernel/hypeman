@@ -14,6 +14,7 @@ type Metrics struct {
 	conntrackEventsTotal   metric.Int64Counter
 	startupResyncDuration  metric.Float64Histogram
 	standbyAttemptsTotal   metric.Int64Counter
+	holdDuration           metric.Float64Histogram
 	controllerErrorsTotal  metric.Int64Counter
 	trackedInstancesGauge  metric.Int64ObservableGauge
 	activeConnectionsGauge metric.Int64ObservableGauge
@@ -46,6 +47,15 @@ func newMetrics(meter metric.Meter, tracer trace.Tracer, controller *Controller)
 	standbyAttemptsTotal, err := meter.Int64Counter(
 		"hypeman_auto_standby_standby_attempts_total",
 		metric.WithDescription("Total standby attempts issued by the auto-standby controller"),
+	)
+	if err != nil {
+		return &Metrics{tracer: tracer}
+	}
+	holdDuration, err := meter.Float64Histogram(
+		"hypeman_auto_standby_hold_duration_seconds",
+		metric.WithDescription("Time spent placing an auto-standby hold"),
+		metric.WithUnit("s"),
+		metric.WithExplicitBucketBoundaries(hypotel.CommonDurationHistogramBuckets()...),
 	)
 	if err != nil {
 		return &Metrics{tracer: tracer}
@@ -90,6 +100,7 @@ func newMetrics(meter metric.Meter, tracer trace.Tracer, controller *Controller)
 		conntrackEventsTotal:   conntrackEventsTotal,
 		startupResyncDuration:  startupResyncDuration,
 		standbyAttemptsTotal:   standbyAttemptsTotal,
+		holdDuration:           holdDuration,
 		controllerErrorsTotal:  controllerErrorsTotal,
 		trackedInstancesGauge:  trackedInstancesGauge,
 		activeConnectionsGauge: activeConnectionsGauge,
@@ -142,6 +153,13 @@ func (c *Controller) recordStandbyAttempt(status string) {
 	c.metrics.standbyAttemptsTotal.Add(context.Background(), 1, metric.WithAttributes(
 		attribute.String("status", status),
 	))
+}
+
+func (c *Controller) recordHoldDuration(start time.Time) {
+	if c.metrics == nil || c.metrics.holdDuration == nil {
+		return
+	}
+	c.metrics.holdDuration.Record(context.Background(), time.Since(start).Seconds())
 }
 
 func (c *Controller) recordControllerError(operation string) {

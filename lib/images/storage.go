@@ -29,6 +29,7 @@ type imageMetadata struct {
 	WorkingDir   string              `json:"working_dir,omitempty"`
 	CreatedAt    time.Time           `json:"created_at"`
 	BorrowedAuth bool                `json:"borrowed_auth,omitempty"`
+	BuildID      string              `json:"build_id,omitempty"`
 }
 
 func (m *imageMetadata) toImage() *Image {

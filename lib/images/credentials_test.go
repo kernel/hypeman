@@ -113,9 +113,28 @@ func TestBorrowedCredentialsExpireWhileQueued(t *testing.T) {
 		return m.inflightPulls[digest].credentials == nil
 	}, time.Second, time.Millisecond)
 
-	credentials, _, expired := m.borrowedAuth(digest)
+	credentials, _, expired, stale := m.borrowedAuth(digest, inflight)
 	assert.True(t, expired)
+	assert.False(t, stale)
 	assert.Nil(t, credentials)
+}
+
+func TestBorrowedAuthRejectsReplacedInflightPull(t *testing.T) {
+	m := &manager{inflightPulls: make(map[string]*inflightImagePull)}
+	const digest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	first := m.registerInflightPull(digest, &authn.AuthConfig{Username: "first"})
+	second := m.registerInflightPull(digest, &authn.AuthConfig{Username: "second"})
+	defer m.releaseInflightPull(digest, second)()
+
+	credentials, _, expired, stale := m.borrowedAuth(digest, first)
+	assert.Nil(t, credentials)
+	assert.False(t, expired)
+	assert.True(t, stale)
+
+	credentials, _, expired, stale = m.borrowedAuth(digest, second)
+	assert.Equal(t, "second", credentials.Username)
+	assert.False(t, expired)
+	assert.False(t, stale)
 }
 
 func TestRecoverInterruptedCredentialedConversionFromCache(t *testing.T) {

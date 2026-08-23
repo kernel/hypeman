@@ -278,6 +278,7 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 	forkMeta.Id = forkID
 	forkMeta.Name = req.Name
 	forkMeta.CreatedAt = now
+	forkMeta.ExpiresAt = nil
 	forkMeta.StartedAt = nil
 	forkMeta.StoppedAt = nil
 	forkMeta.HypervisorPID = nil
@@ -613,6 +614,10 @@ func cloneStoredMetadata(src StoredMetadata) StoredMetadata {
 		pid := *src.HypervisorPID
 		dst.HypervisorPID = &pid
 	}
+	if src.ExpiresAt != nil {
+		expiresAt := *src.ExpiresAt
+		dst.ExpiresAt = &expiresAt
+	}
 	if src.StartedAt != nil {
 		startedAt := *src.StartedAt
 		dst.StartedAt = &startedAt
@@ -641,5 +646,11 @@ func cloneStoredMetadata(src StoredMetadata) StoredMetadata {
 func cloneStoredMetadataWithoutPendingStandbyCompression(src StoredMetadata) StoredMetadata {
 	dst := cloneStoredMetadata(src)
 	dst.PendingStandbyCompression = nil
+	return dst
+}
+
+func cloneStoredMetadataForSnapshot(src StoredMetadata) StoredMetadata {
+	dst := cloneStoredMetadataWithoutPendingStandbyCompression(src)
+	dst.ExpiresAt = nil
 	return dst
 }

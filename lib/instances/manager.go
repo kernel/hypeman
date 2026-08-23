@@ -179,7 +179,9 @@ type manager struct {
 	tracer                    trace.Tracer
 	now                       func() time.Time
 	writeFile                 func(string, []byte, os.FileMode) error
+	deleteInstanceFn          func(context.Context, string) error
 	deleteSnapshotFn          func(context.Context, string) error
+	ttlReaperDeleteTimeout    time.Duration
 	egressProxy               *egressproxy.Service
 	egressProxyServiceOptions egressproxy.ServiceOptions
 	egressProxyMu             sync.Mutex
@@ -376,8 +378,13 @@ func (m *manager) supportsConcurrentForkPrepare(hvType hypervisor.Type) bool {
 
 // getInstanceLock returns or creates a lock for a specific instance
 func (m *manager) getInstanceLock(id string) *sync.RWMutex {
-	lock, _ := m.instanceLocks.LoadOrStore(id, &sync.RWMutex{})
-	return lock.(*sync.RWMutex)
+	lock, _ := m.loadOrStoreInstanceLock(id)
+	return lock
+}
+
+func (m *manager) loadOrStoreInstanceLock(id string) (*sync.RWMutex, bool) {
+	lock, loaded := m.instanceLocks.LoadOrStore(id, &sync.RWMutex{})
+	return lock.(*sync.RWMutex), !loaded
 }
 
 // maybePersistExitInfo persists exit info to metadata under the instance write lock.
@@ -440,10 +447,17 @@ func (m *manager) DeleteInstance(ctx context.Context, id string) error {
 	lock.Lock()
 	defer lock.Unlock()
 
-	err := m.deleteInstance(ctx, id)
+	return m.deleteInstanceLocked(ctx, id)
+}
+
+func (m *manager) deleteInstanceLocked(ctx context.Context, id string) error {
+	deleteInstance := m.deleteInstance
+	if m.deleteInstanceFn != nil {
+		deleteInstance = m.deleteInstanceFn
+	}
+	err := deleteInstance(ctx, id)
 	if err == nil {
 		m.notifyLifecycleDelete(ctx, id)
-		// Clean up the lock after successful deletion
 		m.instanceLocks.Delete(id)
 	}
 	return err

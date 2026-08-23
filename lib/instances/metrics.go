@@ -93,6 +93,7 @@ type Metrics struct {
 	snapshotCompressionPreemptionsTotal  metric.Int64Counter
 	lifecycleEventsDroppedTotal          metric.Int64Counter
 	forkMemFileShareFallbacksTotal       metric.Int64Counter
+	ttlReaperDeletionsTotal              metric.Int64Counter
 	tracer                               trace.Tracer
 }
 
@@ -256,6 +257,14 @@ func newInstanceMetrics(meter metric.Meter, tracer trace.Tracer, m *manager) (*M
 	forkMemFileShareFallbacksTotal, err := meter.Int64Counter(
 		"hypeman_fork_memfile_share_fallbacks_total",
 		metric.WithDescription("Total number of fork mem-file hardlink failures that fell back to a full copy"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	ttlReaperDeletionsTotal, err := meter.Int64Counter(
+		"hypeman_instances_ttl_reaper_deletions_total",
+		metric.WithDescription("Total number of instance TTL reaper deletion attempts"),
 	)
 	if err != nil {
 		return nil, err
@@ -454,6 +463,7 @@ func newInstanceMetrics(meter metric.Meter, tracer trace.Tracer, m *manager) (*M
 		snapshotCompressionPreemptionsTotal:  snapshotCompressionPreemptionsTotal,
 		lifecycleEventsDroppedTotal:          lifecycleEventsDroppedTotal,
 		forkMemFileShareFallbacksTotal:       forkMemFileShareFallbacksTotal,
+		ttlReaperDeletionsTotal:              ttlReaperDeletionsTotal,
 		tracer:                               tracer,
 	}, nil
 }
