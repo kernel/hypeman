@@ -37,13 +37,10 @@ func (m *manager) vgpuTermGrace() time.Duration {
 }
 
 // terminateThenKill hard-kills the hypervisor process, first giving any vGPU
-// instance a SIGTERM grace: SIGKILL during guest driver init can silently
-// wedge the VF until its parent GPU's SR-IOV is cycled (see
-// lib/devices/GPU.md), while a terminating QEMU runs its VFIO teardown. The
-// grace applies in every state, not just Initializing, because the instance
-// reports Running seconds before the guest driver finishes initializing and
-// nothing host-side observes that boundary; post-init the SIGTERM is proven
-// harmless and costs the grace only when the process ignores it.
+// instance a SIGTERM grace: SIGKILL during guest driver init can wedge the VF
+// until its parent GPU is SR-IOV cycled (see lib/devices/GPU.md). The grace
+// applies in every state because the instance reports Running seconds before
+// driver init finishes and nothing host-side observes that boundary.
 func (m *manager) terminateThenKill(ctx context.Context, inst *Instance, pid int) error {
 	if inst.GPUProfile != "" {
 		if syscall.Kill(pid, syscall.SIGTERM) == nil && WaitForProcessExit(pid, m.vgpuTermGrace()) {
@@ -211,10 +208,9 @@ func classifyResolvedHypervisorOwner(socketPath string, stored, resolved int, er
 }
 
 // HypervisorMayBeAlive reports whether the recorded hypervisor process may
-// still be running. It fails open: when ownership cannot be resolved it
-// returns true, which is the safe direction for its callers (reconcile
-// protection and claim checks, where true means "protect"). Do not use it to
-// authorize teardown.
+// still be running. It fails open (unresolvable ownership returns true, the
+// safe direction for reconcile protection and claim checks); do not use it
+// to authorize teardown.
 func HypervisorMayBeAlive(id HypervisorProcessIdentity, socketPath string) bool {
 	pid, err := resolveLiveHypervisorPID(id, socketPath)
 	return err != nil || pid > 0
