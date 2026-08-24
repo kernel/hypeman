@@ -351,6 +351,11 @@ func (s vgpuReconcileManagerStub) ListInstancesForReconcile(context.Context) ([]
 	return s.list, nil
 }
 
+func TestLiveInstanceVGPUDevicePathsRequiresReconcileInventory(t *testing.T) {
+	_, _, err := liveInstanceVGPUDevicePaths(context.Background(), struct{ instances.Manager }{})
+	require.ErrorContains(t, err, "does not support vGPU reconcile inventory")
+}
+
 func TestLiveInstanceVGPUDevicePathsBoundsStartupProtection(t *testing.T) {
 	dead := exec.Command("true")
 	require.NoError(t, dead.Run())
