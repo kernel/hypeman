@@ -121,16 +121,8 @@ func (m *manager) startInstance(
 	}
 
 	// Setup cleanup stack for automatic rollback on errors
-	// Registered before cu.Clean so it runs after cleanup and can report a
-	// vGPU assignment that rollback failed to destroy, matching create's
-	// vgpu_cleanup_pending contract.
-	vgpuRetained := false
-	vgpuRetentionPersisted := false
-	defer func() {
-		if retErr != nil && vgpuRetained {
-			retErr = &VGPUCleanupPendingError{InstanceID: id, Retained: vgpuRetentionPersisted, Err: retErr}
-		}
-	}()
+	retention := vgpuRetention{instanceID: id}
+	defer retention.deferWrapPending(&retErr)
 	cu := cleanup.Make(func() {})
 	defer cu.Clean()
 
@@ -204,7 +196,10 @@ func (m *manager) startInstance(
 		log.InfoContext(ctx, "created vGPU", "instance_id", id, "profile", stored.GPUProfile, "uuid", device.MdevUUID)
 		// Add vGPU cleanup to stack
 		cu.Add(func() {
-			vgpuRetained, vgpuRetentionPersisted = m.cleanupStartVGPU(ctx, id, device, assignedAt, rollbackMeta)
+			retained, persisted := m.cleanupStartVGPU(ctx, id, device, assignedAt, rollbackMeta)
+			if retained {
+				retention.markRetained(persisted)
+			}
 		})
 		if err := m.saveMetadata(meta); err != nil {
 			log.ErrorContext(ctx, "failed to save metadata after vGPU creation", "instance_id", id, "error", err)

@@ -201,7 +201,7 @@ func TestDeletePersistsVGPUReleaseBeforeTeardown(t *testing.T) {
 // A failed create whose vGPU release also failed retains a minimal
 // GPU-fields-only stub, and the API tells the caller to delete it to retry
 // the release. Exercise that recovery path against the exact stub shape
-// cleanupFailedCreate writes.
+// persistVGPURetention writes.
 func TestDeleteReleasesRetainedCreateStub(t *testing.T) {
 	p := paths.New(t.TempDir())
 	var destroyed []devices.VGPUAssignment
