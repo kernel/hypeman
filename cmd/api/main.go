@@ -185,8 +185,16 @@ func configureUFFDGraduationController(cfg *config.Config, instanceManager insta
 	}, logger), nil
 }
 
+type vgpuReconcileInstanceLister interface {
+	ListInstancesForReconcile(context.Context) ([]instances.Instance, error)
+}
+
 func liveInstanceVGPUDevicePaths(ctx context.Context, instanceManager instances.Manager) (map[string]struct{}, time.Duration, error) {
-	allInstances, err := instanceManager.ListInstancesForReconcile(ctx)
+	lister, ok := instanceManager.(vgpuReconcileInstanceLister)
+	if !ok {
+		return nil, 0, errors.New("instance manager does not support vGPU reconcile inventory")
+	}
+	allInstances, err := lister.ListInstancesForReconcile(ctx)
 	if err != nil {
 		return nil, 0, err
 	}
