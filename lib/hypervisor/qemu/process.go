@@ -40,12 +40,6 @@ const (
 	// socketDialTimeout is timeout for individual socket connection attempts
 	socketDialTimeout = 100 * time.Millisecond
 
-	// vfioTermGrace is how long start-failure cleanup waits for a
-	// VFIO-attached QEMU to exit on SIGTERM before SIGKILL. Only failed
-	// starts pay it, and only when the process ignores SIGTERM; observed
-	// mid-init VFIO teardown takes 1-2s.
-	vfioTermGrace = 5 * time.Second
-
 	// clientCreateTimeout is how long to retry QMP client creation after the
 	// socket appears. Under high parallel load the socket can accept connections
 	// slightly later than file creation/availability.
@@ -320,20 +314,17 @@ func (p *startedProcess) cleanup() {
 	_ = os.Remove(p.socketPath)
 }
 
-// hasVFIODevice reports whether the QEMU command line attaches a VFIO device.
-func hasVFIODevice(args []string) bool {
-	for _, arg := range args {
-		if strings.Contains(arg, "vfio-pci") {
-			return true
-		}
+func vfioTermGraceFor(cfg hypervisor.VMConfig) time.Duration {
+	if cfg.VGPUDevicePath != "" || len(cfg.PCIDevices) > 0 {
+		return hypervisor.VFIOTermGrace
 	}
-	return false
+	return 0
 }
 
 // startQEMUProcess handles the common QEMU process startup logic.
 // Returns the PID, hypervisor client, and a cleanup function.
 // The cleanup function must be called on error; call cleanup.Release() on success.
-func (s *Starter) startQEMUProcess(ctx context.Context, p *paths.Paths, version string, socketPath string, args []string) (int, *QEMU, *cleanup.Cleanup, error) {
+func (s *Starter) startQEMUProcess(ctx context.Context, p *paths.Paths, version string, socketPath string, args []string, termGrace time.Duration) (int, *QEMU, *cleanup.Cleanup, error) {
 	log := logger.FromContext(ctx)
 	processAttrs := hypervisor.TraceAttributesFromContext(ctx)
 	processAttrs = append(processAttrs,
@@ -403,9 +394,8 @@ func (s *Starter) startQEMUProcess(ctx context.Context, p *paths.Paths, version 
 	}
 
 	pid := proc.pid
-	if hasVFIODevice(args) {
-		proc.termGrace = vfioTermGrace
-	}
+	// Only failed starts pay the VFIO termination grace.
+	proc.termGrace = termGrace
 	log.DebugContext(processCtx, "QEMU process started", "pid", pid, "duration_ms", time.Since(processStartTime).Milliseconds())
 
 	// Setup cleanup to kill, reap, and remove the socket if subsequent steps fail.
@@ -522,7 +512,7 @@ func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, s
 			// Build command arguments: QMP socket + VM configuration
 			args := buildQMPArgs(socketPath)
 			args = append(args, buildArgs(attempt, machineType)...)
-			pid, hv, cu, err = s.startQEMUProcess(ctx, p, version, socketPath, args)
+			pid, hv, cu, err = s.startQEMUProcess(ctx, p, version, socketPath, args, vfioTermGraceFor(attempt))
 			if err == nil {
 				booted = attempt
 				started = true
@@ -657,7 +647,7 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 	incomingURI := "exec:cat < " + memoryFile
 	args = append(args, "-incoming", incomingURI)
 
-	pid, hv, cu, err := s.startQEMUProcess(ctx, p, version, socketPath, args)
+	pid, hv, cu, err := s.startQEMUProcess(ctx, p, version, socketPath, args, vfioTermGraceFor(config))
 	if err != nil {
 		return 0, nil, err
 	}
