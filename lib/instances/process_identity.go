@@ -123,7 +123,7 @@ func resolveLiveHypervisorPID(id HypervisorProcessIdentity, socketPath string) (
 			_, _ = syscall.Wait4(*id.HypervisorPID, &status, syscall.WNOHANG, nil)
 		}
 	}
-	if runtime.GOOS != "linux" || socketPath == "" {
+	if runtime.GOOS != "linux" {
 		return stored, nil
 	}
 	bootID := hostBootID()
@@ -133,8 +133,17 @@ func resolveLiveHypervisorPID(id HypervisorProcessIdentity, socketPath string) (
 		// hypervisor. Treat the stored PID as dead rather than failing closed.
 		stored = 0
 	}
-	if stored != 0 && id.HypervisorStartTime != 0 && id.HypervisorBootID != "" && bootID != "" && id.HypervisorBootID == bootID && processStartTime(stored) == id.HypervisorStartTime {
-		return stored, nil
+	if stored != 0 && id.HypervisorStartTime != 0 && id.HypervisorBootID != "" && bootID != "" && id.HypervisorBootID == bootID {
+		if processStartTime(stored) == id.HypervisorStartTime {
+			return stored, nil
+		}
+		stored = 0
+	}
+	if socketPath == "" {
+		if stored != 0 {
+			return 0, fmt.Errorf("cannot confirm stored hypervisor PID %d without a socket path", stored)
+		}
+		return 0, nil
 	}
 	var resolved int
 	var err error
