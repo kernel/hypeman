@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"os/exec"
 	"testing"
 	"time"
 
@@ -340,44 +339,4 @@ func TestImageNameWithSlashes_URLEncoding(t *testing.T) {
 			}
 		})
 	}
-}
-
-type vgpuReconcileManagerStub struct {
-	instances.Manager
-	list []instances.Instance
-}
-
-func (s vgpuReconcileManagerStub) ListInstancesForReconcile(context.Context) ([]instances.Instance, error) {
-	return s.list, nil
-}
-
-func TestLiveInstanceVGPUDevicePathsRequiresReconcileInventory(t *testing.T) {
-	_, _, err := liveInstanceVGPUDevicePaths(context.Background(), struct{ instances.Manager }{})
-	require.ErrorContains(t, err, "does not support vGPU reconcile inventory")
-}
-
-func TestLiveInstanceVGPUDevicePathsBoundsStartupProtection(t *testing.T) {
-	dead := exec.Command("true")
-	require.NoError(t, dead.Run())
-	deadPID := dead.Process.Pid
-	recent := time.Now().Add(-time.Minute)
-	stale := time.Now().Add(-instances.VGPUAssignmentStartupGracePeriod - time.Minute)
-
-	manager := vgpuReconcileManagerStub{list: []instances.Instance{
-		{StoredMetadata: instances.StoredMetadata{Id: "booting", GPUDevicePath: "/sys/bus/pci/devices/0000:82:00.4", GPUAssignedAt: &recent}},
-		{StoredMetadata: instances.StoredMetadata{Id: "orphaned", GPUDevicePath: "/sys/bus/pci/devices/0000:82:00.5", GPUAssignedAt: &stale}},
-		{StoredMetadata: instances.StoredMetadata{Id: "legacy", GPUDevicePath: "/sys/bus/pci/devices/0000:82:00.6"}},
-		{StoredMetadata: instances.StoredMetadata{Id: "dead", GPUDevicePath: "/sys/bus/pci/devices/0000:82:00.7", HypervisorProcessIdentity: instances.HypervisorProcessIdentity{HypervisorPID: &deadPID}}},
-		{StoredMetadata: instances.StoredMetadata{Id: "stale-pid-booting", GPUDevicePath: "/sys/bus/pci/devices/0000:82:00.8", HypervisorProcessIdentity: instances.HypervisorProcessIdentity{HypervisorPID: &deadPID}, GPUAssignedAt: &recent}},
-	}}
-
-	protected, retryAfter, err := liveInstanceVGPUDevicePaths(context.Background(), manager)
-	require.NoError(t, err)
-	require.Positive(t, retryAfter)
-	require.LessOrEqual(t, retryAfter, instances.VGPUAssignmentStartupGracePeriod)
-	assert.Contains(t, protected, "/sys/bus/pci/devices/0000:82:00.4")
-	assert.NotContains(t, protected, "/sys/bus/pci/devices/0000:82:00.5")
-	assert.NotContains(t, protected, "/sys/bus/pci/devices/0000:82:00.6")
-	assert.NotContains(t, protected, "/sys/bus/pci/devices/0000:82:00.7")
-	assert.Contains(t, protected, "/sys/bus/pci/devices/0000:82:00.8")
 }

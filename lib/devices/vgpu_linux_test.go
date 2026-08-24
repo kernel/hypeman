@@ -3,6 +3,7 @@
 package devices
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -11,6 +12,21 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestReconcileDiscoveredVGPUsControlsVendorSweep(t *testing.T) {
+	protected := make(map[string]struct{})
+	vendorCalls := 0
+	reconcileVendor := func(context.Context, map[string]struct{}) error {
+		vendorCalls++
+		return nil
+	}
+
+	require.NoError(t, reconcileDiscoveredVGPUs(context.Background(), VGPUFrameworkVendorVFIO, protected, false, nil, reconcileVendor))
+	assert.Zero(t, vendorCalls)
+
+	require.NoError(t, reconcileDiscoveredVGPUs(context.Background(), VGPUFrameworkVendorVFIO, protected, true, nil, reconcileVendor))
+	assert.Equal(t, 1, vendorCalls)
+}
 
 func TestDiscoverVGPUWithPropagatesMdevError(t *testing.T) {
 	t.Parallel()
