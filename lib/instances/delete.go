@@ -15,7 +15,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 )
 
-const deleteGracefulShutdownTimeout = 2
+const deleteGracefulShutdownTimeout = 5
 
 type deleteInstanceOptions struct {
 	skipGracefulShutdown bool
