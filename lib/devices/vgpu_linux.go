@@ -105,20 +105,38 @@ func DestroyVGPU(ctx context.Context, assignment VGPUAssignment) error {
 }
 
 // ReconcileVGPUs releases orphaned vGPU assignments.
-func ReconcileVGPUs(ctx context.Context, protectedDevicePaths map[string]struct{}) error {
+func ReconcileVGPUs(ctx context.Context, protectedDevicePaths map[string]struct{}, sweepVendorVFIO bool) error {
 	framework, _, err := DiscoverVGPU()
 	if err != nil {
 		return err
 	}
 
+	return reconcileDiscoveredVGPUs(
+		ctx,
+		framework,
+		protectedDevicePaths,
+		sweepVendorVFIO,
+		func(ctx context.Context) error { return ReconcileMdevs(ctx, nil) },
+		hostVendorVFIO.reconcile,
+	)
+}
+
+func reconcileDiscoveredVGPUs(
+	ctx context.Context,
+	framework VGPUFramework,
+	protectedDevicePaths map[string]struct{},
+	sweepVendorVFIO bool,
+	reconcileMdev func(context.Context) error,
+	reconcileVendorVFIO func(context.Context, map[string]struct{}) error,
+) error {
 	switch framework {
 	case VGPUFrameworkMdev:
-		return ReconcileMdevs(ctx, nil)
+		return reconcileMdev(ctx)
 	case VGPUFrameworkVendorVFIO:
-		if protectedDevicePaths == nil {
+		if !sweepVendorVFIO {
 			return nil
 		}
-		return hostVendorVFIO.reconcile(ctx, protectedDevicePaths)
+		return reconcileVendorVFIO(ctx, protectedDevicePaths)
 	default:
 		return nil
 	}

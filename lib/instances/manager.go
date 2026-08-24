@@ -29,6 +29,7 @@ import (
 
 type Manager interface {
 	ListInstances(ctx context.Context, filter *ListInstancesFilter) ([]Instance, error)
+	ReconcileVGPUs(ctx context.Context)
 	ListSnapshots(ctx context.Context, filter *ListSnapshotsFilter) ([]Snapshot, error)
 	GetSnapshot(ctx context.Context, snapshotID string) (*Snapshot, error)
 	CreateInstance(ctx context.Context, req CreateInstanceRequest) (*Instance, error)
