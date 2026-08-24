@@ -30,11 +30,6 @@ func (r *vgpuRetention) retainFromDevice(stub StoredMetadata, device *devices.VG
 	r.retained = true
 }
 
-func (r *vgpuRetention) retain(stub *StoredMetadata) {
-	r.stub = stub
-	r.retained = stub != nil
-}
-
 func (r *vgpuRetention) markRetained(persisted bool) {
 	r.retained = true
 	r.persisted = persisted
@@ -70,6 +65,9 @@ func (m *manager) persistVGPURetention(ctx context.Context, retention *vgpuReten
 		if err := m.deleteInstanceData(id); err != nil {
 			log.ErrorContext(ctx, "failed to delete stale instance data after retention failure", "instance_id", id, "error", err)
 		}
+		// No on-disk record points at the device; retry the release in the
+		// background instead of waiting for the next startup reconcile.
+		m.scheduleOrphanedVGPURelease(ctx, *retainedVGPU)
 		return false
 	}
 	if err := m.ensureDirectories(id); err != nil {

@@ -31,12 +31,12 @@ func TestListInstancesForReconcileFailsOnInvalidMetadata(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, listed, 1)
 
-	_, err = m.ListInstancesForReconcile(context.Background())
+	_, err = m.listInstancesForReconcile(context.Background())
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "load metadata for instance invalid")
 
 	require.NoError(t, os.Remove(m.paths.InstanceMetadata("invalid")))
-	listed, err = m.ListInstancesForReconcile(context.Background())
+	listed, err = m.listInstancesForReconcile(context.Background())
 	require.NoError(t, err)
 	require.Len(t, listed, 1)
 	assert.Equal(t, "valid", listed[0].Id)
@@ -70,7 +70,7 @@ func TestListInstancesForReconcileSkipsInstanceDeletedDuringListing(t *testing.T
 	}
 	done := make(chan result, 1)
 	go func() {
-		listed, err := m.ListInstancesForReconcile(context.Background())
+		listed, err := m.listInstancesForReconcile(context.Background())
 		done <- result{listed, err}
 	}()
 	time.Sleep(100 * time.Millisecond)

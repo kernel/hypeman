@@ -185,6 +185,10 @@ func (m *manager) startInstance(
 				wrapped := fmt.Errorf("create vGPU for profile %s: %w", stored.GPUProfile, err)
 				if saveErr := m.saveMetadata(&retentionMeta); saveErr != nil {
 					log.ErrorContext(ctx, "failed to retain vGPU assignment after create rollback failure", "instance_id", id, "error", saveErr)
+					// No on-disk record points at the device; retry the release
+					// in the background instead of waiting for the next startup
+					// reconcile.
+					m.scheduleOrphanedVGPURelease(ctx, retentionMeta.StoredMetadata)
 					return nil, &VGPUCleanupPendingError{InstanceID: id, Err: fmt.Errorf("%w; retain assignment: %v", wrapped, saveErr)}
 				}
 				return nil, &VGPUCleanupPendingError{InstanceID: id, Retained: true, Err: wrapped}
