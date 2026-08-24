@@ -70,6 +70,11 @@ func (m *manager) persistVGPURetention(ctx context.Context, retention *vgpuReten
 		m.scheduleOrphanedVGPURelease(ctx, *retainedVGPU)
 		return false
 	}
+	if err := m.deleteInstanceData(id); err != nil {
+		log.ErrorContext(ctx, "failed to clean instance data before retaining vGPU assignment", "instance_id", id, "error", err)
+		retention.persisted = retentionSurvives()
+		return
+	}
 	if err := m.ensureDirectories(id); err != nil {
 		log.ErrorContext(ctx, "failed to retain instance data after vGPU cleanup failure", "instance_id", id, "error", err)
 		retention.persisted = retentionSurvives()

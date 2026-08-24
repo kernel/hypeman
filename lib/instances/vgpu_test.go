@@ -49,8 +49,16 @@ func TestCleanupFailedCreateRetainsVGPUAssignment(t *testing.T) {
 		HypervisorType: "qemu",
 		DataDir:        m.paths.InstanceDir("failed-create"),
 	}
+	require.NoError(t, m.ensureDirectories(stored.Id))
+	require.NoError(t, os.WriteFile(m.paths.InstanceOverlay(stored.Id), []byte("overlay"), 0o644))
+	require.NoError(t, os.WriteFile(m.paths.InstanceConfigDisk(stored.Id), []byte("config"), 0o644))
+	require.NoError(t, os.MkdirAll(m.paths.InstanceVolumeOverlaysDir(stored.Id), 0o755))
+	require.NoError(t, os.WriteFile(m.paths.InstanceVolumeOverlay(stored.Id, "volume"), []byte("volume overlay"), 0o644))
 
 	assert.True(t, persistTestVGPURetention(m, context.Background(), stored.Id, stored))
+	assert.NoFileExists(t, m.paths.InstanceOverlay(stored.Id))
+	assert.NoFileExists(t, m.paths.InstanceConfigDisk(stored.Id))
+	assert.NoDirExists(t, m.paths.InstanceVolumeOverlaysDir(stored.Id))
 
 	retained, err := m.loadMetadata(stored.Id)
 	require.NoError(t, err)
@@ -85,12 +93,15 @@ func TestCleanupFailedCreateDeletesDataWithoutRetainedVGPU(t *testing.T) {
 }
 
 func TestCleanupFailedCreateReportsUnpersistedRetention(t *testing.T) {
-	t.Parallel()
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses directory permissions")
+	}
 
 	m := &manager{paths: paths.New(t.TempDir())}
 	const id = "failed-create"
-	require.NoError(t, m.ensureDirectories(id))
-	require.NoError(t, os.Mkdir(m.paths.InstanceMetadata(id), 0o755))
+	require.NoError(t, os.MkdirAll(m.paths.GuestsDir(), 0o755))
+	require.NoError(t, os.Chmod(m.paths.GuestsDir(), 0o555))
+	t.Cleanup(func() { _ = os.Chmod(m.paths.GuestsDir(), 0o755) })
 
 	stored := &StoredMetadata{
 		Id:            id,
