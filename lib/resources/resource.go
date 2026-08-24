@@ -695,11 +695,11 @@ func (m *Manager) validateAllocationLocked(ctx context.Context, excludeID string
 		if gpuStatus == nil {
 			return fmt.Errorf("insufficient GPU: no GPU available on this host")
 		}
-		availableSlots := gpuStatus.TotalSlots - gpuStatus.UsedSlots - pending.GPUSlots
+		availableSlots := gpuStatus.AllocatableSlots - pending.GPUSlots
 		if availableSlots < req.GPUSlots {
 			if availableSlots <= 0 {
-				return fmt.Errorf("insufficient GPU: all %d %s slots are in use",
-					gpuStatus.TotalSlots, gpuStatus.Mode)
+				return fmt.Errorf("insufficient GPU: no allocatable %s slots available (%d total, %d in use)",
+					gpuStatus.Mode, gpuStatus.TotalSlots, gpuStatus.UsedSlots)
 			}
 			return fmt.Errorf("insufficient GPU: requested %d %s slot(s), but only %d available",
 				req.GPUSlots, gpuStatus.Mode, availableSlots)

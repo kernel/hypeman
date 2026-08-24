@@ -3,6 +3,7 @@ package devices
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -201,11 +202,18 @@ func (s *vfHealthStore) persistLocked() error {
 		os.Remove(tmp)
 		return fmt.Errorf("rename VF health state: %w", err)
 	}
-	// Sync the directory so the rename itself survives a crash. Best-effort
-	// — a directory sync failure is not worth failing the conviction over.
-	if dir, err := os.Open(filepath.Dir(s.path)); err == nil {
-		_ = dir.Sync()
-		_ = dir.Close()
+	// The rename already committed the quarantine, so a directory-sync
+	// failure must not roll back the in-memory record. Report the weaker
+	// crash-durability guarantee instead.
+	dirPath := filepath.Dir(s.path)
+	dir, err := os.Open(dirPath)
+	if err != nil {
+		slog.Default().Warn("failed to open VF health state directory for sync", "path", dirPath, "error", err)
+		return nil
 	}
+	if err := dir.Sync(); err != nil {
+		slog.Default().Warn("failed to sync VF health state directory", "path", dirPath, "error", err)
+	}
+	_ = dir.Close()
 	return nil
 }

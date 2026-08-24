@@ -10,11 +10,12 @@ import (
 // GPUResourceStatus represents the GPU resource status for the API response.
 // Returns nil if no GPU is available on the host.
 type GPUResourceStatus struct {
-	Mode       string                      `json:"mode"`               // "vgpu" or "passthrough"
-	TotalSlots int                         `json:"total_slots"`        // VFs for vGPU, physical GPUs for passthrough
-	UsedSlots  int                         `json:"used_slots"`         // Slots currently in use
-	Profiles   []devices.GPUProfile        `json:"profiles,omitempty"` // vGPU mode only
-	Devices    []devices.PassthroughDevice `json:"devices,omitempty"`  // passthrough mode only
+	Mode             string                      `json:"mode"`               // "vgpu" or "passthrough"
+	TotalSlots       int                         `json:"total_slots"`        // VFs for vGPU, physical GPUs for passthrough
+	UsedSlots        int                         `json:"used_slots"`         // Slots currently in use
+	AllocatableSlots int                         `json:"-"`                  // Healthy free slots used by admission control
+	Profiles         []devices.GPUProfile        `json:"profiles,omitempty"` // vGPU mode only
+	Devices          []devices.PassthroughDevice `json:"devices,omitempty"`  // passthrough mode only
 }
 
 // GetGPUStatus returns the current GPU resource status.
@@ -53,11 +54,40 @@ func getVGPUStatus(ctx context.Context, framework devices.VGPUFramework, vfs []d
 	}
 
 	return &GPUResourceStatus{
-		Mode:       string(devices.GPUModeVGPU),
-		TotalSlots: len(vfs),
-		UsedSlots:  usedSlots,
-		Profiles:   profiles,
+		Mode:             string(devices.GPUModeVGPU),
+		TotalSlots:       len(vfs),
+		UsedSlots:        usedSlots,
+		AllocatableSlots: allocatableVGPUSlots(framework, vfs, devices.QuarantinedVFs(), devices.VFHealthStoreUnavailable()),
+		Profiles:         profiles,
 	}
+}
+
+func allocatableVGPUSlots(framework devices.VGPUFramework, vfs []devices.VirtualFunction, quarantined []devices.VFHealthRecord, storeUnavailable bool) int {
+	available := 0
+	for _, vf := range vfs {
+		if !vf.Allocated {
+			available++
+		}
+	}
+	if framework != devices.VGPUFrameworkVendorVFIO {
+		return available
+	}
+	if storeUnavailable {
+		return 0
+	}
+	bad := make(map[string]struct{}, len(quarantined))
+	for _, record := range quarantined {
+		bad[record.VFAddress] = struct{}{}
+	}
+	for _, vf := range vfs {
+		if vf.Allocated {
+			continue
+		}
+		if _, ok := bad[vf.PCIAddress]; ok {
+			available--
+		}
+	}
+	return available
 }
 
 // getPassthroughStatus returns GPU status for whole-GPU passthrough mode.
@@ -92,9 +122,10 @@ func getPassthroughStatus() *GPUResourceStatus {
 	}
 
 	return &GPUResourceStatus{
-		Mode:       string(devices.GPUModePassthrough),
-		TotalSlots: len(passthroughDevices),
-		UsedSlots:  usedSlots,
-		Devices:    passthroughDevices,
+		Mode:             string(devices.GPUModePassthrough),
+		TotalSlots:       len(passthroughDevices),
+		UsedSlots:        usedSlots,
+		AllocatableSlots: len(passthroughDevices) - usedSlots,
+		Devices:          passthroughDevices,
 	}
 }

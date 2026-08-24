@@ -342,15 +342,14 @@ func scanForSentinel(path string, tail *vgpuSentinelTail) (string, bool, error) 
 // the scan runs continuously and deriving state would query every
 // hypervisor on the host.
 func (m *manager) listVGPUSentinelTargets(ctx context.Context) ([]vgpuSentinelTarget, error) {
-	// The strict walk names an instance whose metadata cannot be statted; the
-	// lenient retry keeps detection running on the readable rest, so one bad
-	// instance degrades coverage loudly instead of losing it host-wide.
+	// Keep scanning readable records while reporting every instance whose
+	// metadata could not be statted.
 	files, err := m.listMetadataFilesStrict()
 	if err != nil {
-		logger.FromContext(ctx).WarnContext(ctx, "vGPU sentinel skipping unreadable instance metadata", "error", err)
-		if files, err = m.listMetadataFiles(); err != nil {
+		if files == nil {
 			return nil, err
 		}
+		logger.FromContext(ctx).WarnContext(ctx, "vGPU sentinel skipping unreadable instance metadata", "error", err)
 	}
 	targets := make([]vgpuSentinelTarget, 0, len(files))
 	for _, file := range files {

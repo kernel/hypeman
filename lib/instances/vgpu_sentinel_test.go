@@ -284,7 +284,7 @@ func TestListVGPUSentinelTargetsSkipsUnstattableMetadata(t *testing.T) {
 
 	m := &manager{paths: paths.New(t.TempDir())}
 	assigned := time.Now().UTC()
-	for _, id := range []string{"readable", "unreadable"} {
+	for _, id := range []string{"readable", "unreadable-a", "unreadable-b"} {
 		require.NoError(t, m.ensureDirectories(id))
 		require.NoError(t, m.saveMetadata(&metadata{StoredMetadata: StoredMetadata{
 			Id:            id,
@@ -293,14 +293,31 @@ func TestListVGPUSentinelTargetsSkipsUnstattableMetadata(t *testing.T) {
 			GPUAssignedAt: &assigned,
 		}}))
 	}
-	instanceDir := filepath.Dir(m.paths.InstanceMetadata("unreadable"))
-	require.NoError(t, os.Chmod(instanceDir, 0o000))
-	t.Cleanup(func() { _ = os.Chmod(instanceDir, 0o755) })
+	for _, id := range []string{"unreadable-a", "unreadable-b"} {
+		instanceDir := filepath.Dir(m.paths.InstanceMetadata(id))
+		require.NoError(t, os.Chmod(instanceDir, 0o000))
+		t.Cleanup(func() { _ = os.Chmod(instanceDir, 0o755) })
+	}
+
+	files, err := m.listMetadataFilesStrict()
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "unreadable-a")
+	assert.ErrorContains(t, err, "unreadable-b")
+	require.Len(t, files, 1)
 
 	targets, err := m.listVGPUSentinelTargets(context.Background())
 	require.NoError(t, err)
 	require.Len(t, targets, 1)
 	assert.Equal(t, "readable", targets[0].instanceID)
+}
+
+func TestListVGPUSentinelTargetsReturnsMetadataWalkError(t *testing.T) {
+	m := &manager{paths: paths.New(t.TempDir())}
+	require.NoError(t, os.MkdirAll(filepath.Dir(m.paths.GuestsDir()), 0o755))
+	require.NoError(t, os.WriteFile(m.paths.GuestsDir(), []byte("not a directory"), 0o644))
+
+	_, err := m.listVGPUSentinelTargets(context.Background())
+	require.ErrorContains(t, err, "create guests directory")
 }
 
 // A transient discovery error fails open — the controller scans as if the
