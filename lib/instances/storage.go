@@ -194,9 +194,8 @@ func (m *manager) listMetadataFiles() ([]string, error) {
 }
 
 // listMetadataFilesStrict returns paths to all instance metadata files,
-// failing on any stat error other than absence. Fail-closed callers (the
-// vGPU release claim scan and startup reconcile protection) use it so an
-// unreadable instance is an error instead of silently missing.
+// failing on any stat error other than absence, so fail-closed callers see
+// an unreadable instance as an error instead of silently missing.
 func (m *manager) listMetadataFilesStrict() ([]string, error) {
 	return m.walkMetadataFiles(true)
 }

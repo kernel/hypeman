@@ -123,10 +123,8 @@ func (m *manager) cleanupStartVGPU(ctx context.Context, instanceID string, devic
 		if !retained {
 			return false, false
 		}
-		// The mid-start save may already have persisted this assignment, in
-		// which case the on-disk record still points at the device and
-		// delete or a retried start can release it (matching create's
-		// retention-survives check).
+		// The mid-start save may already have persisted this assignment, so
+		// delete or a retried start can still release it.
 		if meta, loadErr := m.loadMetadata(instanceID); loadErr == nil && storedVGPUDevicePath(&meta.StoredMetadata) == device.SysfsPath {
 			return true, true
 		}
@@ -159,11 +157,10 @@ func restoreStartMutatedFields(dst, src *StoredMetadata) {
 func (m *manager) releaseStoredVGPU(ctx context.Context, stored *StoredMetadata) error {
 	path := storedVGPUDevicePath(stored)
 	if path != "" {
-		// Vendor VFIO VFs are reused across instances, so stale metadata can
-		// point at a path claimed by a live instance and the release must fail
-		// closed on an incomplete inventory. mdev UUIDs are unique and never
-		// reused, so skip the scan there — it would let one unreadable
-		// metadata file block every mdev release on the host.
+		// Vendor VFIO VFs are reused across instances, so the release must
+		// fail closed on an incomplete inventory. mdev UUIDs are never reused;
+		// scanning there would let one unreadable metadata file block every
+		// mdev release on the host.
 		claimed := false
 		if stored.GPUFramework == devices.VGPUFrameworkVendorVFIO {
 			var err error
@@ -192,12 +189,9 @@ func (m *manager) releaseStoredVGPU(ctx context.Context, stored *StoredMetadata)
 }
 
 // vgpuAssignmentClaimedByLiveInstance reports whether another live instance's
-// stored metadata claims devicePath. It reads raw metadata instead of
-// hydrating full instances: the scan runs on every vendor VFIO release, and
-// deriving state would query the hypervisor of every instance on the host.
-// A confirmed live claimant returns true. Unreadable metadata, a recent
-// assignment without a PID, or unverifiable process ownership returns an error
-// so the requester retains its assignment for a later retry.
+// stored metadata claims devicePath. Unreadable metadata, a recent assignment
+// without a PID, or unverifiable process ownership returns an error so the
+// requester retains its assignment for a later retry.
 func (m *manager) vgpuAssignmentClaimedByLiveInstance(ctx context.Context, excludeID, devicePath string) (bool, error) {
 	files, err := m.listMetadataFilesStrict()
 	if err != nil {
