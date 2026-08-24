@@ -194,6 +194,7 @@ type manager struct {
 	nativeCodecPaths          map[string]string
 	imageUsageRecorder        ImageUsageRecorder
 	guestAgentReadyProbe      func(context.Context, *StoredMetadata) bool
+	shutdownGuestFn           func(context.Context, hypervisor.VsockDialer, int32) error
 
 	// Shared lifecycle event subscriptions for internal consumers.
 	lifecycleEvents *lifecycleSubscribers
