@@ -279,21 +279,13 @@ func (m *manager) createInstance(
 	var gpuMdevUUID string
 	var gpuAssignedAt *time.Time
 	var stored *StoredMetadata
-	var retainedVGPU *StoredMetadata
+	retention := vgpuRetention{instanceID: id}
 
 	// Setup cleanup stack early so device attachment errors trigger cleanup.
-	// When rollback cannot release a vGPU assignment, report whether its
-	// retention record was persisted. The wrapping defer is registered first
-	// so it runs after cu.Clean has attempted to retain the metadata.
-	vgpuPersisted := false
-	defer func() {
-		if retErr != nil && retainedVGPU != nil {
-			retErr = &VGPUCleanupPendingError{InstanceID: id, Retained: vgpuPersisted, Err: retErr}
-		}
-	}()
+	defer retention.deferWrapPending(&retErr)
 	cu := cleanup.Make(func() {
 		log.DebugContext(ctx, "cleaning up instance on error", "instance_id", id)
-		vgpuPersisted = m.cleanupFailedCreate(ctx, id, retainedVGPU)
+		m.persistVGPURetention(ctx, &retention)
 	})
 	defer cu.Clean()
 
@@ -329,7 +321,7 @@ func (m *manager) createInstance(
 		log.InfoContext(ctx, "creating vGPU", "instance_id", id, "profile", req.GPU.Profile)
 		gpuDevice, err = m.createVGPUDevice(ctx, req.GPU.Profile, id)
 		if err != nil {
-			retainedVGPU = retainedVGPUFromCreateError(retentionStub(), m.nowUTC(), err)
+			retention.retainFromCreateError(retentionStub(), m.nowUTC(), err)
 			log.ErrorContext(ctx, "failed to create vGPU", "profile", req.GPU.Profile, "error", err)
 			return nil, wrapCreateVGPUErr(req.GPU.Profile, err)
 		}
@@ -352,9 +344,9 @@ func (m *manager) createInstance(
 			}
 			if err := m.destroyVGPUAssignment(ctx, assignment); err != nil {
 				log.WarnContext(ctx, "failed to destroy vGPU on cleanup", "instance_id", id, "uuid", gpuDevice.MdevUUID, "error", err)
-				retainedVGPU = stored
-				if retainedVGPU == nil {
-					retainedVGPU = retainedVGPUFromDevice(retentionStub(), gpuDevice, *gpuAssignedAt)
+				retention.retain(stored)
+				if stored == nil {
+					retention.retainFromDevice(retentionStub(), gpuDevice, *gpuAssignedAt)
 				}
 			}
 		})
@@ -645,57 +637,6 @@ func resolveCreateExpiration(req CreateInstanceRequest, now time.Time) (*time.Ti
 	}
 	expiresAt := now.Add(*req.TTL)
 	return &expiresAt, nil
-}
-
-// cleanupFailedCreate reports whether the retention record for a vGPU
-// assignment whose release failed during rollback was persisted.
-func (m *manager) cleanupFailedCreate(ctx context.Context, id string, retainedVGPU *StoredMetadata) bool {
-	if retainedVGPU == nil {
-		m.deleteInstanceData(id)
-		return false
-	}
-
-	log := logger.FromContext(ctx)
-	retentionSurvives := func() bool {
-		meta, err := m.loadMetadata(id)
-		if err == nil && storedVGPUDevicePath(&meta.StoredMetadata) != "" {
-			return true
-		}
-		if err := m.deleteInstanceData(id); err != nil {
-			log.ErrorContext(ctx, "failed to delete stale instance data after retention failure", "instance_id", id, "error", err)
-		}
-		return false
-	}
-	if err := m.ensureDirectories(id); err != nil {
-		log.ErrorContext(ctx, "failed to retain instance data after vGPU cleanup failure", "instance_id", id, "error", err)
-		return retentionSurvives()
-	}
-	// Retain identity fields so the instance lists as a recognizable,
-	// deletable record rather than a nameless phantom, but drop resource
-	// claims (network, volumes, devices) that rollback already released.
-	retained := StoredMetadata{
-		Id:                    id,
-		Name:                  retainedVGPU.Name,
-		Image:                 retainedVGPU.Image,
-		ResolvedImage:         retainedVGPU.ResolvedImage,
-		Platform:              retainedVGPU.Platform,
-		CreatedAt:             retainedVGPU.CreatedAt,
-		HypervisorType:        retainedVGPU.HypervisorType,
-		HypervisorVersion:     retainedVGPU.HypervisorVersion,
-		SocketPath:            retainedVGPU.SocketPath,
-		DataDir:               retainedVGPU.DataDir,
-		GPUProfile:            retainedVGPU.GPUProfile,
-		GPUFramework:          retainedVGPU.GPUFramework,
-		GPUDevicePath:         retainedVGPU.GPUDevicePath,
-		GPUMdevUUID:           retainedVGPU.GPUMdevUUID,
-		GPUAssignedAt:         retainedVGPU.GPUAssignedAt,
-		GPURetainedForCleanup: true,
-	}
-	if err := m.saveMetadata(&metadata{StoredMetadata: retained}); err != nil {
-		log.ErrorContext(ctx, "failed to retain vGPU assignment metadata after cleanup failure", "instance_id", id, "error", err)
-		return retentionSurvives()
-	}
-	return true
 }
 
 // validateCreateRequest validates the create instance request.
