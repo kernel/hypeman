@@ -18,6 +18,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func persistTestVGPURetention(m *manager, ctx context.Context, id string, stub *StoredMetadata) bool {
+	retention := vgpuRetention{instanceID: id}
+	retention.retain(stub)
+	m.persistVGPURetention(ctx, &retention)
+	return retention.persisted
+}
+
+func retainedVGPUFromCreateErrorForTest(stub StoredMetadata, assignedAt time.Time, err error) *StoredMetadata {
+	retention := vgpuRetention{}
+	retention.retainFromCreateError(stub, assignedAt, err)
+	return retention.stub
+}
+
 func TestCleanupFailedCreateRetainsVGPUAssignment(t *testing.T) {
 	t.Parallel()
 
@@ -38,7 +51,7 @@ func TestCleanupFailedCreateRetainsVGPUAssignment(t *testing.T) {
 		DataDir:        m.paths.InstanceDir("failed-create"),
 	}
 
-	assert.True(t, m.cleanupFailedCreate(context.Background(), stored.Id, stored))
+	assert.True(t, persistTestVGPURetention(m, context.Background(), stored.Id, stored))
 
 	retained, err := m.loadMetadata(stored.Id)
 	require.NoError(t, err)
@@ -67,7 +80,7 @@ func TestCleanupFailedCreateDeletesDataWithoutRetainedVGPU(t *testing.T) {
 	m := &manager{paths: paths.New(t.TempDir())}
 	require.NoError(t, m.ensureDirectories("failed-create"))
 
-	assert.False(t, m.cleanupFailedCreate(context.Background(), "failed-create", nil))
+	assert.False(t, persistTestVGPURetention(m, context.Background(), "failed-create", nil))
 	_, err := m.loadMetadata("failed-create")
 	require.Error(t, err)
 }
@@ -85,7 +98,7 @@ func TestCleanupFailedCreateReportsUnpersistedRetention(t *testing.T) {
 		GPUFramework:  devices.VGPUFrameworkVendorVFIO,
 		GPUDevicePath: "/sys/bus/pci/devices/0000:82:00.4",
 	}
-	assert.False(t, m.cleanupFailedCreate(context.Background(), stored.Id, stored))
+	assert.False(t, persistTestVGPURetention(m, context.Background(), stored.Id, stored))
 	_, err := m.loadMetadata(id)
 	require.Error(t, err)
 }
@@ -109,11 +122,29 @@ func TestCleanupFailedCreateReportsRetainedWhenFullMetadataSurvives(t *testing.T
 	require.NoError(t, os.Chmod(instanceDir, 0o555))
 	t.Cleanup(func() { _ = os.Chmod(instanceDir, 0o755) })
 
-	assert.True(t, m.cleanupFailedCreate(context.Background(), id, stored))
+	assert.True(t, persistTestVGPURetention(m, context.Background(), id, stored))
 	retained, err := m.loadMetadata(id)
 	require.NoError(t, err)
 	assert.Equal(t, stored.GPUFramework, retained.GPUFramework)
 	assert.Equal(t, stored.GPUDevicePath, retained.GPUDevicePath)
+}
+
+func TestVGPURetentionWrapPending(t *testing.T) {
+	cause := errors.New("boot failed")
+
+	retention := vgpuRetention{instanceID: "inst-1"}
+	assert.Same(t, cause, retention.wrapPending(cause))
+
+	retention.retained = true
+	pending := retention.wrapPending(cause)
+	var cleanupPending *VGPUCleanupPendingError
+	require.ErrorAs(t, pending, &cleanupPending)
+	assert.False(t, cleanupPending.Retained)
+
+	retention.persisted = true
+	pending = retention.wrapPending(cause)
+	require.ErrorAs(t, pending, &cleanupPending)
+	assert.True(t, cleanupPending.Retained)
 }
 
 func TestVGPUCleanupPendingErrorUnwraps(t *testing.T) {
@@ -145,7 +176,7 @@ func TestVGPUDevicePendingCleanup(t *testing.T) {
 	assert.Equal(t, device, *actual)
 
 	assignedAt := time.Now().UTC()
-	retained := retainedVGPUFromCreateError(StoredMetadata{Id: "inst-1", Name: "named", Image: "img"}, assignedAt, wrapped)
+	retained := retainedVGPUFromCreateErrorForTest(StoredMetadata{Id: "inst-1", Name: "named", Image: "img"}, assignedAt, wrapped)
 	require.NotNil(t, retained)
 	assert.Equal(t, "inst-1", retained.Id)
 	assert.Equal(t, "named", retained.Name, "identity fields must survive into the retention stub")
@@ -157,7 +188,7 @@ func TestVGPUDevicePendingCleanup(t *testing.T) {
 	actual, ok = vgpuDevicePendingCleanup(cause)
 	assert.False(t, ok)
 	assert.Nil(t, actual)
-	assert.Nil(t, retainedVGPUFromCreateError(StoredMetadata{Id: "inst-1"}, assignedAt, cause))
+	assert.Nil(t, retainedVGPUFromCreateErrorForTest(StoredMetadata{Id: "inst-1"}, assignedAt, cause))
 }
 
 type startRetentionNetworkManager struct {
@@ -427,6 +458,7 @@ func TestCleanupStartVGPURestoresMetadataAfterBootFailure(t *testing.T) {
 	exitCode := 1
 	rollbackMeta := metadata{StoredMetadata: StoredMetadata{
 		Id:               id,
+		Name:             "original name",
 		GPUProfile:       "NVIDIA L40S-2Q",
 		Entrypoint:       []string{"old-entrypoint"},
 		Cmd:              []string{"old-command"},
@@ -437,6 +469,7 @@ func TestCleanupStartVGPURestoresMetadataAfterBootFailure(t *testing.T) {
 	}}
 
 	partial := rollbackMeta
+	partial.Name = "concurrent update"
 	partial.Entrypoint = []string{"new-entrypoint"}
 	partial.Cmd = []string{"new-command"}
 	partial.StartedAt = ptr(time.Now().UTC())
@@ -455,6 +488,7 @@ func TestCleanupStartVGPURestoresMetadataAfterBootFailure(t *testing.T) {
 
 	stored, err := m.loadMetadata(id)
 	require.NoError(t, err)
+	assert.Equal(t, "concurrent update", stored.Name)
 	assert.Equal(t, rollbackMeta.Entrypoint, stored.Entrypoint)
 	assert.Equal(t, rollbackMeta.Cmd, stored.Cmd)
 	assert.Equal(t, rollbackMeta.StartedAt, stored.StartedAt)

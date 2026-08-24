@@ -54,24 +54,18 @@ func vgpuDevicePendingCleanup(err error) (*devices.VGPUDevice, bool) {
 	return &pending.Device, true
 }
 
-// retainedVGPUFromCreateError fills stub with the pending device's assignment
-// fields when err carries a failed device-layer cleanup. The caller provides
-// identity fields on stub so the retained record lists as a recognizable,
-// deletable instance.
-func retainedVGPUFromCreateError(stub StoredMetadata, assignedAt time.Time, err error) *StoredMetadata {
-	device, ok := vgpuDevicePendingCleanup(err)
-	if !ok {
-		return nil
+func vgpuAssignmentLiveness(stored *StoredMetadata, now time.Time, livePID bool) (live bool, graceRemaining time.Duration) {
+	if stored.HypervisorPID != nil && livePID {
+		return true, 0
 	}
-	return retainedVGPUFromDevice(stub, device, assignedAt)
-}
-
-// retainedVGPUFromDevice fills stub with device's assignment fields so a
-// failed rollback release retains a recognizable, deletable record.
-func retainedVGPUFromDevice(stub StoredMetadata, device *devices.VGPUDevice, assignedAt time.Time) *StoredMetadata {
-	stub.GPUProfile = device.ProfileName
-	setStoredVGPUDevice(&stub, device, assignedAt)
-	return &stub
+	if stored.GPUAssignedAt == nil {
+		return false, 0
+	}
+	remaining := VGPUAssignmentStartupGracePeriod - now.Sub(*stored.GPUAssignedAt)
+	if remaining <= 0 {
+		return false, 0
+	}
+	return true, remaining
 }
 
 func (m *manager) destroyVGPUAssignment(ctx context.Context, assignment devices.VGPUAssignment) error {
@@ -96,15 +90,9 @@ func clearStoredVGPUDevice(stored *StoredMetadata) {
 	stored.GPUAssignedAt = nil
 }
 
-// cleanupStartVGPU wholesale-restores the pre-start metadata snapshot. The
-// cleanup stack is LIFO, so cleanups registered after this one run before it
-// and this restore would clobber anything they persisted; it is safe only
-// while no such cleanup writes metadata and the instance lock serializes
-// start. Violating that requires switching to targeted field restores.
-//
-// It reports whether the assignment was retained after a failed destroy and
-// whether that retention record was persisted, so start can surface the
-// pending cleanup as a typed error like create does.
+// cleanupStartVGPU reports whether the assignment was retained after a failed
+// destroy and whether that retention record was persisted, so start can surface
+// the pending cleanup as a typed error like create does.
 func (m *manager) cleanupStartVGPU(ctx context.Context, instanceID string, device *devices.VGPUDevice, assignedAt time.Time, rollbackMeta metadata) (retained, persisted bool) {
 	logger.FromContext(ctx).DebugContext(ctx, "destroying vGPU on cleanup", "instance_id", instanceID, "uuid", device.MdevUUID)
 	assignment := devices.VGPUAssignment{
@@ -113,14 +101,20 @@ func (m *manager) cleanupStartVGPU(ctx context.Context, instanceID string, devic
 		MdevUUID:   device.MdevUUID,
 		InstanceID: instanceID,
 	}
-	cleanupMeta := rollbackMeta
+	cleanupMeta, err := m.loadMetadata(instanceID)
+	if err != nil {
+		logger.FromContext(ctx).WarnContext(ctx, "failed to load current metadata for vGPU cleanup; restoring rollback snapshot", "instance_id", instanceID, "error", err)
+		cleanupMeta = &rollbackMeta
+	} else {
+		restoreStartMutatedFields(&cleanupMeta.StoredMetadata, &rollbackMeta.StoredMetadata)
+	}
 	releaseErr := m.destroyVGPUAssignment(ctx, assignment)
 	if releaseErr != nil {
 		logger.FromContext(ctx).WarnContext(ctx, "failed to destroy vGPU on cleanup", "instance_id", instanceID, "uuid", device.MdevUUID, "error", releaseErr)
 		setStoredVGPUDevice(&cleanupMeta.StoredMetadata, device, assignedAt)
 		retained = true
 	}
-	if err := m.saveMetadata(&cleanupMeta); err != nil {
+	if err := m.saveMetadata(cleanupMeta); err != nil {
 		message := "failed to save metadata after vGPU cleanup"
 		if releaseErr != nil {
 			message = "failed to retain vGPU assignment metadata after cleanup failure"
@@ -139,6 +133,27 @@ func (m *manager) cleanupStartVGPU(ctx context.Context, instanceID string, devic
 		return true, false
 	}
 	return retained, retained
+}
+
+// restoreStartMutatedFields must cover every field start mutates before the
+// vGPU cleanup runs.
+func restoreStartMutatedFields(dst, src *StoredMetadata) {
+	dst.HypervisorPID = src.HypervisorPID
+	dst.HypervisorStartTime = src.HypervisorStartTime
+	dst.HypervisorBootID = src.HypervisorBootID
+	dst.ExitCode = src.ExitCode
+	dst.ExitMessage = src.ExitMessage
+	dst.ProgramStartedAt = src.ProgramStartedAt
+	dst.GuestAgentReadyAt = src.GuestAgentReadyAt
+	dst.Entrypoint = src.Entrypoint
+	dst.Cmd = src.Cmd
+	dst.IP = src.IP
+	dst.MAC = src.MAC
+	dst.GPUFramework = src.GPUFramework
+	dst.GPUDevicePath = src.GPUDevicePath
+	dst.GPUMdevUUID = src.GPUMdevUUID
+	dst.GPUAssignedAt = src.GPUAssignedAt
+	dst.StartedAt = src.StartedAt
 }
 
 func (m *manager) releaseStoredVGPU(ctx context.Context, stored *StoredMetadata) error {
@@ -206,23 +221,21 @@ func (m *manager) vgpuAssignmentClaimedByLiveInstance(ctx context.Context, exclu
 		if storedVGPUDevicePath(stored) != devicePath {
 			continue
 		}
-		if stored.HypervisorPID == nil {
-			if stored.GPUAssignedAt == nil || time.Since(*stored.GPUAssignedAt) >= VGPUAssignmentStartupGracePeriod {
-				continue
+		pid := 0
+		if stored.HypervisorPID != nil {
+			pid, err = resolveLiveHypervisorPID(stored.HypervisorProcessIdentity, stored.SocketPath)
+			if err != nil {
+				return false, fmt.Errorf("cannot confirm liveness of vGPU claimant %s on %s: %w", id, devicePath, err)
 			}
-			return false, fmt.Errorf("cannot confirm liveness of recent vGPU claimant %s on %s: no persisted hypervisor PID", id, devicePath)
 		}
-		pid, err := resolveLiveHypervisorPID(stored.HypervisorProcessIdentity, stored.SocketPath)
-		if err != nil {
-			return false, fmt.Errorf("cannot confirm liveness of vGPU claimant %s on %s: %w", id, devicePath, err)
-		}
-		if pid > 0 {
+		live, remaining := vgpuAssignmentLiveness(stored, time.Now(), pid > 0)
+		if pid > 0 && live {
 			return true, nil
 		}
-		// A dead PID with a recent assignment gets the same bounded grace as
-		// startup reconcile protection, so the two guards agree in the
-		// fail-closed direction while a mid-boot claimant hydrates.
-		if stored.GPUAssignedAt != nil && time.Since(*stored.GPUAssignedAt) < VGPUAssignmentStartupGracePeriod {
+		if remaining > 0 {
+			if stored.HypervisorPID == nil {
+				return false, fmt.Errorf("cannot confirm liveness of recent vGPU claimant %s on %s: no persisted hypervisor PID", id, devicePath)
+			}
 			return false, fmt.Errorf("cannot confirm liveness of recent vGPU claimant %s on %s: recorded hypervisor is not running", id, devicePath)
 		}
 	}
