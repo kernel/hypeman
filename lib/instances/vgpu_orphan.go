@@ -8,22 +8,20 @@ import (
 )
 
 const (
-	// orphanedVGPUReleaseMaxAttempts bounds the retry loop so a genuinely
-	// wedged VF degrades to one operator-actionable error instead of
-	// indefinite log churn. At the default interval this covers ten minutes,
-	// far beyond the seconds a dying VMM normally needs to finish kernel-side
-	// VFIO teardown.
+	// Bounds the retry loop (~10 minutes at the default interval, far beyond
+	// normal VFIO teardown) so a wedged VF degrades to one operator-actionable
+	// error instead of indefinite log churn.
 	orphanedVGPUReleaseMaxAttempts       = 20
 	defaultOrphanedVGPUReleaseRetryDelay = 30 * time.Second
 )
 
 // scheduleOrphanedVGPURelease retries a vGPU release that failed during a
-// completed delete, off the request path. A GPU-busy VMM routinely outlives
-// delete's force-kill wait while the kernel finishes VFIO teardown, and once
-// the metadata is deleted nothing else releases the VF until the next
-// startup reconciliation. Each attempt re-runs releaseStoredVGPU, so the
-// claim scan and destroy guards apply on every retry. The queue is in-memory
-// only: a restart abandons it and startup reconciliation sweeps the VF.
+// completed delete, off the request path: a GPU-busy VMM routinely outlives
+// delete's force-kill wait, and once metadata is deleted nothing else
+// releases the VF until startup reconciliation. Each attempt re-runs
+// releaseStoredVGPU, so the claim scan and destroy guards apply on every
+// retry. The queue is in-memory only; a restart abandons it and startup
+// reconciliation sweeps the VF.
 func (m *manager) scheduleOrphanedVGPURelease(ctx context.Context, stored StoredMetadata) {
 	path := storedVGPUDevicePath(&stored)
 	if path == "" {

@@ -228,10 +228,8 @@ type startedProcess struct {
 	pid        int
 	socketPath string
 	// termGrace, when non-zero, makes cleanup send SIGTERM and wait this long
-	// before SIGKILL. Set for VFIO-attached processes: hard-killing QEMU while
-	// the NVIDIA vGPU plugin is initializing can silently wedge the VF until
-	// its parent GPU's SR-IOV is cycled, while a terminating QEMU runs its
-	// device teardown and leaves the VF reusable.
+	// before SIGKILL. Set for VFIO-attached processes: SIGKILL during vGPU
+	// plugin init can wedge the VF until its parent GPU is SR-IOV cycled.
 	termGrace    time.Duration
 	waitDone     chan error
 	waitConsumed bool
