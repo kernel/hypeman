@@ -439,11 +439,11 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 // and inner error detail shared by the create and start handlers. The
 // retained guidance names the verb-specific way to release the assignment.
 func vgpuCleanupPendingDetail(pending *instances.VGPUCleanupPendingError, action, retainedGuidance string) (string, *oapi.ErrorDetail) {
-	message := fmt.Sprintf("failed to %s instance: %v; vGPU release failed during rollback and instance %s retains the assignment, %s", action, pending.Err, pending.InstanceID, retainedGuidance)
-	innerCode := "vgpu_retained_instance"
-	if !pending.Retained {
-		message = fmt.Sprintf("failed to %s instance: %v; vGPU release failed during rollback and the retention record for instance %s could not be saved; the assignment is recovered on the next startup reconcile", action, pending.Err, pending.InstanceID)
-		innerCode = "vgpu_unretained_instance"
+	message := fmt.Sprintf("failed to %s instance: %v", action, pending)
+	innerCode := "vgpu_unretained_instance"
+	if pending.Retained {
+		message += "; " + retainedGuidance
+		innerCode = "vgpu_retained_instance"
 	}
 	return message, &oapi.ErrorDetail{
 		Code:    lo.ToPtr(innerCode),

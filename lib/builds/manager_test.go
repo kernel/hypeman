@@ -51,8 +51,6 @@ func (m *mockInstanceManager) ListInstances(ctx context.Context, filter *instanc
 	return result, nil
 }
 
-func (m *mockInstanceManager) ReconcileVGPUs(context.Context) {}
-
 func (m *mockInstanceManager) ListSnapshots(ctx context.Context, filter *instances.ListSnapshotsFilter) ([]instances.Snapshot, error) {
 	return nil, nil
 }

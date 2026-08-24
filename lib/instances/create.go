@@ -278,7 +278,6 @@ func (m *manager) createInstance(
 	var gpuDevicePath string
 	var gpuMdevUUID string
 	var gpuAssignedAt *time.Time
-	var stored *StoredMetadata
 	retention := vgpuRetention{instanceID: id}
 
 	// Setup cleanup stack early so device attachment errors trigger cleanup.
@@ -344,10 +343,7 @@ func (m *manager) createInstance(
 			}
 			if err := m.destroyVGPUAssignment(ctx, assignment); err != nil {
 				log.WarnContext(ctx, "failed to destroy vGPU on cleanup", "instance_id", id, "uuid", gpuDevice.MdevUUID, "error", err)
-				retention.retain(stored)
-				if stored == nil {
-					retention.retainFromDevice(retentionStub(), gpuDevice, *gpuAssignedAt)
-				}
+				retention.retainFromDevice(retentionStub(), gpuDevice, *gpuAssignedAt)
 			}
 		})
 	}
@@ -388,7 +384,7 @@ func (m *manager) createInstance(
 	if err != nil {
 		return nil, err
 	}
-	stored = &StoredMetadata{
+	stored := &StoredMetadata{
 		Id:                       id,
 		Name:                     req.Name,
 		Image:                    req.Image,

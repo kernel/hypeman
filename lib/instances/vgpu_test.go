@@ -19,8 +19,7 @@ import (
 )
 
 func persistTestVGPURetention(m *manager, ctx context.Context, id string, stub *StoredMetadata) bool {
-	retention := vgpuRetention{instanceID: id}
-	retention.retain(stub)
+	retention := vgpuRetention{instanceID: id, stub: stub, retained: stub != nil}
 	m.persistVGPURetention(ctx, &retention)
 	return retention.persisted
 }
@@ -101,6 +100,11 @@ func TestCleanupFailedCreateReportsUnpersistedRetention(t *testing.T) {
 	assert.False(t, persistTestVGPURetention(m, context.Background(), stored.Id, stored))
 	_, err := m.loadMetadata(id)
 	require.Error(t, err)
+
+	m.orphanedVGPUMu.Lock()
+	_, queued := m.orphanedVGPUs[stored.GPUDevicePath]
+	m.orphanedVGPUMu.Unlock()
+	assert.True(t, queued, "unpersisted retention must queue a background release")
 }
 
 func TestCleanupFailedCreateReportsRetainedWhenFullMetadataSurvives(t *testing.T) {
@@ -157,7 +161,7 @@ func TestVGPUCleanupPendingErrorUnwraps(t *testing.T) {
 
 	unpersisted := &VGPUCleanupPendingError{InstanceID: "inst-1", Err: cause}
 	assert.ErrorIs(t, unpersisted, cause)
-	assert.Equal(t, "boot failed; vGPU release failed during rollback and the retention record for instance inst-1 could not be saved; the assignment is recovered on the next startup reconcile", unpersisted.Error())
+	assert.Equal(t, "boot failed; vGPU release failed during rollback and the retention record for instance inst-1 could not be saved; the release is retried in the background and by the next startup reconcile", unpersisted.Error())
 }
 
 func TestVGPUDevicePendingCleanup(t *testing.T) {
@@ -334,6 +338,11 @@ func TestStartReportsUnretainedVGPUWhenRetentionSaveFails(t *testing.T) {
 	stored, err := m.loadMetadata(id)
 	require.NoError(t, err)
 	assert.Empty(t, stored.GPUDevicePath, "retention save failed, so no assignment should be recorded")
+
+	m.orphanedVGPUMu.Lock()
+	_, queued := m.orphanedVGPUs[device.SysfsPath]
+	m.orphanedVGPUMu.Unlock()
+	assert.True(t, queued, "unpersisted retention must queue a background release")
 }
 
 func TestStartDoesNotRestrictVGPUHypervisor(t *testing.T) {

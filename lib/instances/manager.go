@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/kernel/hypeman/lib/devices"
@@ -29,7 +30,6 @@ import (
 
 type Manager interface {
 	ListInstances(ctx context.Context, filter *ListInstancesFilter) ([]Instance, error)
-	ReconcileVGPUs(ctx context.Context)
 	ListSnapshots(ctx context.Context, filter *ListSnapshotsFilter) ([]Snapshot, error)
 	GetSnapshot(ctx context.Context, snapshotID string) (*Snapshot, error)
 	CreateInstance(ctx context.Context, req CreateInstanceRequest) (*Instance, error)
@@ -221,6 +221,12 @@ type manager struct {
 	orphanedVGPUMu         sync.Mutex
 	orphanedVGPUs          map[string]struct{}
 	orphanedVGPURetryDelay time.Duration
+
+	// One pending vGPU reconcile retry at a time, for both the startup-grace
+	// and listing-failure paths. vgpuReconcileRetryDelay overrides the
+	// listing-failure delay in tests; zero means the default.
+	vgpuReconcileRetryPending atomic.Bool
+	vgpuReconcileRetryDelay   time.Duration
 
 	// vgpuInitTermGrace overrides terminateThenKill's SIGTERM wait for vGPU
 	// instances still initializing; zero means the default.
@@ -751,10 +757,10 @@ func (m *manager) DefaultHypervisor() hypervisor.Type {
 	return m.defaultHypervisor
 }
 
-// ListInstancesForReconcile returns every instance's stored metadata or an
+// listInstancesForReconcile returns every instance's stored metadata or an
 // invalid metadata error. It does not derive state: hydration would query
 // every hypervisor on the host before the API serves.
-func (m *manager) ListInstancesForReconcile(ctx context.Context) ([]Instance, error) {
+func (m *manager) listInstancesForReconcile(ctx context.Context) ([]Instance, error) {
 	files, err := m.listMetadataFilesStrict()
 	if err != nil {
 		return nil, err

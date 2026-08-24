@@ -15,12 +15,13 @@ const (
 	defaultOrphanedVGPUReleaseRetryDelay = 30 * time.Second
 )
 
-// scheduleOrphanedVGPURelease retries a vGPU release that failed during a
-// completed delete, off the request path: a GPU-busy VMM routinely outlives
-// delete's force-kill wait, and once metadata is deleted nothing else
-// releases the VF until startup reconciliation. Each attempt re-runs
-// releaseStoredVGPU, so the claim scan and destroy guards apply on every
-// retry. The queue is in-memory only; a restart abandons it and startup
+// scheduleOrphanedVGPURelease retries a vGPU release for an assignment no
+// on-disk metadata points at anymore: a release that failed during a
+// completed delete (a GPU-busy VMM routinely outlives delete's force-kill
+// wait), or a rollback whose retention record could not be saved. Without a
+// record, nothing else releases the VF until startup reconciliation. Each
+// attempt re-runs the release, so the claim scan and destroy guards apply on
+// every retry. The queue is in-memory only; a restart abandons it and startup
 // reconciliation sweeps the VF.
 func (m *manager) scheduleOrphanedVGPURelease(ctx context.Context, stored StoredMetadata) {
 	path := storedVGPUDevicePath(&stored)
@@ -56,7 +57,9 @@ func (m *manager) retryOrphanedVGPURelease(ctx context.Context, stored StoredMet
 	}()
 	for attempt := 1; attempt <= orphanedVGPUReleaseMaxAttempts; attempt++ {
 		time.Sleep(delay)
-		if err := m.releaseStoredVGPU(ctx, &stored); err != nil {
+		// No claim-scan exclusion: unlike delete, a failed start keeps its
+		// instance record, and a restarted instance may hold this same VF.
+		if err := m.releaseStoredVGPUExcluding(ctx, &stored, ""); err != nil {
 			log.WarnContext(ctx, "orphaned vGPU release retry failed",
 				"instance_id", stored.Id, "device_path", path, "attempt", attempt, "error", err)
 			continue
