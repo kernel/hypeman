@@ -177,6 +177,11 @@ func TestSocketListenerHelper(t *testing.T) {
 	defer listener.Close()
 	fmt.Fprintln(os.Stdout, "ready")
 	_, _ = os.Stdin.Read(make([]byte, 1))
+	if os.Getenv("HYPERVISOR_SOCKET_CLOSE_BEFORE_EXIT") == "1" {
+		_ = listener.Close()
+		fmt.Fprintln(os.Stdout, "closed")
+		_, _ = os.Stdin.Read(make([]byte, 1))
+	}
 }
 
 func TestKillHypervisorSparesReusedPIDAndKillsSocketOwner(t *testing.T) {
@@ -247,6 +252,48 @@ func TestGracefulShutdownWaitsForSocketOwnerInsteadOfExitedStoredPID(t *testing.
 	assert.False(t, m.tryGracefulGuestShutdown(context.Background(), inst, 1),
 		"stop and delete must fall back to the hardened kill path while the socket owner is alive")
 	assert.True(t, ProcessExists(owner.Process.Pid))
+}
+
+func TestGracefulShutdownFallbackKillsCapturedPIDAfterListenerCloses(t *testing.T) {
+	socketPath := filepath.Join(t.TempDir(), "test.sock")
+	owner := exec.Command(os.Args[0], "-test.run=^TestSocketListenerHelper$")
+	owner.Env = append(os.Environ(),
+		"HYPERVISOR_SOCKET_HELPER=1",
+		"HYPERVISOR_SOCKET_CLOSE_BEFORE_EXIT=1",
+		"HYPERVISOR_SOCKET_PATH="+socketPath,
+	)
+	stdin, err := owner.StdinPipe()
+	require.NoError(t, err)
+	stdout, err := owner.StdoutPipe()
+	require.NoError(t, err)
+	require.NoError(t, owner.Start())
+	t.Cleanup(func() {
+		_ = stdin.Close()
+		_ = owner.Process.Kill()
+		_ = owner.Wait()
+	})
+	output := bufio.NewReader(stdout)
+	_, err = output.ReadString('\n')
+	require.NoError(t, err)
+
+	m := &manager{shutdownGuestFn: func(context.Context, hypervisor.VsockDialer, int32) error {
+		if _, err := stdin.Write([]byte{1}); err != nil {
+			return err
+		}
+		_, err := output.ReadString('\n')
+		return err
+	}}
+	inst := &Instance{StoredMetadata: StoredMetadata{
+		Id:                        "graceful-listener-close",
+		HypervisorType:            hypervisor.TypeCloudHypervisor,
+		HypervisorProcessIdentity: HypervisorProcessIdentity{HypervisorPID: &owner.Process.Pid},
+		SocketPath:                socketPath,
+		VsockSocket:               filepath.Join(t.TempDir(), "missing-vsock.sock"),
+	}}
+
+	assert.False(t, m.tryGracefulGuestShutdown(context.Background(), inst, 0))
+	require.NoError(t, m.killHypervisor(context.Background(), inst))
+	assert.False(t, ProcessExists(owner.Process.Pid))
 }
 
 func TestShutdownHypervisorSparesReusedPIDWhenNoProcessOwnsSocket(t *testing.T) {

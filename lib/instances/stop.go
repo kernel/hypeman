@@ -50,10 +50,27 @@ func (m *manager) tryGracefulGuestShutdown(ctx context.Context, inst *Instance, 
 		return false
 	}
 
+	// Capture the socket owner before shutdown can close its listener. Legacy
+	// metadata has no process identity token, so the PID cannot be recovered
+	// safely from the stored value once the listener disappears.
+	pid, err := resolveLiveHypervisorPID(inst.HypervisorProcessIdentity, inst.SocketPath)
+	if err != nil {
+		log.WarnContext(ctx, "could not confirm hypervisor ownership before graceful shutdown", "instance_id", inst.Id, "error", err)
+		return false
+	}
+	if pid == 0 {
+		return true
+	}
+	inst.HypervisorProcessIdentity.Set(pid)
+
+	shutdownGuest := guest.ShutdownInstance
+	if m.shutdownGuestFn != nil {
+		shutdownGuest = m.shutdownGuestFn
+	}
 	sendShutdown := func() error {
 		shutdownCtx, cancel := context.WithTimeout(ctx, shutdownRPCDeadline)
 		defer cancel()
-		return guest.ShutdownInstance(shutdownCtx, dialer, 0)
+		return shutdownGuest(shutdownCtx, dialer, 0)
 	}
 
 	shutdownSent := false
@@ -67,18 +84,6 @@ func (m *manager) tryGracefulGuestShutdown(ctx context.Context, inst *Instance, 
 		}
 	} else {
 		shutdownSent = true
-	}
-
-	// Wait for the process that currently owns the hypervisor socket. The
-	// persisted PID may be stale or reused, so trusting it here could skip the
-	// fail-closed kill path while the actual VMM is still running.
-	pid, err := resolveLiveHypervisorPID(inst.HypervisorProcessIdentity, inst.SocketPath)
-	if err != nil {
-		log.WarnContext(ctx, "could not confirm hypervisor ownership after graceful shutdown", "instance_id", inst.Id, "error", err)
-		return false
-	}
-	if pid == 0 {
-		return true
 	}
 
 	waitTimeout := time.Duration(stopTimeout) * time.Second
