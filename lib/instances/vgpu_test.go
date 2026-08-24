@@ -526,10 +526,14 @@ func TestVGPUAssignmentClaimedByLiveInstanceNormalizesLegacyMdevPath(t *testing.
 	require.NoError(t, m.ensureDirectories("legacy-claimant"))
 	pid := os.Getpid()
 	require.NoError(t, m.saveMetadata(&metadata{StoredMetadata: StoredMetadata{
-		Id:                        "legacy-claimant",
-		Name:                      "legacy-claimant",
-		GPUMdevUUID:               "legacy-uuid",
-		HypervisorProcessIdentity: HypervisorProcessIdentity{HypervisorPID: &pid},
+		Id:          "legacy-claimant",
+		Name:        "legacy-claimant",
+		GPUMdevUUID: "legacy-uuid",
+		HypervisorProcessIdentity: HypervisorProcessIdentity{
+			HypervisorPID:       &pid,
+			HypervisorStartTime: processStartTime(pid),
+			HypervisorBootID:    hostBootID(),
+		},
 	}}))
 
 	claimed, err := m.vgpuAssignmentClaimedByLiveInstance(context.Background(), "other-instance", "/sys/bus/mdev/devices/legacy-uuid")
