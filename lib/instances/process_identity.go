@@ -27,19 +27,13 @@ const linuxBootIDPath = "/proc/sys/kernel/random/boot_id"
 // does not unstick it, so the wait is short to keep stop and delete fast.
 const hypervisorSIGKILLWaitTimeout = 2 * time.Second
 
-// defaultVGPUInitTermGrace is how long terminateThenKill waits for a vGPU
-// hypervisor to exit on SIGTERM before SIGKILL. Only force-kill paths pay it,
-// only for vGPU instances, and only when the process ignores SIGTERM;
-// observed mid-init VFIO teardown takes 1-2s.
-const defaultVGPUInitTermGrace = 5 * time.Second
-
 // vgpuTermGrace returns the SIGTERM wait used before hard-killing a vGPU
 // hypervisor.
 func (m *manager) vgpuTermGrace() time.Duration {
 	if m.vgpuInitTermGrace > 0 {
 		return m.vgpuInitTermGrace
 	}
-	return defaultVGPUInitTermGrace
+	return hypervisor.VFIOTermGrace
 }
 
 // terminateThenKill hard-kills the hypervisor process, first giving any vGPU

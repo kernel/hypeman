@@ -411,6 +411,23 @@ func TestWaitForSocketOrExitReturnsEarlyWhenProcessDies(t *testing.T) {
 	assert.True(t, cmd.ProcessState.Exited())
 }
 
+func TestVFIOTermGraceFor(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  hypervisor.VMConfig
+		want time.Duration
+	}{
+		{name: "vGPU", cfg: hypervisor.VMConfig{VGPUDevicePath: "/sys/bus/mdev/devices/test"}, want: hypervisor.VFIOTermGrace},
+		{name: "PCI device", cfg: hypervisor.VMConfig{PCIDevices: []string{"0000:01:00.0"}}, want: hypervisor.VFIOTermGrace},
+		{name: "no VFIO device", cfg: hypervisor.VMConfig{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, vfioTermGraceFor(tt.cfg))
+		})
+	}
+}
+
 func TestCleanupSIGTERMsProcessWithTermGrace(t *testing.T) {
 	socketPath := filepath.Join(t.TempDir(), "qemu.sock")
 	markerPath := filepath.Join(t.TempDir(), "terminated")
