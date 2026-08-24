@@ -92,7 +92,7 @@ func TestResolveLiveHypervisorPIDUsesMatchingStartTime(t *testing.T) {
 	startTime := processStartTime(pid)
 	require.NotZero(t, startTime)
 
-	resolved, err := resolveLiveHypervisorPID(HypervisorProcessIdentity{HypervisorPID: &pid, HypervisorStartTime: startTime, HypervisorBootID: hostBootID()}, filepath.Join(t.TempDir(), "missing.sock"))
+	resolved, err := resolveLiveHypervisorPID(HypervisorProcessIdentity{HypervisorPID: &pid, HypervisorStartTime: startTime, HypervisorBootID: hostBootID()}, "")
 	require.NoError(t, err)
 	assert.Equal(t, pid, resolved)
 }
@@ -149,12 +149,19 @@ func TestResolveLiveHypervisorPIDTreatsDisprovenIdentityAsDead(t *testing.T) {
 		"mismatched start time": {HypervisorPID: &pid, HypervisorStartTime: startTime + 1, HypervisorBootID: hostBootID()},
 	} {
 		t.Run(name, func(t *testing.T) {
-			resolved, err := resolveLiveHypervisorPID(id, filepath.Join(t.TempDir(), "missing.sock"))
+			resolved, err := resolveLiveHypervisorPID(id, "")
 			require.NoError(t, err)
 			assert.Zero(t, resolved)
 			assert.NoError(t, syscall.Kill(pid, 0), "disproven identity must not signal the PID holder")
 		})
 	}
+}
+
+func TestResolveLiveHypervisorPIDFailsClosedWithoutSocketOrIdentity(t *testing.T) {
+	pid := os.Getpid()
+	resolved, err := resolveLiveHypervisorPID(HypervisorProcessIdentity{HypervisorPID: &pid}, "")
+	require.ErrorContains(t, err, "without a socket path")
+	assert.Zero(t, resolved)
 }
 
 func TestSocketListenerHelper(t *testing.T) {
