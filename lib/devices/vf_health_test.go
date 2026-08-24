@@ -54,6 +54,14 @@ func TestQuarantineVFPersistsAcrossReload(t *testing.T) {
 	assert.Equal(t, "instance-1", records[0].InstanceID)
 }
 
+func TestQuarantineVFRejectsInvalidAddress(t *testing.T) {
+	resetVFHealthStore(t)
+
+	_, err := QuarantineVF(VFQuarantine{VFAddress: "not-a-pci-address"})
+	require.ErrorContains(t, err, "invalid VF address")
+	assert.Empty(t, QuarantinedVFs())
+}
+
 func TestQuarantineVFRollsBackOnPersistFailure(t *testing.T) {
 	resetVFHealthStore(t)
 	// Point the store below a path component that is a file, so persisting
@@ -91,6 +99,53 @@ func TestCheckedAddressesFailsClosedOnUnloadedState(t *testing.T) {
 	addresses, err := vfHealth.checkedAddresses()
 	require.NoError(t, err)
 	assert.Contains(t, addresses, "0000:e3:00.4")
+}
+
+func TestCheckedAddressesFailsClosedOnInvalidRecord(t *testing.T) {
+	tests := []struct {
+		name    string
+		state   string
+		wantErr string
+	}{
+		{
+			name:    "null state",
+			state:   `null`,
+			wantErr: "expected an array",
+		},
+		{
+			name:    "missing fields",
+			state:   `[{}]`,
+			wantErr: "invalid VF address",
+		},
+		{
+			name:    "invalid address",
+			state:   `[{"vf_address":"not-a-pci-address","quarantined_at":"2026-08-20T00:00:00Z"}]`,
+			wantErr: "invalid VF address",
+		},
+		{
+			name:    "missing timestamp",
+			state:   `[{"vf_address":"0000:e3:00.4"}]`,
+			wantErr: "missing quarantine timestamp",
+		},
+		{
+			name:    "duplicate address",
+			state:   `[{"vf_address":"0000:e3:00.4","quarantined_at":"2026-08-20T00:00:00Z"},{"vf_address":"0000:e3:00.4","quarantined_at":"2026-08-21T00:00:00Z"}]`,
+			wantErr: "duplicate VF address",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := resetVFHealthStore(t)
+			require.NoError(t, os.WriteFile(path, []byte(tt.state), 0644))
+			require.ErrorContains(t, initVFHealthStore(path), tt.wantErr)
+			assert.True(t, VFHealthStoreUnavailable())
+			assert.Empty(t, QuarantinedVFs())
+
+			_, err := vfHealth.checkedAddresses()
+			require.Error(t, err)
+		})
+	}
 }
 
 func TestQuarantineVFRefusesToClobberUnloadedState(t *testing.T) {

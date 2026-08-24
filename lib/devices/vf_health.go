@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"sync"
 	"time"
@@ -39,6 +40,8 @@ type vfHealthStore struct {
 	loadErr error
 }
 
+var vfHealthAddressPattern = regexp.MustCompile(`^[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]$`)
+
 var vfHealth = &vfHealthStore{records: make(map[string]VFHealthRecord)}
 
 // initVFHealthStore points the store at its state file and loads any
@@ -67,9 +70,27 @@ func (s *vfHealthStore) loadLocked() error {
 		s.loadErr = fmt.Errorf("unmarshal VF health state: %w", err)
 		return s.loadErr
 	}
-	for _, record := range records {
-		s.records[record.VFAddress] = record
+	if records == nil {
+		s.loadErr = fmt.Errorf("validate VF health state: expected an array")
+		return s.loadErr
 	}
+	loaded := make(map[string]VFHealthRecord, len(records))
+	for i, record := range records {
+		if !vfHealthAddressPattern.MatchString(record.VFAddress) {
+			s.loadErr = fmt.Errorf("validate VF health state record %d: invalid VF address %q", i, record.VFAddress)
+			return s.loadErr
+		}
+		if record.QuarantinedAt.IsZero() {
+			s.loadErr = fmt.Errorf("validate VF health state record %d: missing quarantine timestamp", i)
+			return s.loadErr
+		}
+		if _, exists := loaded[record.VFAddress]; exists {
+			s.loadErr = fmt.Errorf("validate VF health state record %d: duplicate VF address %q", i, record.VFAddress)
+			return s.loadErr
+		}
+		loaded[record.VFAddress] = record
+	}
+	s.records = loaded
 	return nil
 }
 
@@ -145,6 +166,9 @@ func (s *vfHealthStore) quarantine(q VFQuarantine) (bool, error) {
 	defer s.mu.Unlock()
 	if err := s.ensureLoadedLocked(); err != nil {
 		return false, err
+	}
+	if !vfHealthAddressPattern.MatchString(q.VFAddress) {
+		return false, fmt.Errorf("invalid VF address %q", q.VFAddress)
 	}
 	if _, ok := s.records[q.VFAddress]; ok {
 		return true, nil
