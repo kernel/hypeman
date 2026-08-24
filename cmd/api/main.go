@@ -384,9 +384,14 @@ func run() error {
 		return fmt.Errorf("reconcile device state: %w", err)
 	}
 
-	// Reconcile vGPU devices (clears orphaned vGPUs from previous runs)
+	// Reconcile vGPU devices (clears orphaned vGPUs from previous runs).
+	// Type-asserted rather than added to instances.Manager so alternate
+	// Manager implementations compiled against the public module keep
+	// building without this startup-only method.
 	logger.Info("Reconciling vGPU devices...")
-	app.InstanceManager.ReconcileVGPUs(ctx)
+	if r, ok := app.InstanceManager.(interface{ ReconcileVGPUs(context.Context) }); ok {
+		r.ReconcileVGPUs(ctx)
+	}
 
 	// Wire up resource validator for aggregate limit checking
 	// This enables the instance manager to validate CPU, memory, network, and GPU

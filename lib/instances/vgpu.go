@@ -17,7 +17,8 @@ const VGPUAssignmentStartupGracePeriod = 5 * time.Minute
 
 // VGPUCleanupPendingError reports a failed create whose vGPU release also
 // failed during rollback. When Retained is true, deleting the retained instance
-// retries the release; otherwise startup reconciliation recovers the assignment.
+// retries the release; otherwise a background retry and startup reconciliation
+// recover the assignment.
 type VGPUCleanupPendingError struct {
 	InstanceID string
 	Retained   bool
@@ -28,7 +29,7 @@ func (e *VGPUCleanupPendingError) Error() string {
 	if e.Retained {
 		return fmt.Sprintf("%v; vGPU release failed during rollback, instance %s retains the assignment", e.Err, e.InstanceID)
 	}
-	return fmt.Sprintf("%v; vGPU release failed during rollback and the retention record for instance %s could not be saved; the assignment is recovered on the next startup reconcile", e.Err, e.InstanceID)
+	return fmt.Sprintf("%v; vGPU release failed during rollback and the retention record for instance %s could not be saved; the release is retried in the background and by the next startup reconcile", e.Err, e.InstanceID)
 }
 
 func (e *VGPUCleanupPendingError) Unwrap() error { return e.Err }
@@ -128,6 +129,9 @@ func (m *manager) cleanupStartVGPU(ctx context.Context, instanceID string, devic
 		if meta, loadErr := m.loadMetadata(instanceID); loadErr == nil && storedVGPUDevicePath(&meta.StoredMetadata) == device.SysfsPath {
 			return true, true
 		}
+		// No on-disk record points at the device; retry the release in the
+		// background instead of waiting for the next startup reconcile.
+		m.scheduleOrphanedVGPURelease(ctx, cleanupMeta.StoredMetadata)
 		return true, false
 	}
 	return retained, retained
@@ -155,6 +159,15 @@ func restoreStartMutatedFields(dst, src *StoredMetadata) {
 }
 
 func (m *manager) releaseStoredVGPU(ctx context.Context, stored *StoredMetadata) error {
+	return m.releaseStoredVGPUExcluding(ctx, stored, stored.Id)
+}
+
+// releaseStoredVGPUExcluding releases stored's assignment while treating
+// excludeID's metadata as not a claimant. Callers releasing an instance's own
+// persisted assignment exclude that instance; the orphan retry passes no
+// exclusion because its instance may have been restarted onto the same VF,
+// and that live claim must block the release.
+func (m *manager) releaseStoredVGPUExcluding(ctx context.Context, stored *StoredMetadata, excludeID string) error {
 	path := storedVGPUDevicePath(stored)
 	if path != "" {
 		// Vendor VFIO VFs are reused across instances, so the release must
@@ -164,7 +177,7 @@ func (m *manager) releaseStoredVGPU(ctx context.Context, stored *StoredMetadata)
 		claimed := false
 		if stored.GPUFramework == devices.VGPUFrameworkVendorVFIO {
 			var err error
-			claimed, err = m.vgpuAssignmentClaimedByLiveInstance(ctx, stored.Id, path)
+			claimed, err = m.vgpuAssignmentClaimedByLiveInstance(ctx, excludeID, path)
 			if err != nil {
 				return err
 			}
@@ -222,7 +235,7 @@ func (m *manager) vgpuAssignmentClaimedByLiveInstance(ctx context.Context, exclu
 				return false, fmt.Errorf("cannot confirm liveness of vGPU claimant %s on %s: %w", id, devicePath, err)
 			}
 		}
-		live, remaining := vgpuAssignmentLiveness(stored, time.Now(), pid > 0)
+		live, remaining := vgpuAssignmentLiveness(stored, m.nowUTC(), pid > 0)
 		if pid > 0 && live {
 			return true, nil
 		}

@@ -1,7 +1,10 @@
 package instances
 
 import (
+	"context"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -39,6 +42,32 @@ func TestLiveVGPUReconcileProtectionBoundsStartupProtection(t *testing.T) {
 	assert.NotContains(t, protected, "/sys/bus/pci/devices/0000:82:00.6")
 	assert.NotContains(t, protected, "/sys/bus/pci/devices/0000:82:00.7")
 	assert.Contains(t, protected, "/sys/bus/pci/devices/0000:82:00.8")
+}
+
+func TestReconcileVGPUsRetriesAfterListingFailure(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses directory permissions")
+	}
+
+	m := &manager{paths: paths.New(t.TempDir()), vgpuReconcileRetryDelay: 250 * time.Millisecond}
+	const id = "unreadable"
+	require.NoError(t, m.ensureDirectories(id))
+	require.NoError(t, m.saveMetadata(&metadata{StoredMetadata: StoredMetadata{Id: id}}))
+	instanceDir := filepath.Dir(m.paths.InstanceMetadata(id))
+	require.NoError(t, os.Chmod(instanceDir, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(instanceDir, 0o755) })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m.ReconcileVGPUs(ctx)
+	require.True(t, m.vgpuReconcileRetryPending.Load(),
+		"a listing failure must schedule a retry instead of disabling the vendor sweep until restart")
+
+	// Once the listing recovers, the retry runs the sweep and stops rearming.
+	require.NoError(t, os.Chmod(instanceDir, 0o755))
+	require.Eventually(t, func() bool {
+		return !m.vgpuReconcileRetryPending.Load()
+	}, 5*time.Second, 10*time.Millisecond)
 }
 
 func TestVGPUAssignmentLiveness(t *testing.T) {

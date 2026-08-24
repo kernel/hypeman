@@ -77,6 +77,43 @@ func TestCreateSnapshotRejectsVGPURetentionRecord(t *testing.T) {
 	require.ErrorContains(t, err, "delete it to release the assignment")
 }
 
+func TestRestoreSnapshotRejectsVGPURetentionRecord(t *testing.T) {
+	mgr, _ := setupTestManager(t)
+	ctx := context.Background()
+
+	sourceID := "snapshot-vgpu-restore-retention"
+	createStoppedSnapshotSourceFixture(t, mgr, sourceID, sourceID, mgr.defaultHypervisor)
+
+	snapshot, err := mgr.CreateSnapshot(ctx, sourceID, CreateSnapshotRequest{
+		Kind: SnapshotKindStopped,
+		Name: "snapshot-vgpu-restore-retention",
+	})
+	require.NoError(t, err)
+
+	meta, err := mgr.loadMetadata(sourceID)
+	require.NoError(t, err)
+	meta.GPUProfile = "NVIDIA L40S-2Q"
+	meta.GPUFramework = devices.VGPUFramework("future-framework")
+	meta.GPUDevicePath = "/sys/bus/pci/devices/0000:82:00.4"
+	meta.GPURetainedForCleanup = true
+	require.NoError(t, mgr.saveMetadata(meta))
+
+	// Restoring into the delete-only stub would rebuild boot config from the
+	// snapshot record, whose retention flag is false, clearing the marker.
+	_, err = mgr.RestoreSnapshot(ctx, sourceID, snapshot.Id, RestoreSnapshotRequest{
+		TargetState:      StateStopped,
+		TargetHypervisor: mgr.defaultHypervisor,
+	})
+	require.ErrorIs(t, err, ErrInvalidState)
+	require.ErrorContains(t, err, "delete it to release the assignment")
+
+	// The retained assignment must survive the rejected restore for delete.
+	stored, err := mgr.loadMetadata(sourceID)
+	require.NoError(t, err)
+	assert.True(t, stored.GPURetainedForCleanup)
+	assert.Equal(t, "/sys/bus/pci/devices/0000:82:00.4", stored.GPUDevicePath)
+}
+
 func TestRestoreSnapshotDoesNotResurrectStaleVGPUAssignment(t *testing.T) {
 	mgr, _ := setupTestManager(t)
 	ctx := context.Background()

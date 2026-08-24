@@ -36,17 +36,19 @@ func (m *manager) vgpuTermGrace() time.Duration {
 	return hypervisor.VFIOTermGrace
 }
 
-// terminateThenKill hard-kills the hypervisor process, first giving any vGPU
-// instance a SIGTERM grace: SIGKILL during guest driver init can wedge the VF
-// until its parent GPU is SR-IOV cycled (see lib/devices/GPU.md). The grace
-// applies in every state because the instance reports Running seconds before
-// driver init finishes and nothing host-side observes that boundary.
+// terminateThenKill hard-kills the hypervisor process, first giving any
+// instance with VFIO devices (a vGPU VF or passthrough PCI devices, matching
+// the QEMU-side vfioTermGraceFor) a SIGTERM grace: SIGKILL during guest
+// driver init can wedge the device until its parent GPU is SR-IOV cycled
+// (see lib/devices/GPU.md). The grace applies in every state because the
+// instance reports Running seconds before driver init finishes and nothing
+// host-side observes that boundary.
 func (m *manager) terminateThenKill(ctx context.Context, inst *Instance, pid int) error {
-	if inst.GPUProfile != "" {
+	if inst.GPUProfile != "" || len(inst.Devices) > 0 {
 		if syscall.Kill(pid, syscall.SIGTERM) == nil && WaitForProcessExit(pid, m.vgpuTermGrace()) {
 			return nil
 		}
-		logger.FromContext(ctx).WarnContext(ctx, "vGPU hypervisor did not exit on SIGTERM; hard-killing, VF may wedge if the guest driver was initializing",
+		logger.FromContext(ctx).WarnContext(ctx, "hypervisor with VFIO devices did not exit on SIGTERM; hard-killing, device may wedge if the guest driver was initializing",
 			"instance_id", inst.Id, "device_path", inst.GPUDevicePath)
 	}
 	return killProcessAndWait(pid)
@@ -207,11 +209,11 @@ func classifyResolvedHypervisorOwner(socketPath string, stored, resolved int, er
 	return 0, fmt.Errorf("cannot confirm ownership of socket %s: %w", socketPath, err)
 }
 
-// HypervisorMayBeAlive reports whether the recorded hypervisor process may
+// hypervisorMayBeAlive reports whether the recorded hypervisor process may
 // still be running. It fails open (unresolvable ownership returns true, the
 // safe direction for reconcile protection and claim checks); do not use it
 // to authorize teardown.
-func HypervisorMayBeAlive(id HypervisorProcessIdentity, socketPath string) bool {
+func hypervisorMayBeAlive(id HypervisorProcessIdentity, socketPath string) bool {
 	pid, err := resolveLiveHypervisorPID(id, socketPath)
 	return err != nil || pid > 0
 }
