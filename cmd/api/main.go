@@ -185,71 +185,6 @@ func configureUFFDGraduationController(cfg *config.Config, instanceManager insta
 	}, logger), nil
 }
 
-type vgpuReconcileInstanceLister interface {
-	ListInstancesForReconcile(context.Context) ([]instances.Instance, error)
-}
-
-func liveInstanceVGPUDevicePaths(ctx context.Context, instanceManager instances.Manager) (map[string]struct{}, time.Duration, error) {
-	lister, ok := instanceManager.(vgpuReconcileInstanceLister)
-	if !ok {
-		return nil, 0, errors.New("instance manager does not support vGPU reconcile inventory")
-	}
-	allInstances, err := lister.ListInstancesForReconcile(ctx)
-	if err != nil {
-		return nil, 0, err
-	}
-	protected := make(map[string]struct{})
-	var retryAfter time.Duration
-	for _, inst := range allInstances {
-		if inst.GPUDevicePath == "" {
-			continue
-		}
-		if inst.HypervisorPID != nil && instances.HypervisorMayBeAlive(inst.HypervisorProcessIdentity, inst.SocketPath) {
-			protected[inst.GPUDevicePath] = struct{}{}
-			continue
-		}
-		if inst.GPUAssignedAt == nil {
-			continue
-		}
-		remaining := instances.VGPUAssignmentStartupGracePeriod - time.Since(*inst.GPUAssignedAt)
-		if remaining <= 0 {
-			continue
-		}
-		protected[inst.GPUDevicePath] = struct{}{}
-		if retryAfter == 0 || remaining < retryAfter {
-			retryAfter = remaining
-		}
-	}
-	return protected, retryAfter, nil
-}
-
-func reconcileVGPUs(ctx context.Context, instanceManager instances.Manager, logger *slog.Logger) {
-	protected, retryAfter, err := liveInstanceVGPUDevicePaths(ctx, instanceManager)
-	if err != nil {
-		// Operator-actionable: vendor VFIO reconciliation stays disabled
-		// host-wide (and releases fail closed on the same inventory) until
-		// the unreadable instance metadata is repaired.
-		logger.Error("failed to list instances for vGPU reconcile protection; reconciling mdev only", "error", err)
-		protected = nil
-		retryAfter = 0
-	}
-	if err := devices.ReconcileVGPUs(ctx, protected); err != nil {
-		logger.Warn("failed to reconcile vGPU devices", "error", err)
-	}
-	if retryAfter <= 0 {
-		return
-	}
-	go func() {
-		timer := time.NewTimer(retryAfter)
-		defer timer.Stop()
-		select {
-		case <-ctx.Done():
-		case <-timer.C:
-			reconcileVGPUs(ctx, instanceManager, logger)
-		}
-	}()
-}
-
 func run() error {
 	startupStarted := time.Now()
 	slog.Info("starting hypeman initialization")
@@ -451,7 +386,7 @@ func run() error {
 
 	// Reconcile vGPU devices (clears orphaned vGPUs from previous runs)
 	logger.Info("Reconciling vGPU devices...")
-	reconcileVGPUs(ctx, app.InstanceManager, logger)
+	app.InstanceManager.ReconcileVGPUs(ctx)
 
 	// Wire up resource validator for aggregate limit checking
 	// This enables the instance manager to validate CPU, memory, network, and GPU
