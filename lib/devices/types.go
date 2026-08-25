@@ -60,6 +60,11 @@ func ValidateDeviceName(name string) bool {
 // GPUMode represents the host's GPU configuration mode
 type GPUMode string
 
+// VGPUAssignmentGracePeriod protects a fresh vGPU assignment from cleanup
+// until its VM has had time to boot and become identifiable — by a persisted
+// hypervisor PID, a control-socket owner, or an open VFIO handle.
+const VGPUAssignmentGracePeriod = 5 * time.Minute
+
 type VGPUFramework string
 
 const (
