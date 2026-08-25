@@ -464,7 +464,8 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 	if err := m.prepareWindowsForkIdentity(&forkMeta, resetWindowsTPM); err != nil {
 		return nil, err
 	}
-	if forkMeta.NetworkEnabled && !(isWindowsPlatform(forkMeta.Platform) && rec.Snapshot.Kind == SnapshotKindStandby) {
+	keepCapturedNetwork := isWindowsPlatform(forkMeta.Platform) && windowsForkKeepsCapturedNetwork(rec.Snapshot.Kind == SnapshotKindStandby, targetState)
+	if forkMeta.NetworkEnabled && !keepCapturedNetwork {
 		forkMeta.IP = ""
 		forkMeta.MAC = ""
 	}

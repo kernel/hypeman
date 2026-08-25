@@ -85,6 +85,10 @@ func windowsForkNeedsFreshTPM(hasMemorySnapshot bool, targetState State) bool {
 	return targetState == StateStopped || !hasMemorySnapshot
 }
 
+func windowsForkKeepsCapturedNetwork(hasMemorySnapshot bool, targetState State) bool {
+	return hasMemorySnapshot && targetState != StateStopped
+}
+
 func (m *manager) prepareWindowsForkIdentity(stored *StoredMetadata, resetTPM bool) error {
 	if stored == nil || !isWindowsPlatform(stored.Platform) {
 		return nil

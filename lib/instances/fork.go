@@ -333,7 +333,8 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 		return nil, false, err
 	}
 
-	if forkMeta.NetworkEnabled && !(isWindowsPlatform(forkMeta.Platform) && source.State == StateStandby) {
+	keepCapturedNetwork := isWindowsPlatform(forkMeta.Platform) && windowsForkKeepsCapturedNetwork(source.State == StateStandby, targetState)
+	if forkMeta.NetworkEnabled && !keepCapturedNetwork {
 		// Clear inherited network identity. Windows memory forks retain the NIC
 		// identity captured by QEMU and cannot run concurrently with their source.
 		forkMeta.IP = ""

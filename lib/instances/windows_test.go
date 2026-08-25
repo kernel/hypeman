@@ -73,6 +73,24 @@ func TestWindowsForkNeedsFreshTPM(t *testing.T) {
 	}
 }
 
+func TestWindowsForkKeepsCapturedNetwork(t *testing.T) {
+	tests := []struct {
+		name              string
+		hasMemorySnapshot bool
+		targetState       State
+		want              bool
+	}{
+		{name: "memory fork", hasMemorySnapshot: true, targetState: StateRunning, want: true},
+		{name: "standby fork stopped before restore", hasMemorySnapshot: true, targetState: StateStopped},
+		{name: "cold fork", targetState: StateRunning},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, windowsForkKeepsCapturedNetwork(tt.hasMemorySnapshot, tt.targetState))
+		})
+	}
+}
+
 func TestPrepareWindowsForkIdentity(t *testing.T) {
 	p := paths.New(t.TempDir())
 	m := &manager{paths: p}
