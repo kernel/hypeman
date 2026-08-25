@@ -656,6 +656,12 @@ func (s *ApiService) RestoreInstance(ctx context.Context, request oapi.RestoreIn
 	result, err := s.InstanceManager.RestoreInstance(ctx, inst.Id)
 	if err != nil {
 		switch {
+		case errors.Is(err, context.Canceled):
+			log.DebugContext(ctx, "restore request canceled")
+			return oapi.RestoreInstance499JSONResponse{
+				Code:    "client_closed_request",
+				Message: "request canceled",
+			}, nil
 		case errors.Is(err, instances.ErrNotFound):
 			return oapi.RestoreInstance404JSONResponse{
 				Code:    "not_found",
