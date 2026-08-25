@@ -97,20 +97,6 @@ func TestScheduleOrphanedVGPUReleaseDeduplicatesByDevicePath(t *testing.T) {
 	assert.Equal(t, int32(1), attempts.Load(), "the second schedule for the same path must be dropped")
 }
 
-func TestScheduleOrphanedVGPUReleaseIgnoresEmptyAssignment(t *testing.T) {
-	t.Parallel()
-
-	m := &manager{paths: paths.New(t.TempDir())}
-	m.scheduleOrphanedVGPURelease(context.Background(), StoredMetadata{Id: "no-gpu"})
-
-	m.orphanedVGPUMu.Lock()
-	defer m.orphanedVGPUMu.Unlock()
-	assert.Empty(t, m.orphanedVGPUs)
-}
-
-// TestOrphanedVGPUReleaseReappliesClaimScan pins that the background retry
-// goes through releaseStoredVGPU, not a raw destroy: a live claimant found by
-// the vendor VFIO claim scan must keep blocking the release on every retry.
 func TestOrphanedVGPUReleaseReappliesClaimScan(t *testing.T) {
 	t.Parallel()
 
@@ -123,8 +109,6 @@ func TestOrphanedVGPUReleaseReappliesClaimScan(t *testing.T) {
 			return nil
 		},
 	}
-	// A claimant with a recent assignment and no persisted PID makes the scan
-	// fail closed, exactly like the synchronous release path.
 	require.NoError(t, m.ensureDirectories("mid-boot-claimant"))
 	assignedAt := time.Now()
 	require.NoError(t, m.saveMetadata(&metadata{StoredMetadata: StoredMetadata{

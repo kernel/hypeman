@@ -42,11 +42,6 @@ func TestListInstancesForReconcileFailsOnInvalidMetadata(t *testing.T) {
 	assert.Equal(t, "valid", listed[0].Id)
 }
 
-// A concurrent delete can remove an instance between the reconcile listing
-// and its metadata load. A vanished record cannot claim a VF, so it must be
-// skipped like the release claim scan does — failing instead would zero the
-// grace-period retry and silently disable the vendor VFIO sweep whenever it
-// races a delete.
 func TestListInstancesForReconcileSkipsInstanceDeletedDuringListing(t *testing.T) {
 	m := &manager{paths: paths.New(t.TempDir())}
 
@@ -60,9 +55,6 @@ func TestListInstancesForReconcileSkipsInstanceDeletedDuringListing(t *testing.T
 		}}))
 	}
 
-	// loadMetadata takes the snapshot-alias read lock, so holding the
-	// mutation lock parks the reconcile between listing and loading — the
-	// window a concurrent delete lands in.
 	unlock := hypervisor.LockSnapshotSourceAliasMutation()
 	type result struct {
 		listed []Instance

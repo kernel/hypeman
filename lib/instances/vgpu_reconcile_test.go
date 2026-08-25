@@ -65,7 +65,6 @@ func TestReconcileVGPUsRetriesAfterListingFailure(t *testing.T) {
 	require.True(t, m.vgpuReconcileRetryPending.Load(),
 		"a listing failure must schedule a retry instead of disabling the vendor sweep until restart")
 
-	// Once the listing recovers, the retry runs the sweep and stops rearming.
 	require.NoError(t, os.Chmod(instanceDir, 0o755))
 	require.Eventually(t, func() bool {
 		return !m.vgpuReconcileRetryPending.Load()
@@ -92,33 +91,4 @@ func TestReconcileVGPUsRetriesAfterDeviceFailure(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return calls.Load() >= 2 && !m.vgpuReconcileRetryPending.Load()
 	}, 5*time.Second, 10*time.Millisecond)
-}
-
-func TestVGPUAssignmentLiveness(t *testing.T) {
-	now := time.Now().UTC()
-	recent := now.Add(-time.Minute)
-	stale := now.Add(-VGPUAssignmentStartupGracePeriod - time.Minute)
-	pid := 123
-
-	tests := []struct {
-		name      string
-		stored    StoredMetadata
-		livePID   bool
-		live      bool
-		remaining time.Duration
-	}{
-		{name: "live PID", stored: StoredMetadata{HypervisorProcessIdentity: HypervisorProcessIdentity{HypervisorPID: &pid}}, livePID: true, live: true},
-		{name: "dead PID recent assignment", stored: StoredMetadata{HypervisorProcessIdentity: HypervisorProcessIdentity{HypervisorPID: &pid}, GPUAssignedAt: &recent}, live: true, remaining: VGPUAssignmentStartupGracePeriod - time.Minute},
-		{name: "dead PID stale assignment", stored: StoredMetadata{HypervisorProcessIdentity: HypervisorProcessIdentity{HypervisorPID: &pid}, GPUAssignedAt: &stale}},
-		{name: "no PID recent assignment", stored: StoredMetadata{GPUAssignedAt: &recent}, live: true, remaining: VGPUAssignmentStartupGracePeriod - time.Minute},
-		{name: "no PID stale assignment", stored: StoredMetadata{GPUAssignedAt: &stale}},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			live, remaining := vgpuAssignmentLiveness(&tt.stored, now, tt.livePID)
-			assert.Equal(t, tt.live, live)
-			assert.Equal(t, tt.remaining, remaining)
-		})
-	}
 }

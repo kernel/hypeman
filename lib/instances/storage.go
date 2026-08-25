@@ -187,15 +187,10 @@ func removeAllWithRetry(path string, removeAll func(string) error, sleep func(ti
 	}
 }
 
-// listMetadataFiles returns paths to all instance metadata files, skipping
-// entries whose metadata cannot be statted.
 func (m *manager) listMetadataFiles() ([]string, error) {
 	return m.walkMetadataFiles(false)
 }
 
-// listMetadataFilesStrict returns paths to all instance metadata files,
-// failing on any stat error other than absence, so fail-closed callers see
-// an unreadable instance as an error instead of silently missing.
 func (m *manager) listMetadataFilesStrict() ([]string, error) {
 	return m.walkMetadataFiles(true)
 }

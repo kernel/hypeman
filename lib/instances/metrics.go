@@ -573,9 +573,6 @@ func (m *manager) recordTimeToRunning(ctx context.Context, stored *StoredMetadat
 	m.metrics.timeToRunning.Record(ctx, duration, metric.WithAttributes(attrs...))
 }
 
-// recordVGPUOrphanReleaseAbandoned records an orphaned vGPU release retry
-// loop giving up: the VF stays allocated until startup reconciliation or
-// manual remediation, so it must be visible beyond a log line.
 func (m *manager) recordVGPUOrphanReleaseAbandoned(ctx context.Context) {
 	if m.metrics == nil {
 		return

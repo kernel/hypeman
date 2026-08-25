@@ -267,8 +267,6 @@ func (m *manager) restoreSnapshot(ctx context.Context, id string, snapshotID str
 		return nil, fmt.Errorf("%w: cannot restore snapshot while source is %s", ErrInvalidState, sourceInst.State)
 	}
 	if sourceMeta.GPURetainedForCleanup {
-		// Restoring would rebuild boot config from the snapshot record, whose
-		// retention flag is false, silently clearing the delete-only marker.
 		return nil, errVGPURetentionStub
 	}
 

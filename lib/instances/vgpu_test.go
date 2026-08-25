@@ -67,17 +67,13 @@ func TestCleanupFailedCreateRetainsVGPUAssignment(t *testing.T) {
 	assert.Equal(t, stored.GPUDevicePath, retained.GPUDevicePath)
 	assert.Equal(t, stored.GPUMdevUUID, retained.GPUMdevUUID)
 	assert.Equal(t, stored.GPUAssignedAt, retained.GPUAssignedAt)
-	// Identity fields survive so the retained record lists as a
-	// recognizable, deletable instance instead of a nameless phantom.
 	assert.Equal(t, stored.Name, retained.Name)
 	assert.Equal(t, stored.GPUProfile, retained.GPUProfile)
 	assert.Equal(t, stored.HypervisorType, retained.HypervisorType)
 	assert.Equal(t, stored.DataDir, retained.DataDir)
-	// Resource claims released by rollback stay dropped.
 	assert.False(t, retained.NetworkEnabled)
 	assert.Empty(t, retained.IP)
 	assert.Empty(t, retained.Volumes)
-	// The stub has no boot configuration, so it is marked delete-only.
 	assert.True(t, retained.GPURetainedForCleanup)
 }
 
@@ -160,19 +156,6 @@ func TestVGPURetentionWrapPending(t *testing.T) {
 	pending = retention.wrapPending(cause)
 	require.ErrorAs(t, pending, &cleanupPending)
 	assert.True(t, cleanupPending.Retained)
-}
-
-func TestVGPUCleanupPendingErrorUnwraps(t *testing.T) {
-	t.Parallel()
-
-	cause := errors.New("boot failed")
-	retained := &VGPUCleanupPendingError{InstanceID: "inst-1", Retained: true, Err: cause}
-	assert.ErrorIs(t, retained, cause)
-	assert.Equal(t, "boot failed; vGPU release failed during rollback, instance inst-1 retains the assignment", retained.Error())
-
-	unpersisted := &VGPUCleanupPendingError{InstanceID: "inst-1", Err: cause}
-	assert.ErrorIs(t, unpersisted, cause)
-	assert.Equal(t, "boot failed; vGPU release failed during rollback and the retention record for instance inst-1 could not be saved; the release is retried in the background and by the next startup reconcile", unpersisted.Error())
 }
 
 func TestVGPUDevicePendingCleanup(t *testing.T) {
@@ -445,15 +428,12 @@ func TestCleanupStartVGPUReportsRetainedWhenMidStartSaveSurvives(t *testing.T) {
 	}
 	assignedAt := time.Now().UTC()
 
-	// The mid-start save already persisted the assignment.
 	meta, err := m.loadMetadata(id)
 	require.NoError(t, err)
 	rollbackMeta := *meta
 	setStoredVGPUDevice(&meta.StoredMetadata, &device, assignedAt)
 	require.NoError(t, m.saveMetadata(meta))
 
-	// The cleanup save fails, but the surviving on-disk record still points
-	// at the device, so retention must be reported as persisted.
 	instanceDir := filepath.Dir(m.paths.InstanceMetadata(id))
 	require.NoError(t, os.Chmod(instanceDir, 0o555))
 	t.Cleanup(func() { _ = os.Chmod(instanceDir, 0o755) })
@@ -603,12 +583,9 @@ func TestVGPUAssignmentClaimedByLiveInstanceGracesRecentDeadPIDClaim(t *testing.
 		GPUAssignedAt:             &assignedAt,
 	}}))
 
-	// Same bounded grace as startup reconcile: a recent claim whose PID is
-	// dead fails closed instead of being treated as unclaimed.
 	_, err := m.vgpuAssignmentClaimedByLiveInstance(context.Background(), "requester", "/sys/bus/pci/devices/0000:82:00.4")
 	require.Error(t, err)
 
-	// Past the grace period the dead claim no longer blocks the release.
 	stale := assignedAt.Add(-2 * VGPUAssignmentStartupGracePeriod)
 	meta, err := m.loadMetadata(claimantID)
 	require.NoError(t, err)

@@ -8,8 +8,6 @@ import (
 	"github.com/kernel/hypeman/lib/logger"
 )
 
-// vgpuReconcileFailureRetryDelay spaces retries after a transient metadata or
-// device error would otherwise disable orphan recovery until the next restart.
 const vgpuReconcileFailureRetryDelay = time.Minute
 
 func (m *manager) liveVGPUReconcileProtection(ctx context.Context) (map[string]struct{}, time.Duration, error) {
@@ -67,8 +65,6 @@ func (m *manager) ReconcileVGPUs(ctx context.Context) {
 	if retryAfter <= 0 {
 		return
 	}
-	// One pending retry at a time: overlapping calls would fork parallel
-	// retry chains.
 	if !m.vgpuReconcileRetryPending.CompareAndSwap(false, true) {
 		return
 	}

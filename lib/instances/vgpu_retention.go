@@ -65,8 +65,6 @@ func (m *manager) persistVGPURetention(ctx context.Context, retention *vgpuReten
 		if err := m.deleteInstanceData(id); err != nil {
 			log.ErrorContext(ctx, "failed to delete stale instance data after retention failure", "instance_id", id, "error", err)
 		}
-		// No on-disk record points at the device; retry the release in the
-		// background instead of waiting for the next startup reconcile.
 		m.scheduleOrphanedVGPURelease(ctx, *retainedVGPU)
 		return false
 	}
