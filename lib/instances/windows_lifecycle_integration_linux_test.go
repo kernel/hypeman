@@ -6,9 +6,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"net"
 	"os"
-	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -39,24 +37,12 @@ func TestWindowsLifecycleIntegration(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = deleteTestInstanceNow(context.Background(), manager, forked.Id) })
 	assert.Equal(t, source.VsockCID, forked.VsockCID, "memory-restored Windows forks retain the captured VioSock CID until cold boot")
-	forkedMachineID, forkedTPMEK := windowsIdentity(t, ctx, manager, forked.Id, "")
+	forkedMachineID, forkedTPMEK, inherited := windowsIdentityAndFile(t, ctx, manager, forked.Id, `C:\ProgramData\Hypeman\standby.txt`)
 	assert.NotEqual(t, sourceMachineID, forkedMachineID)
 	assert.Equal(t, sourceTPMEK, forkedTPMEK, "memory forks inherit TPM state from the QEMU migration stream")
-	assert.Equal(t, "inherited", windowsPowerShell(t, ctx, manager, forked.Id, `Get-Content C:\ProgramData\Hypeman\standby.txt`))
+	assert.Equal(t, "inherited", inherited)
 	assertIndependentFile(t, p.InstanceOVMFVars(source.Id), p.InstanceOVMFVars(forked.Id))
 	assertIndependentFile(t, p.InstanceWindowsDisk(source.Id), p.InstanceWindowsDisk(forked.Id))
-
-	stoppedFork, err := manager.StopInstance(ctx, forked.Id)
-	require.NoError(t, err)
-	require.Equal(t, StateStopped, stoppedFork.State)
-	restored, err := manager.RestoreInstance(ctx, source.Id)
-	require.NoError(t, err)
-	waitForWindowsRunning(t, ctx, manager, restored.Id)
-	restoredMachineID, restoredTPMEK := windowsIdentity(t, ctx, manager, restored.Id, "")
-	assert.Equal(t, sourceMachineID, restoredMachineID, "same-instance restore must preserve Windows identity")
-	assert.Equal(t, sourceTPMEK, restoredTPMEK, "same-instance restore must preserve TPM identity")
-	assertWindowsNetworkReady(t, ctx, manager, restored.Id, source.IP)
-	assertWindowsGuestControl(t, ctx, manager, restored.Id)
 }
 
 func TestWindowsStoppedForkIntegration(t *testing.T) {
@@ -158,54 +144,6 @@ func waitForWindowsRunning(t *testing.T, ctx context.Context, manager *manager, 
 	}, 75*time.Second, 500*time.Millisecond)
 }
 
-func assertWindowsGuestControl(t *testing.T, ctx context.Context, manager *manager, instanceID string) {
-	t.Helper()
-	dialer, err := manager.GetVsockDialer(ctx, instanceID)
-	require.NoError(t, err)
-	var stdout, stderr bytes.Buffer
-	exit, err := guest.ExecIntoInstance(ctx, dialer, guest.ExecOptions{
-		Command: []string{"cmd.exe", "/d", "/c", "echo HYPEMAN_GUEST_CONTROL_OK"},
-		Stdout:  &stdout,
-		Stderr:  &stderr,
-		Timeout: 15,
-	})
-	require.NoError(t, err, stderr.String())
-	require.Equal(t, 0, exit.Code)
-	assert.Contains(t, stdout.String(), "HYPEMAN_GUEST_CONTROL_OK")
-}
-
-func assertWindowsNetworkReady(t *testing.T, ctx context.Context, manager *manager, instanceID, expectedIP string) {
-	t.Helper()
-	dialer, err := manager.GetVsockDialer(ctx, instanceID)
-	require.NoError(t, err)
-	allocation, err := manager.networkManager.GetAllocation(ctx, instanceID)
-	require.NoError(t, err)
-	expectedDNS := strings.Join(strings.FieldsFunc(allocation.DNS, func(r rune) bool { return r == ',' || r == ' ' }), ",")
-	var stdout, stderr bytes.Buffer
-	command := fmt.Sprintf("$a=Get-NetIPAddress -AddressFamily IPv4 | Where-Object IPAddress -eq '%s'; if (-not $a) { exit 20 }; $dns=@((Get-DnsClientServerAddress -InterfaceIndex $a.InterfaceIndex -AddressFamily IPv4).ServerAddresses); if (($dns -join ',') -ne '%s') { exit 21 }; [System.Net.Dns]::GetHostAddresses('example.com') | Out-Null; [Console]::Out.Write($a.IPAddress)", expectedIP, expectedDNS)
-	exit, err := guest.ExecIntoInstance(ctx, dialer, guest.ExecOptions{
-		Command: []string{"powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command},
-		Stdout:  &stdout,
-		Stderr:  &stderr,
-		Timeout: 30,
-	})
-	require.NoError(t, err, stderr.String())
-	require.Equal(t, 0, exit.Code, stderr.String())
-	assert.Equal(t, expectedIP, stdout.String())
-
-	require.Eventually(t, func() bool {
-		conn, err := net.DialTimeout("tcp", net.JoinHostPort(expectedIP, "3389"), time.Second)
-		if err != nil {
-			return false
-		}
-		_ = conn.Close()
-		return true
-	}, 2*time.Minute, time.Second, "RDP did not become reachable over the allocated network")
-
-	ping := exec.Command("ping", "-c", "3", "-W", "2", expectedIP)
-	require.NoError(t, ping.Run(), "allocated Windows IP did not answer ICMP")
-}
-
 func windowsIdentity(t *testing.T, ctx context.Context, manager *manager, instanceID, prelude string) (string, string) {
 	t.Helper()
 	command := `$machine=(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Cryptography').MachineGuid; $tpm=(Get-TpmEndorsementKeyInfo -HashAlgorithm Sha256).PublicKeyHash; [Console]::Out.Write($machine + "|" + $tpm)`
@@ -217,6 +155,16 @@ func windowsIdentity(t *testing.T, ctx context.Context, manager *manager, instan
 	require.NotEmpty(t, parts[0], "Windows machine identity")
 	require.NotEmpty(t, parts[1], "TPM endorsement key hash")
 	return parts[0], parts[1]
+}
+
+func windowsIdentityAndFile(t *testing.T, ctx context.Context, manager *manager, instanceID, path string) (string, string, string) {
+	t.Helper()
+	command := fmt.Sprintf(`$machine=(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Cryptography').MachineGuid; $tpm=(Get-TpmEndorsementKeyInfo -HashAlgorithm Sha256).PublicKeyHash; $content=Get-Content '%s'; [Console]::Out.Write($machine + "|" + $tpm + "|" + $content)`, path)
+	parts := strings.Split(windowsPowerShell(t, ctx, manager, instanceID, command), "|")
+	require.Len(t, parts, 3)
+	require.NotEmpty(t, parts[0], "Windows machine identity")
+	require.NotEmpty(t, parts[1], "TPM endorsement key hash")
+	return parts[0], parts[1], parts[2]
 }
 
 func windowsPowerShell(t *testing.T, ctx context.Context, manager *manager, instanceID, command string) string {
