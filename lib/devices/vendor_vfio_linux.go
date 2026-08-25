@@ -23,11 +23,6 @@ import (
 const (
 	pciDevicesPath  = "/sys/bus/pci/devices"
 	vfioDevicesPath = "/dev/vfio/devices"
-
-	// vendorVFIOAssignmentGracePeriod protects assignments created by this
-	// process from the periodic sweep until their owning instance has had time
-	// to persist metadata and boot, mirroring orphanedMdevGracePeriod.
-	vendorVFIOAssignmentGracePeriod = 5 * time.Minute
 )
 
 type vendorVFIOOwner struct {
@@ -294,7 +289,7 @@ func (s vendorVFIOSysfs) reconcile(ctx context.Context, protectedDevicePaths map
 			continue
 		}
 		owner := owners[vf.PCIAddress]
-		if !owner.assignedAt.IsZero() && time.Since(owner.assignedAt) < vendorVFIOAssignmentGracePeriod {
+		if !owner.assignedAt.IsZero() && time.Since(owner.assignedAt) < VGPUAssignmentGracePeriod {
 			log.DebugContext(ctx, "skipping recently assigned vendor VFIO vGPU during grace period", "vf", vf.PCIAddress)
 			continue
 		}

@@ -391,7 +391,7 @@ func TestVendorVFIOReconcileDestroysOwnedVFPastGracePeriod(t *testing.T) {
 	sysfs.addVF(t, "0000:82:00.0", "0000:82:00.4", "42", "1148", "")
 	sysfs.owners["0000:82:00.4"] = vendorVFIOOwner{
 		instanceID: "deleted-instance",
-		assignedAt: time.Now().Add(-vendorVFIOAssignmentGracePeriod - time.Minute),
+		assignedAt: time.Now().Add(-VGPUAssignmentGracePeriod - time.Minute),
 	}
 
 	require.NoError(t, sysfs.reconcile(context.Background(), nil))
