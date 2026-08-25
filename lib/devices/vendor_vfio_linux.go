@@ -29,6 +29,7 @@ type vendorVFIOSysfs struct {
 	vfioDevicesPath   string
 	owners            map[string]string
 	framebufferByType map[string]int
+	openVFIOPathsFunc func() (map[string]struct{}, error)
 }
 
 var (
@@ -206,10 +207,6 @@ func (s vendorVFIOSysfs) create(ctx context.Context, profileName, instanceID str
 }
 
 func (s vendorVFIOSysfs) destroy(ctx context.Context, vfAddress, instanceID string) error {
-	return s.destroyWithOpenPaths(ctx, vfAddress, instanceID, nil)
-}
-
-func (s vendorVFIOSysfs) destroyWithOpenPaths(ctx context.Context, vfAddress, instanceID string, openPaths map[string]struct{}) error {
 	vendorVFIOMu.Lock()
 	defer vendorVFIOMu.Unlock()
 
@@ -242,10 +239,9 @@ func (s vendorVFIOSysfs) destroyWithOpenPaths(ctx context.Context, vfAddress, in
 		}
 	}
 
-	if openPaths == nil {
-		if openPaths, err = s.openVFIOPaths(); err != nil {
-			return fmt.Errorf("scan open VFIO handles: %w", err)
-		}
+	openPaths, err := s.openVFIOPaths()
+	if err != nil {
+		return fmt.Errorf("scan open VFIO handles: %w", err)
 	}
 	inUse, err := s.vfioDeviceInUse(vfAddress, openPaths)
 	if err != nil {
@@ -296,7 +292,7 @@ func (s vendorVFIOSysfs) reconcile(ctx context.Context, protectedDevicePaths map
 			log.WarnContext(ctx, "preserving vendor VFIO vGPU held open without a live instance claim", "vf", vf.PCIAddress)
 			continue
 		}
-		if err := s.destroyWithOpenPaths(ctx, vf.PCIAddress, "", openPaths); err != nil {
+		if err := s.destroy(ctx, vf.PCIAddress, ""); err != nil {
 			log.WarnContext(ctx, "failed to destroy orphaned vendor VFIO vGPU", "vf", vf.PCIAddress, "error", err)
 		}
 	}
@@ -430,6 +426,9 @@ func (s vendorVFIOSysfs) vfioDeviceInUse(vfAddress string, openPaths map[string]
 // is a process that exits mid-scan (ENOENT/ESRCH): a dead process holds
 // nothing open, so skipping it cannot produce that false answer.
 func (s vendorVFIOSysfs) openVFIOPaths() (map[string]struct{}, error) {
+	if s.openVFIOPathsFunc != nil {
+		return s.openVFIOPathsFunc()
+	}
 	processes, err := os.ReadDir(s.procPath)
 	if err != nil {
 		return nil, err
