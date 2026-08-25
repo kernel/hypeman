@@ -8,10 +8,9 @@ import (
 	"github.com/kernel/hypeman/lib/logger"
 )
 
-// vgpuReconcileListRetryDelay spaces retries of the vendor VFIO sweep when
-// the instance listing fails: without a retry, one transient stat error at
-// startup would disable orphan recovery until the next restart.
-const vgpuReconcileListRetryDelay = time.Minute
+// vgpuReconcileFailureRetryDelay spaces retries after a transient metadata or
+// device error would otherwise disable orphan recovery until the next restart.
+const vgpuReconcileFailureRetryDelay = time.Minute
 
 func (m *manager) liveVGPUReconcileProtection(ctx context.Context) (map[string]struct{}, time.Duration, error) {
 	allInstances, err := m.listInstancesForReconcile(ctx)
@@ -46,13 +45,24 @@ func (m *manager) ReconcileVGPUs(ctx context.Context) {
 	if err != nil {
 		log.ErrorContext(ctx, "failed to list instances for vGPU reconcile protection; skipping vendor VFIO reconcile, mdev reconcile still runs", "error", err)
 		protected = make(map[string]struct{})
-		retryAfter = vgpuReconcileListRetryDelay
+		retryAfter = vgpuReconcileFailureRetryDelay
 		if m.vgpuReconcileRetryDelay > 0 {
 			retryAfter = m.vgpuReconcileRetryDelay
 		}
 	}
-	if err := devices.ReconcileVGPUs(ctx, protected, sweepVendorVFIO); err != nil {
+	reconcileDevices := m.reconcileVGPUDevices
+	if reconcileDevices == nil {
+		reconcileDevices = devices.ReconcileVGPUs
+	}
+	if err := reconcileDevices(ctx, protected, sweepVendorVFIO); err != nil {
 		log.WarnContext(ctx, "failed to reconcile vGPU devices", "error", err)
+		deviceRetryAfter := vgpuReconcileFailureRetryDelay
+		if m.vgpuReconcileRetryDelay > 0 {
+			deviceRetryAfter = m.vgpuReconcileRetryDelay
+		}
+		if retryAfter <= 0 || deviceRetryAfter < retryAfter {
+			retryAfter = deviceRetryAfter
+		}
 	}
 	if retryAfter <= 0 {
 		return
