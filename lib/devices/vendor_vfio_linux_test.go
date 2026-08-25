@@ -372,6 +372,28 @@ func TestVendorVFIOReconcile(t *testing.T) {
 	assertFileValue(t, filepath.Join(sysfs.pciDevicesPath, "0000:e3:00.4", "nvidia", "current_vgpu_type"), "1148")
 }
 
+func TestVendorVFIOReconcileRechecksOpenHandlesBeforeDestroy(t *testing.T) {
+	t.Parallel()
+
+	sysfs := newTestVendorVFIOSysfs(t)
+	const vfAddress = "0000:82:00.4"
+	sysfs.addVF(t, "0000:82:00.0", vfAddress, "42", "1148", "")
+
+	activeDevice := filepath.Join(sysfs.vfioDevicesPath, "vfio42")
+	scans := 0
+	sysfs.openVFIOPathsFunc = func() (map[string]struct{}, error) {
+		scans++
+		if scans == 1 {
+			return map[string]struct{}{}, nil
+		}
+		return map[string]struct{}{activeDevice: {}}, nil
+	}
+
+	require.NoError(t, sysfs.reconcile(context.Background(), nil))
+	assert.Equal(t, 2, scans)
+	assertFileValue(t, filepath.Join(sysfs.pciDevicesPath, vfAddress, "nvidia", "current_vgpu_type"), "1148")
+}
+
 func TestVendorVFIOReconcileSkipsProtectedVF(t *testing.T) {
 	t.Parallel()
 
