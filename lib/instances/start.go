@@ -55,7 +55,7 @@ func (m *manager) startInstance(
 	// Release any assignment retained by an earlier failed release and
 	// persist the cleared fields immediately, so a failure later in start
 	// cannot leave on-disk metadata pointing at a device that is already
-	// gone (matching releaseRetainedVGPULocked).
+	// gone.
 	if storedVGPUDevicePath(stored) != "" {
 		if err := m.releaseStoredVGPU(ctx, stored); err != nil {
 			log.ErrorContext(ctx, "failed to release stale vGPU before start", "instance_id", id, "error", err)
@@ -184,7 +184,6 @@ func (m *manager) startInstance(
 				wrapped := fmt.Errorf("create vGPU for profile %s: %w", stored.GPUProfile, err)
 				if saveErr := m.saveMetadata(&retentionMeta); saveErr != nil {
 					log.ErrorContext(ctx, "failed to retain vGPU assignment after create rollback failure", "instance_id", id, "error", saveErr)
-					m.scheduleOrphanedVGPURelease(ctx, retentionMeta.StoredMetadata)
 					return nil, &VGPUCleanupPendingError{InstanceID: id, Err: fmt.Errorf("%w; retain assignment: %v", wrapped, saveErr)}
 				}
 				return nil, &VGPUCleanupPendingError{InstanceID: id, Retained: true, Err: wrapped}

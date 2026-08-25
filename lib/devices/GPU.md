@@ -97,7 +97,7 @@ Instance Create → Assign profile to VF → Attach VF to VM → Instance Runnin
 Instance Stop/Delete → Release profile → VF available again
 ```
 
-Hypeman reconciles orphaned assignments on server restart while preserving devices held open by a running VMM. A release that fails during delete (typically because a GPU-busy VMM's kernel-side VFIO teardown outlives the force-kill wait) is retried in the background for up to ten minutes, so a completed delete does not strand the VF until the next restart.
+Hypeman reconciles orphaned assignments with a periodic fail-closed pass: once at startup and every minute afterward (skipped entirely on hosts without GPUs). Each pass releases assignments whose owning instance is no longer live and clears their metadata, then sweeps device-level leftovers with no live metadata claim. Devices held open by a running VMM and assignments younger than five minutes are preserved, so a release that fails during stop or delete (typically because a GPU-busy VMM's kernel-side VFIO teardown outlives the force-kill wait) is simply retried on later passes until the device is free.
 
 ### Hypervisor Support
 

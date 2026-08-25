@@ -385,8 +385,8 @@ func run() error {
 	}
 
 	logger.Info("Reconciling vGPU devices...")
-	if r, ok := app.InstanceManager.(interface{ ReconcileVGPUs(context.Context) }); ok {
-		r.ReconcileVGPUs(ctx)
+	if r, ok := app.InstanceManager.(interface{ StartVGPUReconciler(context.Context) }); ok {
+		r.StartVGPUReconciler(ctx)
 	}
 
 	// Wire up resource validator for aggregate limit checking

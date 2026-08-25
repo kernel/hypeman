@@ -146,8 +146,7 @@ func (m *manager) deleteInstanceWithOptions(
 		log.InfoContext(ctx, "destroying vGPU", "instance_id", id, "uuid", stored.GPUMdevUUID)
 	}
 	if err := m.releaseStoredVGPU(ctx, stored); err != nil {
-		log.WarnContext(ctx, "failed to destroy vGPU, continuing with cleanup", "instance_id", id, "uuid", stored.GPUMdevUUID, "error", err)
-		m.scheduleOrphanedVGPURelease(ctx, *stored)
+		log.WarnContext(ctx, "failed to destroy vGPU, continuing with cleanup; the periodic vGPU reconcile releases it once free", "instance_id", id, "uuid", stored.GPUMdevUUID, "error", err)
 	} else if hadVGPUAssignment {
 		if err := m.saveMetadata(meta); err != nil {
 			log.WarnContext(ctx, "failed to save metadata after vGPU release", "instance_id", id, "error", err)
