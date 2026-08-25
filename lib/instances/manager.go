@@ -186,6 +186,7 @@ type manager struct {
 	deleteInstanceFn          func(context.Context, string) error
 	createVGPU                func(context.Context, string, string) (*devices.VGPUDevice, error)
 	destroyVGPU               func(context.Context, devices.VGPUAssignment) error
+	reconcileVGPUDevices      func(context.Context, map[string]struct{}, bool) error
 	deleteSnapshotFn          func(context.Context, string) error
 	ttlReaperDeleteTimeout    time.Duration
 	egressProxy               *egressproxy.Service
@@ -222,9 +223,9 @@ type manager struct {
 	orphanedVGPUs          map[string]struct{}
 	orphanedVGPURetryDelay time.Duration
 
-	// One pending vGPU reconcile retry at a time, for both the startup-grace
-	// and listing-failure paths. vgpuReconcileRetryDelay overrides the
-	// listing-failure delay in tests; zero means the default.
+	// One pending vGPU reconcile retry at a time, for startup grace and
+	// reconciliation failures. vgpuReconcileRetryDelay overrides the retry
+	// delay in tests; zero means the default.
 	vgpuReconcileRetryPending atomic.Bool
 	vgpuReconcileRetryDelay   time.Duration
 

@@ -2,9 +2,11 @@ package instances
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -67,6 +69,28 @@ func TestReconcileVGPUsRetriesAfterListingFailure(t *testing.T) {
 	require.NoError(t, os.Chmod(instanceDir, 0o755))
 	require.Eventually(t, func() bool {
 		return !m.vgpuReconcileRetryPending.Load()
+	}, 5*time.Second, 10*time.Millisecond)
+}
+
+func TestReconcileVGPUsRetriesAfterDeviceFailure(t *testing.T) {
+	var calls atomic.Int32
+	m := &manager{
+		paths:                   paths.New(t.TempDir()),
+		vgpuReconcileRetryDelay: 10 * time.Millisecond,
+		reconcileVGPUDevices: func(context.Context, map[string]struct{}, bool) error {
+			if calls.Add(1) == 1 {
+				return errors.New("transient device error")
+			}
+			return nil
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m.ReconcileVGPUs(ctx)
+	require.True(t, m.vgpuReconcileRetryPending.Load())
+	require.Eventually(t, func() bool {
+		return calls.Load() >= 2 && !m.vgpuReconcileRetryPending.Load()
 	}, 5*time.Second, 10*time.Millisecond)
 }
 
