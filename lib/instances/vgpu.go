@@ -26,7 +26,7 @@ func (e *VGPUCleanupPendingError) Error() string {
 	if e.Retained {
 		return fmt.Sprintf("%v; vGPU release failed during rollback, instance %s retains the assignment", e.Err, e.InstanceID)
 	}
-	return fmt.Sprintf("%v; vGPU release failed during rollback and the retention record for instance %s could not be saved; the release is retried in the background and by the next startup reconcile", e.Err, e.InstanceID)
+	return fmt.Sprintf("%v; vGPU release failed during rollback and the retention record for instance %s could not be saved; the periodic vGPU reconcile retries the release", e.Err, e.InstanceID)
 }
 
 func (e *VGPUCleanupPendingError) Unwrap() error { return e.Err }
@@ -118,7 +118,6 @@ func (m *manager) cleanupStartVGPU(ctx context.Context, instanceID string, devic
 		if meta, loadErr := m.loadMetadata(instanceID); loadErr == nil && storedVGPUDevicePath(&meta.StoredMetadata) == device.SysfsPath {
 			return true, true
 		}
-		m.scheduleOrphanedVGPURelease(ctx, cleanupMeta.StoredMetadata)
 		return true, false
 	}
 	return retained, retained
@@ -218,33 +217,6 @@ func (m *manager) vgpuAssignmentClaimedByLiveInstance(ctx context.Context, exclu
 		}
 	}
 	return false, nil
-}
-
-// releaseRetainedVGPULocked releases a vGPU assignment retained on a stopped
-// instance after a failed release during the original stop. It is a no-op
-// when no assignment is retained, and a failed retry only logs so the
-// metadata stays for the next retry. The caller must hold the instance lock.
-func (m *manager) releaseRetainedVGPULocked(ctx context.Context, id string) {
-	log := logger.FromContext(ctx)
-	meta, err := m.loadMetadata(id)
-	if err != nil {
-		log.WarnContext(ctx, "failed to load metadata for retained vGPU release", "instance_id", id, "error", err)
-		return
-	}
-	stored := &meta.StoredMetadata
-	if stored.GPURetainedForCleanup {
-		return
-	}
-	if storedVGPUDevicePath(stored) == "" {
-		return
-	}
-	if err := m.releaseStoredVGPU(ctx, stored); err != nil {
-		log.WarnContext(ctx, "failed to destroy retained vGPU; retaining assignment metadata", "instance_id", id, "error", err)
-		return
-	}
-	if err := m.saveMetadata(meta); err != nil {
-		log.WarnContext(ctx, "failed to save metadata after retained vGPU release", "instance_id", id, "error", err)
-	}
 }
 
 func storedVGPUDevicePath(stored *StoredMetadata) string {

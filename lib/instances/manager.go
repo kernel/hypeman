@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/kernel/hypeman/lib/devices"
@@ -214,12 +213,10 @@ type manager struct {
 	// Periodic TAP garbage collection reconciler.
 	tapGCOnce sync.Once
 
-	orphanedVGPUMu         sync.Mutex
-	orphanedVGPUs          map[string]struct{}
-	orphanedVGPURetryDelay time.Duration
-
-	vgpuReconcileRetryPending atomic.Bool
-	vgpuReconcileRetryDelay   time.Duration
+	// Periodic vGPU reconciler.
+	vgpuReconcileOnce     sync.Once
+	vgpuReconcileInterval time.Duration
+	discoverVGPU          func() (devices.VGPUFramework, []devices.VirtualFunction, error)
 
 	vgpuInitTermGrace time.Duration
 
@@ -653,12 +650,6 @@ func (m *manager) StopInstance(ctx context.Context, id string) (*Instance, error
 		if err := m.markRestartManualStopLocked(ctx, id); err != nil {
 			return nil, err
 		}
-		// A stopped instance can retain a vGPU assignment when the release
-		// failed during the original stop. Retry it here so the vGPU slot is
-		// not held until the next start, delete, or hypeman restart. A failed
-		// retry only logs, keeping stop's no-op contract for already-stopped
-		// instances.
-		m.releaseRetainedVGPULocked(ctx, id)
 		updated, err := m.currentInstanceWithoutHydration(ctx, id)
 		if err != nil {
 			return nil, err
