@@ -198,10 +198,6 @@ func TestDeletePersistsVGPUReleaseBeforeTeardown(t *testing.T) {
 	assert.Equal(t, restartpolicy.BlockedReasonManualStop, persisted.RestartStatus.BlockedReason)
 }
 
-// A failed create whose vGPU release also failed retains a minimal
-// GPU-fields-only stub, and the API tells the caller to delete it to retry
-// the release. Exercise that recovery path against the exact stub shape
-// persistVGPURetention writes.
 func TestDeleteReleasesRetainedCreateStub(t *testing.T) {
 	p := paths.New(t.TempDir())
 	var destroyed []devices.VGPUAssignment
@@ -342,7 +338,6 @@ func TestStartRejectsVGPURetentionRecord(t *testing.T) {
 	require.ErrorIs(t, err, ErrInvalidState)
 	require.ErrorContains(t, err, "delete it to release the assignment")
 
-	// The retained assignment must survive the rejected start for delete.
 	stored, err := m.loadMetadata(id)
 	require.NoError(t, err)
 	assert.Equal(t, "/sys/bus/pci/devices/0000:82:00.4", stored.GPUDevicePath)
@@ -381,8 +376,6 @@ func TestStopStoppedInstanceLeavesRetentionStubForDelete(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, inst)
 
-	// Retention stubs are delete-only: releasing on stop would leave a stub
-	// whose start/fork/snapshot errors still claim a retained assignment.
 	stored, err := m.loadMetadata(id)
 	require.NoError(t, err)
 	assert.Equal(t, "/sys/bus/pci/devices/0000:82:00.4", stored.GPUDevicePath)

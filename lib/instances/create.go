@@ -280,7 +280,6 @@ func (m *manager) createInstance(
 	var gpuAssignedAt *time.Time
 	retention := vgpuRetention{instanceID: id}
 
-	// Setup cleanup stack early so device attachment errors trigger cleanup.
 	defer retention.deferWrapPending(&retErr)
 	cu := cleanup.Make(func() {
 		log.DebugContext(ctx, "cleaning up instance on error", "instance_id", id)
@@ -300,9 +299,6 @@ func (m *manager) createInstance(
 
 	// Handle vGPU profile request
 	if req.GPU != nil && req.GPU.Profile != "" {
-		// Identity fields a retention record keeps when rollback cannot
-		// release the assignment, so it lists as a recognizable, deletable
-		// instance. Create has already failed on a nil starter by this point.
 		retentionStub := func() StoredMetadata {
 			return StoredMetadata{
 				Id:                id,

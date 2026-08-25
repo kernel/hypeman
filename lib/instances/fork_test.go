@@ -81,8 +81,6 @@ func TestForkInstanceRejectsVGPURetentionRecord(t *testing.T) {
 	meta.GPURetainedForCleanup = true
 	require.NoError(t, manager.saveMetadata(meta))
 
-	// The delete-only retention stub has no boot configuration, so a fork of
-	// it could never boot; only delete may act on it.
 	_, err = manager.ForkInstance(ctx, sourceID, ForkInstanceRequest{Name: "fork-vgpu-retention-copy"})
 	require.ErrorIs(t, err, ErrInvalidState)
 	require.ErrorContains(t, err, "delete it to release the assignment")

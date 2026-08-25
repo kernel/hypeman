@@ -384,10 +384,6 @@ func run() error {
 		return fmt.Errorf("reconcile device state: %w", err)
 	}
 
-	// Reconcile vGPU devices (clears orphaned vGPUs from previous runs).
-	// Type-asserted rather than added to instances.Manager so alternate
-	// Manager implementations compiled against the public module keep
-	// building without this startup-only method.
 	logger.Info("Reconciling vGPU devices...")
 	if r, ok := app.InstanceManager.(interface{ ReconcileVGPUs(context.Context) }); ok {
 		r.ReconcileVGPUs(ctx)

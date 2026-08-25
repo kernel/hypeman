@@ -215,22 +215,13 @@ type manager struct {
 	// Periodic TAP garbage collection reconciler.
 	tapGCOnce sync.Once
 
-	// vGPU assignments that survived a completed delete, keyed by device
-	// path, each with a background release retry in flight.
-	// orphanedVGPURetryDelay overrides the retry delay in tests; zero means
-	// the default.
 	orphanedVGPUMu         sync.Mutex
 	orphanedVGPUs          map[string]struct{}
 	orphanedVGPURetryDelay time.Duration
 
-	// One pending vGPU reconcile retry at a time, for startup grace and
-	// reconciliation failures. vgpuReconcileRetryDelay overrides the retry
-	// delay in tests; zero means the default.
 	vgpuReconcileRetryPending atomic.Bool
 	vgpuReconcileRetryDelay   time.Duration
 
-	// vgpuInitTermGrace overrides terminateThenKill's SIGTERM wait for vGPU
-	// instances still initializing; zero means the default.
 	vgpuInitTermGrace time.Duration
 
 	// Hypervisor support
@@ -758,9 +749,6 @@ func (m *manager) DefaultHypervisor() hypervisor.Type {
 	return m.defaultHypervisor
 }
 
-// listInstancesForReconcile returns every instance's stored metadata or an
-// invalid metadata error. It does not derive state: hydration would query
-// every hypervisor on the host before the API serves.
 func (m *manager) listInstancesForReconcile(ctx context.Context) ([]Instance, error) {
 	files, err := m.listMetadataFilesStrict()
 	if err != nil {
@@ -772,8 +760,6 @@ func (m *manager) listInstancesForReconcile(ctx context.Context) ([]Instance, er
 		meta, err := m.loadMetadata(id)
 		if err != nil {
 			if errors.Is(err, ErrNotFound) {
-				// Deleted between listing and load; failing instead would
-				// disable the vendor VFIO sweep whenever it races a delete.
 				continue
 			}
 			return nil, fmt.Errorf("load metadata for instance %s: %w", id, err)
