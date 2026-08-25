@@ -55,30 +55,33 @@ func TestWindowsStoppedForkIntegration(t *testing.T) {
 	ctx := context.Background()
 	source := createWindowsLifecycleInstance(t, ctx, manager, image, "windows-stopped-fork-source", false)
 	sourceMachineID := windowsMachineID(t, ctx, manager, source.Id, `New-Item -ItemType Directory -Force C:\ProgramData\Hypeman | Out-Null; Set-Content C:\ProgramData\Hypeman\identity.txt source`)
-	sourceTPMEK := windowsTPMEK(t, ctx, manager, source.Id)
 
 	stopped, err := manager.StopInstance(ctx, source.Id)
 	require.NoError(t, err)
 	require.Equal(t, StateStopped, stopped.State)
+	sourceTPM := regularFileContents(t, p.InstanceTPMDir(source.Id))
 	forked, err := manager.ForkInstance(ctx, source.Id, ForkInstanceRequest{
 		Name:        "windows-stopped-child",
-		TargetState: StateRunning,
+		TargetState: StateStopped,
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = deleteTestInstanceNow(context.Background(), manager, forked.Id) })
-	forkedMachineID := windowsMachineID(t, ctx, manager, forked.Id, "")
-	forkedTPMEK := windowsTPMEK(t, ctx, manager, forked.Id)
-	assert.NotEqual(t, sourceMachineID, forkedMachineID, "fork must receive a new Windows machine identity")
-	assert.NotEqual(t, sourceTPMEK, forkedTPMEK, "cold forks must initialize a fresh TPM")
+	forkedTPM := regularFileContents(t, p.InstanceTPMDir(forked.Id))
+	assert.NotEmpty(t, sourceTPM)
+	assert.Empty(t, forkedTPM, "stopped forks clear copied TPM state before cold boot")
 	assert.NotEqual(t, source.VsockCID, forked.VsockCID, "forks need unique vsock CIDs")
 	assertIndependentFile(t, p.InstanceOVMFVars(source.Id), p.InstanceOVMFVars(forked.Id))
 	assertIndependentFile(t, p.InstanceWindowsDisk(source.Id), p.InstanceWindowsDisk(forked.Id))
-	require.DirExists(t, p.InstanceTPMDir(forked.Id))
+
+	started, err := manager.StartInstance(ctx, forked.Id, StartInstanceRequest{})
+	require.NoError(t, err)
+	waitForWindowsRunning(t, ctx, manager, started.Id)
+	forkedMachineID := windowsMachineID(t, ctx, manager, started.Id, "")
+	assert.NotEqual(t, sourceMachineID, forkedMachineID, "fork must receive a new Windows machine identity")
 
 	sourceDiskBefore, err := os.Stat(p.InstanceWindowsDisk(source.Id))
 	require.NoError(t, err)
-	windowsPowerShell(t, ctx, manager, forked.Id, `Set-Content C:\ProgramData\Hypeman\identity.txt child`)
-	assert.Equal(t, "child", windowsPowerShell(t, ctx, manager, forked.Id, `Get-Content C:\ProgramData\Hypeman\identity.txt`))
+	assert.Equal(t, "child", windowsPowerShell(t, ctx, manager, started.Id, `Set-Content C:\ProgramData\Hypeman\identity.txt child; Get-Content C:\ProgramData\Hypeman\identity.txt`))
 	sourceDiskAfter, err := os.Stat(p.InstanceWindowsDisk(source.Id))
 	require.NoError(t, err)
 	assert.Equal(t, sourceDiskBefore.ModTime(), sourceDiskAfter.ModTime(), "child writes must not modify the stopped source disk")
@@ -169,13 +172,6 @@ func windowsMachineIDAndFile(t *testing.T, ctx context.Context, manager *manager
 	require.Len(t, parts, 2)
 	require.NotEmpty(t, parts[0], "Windows machine identity")
 	return parts[0], parts[1]
-}
-
-func windowsTPMEK(t *testing.T, ctx context.Context, manager *manager, instanceID string) string {
-	t.Helper()
-	hash := windowsPowerShell(t, ctx, manager, instanceID, `(Get-TpmEndorsementKeyInfo -HashAlgorithm Sha256).PublicKeyHash`)
-	require.NotEmpty(t, hash, "TPM endorsement key hash")
-	return hash
 }
 
 func windowsPowerShell(t *testing.T, ctx context.Context, manager *manager, instanceID, command string) string {
