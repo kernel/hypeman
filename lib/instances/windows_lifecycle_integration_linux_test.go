@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -25,31 +26,36 @@ func TestWindowsLifecycleIntegration(t *testing.T) {
 	ctx := context.Background()
 	source := createWindowsLifecycleInstance(t, ctx, manager, image, "windows-lifecycle-source", true)
 
-	sourceMachineID, sourceTPMEK := windowsIdentity(t, ctx, manager, source.Id, `New-Item -ItemType Directory -Force C:\ProgramData\Hypeman | Out-Null; Set-Content C:\ProgramData\Hypeman\standby.txt inherited`)
+	sourceMachineID := windowsMachineID(t, ctx, manager, source.Id, `New-Item -ItemType Directory -Force C:\ProgramData\Hypeman | Out-Null; Set-Content C:\ProgramData\Hypeman\standby.txt inherited`)
 
 	standby, err := manager.StandbyInstance(ctx, source.Id, StandbyInstanceRequest{})
 	require.NoError(t, err)
 	require.Equal(t, StateStandby, standby.State)
 	forked, err := manager.ForkInstance(ctx, source.Id, ForkInstanceRequest{
 		Name:        "windows-standby-child",
-		TargetState: StateRunning,
+		TargetState: StateStandby,
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = deleteTestInstanceNow(context.Background(), manager, forked.Id) })
 	assert.Equal(t, source.VsockCID, forked.VsockCID, "memory-restored Windows forks retain the captured VioSock CID until cold boot")
-	forkedMachineID, forkedTPMEK, inherited := windowsIdentityAndFile(t, ctx, manager, forked.Id, `C:\ProgramData\Hypeman\standby.txt`)
-	assert.NotEqual(t, sourceMachineID, forkedMachineID)
-	assert.Equal(t, sourceTPMEK, forkedTPMEK, "memory forks inherit TPM state from the QEMU migration stream")
-	assert.Equal(t, "inherited", inherited)
+	assert.Equal(t, regularFileContents(t, p.InstanceTPMDir(source.Id)), regularFileContents(t, p.InstanceTPMDir(forked.Id)), "memory forks inherit TPM state")
 	assertIndependentFile(t, p.InstanceOVMFVars(source.Id), p.InstanceOVMFVars(forked.Id))
 	assertIndependentFile(t, p.InstanceWindowsDisk(source.Id), p.InstanceWindowsDisk(forked.Id))
+
+	restoredFork, err := manager.RestoreInstance(ctx, forked.Id)
+	require.NoError(t, err)
+	waitForWindowsRunning(t, ctx, manager, restoredFork.Id)
+	forkedMachineID, inherited := windowsMachineIDAndFile(t, ctx, manager, restoredFork.Id, `C:\ProgramData\Hypeman\standby.txt`)
+	assert.NotEqual(t, sourceMachineID, forkedMachineID)
+	assert.Equal(t, "inherited", inherited)
 }
 
 func TestWindowsStoppedForkIntegration(t *testing.T) {
 	manager, p, image := setupWindowsLifecycleIntegration(t)
 	ctx := context.Background()
 	source := createWindowsLifecycleInstance(t, ctx, manager, image, "windows-stopped-fork-source", false)
-	sourceMachineID, sourceTPMEK := windowsIdentity(t, ctx, manager, source.Id, `New-Item -ItemType Directory -Force C:\ProgramData\Hypeman | Out-Null; Set-Content C:\ProgramData\Hypeman\identity.txt source`)
+	sourceMachineID := windowsMachineID(t, ctx, manager, source.Id, `New-Item -ItemType Directory -Force C:\ProgramData\Hypeman | Out-Null; Set-Content C:\ProgramData\Hypeman\identity.txt source`)
+	sourceTPMEK := windowsTPMEK(t, ctx, manager, source.Id)
 
 	stopped, err := manager.StopInstance(ctx, source.Id)
 	require.NoError(t, err)
@@ -60,7 +66,8 @@ func TestWindowsStoppedForkIntegration(t *testing.T) {
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = deleteTestInstanceNow(context.Background(), manager, forked.Id) })
-	forkedMachineID, forkedTPMEK := windowsIdentity(t, ctx, manager, forked.Id, "")
+	forkedMachineID := windowsMachineID(t, ctx, manager, forked.Id, "")
+	forkedTPMEK := windowsTPMEK(t, ctx, manager, forked.Id)
 	assert.NotEqual(t, sourceMachineID, forkedMachineID, "fork must receive a new Windows machine identity")
 	assert.NotEqual(t, sourceTPMEK, forkedTPMEK, "cold forks must initialize a fresh TPM")
 	assert.NotEqual(t, source.VsockCID, forked.VsockCID, "forks need unique vsock CIDs")
@@ -144,27 +151,31 @@ func waitForWindowsRunning(t *testing.T, ctx context.Context, manager *manager, 
 	}, 75*time.Second, 500*time.Millisecond)
 }
 
-func windowsIdentity(t *testing.T, ctx context.Context, manager *manager, instanceID, prelude string) (string, string) {
+func windowsMachineID(t *testing.T, ctx context.Context, manager *manager, instanceID, prelude string) string {
 	t.Helper()
-	command := `$machine=(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Cryptography').MachineGuid; $tpm=(Get-TpmEndorsementKeyInfo -HashAlgorithm Sha256).PublicKeyHash; [Console]::Out.Write($machine + "|" + $tpm)`
+	command := `[Console]::Out.Write((Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Cryptography').MachineGuid)`
 	if prelude != "" {
 		command = prelude + "; " + command
 	}
+	machineID := windowsPowerShell(t, ctx, manager, instanceID, command)
+	require.NotEmpty(t, machineID, "Windows machine identity")
+	return machineID
+}
+
+func windowsMachineIDAndFile(t *testing.T, ctx context.Context, manager *manager, instanceID, path string) (string, string) {
+	t.Helper()
+	command := fmt.Sprintf(`$machine=(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Cryptography').MachineGuid; $content=Get-Content '%s'; [Console]::Out.Write($machine + "|" + $content)`, path)
 	parts := strings.Split(windowsPowerShell(t, ctx, manager, instanceID, command), "|")
 	require.Len(t, parts, 2)
 	require.NotEmpty(t, parts[0], "Windows machine identity")
-	require.NotEmpty(t, parts[1], "TPM endorsement key hash")
 	return parts[0], parts[1]
 }
 
-func windowsIdentityAndFile(t *testing.T, ctx context.Context, manager *manager, instanceID, path string) (string, string, string) {
+func windowsTPMEK(t *testing.T, ctx context.Context, manager *manager, instanceID string) string {
 	t.Helper()
-	command := fmt.Sprintf(`$machine=(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Cryptography').MachineGuid; $tpm=(Get-TpmEndorsementKeyInfo -HashAlgorithm Sha256).PublicKeyHash; $content=Get-Content '%s'; [Console]::Out.Write($machine + "|" + $tpm + "|" + $content)`, path)
-	parts := strings.Split(windowsPowerShell(t, ctx, manager, instanceID, command), "|")
-	require.Len(t, parts, 3)
-	require.NotEmpty(t, parts[0], "Windows machine identity")
-	require.NotEmpty(t, parts[1], "TPM endorsement key hash")
-	return parts[0], parts[1], parts[2]
+	hash := windowsPowerShell(t, ctx, manager, instanceID, `(Get-TpmEndorsementKeyInfo -HashAlgorithm Sha256).PublicKeyHash`)
+	require.NotEmpty(t, hash, "TPM endorsement key hash")
+	return hash
 }
 
 func windowsPowerShell(t *testing.T, ctx context.Context, manager *manager, instanceID, command string) string {
@@ -182,6 +193,30 @@ func windowsPowerShell(t *testing.T, ctx context.Context, manager *manager, inst
 	require.NoError(t, err, stderr.String())
 	require.Equal(t, 0, exit.Code, stderr.String())
 	return string(bytes.TrimSpace(stdout.Bytes()))
+}
+
+func regularFileContents(t *testing.T, root string) map[string]string {
+	t.Helper()
+	files := make(map[string]string)
+	require.NoError(t, filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !entry.Type().IsRegular() {
+			return nil
+		}
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		contents, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		files[relative] = string(contents)
+		return nil
+	}))
+	return files
 }
 
 func assertIndependentFile(t *testing.T, source, fork string) {
