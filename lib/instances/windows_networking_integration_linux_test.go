@@ -80,8 +80,8 @@ func TestWindowsLifecycleIntegration(t *testing.T) {
 		return err == nil && current.State == StateRunning
 	}, 4*time.Minute, time.Second)
 
-	assertWindowsGuestControl(t, ctx, manager, instance.Id)
 	assertWindowsNetworkReady(t, ctx, manager, instance.Id, instance.IP)
+	assertWindowsGuestControl(t, ctx, manager, instance.Id)
 }
 
 func assertWindowsGuestControl(t *testing.T, ctx context.Context, manager *manager, instanceID string) {
