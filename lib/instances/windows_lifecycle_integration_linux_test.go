@@ -26,7 +26,7 @@ import (
 func TestWindowsLifecycleIntegration(t *testing.T) {
 	manager, p, image := setupWindowsLifecycleIntegration(t)
 	ctx := context.Background()
-	source := createWindowsLifecycleInstance(t, ctx, manager, image, "windows-lifecycle-source", true)
+	source := createWindowsLifecycleInstance(t, ctx, manager, image, "windows-lifecycle-source", true, 8<<30)
 
 	assertWindowsNetworkReady(t, ctx, manager, source.Id, source.IP)
 	assertWindowsGuestControl(t, ctx, manager, source.Id)
@@ -64,7 +64,7 @@ func TestWindowsLifecycleIntegration(t *testing.T) {
 func TestWindowsStoppedForkIntegration(t *testing.T) {
 	manager, p, image := setupWindowsLifecycleIntegration(t)
 	ctx := context.Background()
-	source := createWindowsLifecycleInstance(t, ctx, manager, image, "windows-stopped-fork-source", false)
+	source := createWindowsLifecycleInstance(t, ctx, manager, image, "windows-stopped-fork-source", false, 4<<30)
 	sourceMachineID := windowsMachineID(t, ctx, manager, source.Id)
 	sourceTPMEK := windowsTPMEK(t, ctx, manager, source.Id)
 	windowsPowerShell(t, ctx, manager, source.Id, `New-Item -ItemType Directory -Force C:\ProgramData\Hypeman | Out-Null; Set-Content C:\ProgramData\Hypeman\identity.txt source`)
@@ -136,13 +136,13 @@ func setupWindowsLifecycleIntegration(t *testing.T) (*manager, *paths.Paths, *im
 	return manager, p, image
 }
 
-func createWindowsLifecycleInstance(t *testing.T, ctx context.Context, manager *manager, image *images.Image, name string, networkEnabled bool) *Instance {
+func createWindowsLifecycleInstance(t *testing.T, ctx context.Context, manager *manager, image *images.Image, name string, networkEnabled bool, size int64) *Instance {
 	t.Helper()
 	instance, err := manager.CreateInstance(ctx, CreateInstanceRequest{
 		Name:           name,
 		Image:          image.Name,
 		Platform:       "windows/amd64",
-		Size:           4 << 30,
+		Size:           size,
 		Vcpus:          4,
 		NetworkEnabled: networkEnabled,
 		Hypervisor:     hypervisor.TypeQEMU,
