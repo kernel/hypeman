@@ -58,6 +58,7 @@ func TestWindowsLifecycleIntegration(t *testing.T) {
 	waitForWindowsRunning(t, ctx, manager, restored.Id)
 	assert.Equal(t, sourceMachineID, windowsMachineID(t, ctx, manager, restored.Id), "same-instance restore must preserve Windows identity")
 	assertWindowsNetworkReady(t, ctx, manager, restored.Id, source.IP)
+	assertWindowsCopyRoundTrip(t, ctx, manager, restored.Id)
 }
 
 func TestWindowsStoppedForkIntegration(t *testing.T) {
@@ -236,6 +237,12 @@ func assertWindowsGuestControl(t *testing.T, ctx context.Context, manager *manag
 	})
 	assert.ErrorContains(t, err, "desktop ConPTY sessions are not supported")
 
+}
+
+func assertWindowsCopyRoundTrip(t *testing.T, ctx context.Context, manager *manager, instanceID string) {
+	t.Helper()
+	dialer, err := manager.GetVsockDialer(ctx, instanceID)
+	require.NoError(t, err)
 	source := filepath.Join(t.TempDir(), "roundtrip.txt")
 	require.NoError(t, os.WriteFile(source, []byte("HYPEMAN_COPY_OK"), 0644))
 	require.NoError(t, guest.CopyToInstance(ctx, dialer, guest.CopyToInstanceOptions{
