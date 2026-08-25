@@ -83,7 +83,11 @@ func (m *manager) reconcileVGPUAssignments(ctx context.Context) (map[string]stru
 		if storedVGPUDevicePath(stored) == "" {
 			continue
 		}
-		livePID := stored.HypervisorPID != nil && hypervisorMayBeAlive(stored.HypervisorProcessIdentity, stored.SocketPath)
+		// The socket-ownership check runs even without a persisted PID: a VMM
+		// whose post-boot metadata save failed still holds its control-socket
+		// listener, and releasing its device would tear the vGPU out from
+		// under a live VM.
+		livePID := hypervisorMayBeAlive(stored.HypervisorProcessIdentity, stored.SocketPath)
 		if live, _ := vgpuAssignmentLiveness(stored, m.nowUTC(), livePID); live {
 			if stored.GPUDevicePath != "" {
 				protected[stored.GPUDevicePath] = struct{}{}
@@ -116,7 +120,7 @@ func (m *manager) releaseStaleVGPUAssignment(ctx context.Context, id string) {
 	if path == "" {
 		return
 	}
-	livePID := stored.HypervisorPID != nil && hypervisorMayBeAlive(stored.HypervisorProcessIdentity, stored.SocketPath)
+	livePID := hypervisorMayBeAlive(stored.HypervisorProcessIdentity, stored.SocketPath)
 	if live, _ := vgpuAssignmentLiveness(stored, m.nowUTC(), livePID); live {
 		return
 	}

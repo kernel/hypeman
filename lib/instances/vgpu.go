@@ -13,7 +13,7 @@ import (
 
 // VGPUAssignmentStartupGracePeriod bounds how long an assignment without a
 // persisted hypervisor PID is treated as potentially live.
-const VGPUAssignmentStartupGracePeriod = 5 * time.Minute
+const VGPUAssignmentStartupGracePeriod = devices.VGPUAssignmentGracePeriod
 
 // VGPUCleanupPendingError reports a failed rollback that left a vGPU assigned.
 type VGPUCleanupPendingError struct {
@@ -50,7 +50,7 @@ func vgpuDevicePendingCleanup(err error) (*devices.VGPUDevice, bool) {
 }
 
 func vgpuAssignmentLiveness(stored *StoredMetadata, now time.Time, livePID bool) (live bool, graceRemaining time.Duration) {
-	if stored.HypervisorPID != nil && livePID {
+	if livePID {
 		return true, 0
 	}
 	if stored.GPUAssignedAt == nil {
@@ -198,12 +198,11 @@ func (m *manager) vgpuAssignmentClaimedByLiveInstance(ctx context.Context, exclu
 		if storedVGPUDevicePath(stored) != devicePath {
 			continue
 		}
-		pid := 0
-		if stored.HypervisorPID != nil {
-			pid, err = resolveLiveHypervisorPID(stored.HypervisorProcessIdentity, stored.SocketPath)
-			if err != nil {
-				return false, fmt.Errorf("cannot confirm liveness of vGPU claimant %s on %s: %w", id, devicePath, err)
-			}
+		// Resolve even without a persisted PID: the socket-ownership scan can
+		// still prove a claimant whose post-boot metadata save failed is live.
+		pid, err := resolveLiveHypervisorPID(stored.HypervisorProcessIdentity, stored.SocketPath)
+		if err != nil {
+			return false, fmt.Errorf("cannot confirm liveness of vGPU claimant %s on %s: %w", id, devicePath, err)
 		}
 		live, remaining := vgpuAssignmentLiveness(stored, m.nowUTC(), pid > 0)
 		if pid > 0 && live {
