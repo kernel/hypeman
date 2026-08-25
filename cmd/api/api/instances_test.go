@@ -57,8 +57,6 @@ func (m createErrorInstanceManager) CreateInstance(context.Context, instances.Cr
 	return nil, m.err
 }
 
-// A retained-assignment error must win over the mapping of the create error
-// it wraps, or the response omits the instance the caller has to delete.
 func TestCreateInstance_VGPUCleanupPendingBeatsWrappedErrorMapping(t *testing.T) {
 	t.Parallel()
 	svc := newTestService(t)
@@ -1034,9 +1032,6 @@ func TestRestoreInstance_ErrorMapping(t *testing.T) {
 	}
 }
 
-// A retained-assignment error must win over the mapping of the start error
-// it wraps, or the response omits the pending vGPU cleanup the caller has to
-// resolve.
 func TestStartInstance_VGPUCleanupPendingBeatsWrappedErrorMapping(t *testing.T) {
 	t.Parallel()
 

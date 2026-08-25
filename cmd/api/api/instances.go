@@ -364,8 +364,6 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 	if err != nil {
 		var vgpuPending *instances.VGPUCleanupPendingError
 		switch {
-		// Checked first: it wraps the original create error, so a later
-		// errors.Is case would match the cause and hide the pending vGPU cleanup.
 		case errors.As(err, &vgpuPending):
 			log.ErrorContext(ctx, "failed to create instance", "error", err, "image", request.Body.Image)
 			message, inner := vgpuCleanupPendingDetail(vgpuPending, "create", "delete it to retry")
@@ -435,9 +433,6 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 	return oapi.CreateInstance201JSONResponse(instanceToOAPI(*inst)), nil
 }
 
-// vgpuCleanupPendingDetail renders a pending vGPU cleanup into the message
-// and inner error detail shared by the create and start handlers. The
-// retained guidance names the verb-specific way to release the assignment.
 func vgpuCleanupPendingDetail(pending *instances.VGPUCleanupPendingError, action, retainedGuidance string) (string, *oapi.ErrorDetail) {
 	message := fmt.Sprintf("failed to %s instance: %v", action, pending)
 	innerCode := "vgpu_unretained_instance"
@@ -858,8 +853,6 @@ func (s *ApiService) StartInstance(ctx context.Context, request oapi.StartInstan
 	if err != nil {
 		var vgpuPending *instances.VGPUCleanupPendingError
 		switch {
-		// Checked first: it wraps the original start error, so a later
-		// errors.Is case would match the cause and hide the pending vGPU cleanup.
 		case errors.As(err, &vgpuPending):
 			log.ErrorContext(ctx, "failed to start instance", "error", err)
 			message, inner := vgpuCleanupPendingDetail(vgpuPending, "start", "delete it or retry start to release it")

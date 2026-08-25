@@ -67,8 +67,6 @@ func TestCreateSnapshotRejectsVGPURetentionRecord(t *testing.T) {
 	meta.GPURetainedForCleanup = true
 	require.NoError(t, mgr.saveMetadata(meta))
 
-	// The delete-only retention stub has no boot configuration, so a snapshot
-	// of it could never be restored or forked into a bootable instance.
 	_, err = mgr.CreateSnapshot(ctx, sourceID, CreateSnapshotRequest{
 		Kind: SnapshotKindStopped,
 		Name: "snapshot-vgpu-retention",
@@ -98,8 +96,6 @@ func TestRestoreSnapshotRejectsVGPURetentionRecord(t *testing.T) {
 	meta.GPURetainedForCleanup = true
 	require.NoError(t, mgr.saveMetadata(meta))
 
-	// Restoring into the delete-only stub would rebuild boot config from the
-	// snapshot record, whose retention flag is false, clearing the marker.
 	_, err = mgr.RestoreSnapshot(ctx, sourceID, snapshot.Id, RestoreSnapshotRequest{
 		TargetState:      StateStopped,
 		TargetHypervisor: mgr.defaultHypervisor,
@@ -107,7 +103,6 @@ func TestRestoreSnapshotRejectsVGPURetentionRecord(t *testing.T) {
 	require.ErrorIs(t, err, ErrInvalidState)
 	require.ErrorContains(t, err, "delete it to release the assignment")
 
-	// The retained assignment must survive the rejected restore for delete.
 	stored, err := mgr.loadMetadata(sourceID)
 	require.NoError(t, err)
 	assert.True(t, stored.GPURetainedForCleanup)

@@ -225,11 +225,8 @@ func buildQMPArgs(socketPath string) []string {
 }
 
 type startedProcess struct {
-	pid        int
-	socketPath string
-	// termGrace, when non-zero, makes cleanup send SIGTERM and wait this long
-	// before SIGKILL. Set for VFIO-attached processes: SIGKILL during vGPU
-	// plugin init can wedge the VF until its parent GPU is SR-IOV cycled.
+	pid          int
+	socketPath   string
 	termGrace    time.Duration
 	waitDone     chan error
 	waitConsumed bool
@@ -281,7 +278,6 @@ func (p *startedProcess) wait() error {
 	return err
 }
 
-// waitFor waits up to d for the process to exit, returning whether it did.
 func (p *startedProcess) waitFor(d time.Duration) bool {
 	if _, exited := p.checkExited(); exited {
 		return true
@@ -392,7 +388,6 @@ func (s *Starter) startQEMUProcess(ctx context.Context, p *paths.Paths, version 
 	}
 
 	pid := proc.pid
-	// Only failed starts pay the VFIO termination grace.
 	proc.termGrace = termGrace
 	log.DebugContext(processCtx, "QEMU process started", "pid", pid, "duration_ms", time.Since(processStartTime).Milliseconds())
 

@@ -142,19 +142,12 @@ func (m *manager) deleteInstanceWithOptions(
 	}
 	m.closeFirecrackerUFFDSession(ctx, stored)
 
-	// 5b. Release the vGPU assignment if present, before any network, device,
-	// or volume teardown. Release failure is logged and the delete continues,
-	// matching the pre-refactor contract: the VMM is already confirmed dead,
-	// the guards inside the release never destroy a device they cannot prove
-	// is unowned, and a skipped release is recovered by the background retry
-	// below or, after a restart, by startup reconciliation.
+	// Release before deleting metadata so a failed release can be retried safely.
 	hadVGPUAssignment := storedVGPUDevicePath(stored) != ""
 	if hadVGPUAssignment {
 		log.InfoContext(ctx, "destroying vGPU", "instance_id", id, "uuid", stored.GPUMdevUUID)
 	}
 	if err := m.releaseStoredVGPU(ctx, stored); err != nil {
-		// Log error but continue with cleanup; the background retry releases
-		// the VF once the metadata is gone.
 		log.WarnContext(ctx, "failed to destroy vGPU, continuing with cleanup", "instance_id", id, "uuid", stored.GPUMdevUUID, "error", err)
 		m.scheduleOrphanedVGPURelease(ctx, *stored)
 	} else if hadVGPUAssignment {

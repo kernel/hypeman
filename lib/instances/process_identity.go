@@ -27,8 +27,6 @@ const linuxBootIDPath = "/proc/sys/kernel/random/boot_id"
 // does not unstick it, so the wait is short to keep stop and delete fast.
 const hypervisorSIGKILLWaitTimeout = 2 * time.Second
 
-// vgpuTermGrace returns the SIGTERM wait used before hard-killing a vGPU
-// hypervisor.
 func (m *manager) vgpuTermGrace() time.Duration {
 	if m.vgpuInitTermGrace > 0 {
 		return m.vgpuInitTermGrace
@@ -36,13 +34,7 @@ func (m *manager) vgpuTermGrace() time.Duration {
 	return hypervisor.VFIOTermGrace
 }
 
-// terminateThenKill hard-kills the hypervisor process, first giving any
-// instance with VFIO devices (a vGPU VF or passthrough PCI devices, matching
-// the QEMU-side vfioTermGraceFor) a SIGTERM grace: SIGKILL during guest
-// driver init can wedge the device until its parent GPU is SR-IOV cycled
-// (see lib/devices/GPU.md). The grace applies in every state because the
-// instance reports Running seconds before driver init finishes and nothing
-// host-side observes that boundary.
+// SIGKILL during guest driver init can wedge a VF until the parent GPU is reset.
 func (m *manager) terminateThenKill(ctx context.Context, inst *Instance, pid int) error {
 	if inst.GPUProfile != "" || len(inst.Devices) > 0 {
 		if syscall.Kill(pid, syscall.SIGTERM) == nil && WaitForProcessExit(pid, m.vgpuTermGrace()) {
@@ -209,10 +201,7 @@ func classifyResolvedHypervisorOwner(socketPath string, stored, resolved int, er
 	return 0, fmt.Errorf("cannot confirm ownership of socket %s: %w", socketPath, err)
 }
 
-// hypervisorMayBeAlive reports whether the recorded hypervisor process may
-// still be running. It fails open (unresolvable ownership returns true, the
-// safe direction for reconcile protection and claim checks); do not use it
-// to authorize teardown.
+// Ambiguous ownership is treated as live; this must not authorize teardown.
 func hypervisorMayBeAlive(id HypervisorProcessIdentity, socketPath string) bool {
 	pid, err := resolveLiveHypervisorPID(id, socketPath)
 	return err != nil || pid > 0

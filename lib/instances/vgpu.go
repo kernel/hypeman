@@ -15,10 +15,7 @@ import (
 // persisted hypervisor PID is treated as potentially live.
 const VGPUAssignmentStartupGracePeriod = 5 * time.Minute
 
-// VGPUCleanupPendingError reports a failed create whose vGPU release also
-// failed during rollback. When Retained is true, deleting the retained instance
-// retries the release; otherwise a background retry and startup reconciliation
-// recover the assignment.
+// VGPUCleanupPendingError reports a failed rollback that left a vGPU assigned.
 type VGPUCleanupPendingError struct {
 	InstanceID string
 	Retained   bool
@@ -34,9 +31,6 @@ func (e *VGPUCleanupPendingError) Error() string {
 
 func (e *VGPUCleanupPendingError) Unwrap() error { return e.Err }
 
-// errVGPURetentionStub rejects every lifecycle verb except delete on a
-// retention stub from a failed create: the record has no boot configuration,
-// and only delete retries the release of its retained assignment.
 var errVGPURetentionStub = fmt.Errorf("%w: instance retains a vGPU assignment from a failed create and has no boot configuration; delete it to release the assignment", ErrInvalidState)
 
 func (m *manager) createVGPUDevice(ctx context.Context, profileName, instanceID string) (*devices.VGPUDevice, error) {
@@ -91,9 +85,6 @@ func clearStoredVGPUDevice(stored *StoredMetadata) {
 	stored.GPUAssignedAt = nil
 }
 
-// cleanupStartVGPU reports whether the assignment was retained after a failed
-// destroy and whether that retention record was persisted, so start can surface
-// the pending cleanup as a typed error like create does.
 func (m *manager) cleanupStartVGPU(ctx context.Context, instanceID string, device *devices.VGPUDevice, assignedAt time.Time, rollbackMeta metadata) (retained, persisted bool) {
 	logger.FromContext(ctx).DebugContext(ctx, "destroying vGPU on cleanup", "instance_id", instanceID, "uuid", device.MdevUUID)
 	assignment := devices.VGPUAssignment{
@@ -124,21 +115,15 @@ func (m *manager) cleanupStartVGPU(ctx context.Context, instanceID string, devic
 		if !retained {
 			return false, false
 		}
-		// The mid-start save may already have persisted this assignment, so
-		// delete or a retried start can still release it.
 		if meta, loadErr := m.loadMetadata(instanceID); loadErr == nil && storedVGPUDevicePath(&meta.StoredMetadata) == device.SysfsPath {
 			return true, true
 		}
-		// No on-disk record points at the device; retry the release in the
-		// background instead of waiting for the next startup reconcile.
 		m.scheduleOrphanedVGPURelease(ctx, cleanupMeta.StoredMetadata)
 		return true, false
 	}
 	return retained, retained
 }
 
-// restoreStartMutatedFields must cover every field start mutates before the
-// vGPU cleanup runs.
 func restoreStartMutatedFields(dst, src *StoredMetadata) {
 	dst.HypervisorPID = src.HypervisorPID
 	dst.HypervisorStartTime = src.HypervisorStartTime
@@ -162,18 +147,10 @@ func (m *manager) releaseStoredVGPU(ctx context.Context, stored *StoredMetadata)
 	return m.releaseStoredVGPUExcluding(ctx, stored, stored.Id)
 }
 
-// releaseStoredVGPUExcluding releases stored's assignment while treating
-// excludeID's metadata as not a claimant. Callers releasing an instance's own
-// persisted assignment exclude that instance; the orphan retry passes no
-// exclusion because its instance may have been restarted onto the same VF,
-// and that live claim must block the release.
 func (m *manager) releaseStoredVGPUExcluding(ctx context.Context, stored *StoredMetadata, excludeID string) error {
 	path := storedVGPUDevicePath(stored)
 	if path != "" {
-		// Vendor VFIO VFs are reused across instances, so the release must
-		// fail closed on an incomplete inventory. mdev UUIDs are never reused;
-		// scanning there would let one unreadable metadata file block every
-		// mdev release on the host.
+		// Vendor VFIO VFs are reusable, so release fails closed on an incomplete inventory.
 		claimed := false
 		if stored.GPUFramework == devices.VGPUFrameworkVendorVFIO {
 			var err error
@@ -201,10 +178,6 @@ func (m *manager) releaseStoredVGPUExcluding(ctx context.Context, stored *Stored
 	return nil
 }
 
-// vgpuAssignmentClaimedByLiveInstance reports whether another live instance's
-// stored metadata claims devicePath. Unreadable metadata, a recent assignment
-// without a PID, or unverifiable process ownership returns an error so the
-// requester retains its assignment for a later retry.
 func (m *manager) vgpuAssignmentClaimedByLiveInstance(ctx context.Context, excludeID, devicePath string) (bool, error) {
 	files, err := m.listMetadataFilesStrict()
 	if err != nil {
@@ -218,8 +191,6 @@ func (m *manager) vgpuAssignmentClaimedByLiveInstance(ctx context.Context, exclu
 		meta, err := m.loadMetadata(id)
 		if err != nil {
 			if errors.Is(err, ErrNotFound) {
-				// Deleted between listing and load; a vanished record cannot
-				// be a live claimant.
 				continue
 			}
 			return false, fmt.Errorf("load metadata for vGPU release check: instance %s: %w", id, err)
@@ -262,9 +233,6 @@ func (m *manager) releaseRetainedVGPULocked(ctx context.Context, id string) {
 	}
 	stored := &meta.StoredMetadata
 	if stored.GPURetainedForCleanup {
-		// Delete-only retention stubs release through delete. Releasing here
-		// would leave a stub whose start/fork/snapshot errors still claim a
-		// retained assignment that no longer exists.
 		return
 	}
 	if storedVGPUDevicePath(stored) == "" {
