@@ -171,6 +171,7 @@ type manager struct {
 	resourceValidator         ResourceValidator // Optional validator for aggregate resource limits
 	instanceLocks             sync.Map          // map[string]*sync.RWMutex - per-instance locks
 	forkMetadataMu            sync.Mutex
+	windowsRestoreMu          sync.Mutex
 	bootMarkerScans           sync.Map      // map[string]time.Time next allowed boot-marker rescan
 	hypervisorStateCache      sync.Map      // map[string]hypervisorStateCacheEntry - last observed hypervisor state per instance
 	hostTopology              *HostTopology // Cached host CPU topology

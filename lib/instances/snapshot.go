@@ -459,8 +459,8 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 		forkMeta.VsockCID = generateVsockCID(forkID)
 	}
 	// QEMU memory snapshots contain the TPM's permanent and volatile state.
-	// Resetting the copied directory is therefore only meaningful for cold forks.
-	resetWindowsTPM := rec.Snapshot.Kind != SnapshotKindStandby
+	// A stopped target discards that memory and must cold-boot with fresh TPM state.
+	resetWindowsTPM := windowsForkNeedsFreshTPM(rec.Snapshot.Kind == SnapshotKindStandby, targetState)
 	if err := m.prepareWindowsForkIdentity(&forkMeta, resetWindowsTPM); err != nil {
 		return nil, err
 	}

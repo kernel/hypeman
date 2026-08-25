@@ -81,6 +81,10 @@ func (m *manager) ensureWindowsVsockCIDAvailable(ctx context.Context, stored *St
 	return nil
 }
 
+func windowsForkNeedsFreshTPM(hasMemorySnapshot bool, targetState State) bool {
+	return targetState == StateStopped || !hasMemorySnapshot
+}
+
 func (m *manager) prepareWindowsForkIdentity(stored *StoredMetadata, resetTPM bool) error {
 	if stored == nil || !isWindowsPlatform(stored.Platform) {
 		return nil

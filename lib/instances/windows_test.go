@@ -55,6 +55,24 @@ func TestValidateWindowsCreate(t *testing.T) {
 	}
 }
 
+func TestWindowsForkNeedsFreshTPM(t *testing.T) {
+	tests := []struct {
+		name              string
+		hasMemorySnapshot bool
+		targetState       State
+		want              bool
+	}{
+		{name: "memory fork", hasMemorySnapshot: true, targetState: StateRunning},
+		{name: "standby fork stopped before restore", hasMemorySnapshot: true, targetState: StateStopped, want: true},
+		{name: "cold fork", targetState: StateRunning, want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, windowsForkNeedsFreshTPM(tt.hasMemorySnapshot, tt.targetState))
+		})
+	}
+}
+
 func TestPrepareWindowsForkIdentity(t *testing.T) {
 	p := paths.New(t.TempDir())
 	m := &manager{paths: p}

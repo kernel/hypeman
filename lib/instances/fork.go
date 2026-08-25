@@ -50,6 +50,9 @@ func (m *manager) forkInstance(ctx context.Context, id string, req ForkInstanceR
 	if isWindowsPlatform(source.Platform) && source.State == StateRunning && targetState != StateStopped {
 		return nil, "", false, fmt.Errorf("%w: Windows forks from a running source require target_state=%s", ErrNotSupported, StateStopped)
 	}
+	if err := validateWindowsForkPolicy(&meta.StoredMetadata); err != nil {
+		return nil, "", false, err
+	}
 
 	switch source.State {
 	case StateRunning:
@@ -324,8 +327,8 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 	}
 
 	// QEMU memory snapshots contain the TPM's permanent and volatile state.
-	// Resetting the copied directory is therefore only meaningful for cold forks.
-	resetWindowsTPM := source.State != StateStandby
+	// A stopped target discards that memory and must cold-boot with fresh TPM state.
+	resetWindowsTPM := windowsForkNeedsFreshTPM(source.State == StateStandby, targetState)
 	if err := m.prepareWindowsForkIdentity(&forkMeta, resetWindowsTPM); err != nil {
 		return nil, false, err
 	}

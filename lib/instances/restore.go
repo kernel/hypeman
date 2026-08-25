@@ -45,6 +45,10 @@ func (m *manager) restoreInstance(
 
 	inst := m.toInstance(ctx, meta)
 	stored := &meta.StoredMetadata
+	if isWindowsPlatform(stored.Platform) {
+		m.windowsRestoreMu.Lock()
+		defer m.windowsRestoreMu.Unlock()
+	}
 	ctx = enrichInstancesTrace(ctx, attribute.String("hypervisor", string(stored.HypervisorType)))
 	log.DebugContext(ctx, "loaded instance", "instance_id", id, "state", inst.State, "has_snapshot", inst.HasSnapshot)
 
