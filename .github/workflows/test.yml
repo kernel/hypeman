@@ -104,6 +104,15 @@ jobs:
         run: |
           set -euo pipefail
           TEST_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
+          fixture_dir=/ci/windows
+          persistent_fixture_dir=/mnt/data/ci-fixtures/windows
+          sudo mkdir -p "$fixture_dir"
+          for fixture in base.raw image-agent.qcow2; do
+            if ! test -r "$fixture_dir/$fixture"; then
+              test -r "$persistent_fixture_dir/$fixture"
+              sudo ln -sfn "$persistent_fixture_dir/$fixture" "$fixture_dir/$fixture"
+            fi
+          done
           for bin in mkfs.erofs mkfs.ext4 iptables qemu-img qemu-system-x86_64 swtpm; do
             if ! sudo env "PATH=$TEST_PATH" bash -lc "command -v '$bin' >/dev/null"; then
               echo "missing required binary under sudo PATH: $bin"
