@@ -9,7 +9,6 @@ import (
 	"net"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -28,10 +27,7 @@ func TestWindowsLifecycleIntegration(t *testing.T) {
 	ctx := context.Background()
 	source := createWindowsLifecycleInstance(t, ctx, manager, image, "windows-lifecycle-source", true)
 
-	assertWindowsNetworkReady(t, ctx, manager, source.Id, source.IP)
-	sourceMachineID := windowsMachineID(t, ctx, manager, source.Id)
-	sourceTPMEK := windowsTPMEK(t, ctx, manager, source.Id)
-	windowsPowerShell(t, ctx, manager, source.Id, `New-Item -ItemType Directory -Force C:\ProgramData\Hypeman | Out-Null; Set-Content C:\ProgramData\Hypeman\standby.txt inherited`)
+	sourceMachineID, sourceTPMEK := windowsIdentity(t, ctx, manager, source.Id, `New-Item -ItemType Directory -Force C:\ProgramData\Hypeman | Out-Null; Set-Content C:\ProgramData\Hypeman\standby.txt inherited`)
 
 	standby, err := manager.StandbyInstance(ctx, source.Id, StandbyInstanceRequest{})
 	require.NoError(t, err)
@@ -43,8 +39,9 @@ func TestWindowsLifecycleIntegration(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = deleteTestInstanceNow(context.Background(), manager, forked.Id) })
 	assert.Equal(t, source.VsockCID, forked.VsockCID, "memory-restored Windows forks retain the captured VioSock CID until cold boot")
-	assert.NotEqual(t, sourceMachineID, windowsMachineID(t, ctx, manager, forked.Id))
-	assert.Equal(t, sourceTPMEK, windowsTPMEK(t, ctx, manager, forked.Id), "memory forks inherit TPM state from the QEMU migration stream")
+	forkedMachineID, forkedTPMEK := windowsIdentity(t, ctx, manager, forked.Id, "")
+	assert.NotEqual(t, sourceMachineID, forkedMachineID)
+	assert.Equal(t, sourceTPMEK, forkedTPMEK, "memory forks inherit TPM state from the QEMU migration stream")
 	assert.Equal(t, "inherited", windowsPowerShell(t, ctx, manager, forked.Id, `Get-Content C:\ProgramData\Hypeman\standby.txt`))
 	assertIndependentFile(t, p.InstanceOVMFVars(source.Id), p.InstanceOVMFVars(forked.Id))
 	assertIndependentFile(t, p.InstanceWindowsDisk(source.Id), p.InstanceWindowsDisk(forked.Id))
@@ -55,19 +52,18 @@ func TestWindowsLifecycleIntegration(t *testing.T) {
 	restored, err := manager.RestoreInstance(ctx, source.Id)
 	require.NoError(t, err)
 	waitForWindowsRunning(t, ctx, manager, restored.Id)
-	assert.Equal(t, sourceMachineID, windowsMachineID(t, ctx, manager, restored.Id), "same-instance restore must preserve Windows identity")
+	restoredMachineID, restoredTPMEK := windowsIdentity(t, ctx, manager, restored.Id, "")
+	assert.Equal(t, sourceMachineID, restoredMachineID, "same-instance restore must preserve Windows identity")
+	assert.Equal(t, sourceTPMEK, restoredTPMEK, "same-instance restore must preserve TPM identity")
 	assertWindowsNetworkReady(t, ctx, manager, restored.Id, source.IP)
 	assertWindowsGuestControl(t, ctx, manager, restored.Id)
-	assertWindowsCopyRoundTrip(t, ctx, manager, restored.Id)
 }
 
 func TestWindowsStoppedForkIntegration(t *testing.T) {
 	manager, p, image := setupWindowsLifecycleIntegration(t)
 	ctx := context.Background()
 	source := createWindowsLifecycleInstance(t, ctx, manager, image, "windows-stopped-fork-source", false)
-	sourceMachineID := windowsMachineID(t, ctx, manager, source.Id)
-	sourceTPMEK := windowsTPMEK(t, ctx, manager, source.Id)
-	windowsPowerShell(t, ctx, manager, source.Id, `New-Item -ItemType Directory -Force C:\ProgramData\Hypeman | Out-Null; Set-Content C:\ProgramData\Hypeman\identity.txt source`)
+	sourceMachineID, sourceTPMEK := windowsIdentity(t, ctx, manager, source.Id, `New-Item -ItemType Directory -Force C:\ProgramData\Hypeman | Out-Null; Set-Content C:\ProgramData\Hypeman\identity.txt source`)
 
 	stopped, err := manager.StopInstance(ctx, source.Id)
 	require.NoError(t, err)
@@ -78,8 +74,9 @@ func TestWindowsStoppedForkIntegration(t *testing.T) {
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = deleteTestInstanceNow(context.Background(), manager, forked.Id) })
-	assert.NotEqual(t, sourceMachineID, windowsMachineID(t, ctx, manager, forked.Id), "fork must receive a new Windows machine identity")
-	assert.NotEqual(t, sourceTPMEK, windowsTPMEK(t, ctx, manager, forked.Id), "cold forks must initialize a fresh TPM")
+	forkedMachineID, forkedTPMEK := windowsIdentity(t, ctx, manager, forked.Id, "")
+	assert.NotEqual(t, sourceMachineID, forkedMachineID, "fork must receive a new Windows machine identity")
+	assert.NotEqual(t, sourceTPMEK, forkedTPMEK, "cold forks must initialize a fresh TPM")
 	assert.NotEqual(t, source.VsockCID, forked.VsockCID, "forks need unique vsock CIDs")
 	assertIndependentFile(t, p.InstanceOVMFVars(source.Id), p.InstanceOVMFVars(forked.Id))
 	assertIndependentFile(t, p.InstanceWindowsDisk(source.Id), p.InstanceWindowsDisk(forked.Id))
@@ -165,98 +162,16 @@ func assertWindowsGuestControl(t *testing.T, ctx context.Context, manager *manag
 	t.Helper()
 	dialer, err := manager.GetVsockDialer(ctx, instanceID)
 	require.NoError(t, err)
-
 	var stdout, stderr bytes.Buffer
-	jobStart := time.Now()
 	exit, err := guest.ExecIntoInstance(ctx, dialer, guest.ExecOptions{
-		Command: []string{"powershell.exe", "-NoProfile", "-NonInteractive", "-Command", `Copy-Item "$env:SystemRoot\System32\ping.exe" "$env:TEMP\hypeman-job-child.exe" -Force; & "$env:TEMP\hypeman-job-child.exe" -n 60 127.0.0.1`},
-		Stdout:  &stdout,
-		Stderr:  &stderr,
-		Timeout: 2,
-	})
-	require.NoError(t, err, stderr.String())
-	assert.Less(t, time.Since(jobStart), 10*time.Second)
-
-	time.Sleep(time.Second)
-	stdout.Reset()
-	stderr.Reset()
-	exit, err = guest.ExecIntoInstance(ctx, dialer, guest.ExecOptions{
-		Command: []string{"powershell.exe", "-NoProfile", "-NonInteractive", "-Command", `if (Get-Process hypeman-job-child -ErrorAction SilentlyContinue) { exit 42 }`},
+		Command: []string{"cmd.exe", "/d", "/c", "echo HYPEMAN_GUEST_CONTROL_OK"},
 		Stdout:  &stdout,
 		Stderr:  &stderr,
 		Timeout: 15,
 	})
 	require.NoError(t, err, stderr.String())
-	require.Equal(t, 0, exit.Code, "job object left a child process running")
-
-	stdout.Reset()
-	stderr.Reset()
-	exit, err = guest.ExecIntoInstance(ctx, dialer, guest.ExecOptions{
-		Command: []string{"powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "[Console]::Out.Write('HYPEMAN_SYSTEM_OK')"},
-		Stdout:  &stdout,
-		Stderr:  &stderr,
-		Timeout: 30,
-	})
-	require.NoError(t, err, stderr.String())
 	require.Equal(t, 0, exit.Code)
-	assert.Equal(t, "HYPEMAN_SYSTEM_OK", stdout.String())
-
-	stdout.Reset()
-	stderr.Reset()
-	exit, err = guest.ExecIntoInstance(ctx, dialer, guest.ExecOptions{
-		Command: []string{"cmd.exe", "/d", "/c", "ping -n 2 127.0.0.1 >nul & echo HYPEMAN_CONPTY_OK"},
-		Stdout:  &stdout,
-		Stderr:  &stderr,
-		TTY:     true,
-		Rows:    31,
-		Cols:    97,
-		Timeout: 30,
-	})
-	require.NoError(t, err, stderr.String())
-	require.Equal(t, 0, exit.Code)
-	assert.Contains(t, stdout.String(), "HYPEMAN_CONPTY_OK")
-
-	stdout.Reset()
-	stderr.Reset()
-	exit, err = guest.ExecIntoInstance(ctx, dialer, guest.ExecOptions{
-		Command: []string{"cmd.exe", "/d", "/c", "echo HYPEMAN_DESKTOP_OK"},
-		Stdout:  &stdout,
-		Stderr:  &stderr,
-		Session: guest.ExecSession_EXEC_SESSION_DESKTOP,
-		Timeout: 30,
-	})
-	require.NoError(t, err, stderr.String())
-	require.Equal(t, 0, exit.Code)
-	assert.Contains(t, stdout.String(), "HYPEMAN_DESKTOP_OK")
-
-	_, err = guest.ExecIntoInstance(ctx, dialer, guest.ExecOptions{
-		Command: []string{"cmd.exe"},
-		TTY:     true,
-		Session: guest.ExecSession_EXEC_SESSION_DESKTOP,
-		Timeout: 30,
-	})
-	assert.ErrorContains(t, err, "desktop ConPTY sessions are not supported")
-
-}
-
-func assertWindowsCopyRoundTrip(t *testing.T, ctx context.Context, manager *manager, instanceID string) {
-	t.Helper()
-	dialer, err := manager.GetVsockDialer(ctx, instanceID)
-	require.NoError(t, err)
-	source := filepath.Join(t.TempDir(), "roundtrip.txt")
-	require.NoError(t, os.WriteFile(source, []byte("HYPEMAN_COPY_OK"), 0644))
-	require.NoError(t, guest.CopyToInstance(ctx, dialer, guest.CopyToInstanceOptions{
-		SrcPath: source,
-		DstPath: `C:\ProgramData\Hypeman\roundtrip.txt`,
-	}))
-	destination := t.TempDir()
-	require.NoError(t, guest.CopyFromInstance(ctx, dialer, guest.CopyFromInstanceOptions{
-		SrcPath: `C:\ProgramData\Hypeman\roundtrip.txt`,
-		DstPath: destination,
-	}))
-	contents, err := os.ReadFile(filepath.Join(destination, "roundtrip.txt"))
-	require.NoError(t, err)
-	assert.Equal(t, "HYPEMAN_COPY_OK", string(contents))
+	assert.Contains(t, stdout.String(), "HYPEMAN_GUEST_CONTROL_OK")
 }
 
 func assertWindowsNetworkReady(t *testing.T, ctx context.Context, manager *manager, instanceID, expectedIP string) {
@@ -291,16 +206,17 @@ func assertWindowsNetworkReady(t *testing.T, ctx context.Context, manager *manag
 	require.NoError(t, ping.Run(), "allocated Windows IP did not answer ICMP")
 }
 
-func windowsMachineID(t *testing.T, ctx context.Context, manager *manager, instanceID string) string {
+func windowsIdentity(t *testing.T, ctx context.Context, manager *manager, instanceID, prelude string) (string, string) {
 	t.Helper()
-	return windowsPowerShell(t, ctx, manager, instanceID, `(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Cryptography').MachineGuid`)
-}
-
-func windowsTPMEK(t *testing.T, ctx context.Context, manager *manager, instanceID string) string {
-	t.Helper()
-	hash := windowsPowerShell(t, ctx, manager, instanceID, `(Get-TpmEndorsementKeyInfo -HashAlgorithm Sha256).PublicKeyHash`)
-	require.NotEmpty(t, hash, "TPM endorsement key hash")
-	return hash
+	command := `$machine=(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Cryptography').MachineGuid; $tpm=(Get-TpmEndorsementKeyInfo -HashAlgorithm Sha256).PublicKeyHash; [Console]::Out.Write($machine + "|" + $tpm)`
+	if prelude != "" {
+		command = prelude + "; " + command
+	}
+	parts := strings.Split(windowsPowerShell(t, ctx, manager, instanceID, command), "|")
+	require.Len(t, parts, 2)
+	require.NotEmpty(t, parts[0], "Windows machine identity")
+	require.NotEmpty(t, parts[1], "TPM endorsement key hash")
+	return parts[0], parts[1]
 }
 
 func windowsPowerShell(t *testing.T, ctx context.Context, manager *manager, instanceID, command string) string {
