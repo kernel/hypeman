@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"sort"
@@ -14,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/kernel/hypeman/lib/logger"
 )
@@ -21,13 +23,23 @@ import (
 const (
 	pciDevicesPath  = "/sys/bus/pci/devices"
 	vfioDevicesPath = "/dev/vfio/devices"
+
+	// vendorVFIOAssignmentGracePeriod protects assignments created by this
+	// process from the periodic sweep until their owning instance has had time
+	// to persist metadata and boot, mirroring orphanedMdevGracePeriod.
+	vendorVFIOAssignmentGracePeriod = 5 * time.Minute
 )
+
+type vendorVFIOOwner struct {
+	instanceID string
+	assignedAt time.Time
+}
 
 type vendorVFIOSysfs struct {
 	pciDevicesPath    string
 	procPath          string
 	vfioDevicesPath   string
-	owners            map[string]string
+	owners            map[string]vendorVFIOOwner
 	framebufferByType map[string]int
 	openVFIOPathsFunc func() (map[string]struct{}, error)
 }
@@ -37,7 +49,7 @@ var (
 		pciDevicesPath:    pciDevicesPath,
 		procPath:          procPath,
 		vfioDevicesPath:   vfioDevicesPath,
-		owners:            make(map[string]string),
+		owners:            make(map[string]vendorVFIOOwner),
 		framebufferByType: make(map[string]int),
 	}
 	vendorVFIOMu sync.Mutex
@@ -196,7 +208,7 @@ func (s vendorVFIOSysfs) create(ctx context.Context, profileName, instanceID str
 		verifyErr := fmt.Errorf("verify vGPU on VF %s: type is %s, want %s", targetVF, currentType, requested.TypeName)
 		return nil, s.rollbackCreate(currentTypePath, targetVF, instanceID, device, verifyErr)
 	}
-	s.owners[targetVF] = instanceID
+	s.owners[targetVF] = vendorVFIOOwner{instanceID: instanceID, assignedAt: time.Now()}
 
 	logger.FromContext(ctx).InfoContext(ctx, "created vendor VFIO vGPU",
 		"profile", profileName,
@@ -229,10 +241,10 @@ func (s vendorVFIOSysfs) destroy(ctx context.Context, vfAddress, instanceID stri
 		if instanceID == "" {
 			return fmt.Errorf("cannot release vendor VFIO vGPU on VF %s without instance ID", vfAddress)
 		}
-		if owner != instanceID {
+		if owner.instanceID != instanceID {
 			log.WarnContext(ctx, "skipping vendor VFIO vGPU release owned by another instance",
 				"vf", vfAddress,
-				"owner_instance_id", owner,
+				"owner_instance_id", owner.instanceID,
 				"requesting_instance_id", instanceID,
 			)
 			return nil
@@ -264,6 +276,9 @@ func (s vendorVFIOSysfs) reconcile(ctx context.Context, protectedDevicePaths map
 	if err != nil {
 		return err
 	}
+	vendorVFIOMu.Lock()
+	owners := maps.Clone(s.owners)
+	vendorVFIOMu.Unlock()
 	log := logger.FromContext(ctx)
 	protectedVFs := make(map[string]struct{}, len(protectedDevicePaths))
 	for path := range protectedDevicePaths {
@@ -276,6 +291,11 @@ func (s vendorVFIOSysfs) reconcile(ctx context.Context, protectedDevicePaths map
 		}
 		if _, ok := protectedVFs[vf.PCIAddress]; ok {
 			log.DebugContext(ctx, "skipping vendor VFIO vGPU held by a live instance", "vf", vf.PCIAddress)
+			continue
+		}
+		owner := owners[vf.PCIAddress]
+		if !owner.assignedAt.IsZero() && time.Since(owner.assignedAt) < vendorVFIOAssignmentGracePeriod {
+			log.DebugContext(ctx, "skipping recently assigned vendor VFIO vGPU during grace period", "vf", vf.PCIAddress)
 			continue
 		}
 		if openPaths == nil {
@@ -292,7 +312,7 @@ func (s vendorVFIOSysfs) reconcile(ctx context.Context, protectedDevicePaths map
 			log.WarnContext(ctx, "preserving vendor VFIO vGPU held open without a live instance claim", "vf", vf.PCIAddress)
 			continue
 		}
-		if err := s.destroy(ctx, vf.PCIAddress, ""); err != nil {
+		if err := s.destroy(ctx, vf.PCIAddress, owner.instanceID); err != nil {
 			log.WarnContext(ctx, "failed to destroy orphaned vendor VFIO vGPU", "vf", vf.PCIAddress, "error", err)
 		}
 	}
@@ -514,7 +534,7 @@ func framebufferFromProfileName(name string) int {
 
 func (s vendorVFIOSysfs) rollbackCreate(currentTypePath, vfAddress, instanceID string, device VGPUDevice, verifyErr error) error {
 	if err := os.WriteFile(currentTypePath, []byte("0"), 0200); err != nil {
-		s.owners[vfAddress] = instanceID
+		s.owners[vfAddress] = vendorVFIOOwner{instanceID: instanceID, assignedAt: time.Now()}
 		return &VGPUCreateCleanupPendingError{
 			Device: device,
 			Err:    errors.Join(verifyErr, fmt.Errorf("roll back vGPU on VF %s: %w", vfAddress, err)),
