@@ -29,7 +29,6 @@ func TestWindowsLifecycleIntegration(t *testing.T) {
 	source := createWindowsLifecycleInstance(t, ctx, manager, image, "windows-lifecycle-source", true, 8<<30)
 
 	assertWindowsNetworkReady(t, ctx, manager, source.Id, source.IP)
-	assertWindowsGuestControl(t, ctx, manager, source.Id)
 	sourceMachineID := windowsMachineID(t, ctx, manager, source.Id)
 	sourceTPMEK := windowsTPMEK(t, ctx, manager, source.Id)
 	windowsPowerShell(t, ctx, manager, source.Id, `New-Item -ItemType Directory -Force C:\ProgramData\Hypeman | Out-Null; Set-Content C:\ProgramData\Hypeman\standby.txt inherited`)
@@ -58,6 +57,7 @@ func TestWindowsLifecycleIntegration(t *testing.T) {
 	waitForWindowsRunning(t, ctx, manager, restored.Id)
 	assert.Equal(t, sourceMachineID, windowsMachineID(t, ctx, manager, restored.Id), "same-instance restore must preserve Windows identity")
 	assertWindowsNetworkReady(t, ctx, manager, restored.Id, source.IP)
+	assertWindowsGuestControl(t, ctx, manager, restored.Id)
 	assertWindowsCopyRoundTrip(t, ctx, manager, restored.Id)
 }
 
