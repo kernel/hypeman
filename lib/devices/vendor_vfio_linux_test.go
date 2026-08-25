@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -372,6 +373,32 @@ func TestVendorVFIOReconcile(t *testing.T) {
 	assertFileValue(t, filepath.Join(sysfs.pciDevicesPath, "0000:e3:00.4", "nvidia", "current_vgpu_type"), "1148")
 }
 
+func TestVendorVFIOReconcileSkipsRecentlyAssignedVF(t *testing.T) {
+	t.Parallel()
+
+	sysfs := newTestVendorVFIOSysfs(t)
+	sysfs.addVF(t, "0000:82:00.0", "0000:82:00.4", "42", "1148", "")
+	sysfs.owners["0000:82:00.4"] = vendorVFIOOwner{instanceID: "mid-create", assignedAt: time.Now()}
+
+	require.NoError(t, sysfs.reconcile(context.Background(), nil))
+	assertFileValue(t, filepath.Join(sysfs.pciDevicesPath, "0000:82:00.4", "nvidia", "current_vgpu_type"), "1148")
+}
+
+func TestVendorVFIOReconcileDestroysOwnedVFPastGracePeriod(t *testing.T) {
+	t.Parallel()
+
+	sysfs := newTestVendorVFIOSysfs(t)
+	sysfs.addVF(t, "0000:82:00.0", "0000:82:00.4", "42", "1148", "")
+	sysfs.owners["0000:82:00.4"] = vendorVFIOOwner{
+		instanceID: "deleted-instance",
+		assignedAt: time.Now().Add(-vendorVFIOAssignmentGracePeriod - time.Minute),
+	}
+
+	require.NoError(t, sysfs.reconcile(context.Background(), nil))
+	assertFileValue(t, filepath.Join(sysfs.pciDevicesPath, "0000:82:00.4", "nvidia", "current_vgpu_type"), "0")
+	assert.Empty(t, sysfs.owners)
+}
+
 func TestVendorVFIOReconcileRechecksOpenHandlesBeforeDestroy(t *testing.T) {
 	t.Parallel()
 
@@ -518,7 +545,7 @@ func TestRollbackVendorVFIOCreate(t *testing.T) {
 	t.Run("preserves verification error", func(t *testing.T) {
 		currentTypePath := filepath.Join(t.TempDir(), "current_vgpu_type")
 		require.NoError(t, os.WriteFile(currentTypePath, []byte("1148"), 0644))
-		sysfs := vendorVFIOSysfs{owners: make(map[string]string)}
+		sysfs := vendorVFIOSysfs{owners: make(map[string]vendorVFIOOwner)}
 
 		err := sysfs.rollbackCreate(currentTypePath, device.VFAddress, "instance-1", device, verifyErr)
 		require.ErrorIs(t, err, verifyErr)
@@ -528,7 +555,7 @@ func TestRollbackVendorVFIOCreate(t *testing.T) {
 
 	t.Run("retains assignment when rollback fails", func(t *testing.T) {
 		currentTypePath := filepath.Join(t.TempDir(), "missing", "current_vgpu_type")
-		sysfs := vendorVFIOSysfs{owners: make(map[string]string)}
+		sysfs := vendorVFIOSysfs{owners: make(map[string]vendorVFIOOwner)}
 
 		err := sysfs.rollbackCreate(currentTypePath, device.VFAddress, "instance-1", device, verifyErr)
 		require.ErrorIs(t, err, verifyErr)
@@ -536,7 +563,8 @@ func TestRollbackVendorVFIOCreate(t *testing.T) {
 		var pending *VGPUCreateCleanupPendingError
 		require.ErrorAs(t, err, &pending)
 		assert.Equal(t, device, pending.Device)
-		assert.Equal(t, "instance-1", sysfs.owners[device.VFAddress])
+		assert.Equal(t, "instance-1", sysfs.owners[device.VFAddress].instanceID)
+		assert.False(t, sysfs.owners[device.VFAddress].assignedAt.IsZero())
 	})
 }
 
@@ -566,7 +594,7 @@ func newTestVendorVFIOSysfs(t *testing.T) testVendorVFIOSysfs {
 		pciDevicesPath:    pci,
 		procPath:          proc,
 		vfioDevicesPath:   vfio,
-		owners:            make(map[string]string),
+		owners:            make(map[string]vendorVFIOOwner),
 		framebufferByType: make(map[string]int),
 	}}
 }
