@@ -10,12 +10,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/paths"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func TestLiveVGPUReconcileProtectionBoundsStartupProtection(t *testing.T) {
+func TestReconcileVGPUsBoundsStartupProtection(t *testing.T) {
 	dead := exec.Command("true")
 	require.NoError(t, dead.Run())
 	deadPID := dead.Process.Pid
@@ -23,7 +24,17 @@ func TestLiveVGPUReconcileProtectionBoundsStartupProtection(t *testing.T) {
 	recent := now.Add(-time.Minute)
 	stale := now.Add(-VGPUAssignmentStartupGracePeriod - time.Minute)
 
-	m := &manager{paths: paths.New(t.TempDir()), now: func() time.Time { return now }}
+	var protected map[string]struct{}
+	m := &manager{
+		paths:       paths.New(t.TempDir()),
+		now:         func() time.Time { return now },
+		destroyVGPU: func(context.Context, devices.VGPUAssignment) error { return nil },
+		reconcileVGPUDevices: func(_ context.Context, p map[string]struct{}, sweepVendorVFIO bool) error {
+			protected = p
+			assert.True(t, sweepVendorVFIO)
+			return nil
+		},
+	}
 	instances := []StoredMetadata{
 		{Id: "booting", GPUDevicePath: "/sys/bus/pci/devices/0000:82:00.4", GPUAssignedAt: &recent},
 		{Id: "orphaned", GPUDevicePath: "/sys/bus/pci/devices/0000:82:00.5", GPUAssignedAt: &stale},
@@ -36,22 +47,38 @@ func TestLiveVGPUReconcileProtectionBoundsStartupProtection(t *testing.T) {
 		require.NoError(t, m.saveMetadata(&metadata{StoredMetadata: instances[i]}))
 	}
 
-	protected, retryAfter, err := m.liveVGPUReconcileProtection(t.Context())
-	require.NoError(t, err)
-	assert.Equal(t, VGPUAssignmentStartupGracePeriod-time.Minute, retryAfter)
+	m.ReconcileVGPUs(t.Context())
 	assert.Contains(t, protected, "/sys/bus/pci/devices/0000:82:00.4")
 	assert.NotContains(t, protected, "/sys/bus/pci/devices/0000:82:00.5")
 	assert.NotContains(t, protected, "/sys/bus/pci/devices/0000:82:00.6")
 	assert.NotContains(t, protected, "/sys/bus/pci/devices/0000:82:00.7")
 	assert.Contains(t, protected, "/sys/bus/pci/devices/0000:82:00.8")
+
+	for _, id := range []string{"orphaned", "legacy", "dead"} {
+		stored, err := m.loadMetadata(id)
+		require.NoError(t, err)
+		assert.Empty(t, stored.GPUDevicePath, "stale assignment on %s must be released", id)
+	}
+	for _, id := range []string{"booting", "stale-pid-booting"} {
+		stored, err := m.loadMetadata(id)
+		require.NoError(t, err)
+		assert.NotEmpty(t, stored.GPUDevicePath, "live assignment on %s must be kept", id)
+	}
 }
 
-func TestReconcileVGPUsRetriesAfterListingFailure(t *testing.T) {
+func TestReconcileVGPUsSkipsVendorSweepWhenListingFails(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root bypasses directory permissions")
 	}
 
-	m := &manager{paths: paths.New(t.TempDir()), vgpuReconcileRetryDelay: 250 * time.Millisecond}
+	var sweeps []bool
+	m := &manager{
+		paths: paths.New(t.TempDir()),
+		reconcileVGPUDevices: func(_ context.Context, _ map[string]struct{}, sweepVendorVFIO bool) error {
+			sweeps = append(sweeps, sweepVendorVFIO)
+			return nil
+		},
+	}
 	const id = "unreadable"
 	require.NoError(t, m.ensureDirectories(id))
 	require.NoError(t, m.saveMetadata(&metadata{StoredMetadata: StoredMetadata{Id: id}}))
@@ -59,36 +86,181 @@ func TestReconcileVGPUsRetriesAfterListingFailure(t *testing.T) {
 	require.NoError(t, os.Chmod(instanceDir, 0o000))
 	t.Cleanup(func() { _ = os.Chmod(instanceDir, 0o755) })
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	m.ReconcileVGPUs(ctx)
-	require.True(t, m.vgpuReconcileRetryPending.Load(),
-		"a listing failure must schedule a retry instead of disabling the vendor sweep until restart")
+	m.ReconcileVGPUs(t.Context())
+	require.Equal(t, []bool{false}, sweeps,
+		"a listing failure must skip the vendor sweep, not run it with an empty protection set")
 
 	require.NoError(t, os.Chmod(instanceDir, 0o755))
-	require.Eventually(t, func() bool {
-		return !m.vgpuReconcileRetryPending.Load()
-	}, 5*time.Second, 10*time.Millisecond)
+	m.ReconcileVGPUs(t.Context())
+	assert.Equal(t, []bool{false, true}, sweeps, "the next pass retries the vendor sweep")
 }
 
-func TestReconcileVGPUsRetriesAfterDeviceFailure(t *testing.T) {
-	var calls atomic.Int32
+func TestReconcileVGPUsReleasesStaleAssignment(t *testing.T) {
+	t.Parallel()
+
+	var destroyed []devices.VGPUAssignment
 	m := &manager{
-		paths:                   paths.New(t.TempDir()),
-		vgpuReconcileRetryDelay: 10 * time.Millisecond,
+		paths: paths.New(t.TempDir()),
+		destroyVGPU: func(_ context.Context, assignment devices.VGPUAssignment) error {
+			destroyed = append(destroyed, assignment)
+			return nil
+		},
+		reconcileVGPUDevices: func(context.Context, map[string]struct{}, bool) error { return nil },
+	}
+	const id = "stopped-retained"
+	require.NoError(t, m.ensureDirectories(id))
+	require.NoError(t, m.saveMetadata(&metadata{StoredMetadata: StoredMetadata{
+		Id:            id,
+		GPUProfile:    "NVIDIA L40S-2Q",
+		GPUFramework:  devices.VGPUFrameworkVendorVFIO,
+		GPUDevicePath: "/sys/bus/pci/devices/0000:82:00.4",
+	}}))
+
+	m.ReconcileVGPUs(t.Context())
+
+	require.Len(t, destroyed, 1)
+	assert.Equal(t, devices.VGPUAssignment{
+		Framework:  devices.VGPUFrameworkVendorVFIO,
+		DevicePath: "/sys/bus/pci/devices/0000:82:00.4",
+		InstanceID: id,
+	}, destroyed[0])
+	stored, err := m.loadMetadata(id)
+	require.NoError(t, err)
+	assert.Empty(t, stored.GPUDevicePath)
+	assert.Equal(t, "NVIDIA L40S-2Q", stored.GPUProfile, "profile is kept for the next start")
+}
+
+func TestReconcileVGPUsKeepsAssignmentWhenReleaseFails(t *testing.T) {
+	t.Parallel()
+
+	var attempts atomic.Int32
+	m := &manager{
+		paths: paths.New(t.TempDir()),
+		destroyVGPU: func(context.Context, devices.VGPUAssignment) error {
+			if attempts.Add(1) == 1 {
+				return errors.New("vGPU destroy failed: 0xffffffff")
+			}
+			return nil
+		},
+		reconcileVGPUDevices: func(context.Context, map[string]struct{}, bool) error { return nil },
+	}
+	const id = "wedged"
+	require.NoError(t, m.ensureDirectories(id))
+	require.NoError(t, m.saveMetadata(&metadata{StoredMetadata: StoredMetadata{
+		Id:            id,
+		GPUFramework:  devices.VGPUFrameworkVendorVFIO,
+		GPUDevicePath: "/sys/bus/pci/devices/0000:82:00.4",
+	}}))
+
+	m.ReconcileVGPUs(t.Context())
+	stored, err := m.loadMetadata(id)
+	require.NoError(t, err)
+	assert.Equal(t, "/sys/bus/pci/devices/0000:82:00.4", stored.GPUDevicePath,
+		"a failed release must keep the assignment metadata for the next pass")
+
+	m.ReconcileVGPUs(t.Context())
+	stored, err = m.loadMetadata(id)
+	require.NoError(t, err)
+	assert.Empty(t, stored.GPUDevicePath, "the next pass retries the release")
+	assert.Equal(t, int32(2), attempts.Load())
+}
+
+func TestReconcileVGPUsDefersToUnconfirmedClaimant(t *testing.T) {
+	t.Parallel()
+
+	var destroys atomic.Int32
+	m := &manager{
+		paths: paths.New(t.TempDir()),
+		destroyVGPU: func(context.Context, devices.VGPUAssignment) error {
+			destroys.Add(1)
+			return nil
+		},
+		reconcileVGPUDevices: func(context.Context, map[string]struct{}, bool) error { return nil },
+	}
+	const path = "/sys/bus/pci/devices/0000:82:00.4"
+	assignedAt := time.Now()
+	for _, stored := range []StoredMetadata{
+		{Id: "stale", GPUFramework: devices.VGPUFrameworkVendorVFIO, GPUDevicePath: path},
+		{Id: "mid-boot-claimant", GPUFramework: devices.VGPUFrameworkVendorVFIO, GPUDevicePath: path, GPUAssignedAt: &assignedAt},
+	} {
+		require.NoError(t, m.ensureDirectories(stored.Id))
+		require.NoError(t, m.saveMetadata(&metadata{StoredMetadata: stored}))
+	}
+
+	m.ReconcileVGPUs(t.Context())
+
+	assert.Zero(t, destroys.Load(), "no destroy may fire while the claim scan cannot clear the path")
+	stale, err := m.loadMetadata("stale")
+	require.NoError(t, err)
+	assert.Equal(t, path, stale.GPUDevicePath, "the stale release retries once the claimant's liveness is decidable")
+}
+
+func TestReconcileVGPUsReleasesRetentionStubAssignment(t *testing.T) {
+	t.Parallel()
+
+	m := &manager{
+		paths:                paths.New(t.TempDir()),
+		destroyVGPU:          func(context.Context, devices.VGPUAssignment) error { return nil },
+		reconcileVGPUDevices: func(context.Context, map[string]struct{}, bool) error { return nil },
+	}
+	const id = "retention-stub"
+	require.NoError(t, m.ensureDirectories(id))
+	require.NoError(t, m.saveMetadata(&metadata{StoredMetadata: StoredMetadata{
+		Id:                    id,
+		Name:                  "failed-create",
+		GPUFramework:          devices.VGPUFrameworkVendorVFIO,
+		GPUDevicePath:         "/sys/bus/pci/devices/0000:82:00.4",
+		GPURetainedForCleanup: true,
+	}}))
+
+	m.ReconcileVGPUs(t.Context())
+
+	stored, err := m.loadMetadata(id)
+	require.NoError(t, err)
+	assert.Empty(t, stored.GPUDevicePath, "the stub's wedged assignment is released once free")
+	assert.True(t, stored.GPURetainedForCleanup, "the stub stays a delete-only record of the failed create")
+}
+
+func TestStartVGPUReconcilerSkipsHostsWithoutGPUs(t *testing.T) {
+	t.Parallel()
+
+	var passes atomic.Int32
+	m := &manager{
+		paths: paths.New(t.TempDir()),
+		discoverVGPU: func() (devices.VGPUFramework, []devices.VirtualFunction, error) {
+			return devices.VGPUFrameworkNone, nil, nil
+		},
 		reconcileVGPUDevices: func(context.Context, map[string]struct{}, bool) error {
-			if calls.Add(1) == 1 {
+			passes.Add(1)
+			return nil
+		},
+		vgpuReconcileInterval: time.Millisecond,
+	}
+
+	m.StartVGPUReconciler(t.Context())
+	time.Sleep(20 * time.Millisecond)
+	assert.Zero(t, passes.Load(), "a host without GPUs must not reconcile at all")
+}
+
+func TestStartVGPUReconcilerRunsPeriodically(t *testing.T) {
+	t.Parallel()
+
+	var passes atomic.Int32
+	m := &manager{
+		paths: paths.New(t.TempDir()),
+		discoverVGPU: func() (devices.VGPUFramework, []devices.VirtualFunction, error) {
+			return devices.VGPUFrameworkVendorVFIO, nil, nil
+		},
+		reconcileVGPUDevices: func(context.Context, map[string]struct{}, bool) error {
+			if passes.Add(1) == 1 {
 				return errors.New("transient device error")
 			}
 			return nil
 		},
+		vgpuReconcileInterval: time.Millisecond,
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	m.ReconcileVGPUs(ctx)
-	require.True(t, m.vgpuReconcileRetryPending.Load())
-	require.Eventually(t, func() bool {
-		return calls.Load() >= 2 && !m.vgpuReconcileRetryPending.Load()
-	}, 5*time.Second, 10*time.Millisecond)
+	m.StartVGPUReconciler(t.Context())
+	require.Eventually(t, func() bool { return passes.Load() >= 3 }, 5*time.Second, time.Millisecond,
+		"periodic passes must keep running after a failed pass")
 }

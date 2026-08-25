@@ -57,6 +57,8 @@ func (m *manager) persistVGPURetention(ctx context.Context, retention *vgpuReten
 	id := retention.instanceID
 	retainedVGPU := retention.stub
 	log := logger.FromContext(ctx)
+	// When the retention record is lost, the assignment has no metadata claim
+	// left; the periodic vGPU reconcile sweeps the device once it is free.
 	retentionSurvives := func() bool {
 		meta, err := m.loadMetadata(id)
 		if err == nil && storedVGPUDevicePath(&meta.StoredMetadata) != "" {
@@ -65,7 +67,6 @@ func (m *manager) persistVGPURetention(ctx context.Context, retention *vgpuReten
 		if err := m.deleteInstanceData(id); err != nil {
 			log.ErrorContext(ctx, "failed to delete stale instance data after retention failure", "instance_id", id, "error", err)
 		}
-		m.scheduleOrphanedVGPURelease(ctx, *retainedVGPU)
 		return false
 	}
 	if err := m.deleteInstanceData(id); err != nil {

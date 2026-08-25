@@ -106,12 +106,7 @@ func TestCleanupFailedCreateReportsUnpersistedRetention(t *testing.T) {
 	}
 	assert.False(t, persistTestVGPURetention(m, context.Background(), stored.Id, stored))
 	_, err := m.loadMetadata(id)
-	require.Error(t, err)
-
-	m.orphanedVGPUMu.Lock()
-	_, queued := m.orphanedVGPUs[stored.GPUDevicePath]
-	m.orphanedVGPUMu.Unlock()
-	assert.True(t, queued, "unpersisted retention must queue a background release")
+	require.Error(t, err, "the lost retention leaves no metadata claim, so the periodic sweep releases the VF")
 }
 
 func TestCleanupFailedCreateReportsRetainedWhenFullMetadataSurvives(t *testing.T) {
@@ -332,11 +327,6 @@ func TestStartReportsUnretainedVGPUWhenRetentionSaveFails(t *testing.T) {
 	stored, err := m.loadMetadata(id)
 	require.NoError(t, err)
 	assert.Empty(t, stored.GPUDevicePath, "retention save failed, so no assignment should be recorded")
-
-	m.orphanedVGPUMu.Lock()
-	_, queued := m.orphanedVGPUs[device.SysfsPath]
-	m.orphanedVGPUMu.Unlock()
-	assert.True(t, queued, "unpersisted retention must queue a background release")
 }
 
 func TestStartDoesNotRestrictVGPUHypervisor(t *testing.T) {
