@@ -35,12 +35,21 @@ func TestResolveBinaryPathInvalidCustomPath(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalid firecracker custom binary path")
 }
 
-func TestParseVersionFallback(t *testing.T) {
-	assert.Equal(t, V1_16_1, defaultVersion)
-	assert.Equal(t, defaultVersion, parseVersion(""))
-	assert.Equal(t, defaultVersion, parseVersion("unknown"))
-	assert.Equal(t, V1_14_2, parseVersion("v1.14.2"))
-	assert.Equal(t, V1_16_1, parseVersion("v1.16.1"))
+func TestParseVersion(t *testing.T) {
+	version, err := parseVersion("")
+	require.NoError(t, err)
+	assert.Equal(t, defaultVersion, version)
+
+	_, err = parseVersion("unknown")
+	require.ErrorContains(t, err, "unsupported firecracker version")
+
+	version, err = parseVersion("v1.14.2")
+	require.NoError(t, err)
+	assert.Equal(t, V1_14_2, version)
+
+	version, err = parseVersion("v1.16.1")
+	require.NoError(t, err)
+	assert.Equal(t, V1_16_1, version)
 }
 
 func TestResolveEmbeddedBinaryVersions(t *testing.T) {
