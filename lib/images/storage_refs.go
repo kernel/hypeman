@@ -50,6 +50,51 @@ func listTags(p *paths.Paths, repository string) ([]string, error) {
 	return tags, nil
 }
 
+// promoteLegacyImages migrates ready legacy images into shared content storage.
+// Keeping the traversal here makes storage layout migration share the same
+// ownership boundary as metadata enumeration.
+func promoteLegacyImages(p *paths.Paths) {
+	imagesDir := p.ImagesDir()
+	type legacyRef struct {
+		repository string
+		digestHex  string
+	}
+	refs := make([]legacyRef, 0)
+	err := filepath.Walk(imagesDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() || info.Name() != "metadata.json" {
+			return nil
+		}
+		rel, relErr := filepath.Rel(imagesDir, path)
+		if relErr != nil {
+			return nil
+		}
+		parts := strings.Split(rel, string(filepath.Separator))
+		if len(parts) < 3 || parts[0] == "content" || parts[0] == "repositories" {
+			return nil
+		}
+		refs = append(refs, legacyRef{
+			repository: filepath.Join(parts[:len(parts)-2]...),
+			digestHex:  parts[len(parts)-2],
+		})
+		return nil
+	})
+	if err != nil && !os.IsNotExist(err) {
+		fmt.Fprintf(os.Stderr, "Warning: failed to scan legacy images for promotion: %v\n", err)
+		return
+	}
+
+	for _, ref := range refs {
+		layout := resolveImageLayout(p, ref.repository, ref.digestHex)
+		meta, readErr := readMetadataAt(layout)
+		if readErr != nil || meta.Status != StatusReady {
+			continue
+		}
+		if promoteErr := promoteImageToContent(p, ref.repository, ref.digestHex, meta); promoteErr != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to promote legacy image %s@%s: %v\n", ref.repository, ref.digestHex, promoteErr)
+		}
+	}
+}
+
 // listAllMetadata returns one metadata record per tag across all repositories.
 // Tagged images are discovered through tag symlinks, and digest-only images are
 // discovered directly from their metadata.json files.
