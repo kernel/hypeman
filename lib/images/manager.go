@@ -261,6 +261,7 @@ func (m *manager) ImportLocalImage(ctx context.Context, repo, reference, digest 
 			if ref.Tag() != "" {
 				var tagErr error
 				if meta.Status == StatusReady {
+					m.nextTagGeneration(ref.Repository(), ref.Tag())
 					tagErr = createTagSymlink(m.paths, ref.Repository(), ref.Tag(), ref.DigestHex())
 				} else {
 					tagErr = ensurePendingTag(m.paths, ref.Repository(), ref.Tag(), ref.DigestHex())
@@ -295,6 +296,7 @@ func (m *manager) reuseExistingImage(ref *ResolvedRef, credentials *authn.AuthCo
 	}
 	if ref.Tag() != "" {
 		if meta.Status == StatusReady {
+			m.nextTagGeneration(ref.Repository(), ref.Tag())
 			err = createTagSymlink(m.paths, ref.Repository(), ref.Tag(), ref.DigestHex())
 		} else {
 			err = ensurePendingTag(m.paths, ref.Repository(), ref.Tag(), ref.DigestHex())
@@ -325,6 +327,24 @@ func (m *manager) nextTagGeneration(repository, tag string) uint64 {
 	key := tagGenerationKey(repository, tag)
 	m.tagGenerations[key]++
 	return m.tagGenerations[key]
+}
+
+func (m *manager) restoreTagGenerations(metas []*imageMetadata) {
+	m.createMu.Lock()
+	defer m.createMu.Unlock()
+	for _, meta := range metas {
+		if meta.RequestedTag == "" {
+			continue
+		}
+		ref, err := ParseNormalizedRef(meta.Name)
+		if err != nil {
+			continue
+		}
+		key := tagGenerationKey(ref.Repository(), meta.RequestedTag)
+		if meta.TagGeneration > m.tagGenerations[key] {
+			m.tagGenerations[key] = meta.TagGeneration
+		}
+	}
 }
 
 func (m *manager) inflightCredentialsMatch(digest string, credentials *authn.AuthConfig) bool {
@@ -516,7 +536,13 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef, credentials 
 		if meta.Status == StatusReady {
 			// Another build completed first; last-pull-wins repoints the tag.
 			if ref.Tag() != "" {
-				createTagSymlink(m.paths, ref.Repository(), ref.Tag(), ref.DigestHex())
+				m.createMu.Lock()
+				m.nextTagGeneration(ref.Repository(), ref.Tag())
+				err := createTagSymlink(m.paths, ref.Repository(), ref.Tag(), ref.DigestHex())
+				m.createMu.Unlock()
+				if err != nil {
+					slog.Warn("failed to claim ready image tag", "repository", ref.Repository(), "tag", ref.Tag(), "error", err)
+				}
 			}
 			buildStatus = "success"
 			return
@@ -681,6 +707,7 @@ func (m *manager) RecoverInterruptedBuilds() {
 	if err != nil {
 		return // Best effort
 	}
+	m.restoreTagGenerations(metas)
 
 	// Sort by created_at to maintain FIFO order
 	sort.Slice(metas, func(i, j int) bool {
