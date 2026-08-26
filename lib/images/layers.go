@@ -78,16 +78,40 @@ func (d layerDescriptor) validate() error {
 	return nil
 }
 
-// imageLayers is the persisted, ordered layer list for one image digest. It
-// is metadata only: the bootable rootfs disk stays a flattened image and VM
-// boot never reads this file. It exists so future work can deduplicate and
-// recompose layers across images without re-pulling from a registry.
+// configDescriptor identifies the image config blob referenced by the pulled
+// manifest. Together with the ordered layer list it is enough to recompose
+// the manifest without re-inspecting a registry.
+type configDescriptor struct {
+	MediaType string `json:"media_type"`
+	Digest    string `json:"digest"`
+	Size      int64  `json:"size"`
+}
+
+func (d configDescriptor) validate() error {
+	if _, err := digest.Parse(d.Digest); err != nil {
+		return fmt.Errorf("config digest: %w", err)
+	}
+	if d.Size < 0 {
+		return fmt.Errorf("config %s: negative size %d", d.Digest, d.Size)
+	}
+	return nil
+}
+
+// imageLayers is the persisted manifest-level record for one image digest:
+// the config descriptor plus the ordered layer descriptors. It is metadata
+// only: the bootable rootfs disk stays a flattened image and VM boot never
+// reads this file. It exists so future work can deduplicate and recompose
+// layers across images without re-pulling from a registry.
 type imageLayers struct {
 	SchemaVersion int               `json:"schema_version"`
+	Config        configDescriptor  `json:"config"`
 	Layers        []layerDescriptor `json:"layers"`
 }
 
 func (l *imageLayers) validate() error {
+	if err := l.Config.validate(); err != nil {
+		return err
+	}
 	for i, layer := range l.Layers {
 		if err := layer.validate(); err != nil {
 			return fmt.Errorf("layer %d: %w", i, err)
@@ -96,10 +120,12 @@ func (l *imageLayers) validate() error {
 	return nil
 }
 
-// newImageLayers builds the persisted record for an ordered layer list.
-func newImageLayers(layers []layerDescriptor) *imageLayers {
+// newImageLayers builds the persisted record from the manifest's config
+// descriptor and ordered layer list.
+func newImageLayers(config configDescriptor, layers []layerDescriptor) *imageLayers {
 	return &imageLayers{
 		SchemaVersion: layersSchemaVersion,
+		Config:        config,
 		Layers:        layers,
 	}
 }

@@ -477,7 +477,7 @@ func TestExtractOCIImageDetailsReturnsOrderedLayers(t *testing.T) {
 	client, err := newOCIClient(cacheDir)
 	require.NoError(t, err)
 
-	_, layers, err := client.extractOCIImageDetails(layoutTag)
+	details, err := client.extractOCIImageDetails(layoutTag)
 	require.NoError(t, err)
 
 	manifest, err := img.Manifest()
@@ -485,15 +485,21 @@ func TestExtractOCIImageDetailsReturnsOrderedLayers(t *testing.T) {
 	configFile, err := img.ConfigFile()
 	require.NoError(t, err)
 
-	require.Len(t, layers, len(manifest.Layers))
-	require.Len(t, layers, len(configFile.RootFS.DiffIDs))
+	// The config blob descriptor must match the manifest so the manifest can
+	// be recomposed later without re-inspecting a registry.
+	assert.Equal(t, string(manifest.Config.MediaType), details.Config.MediaType)
+	assert.Equal(t, manifest.Config.Digest.String(), details.Config.Digest)
+	assert.Equal(t, manifest.Config.Size, details.Config.Size)
+
+	require.Len(t, details.Layers, len(manifest.Layers))
+	require.Len(t, details.Layers, len(configFile.RootFS.DiffIDs))
 	for i, want := range manifest.Layers {
-		assert.Equal(t, string(want.MediaType), layers[i].MediaType, "layer %d mediatype", i)
-		assert.Equal(t, want.Digest.String(), layers[i].Digest, "layer %d digest", i)
-		assert.Equal(t, want.Size, layers[i].Size, "layer %d size", i)
-		assert.Equal(t, configFile.RootFS.DiffIDs[i].String(), layers[i].DiffID, "layer %d diff_id", i)
+		assert.Equal(t, string(want.MediaType), details.Layers[i].MediaType, "layer %d mediatype", i)
+		assert.Equal(t, want.Digest.String(), details.Layers[i].Digest, "layer %d digest", i)
+		assert.Equal(t, want.Size, details.Layers[i].Size, "layer %d size", i)
+		assert.Equal(t, configFile.RootFS.DiffIDs[i].String(), details.Layers[i].DiffID, "layer %d diff_id", i)
 	}
 	// The two layers must be distinct so order is observable.
-	require.NotEqual(t, layers[0].Digest, layers[1].Digest)
-	assert.NoError(t, newImageLayers(layers).validate())
+	require.NotEqual(t, details.Layers[0].Digest, details.Layers[1].Digest)
+	assert.NoError(t, newImageLayers(details.Config, details.Layers).validate())
 }

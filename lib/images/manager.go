@@ -552,7 +552,7 @@ func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, diskSize i
 	if err != nil {
 		return fmt.Errorf("parse image digest: %w", err)
 	}
-	if err := writeImageLayers(m.paths, ref.Repository(), contentRef, newImageLayers(result.Layers)); err != nil {
+	if err := writeImageLayers(m.paths, ref.Repository(), contentRef, newImageLayers(result.Config, result.Layers)); err != nil {
 		return fmt.Errorf("write layer list: %w", err)
 	}
 

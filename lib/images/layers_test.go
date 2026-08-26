@@ -11,6 +11,7 @@ import (
 
 const (
 	testContentDigest = "abababababababababababababababababababababababababababababababab"
+	testConfigDigest  = "sha256:5c3b0e9f2a8d4e71c6f9a0b3d2e5c8f7a1b4d6e9c2f5a8b1d4e7c0f3a6b9d2e5"
 	testLayerDigestA  = "sha256:2d35eb2672e34f00a51cb6ab8a4a4d0e07e6c35fa20b7dc7b8a2b5ef7c86329a"
 	testLayerDigestB  = "sha256:44cf07bba1681a35a0a2ce4f11fbe16ad0b8e57f69965f1970e51bec2878aa70"
 	testDiffIDA       = "sha256:706db5f26d91b7d8f9c6a6f3f2d34c4be1b04e37f4f32a0e29bb5345bb6bb26e"
@@ -71,8 +72,28 @@ func TestLayerDescriptorValidate(t *testing.T) {
 	assert.NoError(t, noDiffID.validate())
 }
 
+func testConfigDescriptor() configDescriptor {
+	return configDescriptor{
+		MediaType: "application/vnd.oci.image.config.v1+json",
+		Digest:    testConfigDigest,
+		Size:      512,
+	}
+}
+
+func TestConfigDescriptorValidate(t *testing.T) {
+	assert.NoError(t, testConfigDescriptor().validate())
+
+	invalidDigest := testConfigDescriptor()
+	invalidDigest.Digest = "not-a-digest"
+	assert.Error(t, invalidDigest.validate())
+
+	negativeSize := testConfigDescriptor()
+	negativeSize.Size = -1
+	assert.Error(t, negativeSize.validate())
+}
+
 func testLayerRecord() *imageLayers {
-	return newImageLayers([]layerDescriptor{
+	return newImageLayers(testConfigDescriptor(), []layerDescriptor{
 		{
 			MediaType: "application/vnd.oci.image.layer.v1.tar+gzip",
 			Digest:    testLayerDigestA,
@@ -100,6 +121,7 @@ func TestWriteAndReadImageLayersRoundtrip(t *testing.T) {
 	got, err := readImageLayers(p, repository, ref)
 	require.NoError(t, err)
 	assert.Equal(t, layersSchemaVersion, got.SchemaVersion)
+	assert.Equal(t, testConfigDescriptor(), got.Config)
 	require.Len(t, got.Layers, 2)
 	// Order is significant: layers must come back in manifest order.
 	assert.Equal(t, testLayerDigestA, got.Layers[0].Digest)
@@ -127,6 +149,12 @@ func TestWriteImageLayersRejectsInvalidRecord(t *testing.T) {
 	record.Layers[1].Digest = "bogus"
 	err = writeImageLayers(p, "docker.io/library/alpine", ref, record)
 	require.Error(t, err)
+
+	invalidConfig := testLayerRecord()
+	invalidConfig.Config.Digest = "bogus"
+	err = writeImageLayers(p, "docker.io/library/alpine", ref, invalidConfig)
+	require.Error(t, err)
+
 	_, statErr := os.Stat(p.ImageContentLayers(ref.Hex()))
 	require.ErrorIs(t, statErr, os.ErrNotExist, "invalid record must not leave a file behind")
 }

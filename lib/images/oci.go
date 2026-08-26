@@ -196,6 +196,7 @@ type pullResult struct {
 	Metadata        *containerMetadata
 	Digest          string // sha256:abc123...
 	CacheHit        bool
+	Config          configDescriptor  // Config blob descriptor from the pulled manifest
 	Layers          []layerDescriptor // Ordered as in the manifest; source of the persisted layer list
 	LayerCount      int
 	CompressedBytes int64
@@ -261,22 +262,22 @@ func (c *ociClient) pullAndExportWithPlatformAuth(ctx context.Context, imageRef,
 	// If cached, we skip the pull entirely
 
 	// Extract metadata (from cache or freshly pulled)
-	var meta *containerMetadata
-	var layers []layerDescriptor
+	var details ociImageDetails
 	err := result.measure("metadata_extract", func() error {
 		var err error
-		meta, layers, err = c.extractOCIImageDetails(layoutTag)
+		details, err = c.extractOCIImageDetails(layoutTag)
 		return err
 	})
 	if err != nil {
 		return result, fmt.Errorf("extract metadata: %w", err)
 	}
-	result.Metadata = meta
-	result.Layers = layers
-	for _, layer := range layers {
+	result.Metadata = details.Metadata
+	result.Config = details.Config
+	result.Layers = details.Layers
+	for _, layer := range details.Layers {
 		result.CompressedBytes += layer.Size
 	}
-	result.LayerCount = len(layers)
+	result.LayerCount = len(details.Layers)
 
 	// Unpack layers to the export directory
 	if err := result.measure("layer_unpack", func() error {
@@ -401,35 +402,53 @@ func imageByAnnotation(path layout.Path, layoutTag string) (gcr.Image, error) {
 // extractOCIMetadata reads metadata from OCI layout config.json
 // Uses go-containerregistry which handles both Docker v2 and OCI v1 manifests.
 func (c *ociClient) extractOCIMetadata(layoutTag string) (*containerMetadata, error) {
-	meta, _, err := c.extractOCIImageDetails(layoutTag)
-	return meta, err
+	details, err := c.extractOCIImageDetails(layoutTag)
+	return details.Metadata, err
 }
 
-// extractOCIImageDetails reads image metadata and the ordered manifest layer
-// descriptors from the OCI layout. Layer digests/sizes come from the manifest
-// and each diff_id aligns positionally with the config's rootfs.diff_ids.
-func (c *ociClient) extractOCIImageDetails(layoutTag string) (*containerMetadata, []layerDescriptor, error) {
+// ociImageDetails is everything the cached image manifest and config expose
+// to the build pipeline: container metadata, the config blob descriptor, and
+// the ordered layer descriptors.
+type ociImageDetails struct {
+	Metadata *containerMetadata
+	Config   configDescriptor
+	Layers   []layerDescriptor
+}
+
+// extractOCIImageDetails reads image metadata, the config blob descriptor,
+// and the ordered manifest layer descriptors from the OCI layout. Layer
+// digests/sizes come from the manifest and each diff_id aligns positionally
+// with the config's rootfs.diff_ids.
+func (c *ociClient) extractOCIImageDetails(layoutTag string) (ociImageDetails, error) {
+	var details ociImageDetails
+
 	// Open OCI layout using go-containerregistry (handles Docker v2 and OCI v1)
 	path, err := layout.FromPath(c.cacheDir)
 	if err != nil {
-		return nil, nil, fmt.Errorf("open oci layout: %w", err)
+		return details, fmt.Errorf("open oci layout: %w", err)
 	}
 
 	// Get the image by annotation tag from the layout
 	img, err := imageByAnnotation(path, layoutTag)
 	if err != nil {
-		return nil, nil, fmt.Errorf("find image by tag %s: %w", layoutTag, err)
+		return details, fmt.Errorf("find image by tag %s: %w", layoutTag, err)
 	}
 
 	// Get config file (go-containerregistry handles manifest format automatically)
 	configFile, err := img.ConfigFile()
 	if err != nil {
-		return nil, nil, fmt.Errorf("get config file: %w", err)
+		return details, fmt.Errorf("get config file: %w", err)
 	}
 
 	manifest, err := img.Manifest()
 	if err != nil {
-		return nil, nil, fmt.Errorf("get manifest: %w", err)
+		return details, fmt.Errorf("get manifest: %w", err)
+	}
+
+	details.Config = configDescriptor{
+		MediaType: string(manifest.Config.MediaType),
+		Digest:    manifest.Config.Digest.String(),
+		Size:      manifest.Config.Size,
 	}
 
 	layers := make([]layerDescriptor, len(manifest.Layers))
@@ -475,7 +494,9 @@ func (c *ociClient) extractOCIImageDetails(layoutTag string) (*containerMetadata
 		meta.Labels[key] = value
 	}
 
-	return meta, layers, nil
+	details.Metadata = meta
+	details.Layers = layers
+	return details, nil
 }
 
 // unpackLayers unpacks all OCI layers to a target directory using umoci
