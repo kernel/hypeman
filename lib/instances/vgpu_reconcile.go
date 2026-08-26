@@ -75,22 +75,18 @@ func (m *manager) ReconcileVGPUs(ctx context.Context) {
 // Listing fails closed: any unreadable metadata aborts the pass so the vendor
 // VFIO sweep cannot clear a VF whose claim it could not read.
 func (m *manager) reconcileVGPUAssignments(ctx context.Context) (map[string]struct{}, error) {
-	allInstances, err := m.listInstancesForReconcile(ctx)
+	allMetadata, err := m.listMetadataForReconcile()
 	if err != nil {
 		return nil, err
 	}
 	protected := make(map[string]struct{})
-	for i := range allInstances {
-		stored := &allInstances[i].StoredMetadata
+	for i := range allMetadata {
+		stored := &allMetadata[i]
 		if storedVGPUDevicePath(stored) == "" {
 			continue
 		}
-		// The socket-ownership check runs even without a persisted PID: a VMM
-		// whose post-boot metadata save failed still holds its control-socket
-		// listener, and releasing its device would tear the vGPU out from
-		// under a live VM.
-		livePID := hypervisorMayBeAlive(stored.HypervisorProcessIdentity, stored.SocketPath)
-		if live, _ := vgpuAssignmentLiveness(stored, m.nowUTC(), livePID); live {
+		hypervisorLive := hypervisorMayBeAlive(stored.HypervisorProcessIdentity, stored.SocketPath)
+		if vgpuAssignmentMayBeLive(stored, m.nowUTC(), hypervisorLive) {
 			if stored.GPUDevicePath != "" {
 				protected[stored.GPUDevicePath] = struct{}{}
 			}
@@ -122,8 +118,8 @@ func (m *manager) releaseStaleVGPUAssignment(ctx context.Context, id string) {
 	if path == "" {
 		return
 	}
-	livePID := hypervisorMayBeAlive(stored.HypervisorProcessIdentity, stored.SocketPath)
-	if live, _ := vgpuAssignmentLiveness(stored, m.nowUTC(), livePID); live {
+	hypervisorLive := hypervisorMayBeAlive(stored.HypervisorProcessIdentity, stored.SocketPath)
+	if vgpuAssignmentMayBeLive(stored, m.nowUTC(), hypervisorLive) {
 		return
 	}
 	if err := m.releaseStoredVGPU(ctx, stored); err != nil {

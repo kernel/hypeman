@@ -15,10 +15,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// A VMM whose post-boot metadata save failed has no persisted PID, but it
-// still holds its control-socket listener. The reconciler must protect its
-// assignment past the startup grace period instead of releasing the device
-// out from under the live VM.
 func TestReconcileVGPUsProtectsSocketOwnerWithoutPersistedPID(t *testing.T) {
 	t.Parallel()
 
@@ -41,7 +37,7 @@ func TestReconcileVGPUsProtectsSocketOwnerWithoutPersistedPID(t *testing.T) {
 		},
 	}
 	const id = "pid-save-failed"
-	stale := time.Now().UTC().Add(-VGPUAssignmentStartupGracePeriod - time.Minute)
+	stale := time.Now().UTC().Add(-devices.VGPUAssignmentGracePeriod - time.Minute)
 	require.NoError(t, m.ensureDirectories(id))
 	require.NoError(t, m.saveMetadata(&metadata{StoredMetadata: StoredMetadata{
 		Id:            id,

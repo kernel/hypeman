@@ -607,10 +607,6 @@ func (m *manager) recordTimeToRunning(ctx context.Context, stored *StoredMetadat
 	m.metrics.timeToRunning.Record(ctx, duration, metric.WithAttributes(attrs...))
 }
 
-// recordVGPUReconcileFailure records a vGPU reconcile stage failing: stale
-// assignments or device leftovers stay allocated (capacity silently reduced
-// while /resources reports full) until a later pass succeeds, so sustained
-// failure must be alertable beyond a log line.
 func (m *manager) recordVGPUReconcileFailure(ctx context.Context, stage vgpuReconcileStage) {
 	if m.metrics == nil {
 		return
@@ -620,9 +616,6 @@ func (m *manager) recordVGPUReconcileFailure(ctx context.Context, stage vgpuReco
 	))
 }
 
-// recordVGPUStaleReleaseFailure records a stale vGPU release failing: the VF
-// stays allocated while /resources still advertises it, so a wedged release
-// that fails every pass must be alertable beyond a log line.
 func (m *manager) recordVGPUStaleReleaseFailure(ctx context.Context) {
 	if m.metrics == nil {
 		return
@@ -630,10 +623,6 @@ func (m *manager) recordVGPUStaleReleaseFailure(ctx context.Context) {
 	m.metrics.vgpuStaleReleaseFailuresTotal.Add(ctx, 1)
 }
 
-// recordVGPURetainedAssignment records a failed rollback leaving a vGPU
-// assignment behind. An unpersisted retention record has no metadata claim,
-// so the device is only recovered by the periodic reconcile sweep; either way
-// the VF is unavailable while /resources still advertises it.
 func (m *manager) recordVGPURetainedAssignment(ctx context.Context, operation vgpuRetentionOperation, persisted bool) {
 	if m.metrics == nil {
 		return

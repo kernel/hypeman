@@ -2,13 +2,9 @@ package instances
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
-	"os"
 	"time"
 
 	"github.com/kernel/hypeman/lib/devices"
-	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/logger"
 )
 
@@ -46,8 +42,7 @@ func (r *vgpuRetention) wrapPending(err error) error {
 	return &VGPUCleanupPendingError{InstanceID: r.instanceID, Retained: r.persisted, Err: err}
 }
 
-// deferWrapPending must be deferred before cleanup so it observes retention
-// state recorded by rollback.
+// Defer before cleanup so rollback records retention before this wraps the error.
 func (r *vgpuRetention) deferWrapPending(retErr *error) {
 	*retErr = r.wrapPending(*retErr)
 }
@@ -64,21 +59,13 @@ func (m *manager) persistVGPURetention(ctx context.Context, retention *vgpuReten
 	defer func() {
 		m.recordVGPURetainedAssignment(ctx, vgpuRetentionOperationCreate, retention.persisted)
 	}()
-	// When the retention record is lost, the assignment has no metadata claim
-	// left; the periodic vGPU reconcile sweeps the device once it is free.
 	retentionSurvives := func() bool {
 		meta, err := m.loadMetadata(id)
 		if err == nil && storedVGPUDevicePath(&meta.StoredMetadata) != "" {
-			saveErr := m.saveVGPURetentionStub(retainedVGPU)
-			if saveErr == nil {
-				return true
+			if err := m.saveVGPURetentionStub(retainedVGPU); err != nil {
+				log.ErrorContext(ctx, "failed to replace surviving instance metadata with vGPU retention stub; preserving existing assignment claim", "instance_id", id, "error", err)
 			}
-			log.ErrorContext(ctx, "failed to replace surviving instance metadata with vGPU retention stub", "instance_id", id, "error", saveErr)
-			overwriteErr := m.overwriteVGPURetentionStub(retainedVGPU)
-			if overwriteErr == nil {
-				return true
-			}
-			log.ErrorContext(ctx, "failed to overwrite surviving instance metadata with vGPU retention stub", "instance_id", id, "error", overwriteErr)
+			return true
 		}
 		if err := m.deleteInstanceData(id); err != nil {
 			log.ErrorContext(ctx, "failed to delete stale instance data after retention failure", "instance_id", id, "error", err)
@@ -126,25 +113,4 @@ func vgpuRetentionMetadata(source *StoredMetadata) *metadata {
 
 func (m *manager) saveVGPURetentionStub(source *StoredMetadata) error {
 	return m.saveMetadata(vgpuRetentionMetadata(source))
-}
-
-// overwriteVGPURetentionStub handles a surviving metadata file when its
-// directory cannot create the temporary file used by saveMetadata.
-func (m *manager) overwriteVGPURetentionStub(source *StoredMetadata) error {
-	retained := vgpuRetentionMetadata(source)
-	data, err := json.MarshalIndent(retained, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal metadata: %w", err)
-	}
-	unlockAliasReaders := hypervisor.LockSnapshotSourceAliasReaders()
-	defer unlockAliasReaders()
-	writeFile := m.writeFile
-	if writeFile == nil {
-		writeFile = os.WriteFile
-	}
-	if err := writeFile(m.paths.InstanceMetadata(source.Id), data, 0644); err != nil {
-		return fmt.Errorf("write metadata: %w", err)
-	}
-	m.syncAdmissionAllocation(retained)
-	return nil
 }

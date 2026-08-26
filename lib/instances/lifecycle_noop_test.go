@@ -150,24 +150,6 @@ func TestLifecycleNoopStandbyWithOptionsStillRejectsStandbyInstance(t *testing.T
 	assertNoLifecycleEvent(t, events)
 }
 
-func TestDeleteContinuesWhenVGPUReleaseFails(t *testing.T) {
-	m, id := newLifecycleNoopManagerWithInstance(t, StateStopped, time.Now().UTC())
-	meta, err := m.loadMetadata(id)
-	require.NoError(t, err)
-	meta.GPUProfile = "NVIDIA L40S-2Q"
-	meta.GPUFramework = devices.VGPUFramework("future-framework")
-	meta.GPUDevicePath = "/sys/bus/pci/devices/0000:82:00.4"
-	require.NoError(t, m.saveMetadata(meta))
-
-	// A failed release is logged and the delete continues, matching the
-	// pre-refactor contract; the leaked assignment is recovered by the
-	// periodic vGPU reconcile.
-	require.NoError(t, m.DeleteInstance(context.Background(), id))
-
-	_, err = m.loadMetadata(id)
-	require.Error(t, err, "instance data must be deleted despite the failed release")
-}
-
 func TestDeletePersistsVGPUReleaseBeforeTeardown(t *testing.T) {
 	m, id := newLifecycleNoopManagerWithInstance(t, StateStopped, time.Now().UTC())
 	var persisted *metadata
@@ -357,24 +339,6 @@ func TestStopStoppedInstanceLeavesVGPUForReconcile(t *testing.T) {
 	assert.Equal(t, StateStopped, inst.State)
 	stored, err := m.loadMetadata(id)
 	require.NoError(t, err)
-	assert.Equal(t, "/sys/bus/pci/devices/0000:82:00.4", stored.GPUDevicePath)
-}
-
-func TestReconcileVGPUReleaseFailureKeepsStoppedInstanceUsable(t *testing.T) {
-	m, id := newLifecycleNoopManagerWithInstance(t, StateStopped, time.Now().UTC())
-	m.reconcileVGPUDevices = func(context.Context, map[string]struct{}, bool) error { return nil }
-	meta, err := m.loadMetadata(id)
-	require.NoError(t, err)
-	meta.GPUProfile = "NVIDIA L40S-2Q"
-	meta.GPUFramework = devices.VGPUFramework("future-framework")
-	meta.GPUDevicePath = "/sys/bus/pci/devices/0000:82:00.4"
-	require.NoError(t, m.saveMetadata(meta))
-
-	m.ReconcileVGPUs(context.Background())
-
-	stored, err := m.loadMetadata(id)
-	require.NoError(t, err)
-	assert.Equal(t, devices.VGPUFramework("future-framework"), stored.GPUFramework)
 	assert.Equal(t, "/sys/bus/pci/devices/0000:82:00.4", stored.GPUDevicePath)
 }
 

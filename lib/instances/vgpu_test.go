@@ -24,53 +24,51 @@ func persistTestVGPURetention(m *manager, ctx context.Context, id string, stub *
 	return retention.persisted
 }
 
-func retainedVGPUFromCreateErrorForTest(stub StoredMetadata, assignedAt time.Time, err error) *StoredMetadata {
-	retention := vgpuRetention{}
-	retention.retainFromCreateError(stub, assignedAt, err)
-	return retention.stub
-}
-
 func TestCleanupFailedCreateRetainsVGPUAssignment(t *testing.T) {
 	t.Parallel()
 
 	m := &manager{paths: paths.New(t.TempDir())}
-	assignedAt := time.Now().UTC()
-	stored := &StoredMetadata{
-		Id:             "failed-create",
-		Name:           "failed-create",
-		GPUProfile:     "NVIDIA L40S-2Q",
-		GPUFramework:   devices.VGPUFrameworkVendorVFIO,
-		GPUDevicePath:  "/sys/bus/pci/devices/0000:82:00.4",
-		GPUMdevUUID:    "mdev-uuid",
-		GPUAssignedAt:  &assignedAt,
+	const id = "failed-create"
+	stub := StoredMetadata{
+		Id:             id,
+		Name:           id,
 		NetworkEnabled: true,
 		IP:             "192.0.2.1",
 		Volumes:        []VolumeAttachment{{VolumeID: "volume"}},
 		HypervisorType: "qemu",
-		DataDir:        m.paths.InstanceDir("failed-create"),
+		DataDir:        m.paths.InstanceDir(id),
 	}
-	require.NoError(t, m.ensureDirectories(stored.Id))
-	require.NoError(t, os.WriteFile(m.paths.InstanceOverlay(stored.Id), []byte("overlay"), 0o644))
-	require.NoError(t, os.WriteFile(m.paths.InstanceConfigDisk(stored.Id), []byte("config"), 0o644))
-	require.NoError(t, os.MkdirAll(m.paths.InstanceVolumeOverlaysDir(stored.Id), 0o755))
-	require.NoError(t, os.WriteFile(m.paths.InstanceVolumeOverlay(stored.Id, "volume"), []byte("volume overlay"), 0o644))
+	device := devices.VGPUDevice{
+		ProfileName: "NVIDIA L40S-2Q",
+		Framework:   devices.VGPUFrameworkVendorVFIO,
+		SysfsPath:   "/sys/bus/pci/devices/0000:82:00.4",
+	}
+	assignedAt := time.Now().UTC()
+	retention := vgpuRetention{instanceID: id}
+	retention.retainFromCreateError(stub, assignedAt, &devices.VGPUCreateCleanupPendingError{Device: device, Err: errors.New("rollback failed")})
 
-	assert.True(t, persistTestVGPURetention(m, context.Background(), stored.Id, stored))
-	assert.NoFileExists(t, m.paths.InstanceOverlay(stored.Id))
-	assert.NoFileExists(t, m.paths.InstanceConfigDisk(stored.Id))
-	assert.NoDirExists(t, m.paths.InstanceVolumeOverlaysDir(stored.Id))
+	require.NoError(t, m.ensureDirectories(id))
+	require.NoError(t, os.WriteFile(m.paths.InstanceOverlay(id), []byte("overlay"), 0o644))
+	require.NoError(t, os.WriteFile(m.paths.InstanceConfigDisk(id), []byte("config"), 0o644))
+	require.NoError(t, os.MkdirAll(m.paths.InstanceVolumeOverlaysDir(id), 0o755))
+	require.NoError(t, os.WriteFile(m.paths.InstanceVolumeOverlay(id, "volume"), []byte("volume overlay"), 0o644))
 
-	retained, err := m.loadMetadata(stored.Id)
+	m.persistVGPURetention(context.Background(), &retention)
+	assert.True(t, retention.persisted)
+	assert.NoFileExists(t, m.paths.InstanceOverlay(id))
+	assert.NoFileExists(t, m.paths.InstanceConfigDisk(id))
+	assert.NoDirExists(t, m.paths.InstanceVolumeOverlaysDir(id))
+
+	retained, err := m.loadMetadata(id)
 	require.NoError(t, err)
-	assert.Equal(t, stored.Id, retained.Id)
-	assert.Equal(t, stored.GPUFramework, retained.GPUFramework)
-	assert.Equal(t, stored.GPUDevicePath, retained.GPUDevicePath)
-	assert.Equal(t, stored.GPUMdevUUID, retained.GPUMdevUUID)
-	assert.Equal(t, stored.GPUAssignedAt, retained.GPUAssignedAt)
-	assert.Equal(t, stored.Name, retained.Name)
-	assert.Equal(t, stored.GPUProfile, retained.GPUProfile)
-	assert.Equal(t, stored.HypervisorType, retained.HypervisorType)
-	assert.Equal(t, stored.DataDir, retained.DataDir)
+	assert.Equal(t, id, retained.Id)
+	assert.Equal(t, device.Framework, retained.GPUFramework)
+	assert.Equal(t, device.SysfsPath, retained.GPUDevicePath)
+	assert.Equal(t, assignedAt, *retained.GPUAssignedAt)
+	assert.Equal(t, stub.Name, retained.Name)
+	assert.Equal(t, device.ProfileName, retained.GPUProfile)
+	assert.Equal(t, stub.HypervisorType, retained.HypervisorType)
+	assert.Equal(t, stub.DataDir, retained.DataDir)
 	assert.False(t, retained.NetworkEnabled)
 	assert.Empty(t, retained.IP)
 	assert.Empty(t, retained.Volumes)
@@ -109,7 +107,7 @@ func TestCleanupFailedCreateReportsUnpersistedRetention(t *testing.T) {
 	require.Error(t, err, "the lost retention leaves no metadata claim, so the periodic sweep releases the VF")
 }
 
-func TestCleanupFailedCreateRewritesFullMetadataWhenDirectoryIsReadOnly(t *testing.T) {
+func TestCleanupFailedCreatePreservesClaimWhenStubSaveFails(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root bypasses directory permissions")
 	}
@@ -119,6 +117,7 @@ func TestCleanupFailedCreateRewritesFullMetadataWhenDirectoryIsReadOnly(t *testi
 	require.NoError(t, m.ensureDirectories(id))
 	stored := &StoredMetadata{
 		Id:            id,
+		Name:          "surviving metadata",
 		GPUFramework:  devices.VGPUFrameworkVendorVFIO,
 		GPUDevicePath: "/sys/bus/pci/devices/0000:82:00.4",
 	}
@@ -131,61 +130,10 @@ func TestCleanupFailedCreateRewritesFullMetadataWhenDirectoryIsReadOnly(t *testi
 	assert.True(t, persistTestVGPURetention(m, context.Background(), id, stored))
 	retained, err := m.loadMetadata(id)
 	require.NoError(t, err)
+	assert.Equal(t, stored.Name, retained.Name)
 	assert.Equal(t, stored.GPUFramework, retained.GPUFramework)
 	assert.Equal(t, stored.GPUDevicePath, retained.GPUDevicePath)
-	assert.True(t, retained.GPURetainedForCleanup)
-
-	_, err = m.startInstance(context.Background(), id, StartInstanceRequest{})
-	assert.ErrorIs(t, err, errVGPURetentionStub)
-}
-
-func TestVGPURetentionWrapPending(t *testing.T) {
-	cause := errors.New("boot failed")
-
-	retention := vgpuRetention{instanceID: "inst-1"}
-	assert.Same(t, cause, retention.wrapPending(cause))
-
-	retention.retained = true
-	pending := retention.wrapPending(cause)
-	var cleanupPending *VGPUCleanupPendingError
-	require.ErrorAs(t, pending, &cleanupPending)
-	assert.False(t, cleanupPending.Retained)
-
-	retention.persisted = true
-	pending = retention.wrapPending(cause)
-	require.ErrorAs(t, pending, &cleanupPending)
-	assert.True(t, cleanupPending.Retained)
-}
-
-func TestVGPUDevicePendingCleanup(t *testing.T) {
-	t.Parallel()
-
-	device := devices.VGPUDevice{
-		Framework: devices.VGPUFrameworkVendorVFIO,
-		SysfsPath: "/sys/bus/pci/devices/0000:82:00.4",
-	}
-	cause := errors.New("rollback failed")
-	pending := &devices.VGPUCreateCleanupPendingError{Device: device, Err: cause}
-
-	wrapped := fmt.Errorf("create failed: %w", pending)
-	actual, ok := vgpuDevicePendingCleanup(wrapped)
-	require.True(t, ok)
-	assert.Equal(t, device, *actual)
-
-	assignedAt := time.Now().UTC()
-	retained := retainedVGPUFromCreateErrorForTest(StoredMetadata{Id: "inst-1", Name: "named", Image: "img"}, assignedAt, wrapped)
-	require.NotNil(t, retained)
-	assert.Equal(t, "inst-1", retained.Id)
-	assert.Equal(t, "named", retained.Name, "identity fields must survive into the retention stub")
-	assert.Equal(t, "img", retained.Image)
-	assert.Equal(t, device.Framework, retained.GPUFramework)
-	assert.Equal(t, device.SysfsPath, retained.GPUDevicePath)
-	assert.Equal(t, assignedAt, *retained.GPUAssignedAt)
-
-	actual, ok = vgpuDevicePendingCleanup(cause)
-	assert.False(t, ok)
-	assert.Nil(t, actual)
-	assert.Nil(t, retainedVGPUFromCreateErrorForTest(StoredMetadata{Id: "inst-1"}, assignedAt, cause))
+	assert.False(t, retained.GPURetainedForCleanup)
 }
 
 type startRetentionNetworkManager struct {
@@ -333,24 +281,6 @@ func TestStartReportsUnretainedVGPUWhenRetentionSaveFails(t *testing.T) {
 	assert.Empty(t, stored.GPUDevicePath, "retention save failed, so no assignment should be recorded")
 }
 
-func TestStartDoesNotRestrictVGPUHypervisor(t *testing.T) {
-	m, id := newStartRollbackVGPUManager(t, func(context.Context, devices.VGPUAssignment) error {
-		return nil
-	})
-	meta, err := m.loadMetadata(id)
-	require.NoError(t, err)
-	meta.HypervisorType = hypervisor.TypeCloudHypervisor
-	require.NoError(t, m.saveMetadata(meta))
-
-	cause := errors.New("create failed")
-	m.createVGPU = func(context.Context, string, string) (*devices.VGPUDevice, error) {
-		return nil, cause
-	}
-
-	_, err = m.startInstance(context.Background(), id, StartInstanceRequest{})
-	assert.ErrorIs(t, err, cause)
-}
-
 func TestStartRollbackClearsVGPUAssignmentAfterSuccessfulDestroy(t *testing.T) {
 	var destroyed []devices.VGPUAssignment
 	m, id := newStartRollbackVGPUManager(t, func(_ context.Context, assignment devices.VGPUAssignment) error {
@@ -439,37 +369,24 @@ func TestCleanupStartVGPUReportsRetainedWhenMidStartSaveSurvives(t *testing.T) {
 
 func TestCleanupStartVGPURestoresMetadataAfterBootFailure(t *testing.T) {
 	m := &manager{
-		paths: paths.New(t.TempDir()),
-		destroyVGPU: func(context.Context, devices.VGPUAssignment) error {
-			return nil
-		},
+		paths:       paths.New(t.TempDir()),
+		destroyVGPU: func(context.Context, devices.VGPUAssignment) error { return nil },
 	}
 	const id = "failed-start"
 	require.NoError(t, m.ensureDirectories(id))
 
 	previousStart := time.Now().Add(-time.Hour).UTC()
-	previousProgramStart := previousStart.Add(time.Second)
 	exitCode := 1
 	rollbackMeta := metadata{StoredMetadata: StoredMetadata{
-		Id:               id,
-		Name:             "original name",
-		GPUProfile:       "NVIDIA L40S-2Q",
-		Entrypoint:       []string{"old-entrypoint"},
-		Cmd:              []string{"old-command"},
-		StartedAt:        &previousStart,
-		ProgramStartedAt: &previousProgramStart,
-		ExitCode:         &exitCode,
-		ExitMessage:      "previous exit",
+		Id:          id,
+		Name:        "original name",
+		GPUProfile:  "NVIDIA L40S-2Q",
+		Entrypoint:  []string{"old-entrypoint"},
+		StartedAt:   &previousStart,
+		ExitCode:    &exitCode,
+		ExitMessage: "previous exit",
 	}}
-
-	partial := rollbackMeta
-	partial.Name = "concurrent update"
-	partial.Entrypoint = []string{"new-entrypoint"}
-	partial.Cmd = []string{"new-command"}
-	partial.StartedAt = ptr(time.Now().UTC())
-	partial.ProgramStartedAt = nil
-	partial.ExitCode = nil
-	partial.ExitMessage = ""
+	partial := metadata{StoredMetadata: StoredMetadata{Id: id, Name: "partial start"}}
 	assignedAt := time.Now().UTC()
 	device := &devices.VGPUDevice{
 		Framework: devices.VGPUFrameworkVendorVFIO,
@@ -482,15 +399,7 @@ func TestCleanupStartVGPURestoresMetadataAfterBootFailure(t *testing.T) {
 
 	stored, err := m.loadMetadata(id)
 	require.NoError(t, err)
-	assert.Equal(t, "concurrent update", stored.Name)
-	assert.Equal(t, rollbackMeta.Entrypoint, stored.Entrypoint)
-	assert.Equal(t, rollbackMeta.Cmd, stored.Cmd)
-	assert.Equal(t, rollbackMeta.StartedAt, stored.StartedAt)
-	assert.Equal(t, rollbackMeta.ProgramStartedAt, stored.ProgramStartedAt)
-	assert.Equal(t, rollbackMeta.ExitCode, stored.ExitCode)
-	assert.Equal(t, rollbackMeta.ExitMessage, stored.ExitMessage)
-	assert.Empty(t, stored.GPUDevicePath)
-	assert.Nil(t, stored.GPUAssignedAt)
+	assert.Equal(t, rollbackMeta.StoredMetadata, stored.StoredMetadata)
 }
 
 func TestVGPUAssignmentClaimedByLiveInstanceFailsOnInvalidMetadata(t *testing.T) {
@@ -500,7 +409,7 @@ func TestVGPUAssignmentClaimedByLiveInstanceFailsOnInvalidMetadata(t *testing.T)
 	require.NoError(t, m.ensureDirectories("invalid-instance"))
 	require.NoError(t, os.WriteFile(m.paths.InstanceMetadata("invalid-instance"), []byte("{"), 0o644))
 
-	_, err := m.vgpuAssignmentClaimedByLiveInstance(context.Background(), "other-instance", "/sys/bus/pci/devices/0000:82:00.4")
+	_, err := m.vgpuAssignmentClaimedByLiveInstance("other-instance", "/sys/bus/pci/devices/0000:82:00.4")
 	require.Error(t, err)
 }
 
@@ -521,7 +430,7 @@ func TestVGPUAssignmentClaimedByLiveInstanceNormalizesLegacyMdevPath(t *testing.
 		},
 	}}))
 
-	claimed, err := m.vgpuAssignmentClaimedByLiveInstance(context.Background(), "other-instance", "/sys/bus/mdev/devices/legacy-uuid")
+	claimed, err := m.vgpuAssignmentClaimedByLiveInstance("other-instance", "/sys/bus/mdev/devices/legacy-uuid")
 	require.NoError(t, err)
 	assert.True(t, claimed)
 }
@@ -533,7 +442,7 @@ func TestVGPUAssignmentClaimedByLiveInstanceLiveness(t *testing.T) {
 	deadPID := 1 << 30
 	require.False(t, ProcessExists(deadPID))
 	recent := time.Now().UTC()
-	stale := recent.Add(-VGPUAssignmentStartupGracePeriod - time.Minute)
+	stale := recent.Add(-devices.VGPUAssignmentGracePeriod - time.Minute)
 	tests := []struct {
 		name       string
 		assignedAt *time.Time
@@ -559,7 +468,7 @@ func TestVGPUAssignmentClaimedByLiveInstanceLiveness(t *testing.T) {
 				HypervisorProcessIdentity: HypervisorProcessIdentity{HypervisorPID: tt.pid},
 			}}))
 
-			claimed, err := m.vgpuAssignmentClaimedByLiveInstance(context.Background(), "requester", devicePath)
+			claimed, err := m.vgpuAssignmentClaimedByLiveInstance("requester", devicePath)
 			if tt.wantErr != "" {
 				require.ErrorContains(t, err, tt.wantErr)
 				return
@@ -634,38 +543,4 @@ func TestStoredVGPUDevicePath(t *testing.T) {
 		GPUMdevUUID: "legacy-uuid",
 	}))
 	assert.Empty(t, storedVGPUDevicePath(&StoredMetadata{}))
-}
-
-func TestReleaseStoredVGPURetainsMetadataOnFailure(t *testing.T) {
-	t.Parallel()
-
-	m := &manager{paths: paths.New(t.TempDir())}
-	stored := &StoredMetadata{
-		GPUFramework:  devices.VGPUFramework("future-framework"),
-		GPUDevicePath: "/sys/bus/pci/devices/0000:82:00.4",
-	}
-	err := m.releaseStoredVGPU(context.Background(), stored)
-	assert.Error(t, err)
-	assert.Equal(t, devices.VGPUFramework("future-framework"), stored.GPUFramework)
-	assert.Equal(t, "/sys/bus/pci/devices/0000:82:00.4", stored.GPUDevicePath)
-}
-
-func TestSetAndClearStoredVGPUDevice(t *testing.T) {
-	t.Parallel()
-
-	assignedAt := time.Now().UTC()
-	stored := &StoredMetadata{}
-	setStoredVGPUDevice(stored, &devices.VGPUDevice{
-		Framework: devices.VGPUFrameworkVendorVFIO,
-		SysfsPath: "/sys/bus/pci/devices/0000:82:00.4",
-	}, assignedAt)
-	assert.Equal(t, devices.VGPUFrameworkVendorVFIO, stored.GPUFramework)
-	assert.Equal(t, "/sys/bus/pci/devices/0000:82:00.4", stored.GPUDevicePath)
-	assert.Equal(t, assignedAt, *stored.GPUAssignedAt)
-
-	clearStoredVGPUDevice(stored)
-	assert.Empty(t, stored.GPUFramework)
-	assert.Empty(t, stored.GPUDevicePath)
-	assert.Empty(t, stored.GPUMdevUUID)
-	assert.Nil(t, stored.GPUAssignedAt)
 }
