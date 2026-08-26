@@ -1,7 +1,6 @@
 package images
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -286,15 +285,11 @@ func contentTagsForDigest(p *paths.Paths, digestHex string) ([]string, error) {
 }
 
 func contentMetadataStatus(p *paths.Paths, digestHex string) (string, error) {
-	data, err := os.ReadFile(p.ImageContentMetadata(digestHex))
-	if err != nil {
-		return "", err
+	status, ok := metadataStatus(p.ImageContentMetadata(digestHex))
+	if !ok {
+		return "", os.ErrNotExist
 	}
-	var meta imageMetadata
-	if err := json.Unmarshal(data, &meta); err != nil {
-		return "", fmt.Errorf("unmarshal content metadata: %w", err)
-	}
-	return meta.Status, nil
+	return status, nil
 }
 
 func contentPullInProgress(p *paths.Paths, digestHex string) bool {

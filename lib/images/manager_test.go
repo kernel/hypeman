@@ -98,10 +98,12 @@ func TestCreateImage(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEqual(t, 0, linkStat.Mode()&os.ModeSymlink, "should be a symlink")
 
-	// Verify symlink points to digest directory
+	// Verify symlink resolves to the digest
 	linkTarget, err := os.Readlink(linkPath)
 	require.NoError(t, err)
-	require.Equal(t, digestHex, linkTarget, "symlink should point to digest")
+	resolvedDigest, err := resolveTag(paths.New(dataDir), ref.Repository(), ref.Tag())
+	require.NoError(t, err)
+	require.Equal(t, digestHex, resolvedDigest, "symlink should resolve to digest")
 	t.Logf("Tag symlink: %s -> %s", linkPath, linkTarget)
 }
 
@@ -704,6 +706,9 @@ func TestDeleteAndRecreateDuringBuildTail(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEqual(t, firstMeta.BuildID, currentMeta.BuildID)
 	require.NoError(t, m.DeleteImage(ctx, repo+"@"+digestStr))
+	// Deleting a digest whose build is still in flight keeps the shared content
+	// so the running build can finish; re-import joins that build instead of
+	// starting a second one for the same digest.
 	recreatedAgain, err := m.ImportLocalImage(ctx, repo, tag, digestStr)
 	require.NoError(t, err)
 	require.Equal(t, StatusPending, recreatedAgain.Status)
@@ -711,7 +716,7 @@ func TestDeleteAndRecreateDuringBuildTail(t *testing.T) {
 	require.Equal(t, 1, *recreatedAgain.QueuePosition)
 	latestMeta, err := readMetadata(p, repo, digestHex)
 	require.NoError(t, err)
-	require.NotEqual(t, currentMeta.BuildID, latestMeta.BuildID)
+	require.Equal(t, currentMeta.BuildID, latestMeta.BuildID)
 	currentMeta = latestMeta
 
 	waitCtx, cancelWait := context.WithCancel(ctx)
