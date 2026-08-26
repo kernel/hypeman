@@ -253,45 +253,9 @@ func (m *manager) CreateImage(ctx context.Context, req CreateImageRequest) (*Ima
 	m.createMu.Lock()
 	defer m.createMu.Unlock()
 
-	// Check if we already have this digest (deduplication)
-	if meta, err := readMetadata(m.paths, ref.Repository(), ref.DigestHex()); err == nil {
-		// Don't cache failed builds - allow retry
-		if meta.Status == StatusFailed {
-			// Clean up the failed build directory so we can retry. Shared content
-			// is retained if another tag or pull still references it.
-			if err := removeDigestIfUnreferenced(m.paths, ref.Repository(), ref.DigestHex(), false); err != nil {
-				return nil, fmt.Errorf("remove failed image: %w", err)
-			}
-			// Fall through to re-queue the build
-		} else {
-			// Keep an existing ready tag visible until a replacement is ready.
-			if ref.Tag() != "" {
-				var tagErr error
-				if meta.Status == StatusReady {
-					tagErr = createTagSymlink(m.paths, ref.Repository(), ref.Tag(), ref.DigestHex())
-				} else {
-					tagErr = ensurePendingTag(m.paths, ref.Repository(), ref.Tag(), ref.DigestHex())
-				}
-				if tagErr != nil {
-					return nil, fmt.Errorf("create image tag: %w", tagErr)
-				}
-			}
-			img := meta.toImage()
-			img.Name = ref.String()
-			if meta.Status == StatusReady {
-				return img, nil
-			}
-			if !m.inflightCredentialsMatch(ref.Digest(), req.Credentials) {
-				return nil, fmt.Errorf("%w: retry after the current pull completes", ErrCredentialConflict)
-			}
-			if meta.Status == StatusPending {
-				img.QueuePosition = m.queue.GetPosition(meta.Digest)
-			}
-			return img, nil
-		}
+	if img, found, err := m.reuseExistingImage(ref, req.Credentials); found || err != nil {
+		return img, err
 	}
-
-	// Don't have this digest yet, queue the build
 	return m.createAndQueueImage(ref, req, platform)
 }
 
@@ -352,6 +316,41 @@ func (m *manager) ImportLocalImage(ctx context.Context, repo, reference, digest 
 
 	// Don't have this digest yet, queue the build
 	return m.createAndQueueImage(ref, CreateImageRequest{Name: imageRef}, hostPlatform())
+}
+
+func (m *manager) reuseExistingImage(ref *ResolvedRef, credentials *authn.AuthConfig) (*Image, bool, error) {
+	meta, err := readMetadata(m.paths, ref.Repository(), ref.DigestHex())
+	if err != nil {
+		return nil, false, nil
+	}
+	if meta.Status == StatusFailed {
+		if err := removeDigestIfUnreferenced(m.paths, ref.Repository(), ref.DigestHex(), false); err != nil {
+			return nil, true, fmt.Errorf("remove failed image: %w", err)
+		}
+		return nil, false, nil
+	}
+	if ref.Tag() != "" {
+		if meta.Status == StatusReady {
+			err = createTagSymlink(m.paths, ref.Repository(), ref.Tag(), ref.DigestHex())
+		} else {
+			err = ensurePendingTag(m.paths, ref.Repository(), ref.Tag(), ref.DigestHex())
+		}
+		if err != nil {
+			return nil, true, fmt.Errorf("create image tag: %w", err)
+		}
+	}
+	img := meta.toImage()
+	img.Name = ref.String()
+	if meta.Status == StatusReady {
+		return img, true, nil
+	}
+	if !m.inflightCredentialsMatch(ref.Digest(), credentials) {
+		return nil, true, fmt.Errorf("%w: retry after the current pull completes", ErrCredentialConflict)
+	}
+	if meta.Status == StatusPending {
+		img.QueuePosition = m.queue.GetPosition(meta.Digest)
+	}
+	return img, true, nil
 }
 
 func (m *manager) inflightCredentialsMatch(digest string, credentials *authn.AuthConfig) bool {
