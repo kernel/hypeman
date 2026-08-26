@@ -61,6 +61,9 @@ func (m *manager) persistVGPURetention(ctx context.Context, retention *vgpuReten
 	id := retention.instanceID
 	retainedVGPU := retention.stub
 	log := logger.FromContext(ctx)
+	defer func() {
+		m.recordVGPURetainedAssignment(ctx, vgpuRetentionOperationCreate, retention.persisted)
+	}()
 	// When the retention record is lost, the assignment has no metadata claim
 	// left; the periodic vGPU reconcile sweeps the device once it is free.
 	retentionSurvives := func() bool {
