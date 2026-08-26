@@ -209,6 +209,8 @@ func TestExportLayerArtifactsHappyPath(t *testing.T) {
 		require.Equal(t, artifact.LayerDigest, meta.LayerDigest)
 		require.Equal(t, diffID.String(), meta.DiffID)
 		require.Equal(t, FormatErofs, meta.Format)
+		require.Equal(t, ErofsCompression, meta.Compression)
+		require.Equal(t, int64(sectorSize), meta.SectorSize)
 		require.Equal(t, artifact.SizeBytes, meta.SizeBytes)
 	}
 
@@ -312,40 +314,93 @@ func TestExportLayerArtifactsSkipsCrossLayerHardlink(t *testing.T) {
 	require.Equal(t, 0, report.Artifacts[0].Index)
 	require.Len(t, report.Skipped, 1)
 	require.Equal(t, 1, report.Skipped[0].Index)
-	require.Contains(t, report.Skipped[0].Reason, "unpack layer standalone")
+	require.Contains(t, report.Skipped[0].Reason, "cannot unpack layer standalone")
 
 	// A failed layer must not leave a partial artifact behind.
 	_, err = os.Stat(p.LayerArtifactPath(diffIDs[1].Hex))
 	require.True(t, os.IsNotExist(err))
 }
 
-func TestExportLayerArtifactsDropsLowerLayerWhiteouts(t *testing.T) {
+func TestExportLayerArtifactsSkipsWhiteoutLayer(t *testing.T) {
 	requireErofsTooling(t)
 	p := paths.New(t.TempDir())
 
 	layer1 := newGzipLayer(t, []tarEntry{
 		{name: "base.txt", body: "base", typeflag: tar.TypeReg},
 	})
-	// Whiteout of a path introduced by the lower layer: umoci applies it as
-	// a removal against the (empty) unpack root, so it is a no-op and the
-	// layer's own contribution still converts. See the whiteout limitation
-	// documented on ExportLayerArtifacts.
+	// Whiteout of a path introduced by the lower layer. The deletion applies
+	// to layer 1's content, which a standalone artifact of layer 2 cannot
+	// express, so the layer must be skipped rather than silently losing it.
 	layer2 := newGzipLayer(t, []tarEntry{
 		{name: ".wh.base.txt", typeflag: tar.TypeReg},
 		{name: "new.txt", body: "new", typeflag: tar.TypeReg},
 	})
-	digest, _ := writeTestImage(t, p, layer1, layer2)
+	digest, diffIDs := writeTestImage(t, p, layer1, layer2)
 
 	report, err := ExportLayerArtifacts(context.Background(), p, digest)
 	require.NoError(t, err)
-	require.Empty(t, report.Skipped)
-	require.Len(t, report.Artifacts, 2)
 
-	layer2Root := extractErofs(t, report.Artifacts[1].ArtifactPath)
-	content, err := os.ReadFile(filepath.Join(layer2Root, "new.txt"))
+	require.Len(t, report.Artifacts, 1)
+	require.Equal(t, 0, report.Artifacts[0].Index)
+	require.Len(t, report.Skipped, 1)
+	require.Equal(t, 1, report.Skipped[0].Index)
+	require.Contains(t, report.Skipped[0].Reason, ".wh.base.txt")
+	require.Contains(t, report.Skipped[0].Reason, "whiteout")
+
+	_, err = os.Stat(p.LayerArtifactPath(diffIDs[1].Hex))
+	require.True(t, os.IsNotExist(err))
+}
+
+func TestExportLayerArtifactsSkipsOpaqueDirectoryLayer(t *testing.T) {
+	requireErofsTooling(t)
+	p := paths.New(t.TempDir())
+
+	layer1 := newGzipLayer(t, []tarEntry{
+		{name: "conf/", typeflag: tar.TypeDir},
+		{name: "conf/old.txt", body: "old", typeflag: tar.TypeReg},
+	})
+	// An opaque-directory marker clears every lower-layer child of conf/.
+	layer2 := newGzipLayer(t, []tarEntry{
+		{name: "conf/", typeflag: tar.TypeDir},
+		{name: "conf/.wh..wh..opq", typeflag: tar.TypeReg},
+		{name: "conf/new.txt", body: "new", typeflag: tar.TypeReg},
+	})
+	digest, diffIDs := writeTestImage(t, p, layer1, layer2)
+
+	report, err := ExportLayerArtifacts(context.Background(), p, digest)
 	require.NoError(t, err)
-	require.Equal(t, "new", string(content))
-	_, err = os.Stat(filepath.Join(layer2Root, "base.txt"))
+
+	require.Len(t, report.Artifacts, 1)
+	require.Equal(t, 0, report.Artifacts[0].Index)
+	require.Len(t, report.Skipped, 1)
+	require.Equal(t, 1, report.Skipped[0].Index)
+	require.Contains(t, report.Skipped[0].Reason, opaqueWhiteout)
+
+	_, err = os.Stat(p.LayerArtifactPath(diffIDs[1].Hex))
+	require.True(t, os.IsNotExist(err))
+}
+
+func TestExportLayerArtifactsSkipsSingleLayerWithWhiteout(t *testing.T) {
+	requireErofsTooling(t)
+	p := paths.New(t.TempDir())
+
+	// A single-layer image whose only layer carries a whiteout still has
+	// deletion semantics recorded in the tar, so it is skipped too: the
+	// exporter classifies by marker presence, not by whether the target
+	// happens to exist.
+	layer := newGzipLayer(t, []tarEntry{
+		{name: ".wh.gone.txt", typeflag: tar.TypeReg},
+		{name: "a.txt", body: "a", typeflag: tar.TypeReg},
+	})
+	digest, diffIDs := writeTestImage(t, p, layer)
+
+	report, err := ExportLayerArtifacts(context.Background(), p, digest)
+	require.NoError(t, err)
+	require.Empty(t, report.Artifacts)
+	require.Len(t, report.Skipped, 1)
+	require.Contains(t, report.Skipped[0].Reason, ".wh.gone.txt")
+
+	_, err = os.Stat(p.LayerArtifactPath(diffIDs[0].Hex))
 	require.True(t, os.IsNotExist(err))
 }
 

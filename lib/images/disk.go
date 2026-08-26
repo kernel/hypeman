@@ -119,6 +119,11 @@ func convertToCpio(rootfsDir, outputPath string) (int64, error) {
 // sectorSize is the block size for disk images (required by Virtualization.framework)
 const sectorSize = 4096
 
+// ErofsCompression is the compression algorithm passed to mkfs.erofs via -z.
+// It is part of the on-disk contract for erofs images: readers (and future
+// layer-artifact consumers) rely on the kernel supporting it at mount time.
+const ErofsCompression = "lz4"
+
 // alignToSector rounds size up to the nearest sector boundary
 func alignToSector(size int64) int64 {
 	if size%sectorSize == 0 {
@@ -202,7 +207,7 @@ func convertToErofs(rootfsDir, diskPath string) (int64, error) {
 	// Create erofs image with LZ4 fast compression
 	// -zlz4: LZ4 fast compression (~20-25% space savings, faster builds)
 	// erofs doesn't need pre-allocation, creates file directly
-	cmd := exec.Command("mkfs.erofs", "-zlz4", diskPath, rootfsDir)
+	cmd := exec.Command("mkfs.erofs", "-z"+ErofsCompression, diskPath, rootfsDir)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return 0, fmt.Errorf("mkfs.erofs failed: %w, output: %s", err, output)

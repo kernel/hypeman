@@ -114,18 +114,27 @@ Scope and behavior:
 - Layers with an unsupported media type (e.g. zstd) or that cannot be
   unpacked standalone (e.g. hardlinks into an earlier layer) are reported as
   skipped, not errors.
+- OCI deletion semantics are handled explicitly: a layer containing whiteout
+  entries (`.wh.<name>`) or opaque-directory markers (`.wh..wh..opq`) deletes
+  content that lives in earlier layers, which a standalone read-only artifact
+  cannot express. Such layers are skipped rather than converted, because a
+  raw tar-to-erofs conversion would silently drop the deletions.
+- Each artifact's `metadata.json` is the contract for reading it back: source
+  blob digest, diff ID, filesystem format and the options it was built with
+  (erofs `-z` compression, sector alignment), size.
 - Requires Linux and `mkfs.erofs`; otherwise returns
   `ErrLayerArtifactsUnsupported`.
 
 Known limitations a future layer-composition step must resolve:
 
-1. Whiteouts targeting lower layers are dropped: umoci applies OCI whiteouts
-   as removals against the (empty) standalone unpack root. An artifact holds
-   only what the layer contributes; expressing deletions needs an
-   overlayfs-style or custom composition format that hasn't been chosen yet.
+1. Artifacts hold only what a layer adds; layers that delete are skipped.
+   Composing images from per-layer artifacts needs a format that can carry
+   deletions (overlayfs-style or custom), which hasn't been chosen yet.
 2. The image -> ordered artifact mapping is returned to the caller but not
    persisted; `imageMetadata` gains layer fields once a composition consumer
-   exists.
+   exists. No separate manifest-metadata change exists yet; the exporter
+   derives everything it needs from the manifest and config blobs already in
+   the OCI cache.
 3. Artifacts are not reference-counted against the OCI cache GC. Safe today
    (an artifact is self-contained once installed), but a GC policy for
    `images/layers` is future work.

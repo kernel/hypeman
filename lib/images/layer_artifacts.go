@@ -15,6 +15,7 @@
 package images
 
 import (
+	"archive/tar"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -25,6 +26,7 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
+	"path"
 	"runtime"
 	"strings"
 	"time"
@@ -65,12 +67,16 @@ type LayerExportReport struct {
 	Skipped     []SkippedLayer
 }
 
-// layerArtifactMetadata is persisted beside each artifact so a reader can
-// trace it back to its source blob without re-deriving anything.
+// layerArtifactMetadata is persisted beside each artifact and is the
+// contract for reading it back: the source blob identity plus the filesystem
+// format and the options it was built with, so a consumer knows how to mount
+// or interpret the artifact without re-deriving anything.
 type layerArtifactMetadata struct {
 	LayerDigest string       `json:"layer_digest"`
 	DiffID      string       `json:"diff_id"`
 	Format      ExportFormat `json:"format"`
+	Compression string       `json:"compression"` // erofs -z algorithm
+	SectorSize  int64        `json:"sector_size"` // artifact padded to this alignment
 	SizeBytes   int64        `json:"size_bytes"`
 	CreatedAt   time.Time    `json:"created_at"`
 }
@@ -84,6 +90,12 @@ type layerArtifactMetadata struct {
 //     same integrity check umoci applies during a full unpack.
 //   - Layers with an unsupported media type (anything ocicache cannot
 //     decompress, e.g. zstd) are reported in Skipped, not errors.
+//   - Layers carrying OCI deletion semantics are reported in Skipped, not
+//     converted: whiteout entries (.wh.<name>) and opaque-directory markers
+//     (.wh..wh..opq) delete content that lives in earlier layers, and a
+//     standalone read-only artifact cannot express that. A raw tar-to-erofs
+//     conversion of such a layer would silently drop the deletions, so the
+//     exporter refuses it explicitly instead.
 //   - Layers that cannot be unpacked standalone are also reported in
 //     Skipped. This happens when a layer's tar references state from earlier
 //     layers, most commonly hardlinks to files introduced by a lower layer.
@@ -93,11 +105,10 @@ type layerArtifactMetadata struct {
 //     reusable because they are content-addressed.
 //
 // Known limitations, deferred until layer composition is designed:
-//   - Whiteouts targeting lower layers are dropped: umoci applies OCI
-//     whiteouts as removals against the unpack root, which is empty for a
-//     standalone layer. An artifact therefore contains only what the layer
-//     contributes; expressing deletions requires an overlayfs-style or
-//     custom composition format that has not been chosen yet.
+//   - Artifacts hold only what a layer adds; layers that delete are skipped
+//     (above). Composing images from per-layer artifacts needs a format that
+//     can carry deletions (overlayfs-style or custom), which has not been
+//     chosen yet.
 //   - The mapping from an image to its ordered artifact list is returned to
 //     the caller but not persisted; imageMetadata gains layer fields once a
 //     composition consumer exists.
@@ -159,12 +170,12 @@ func ExportLayerArtifacts(ctx context.Context, p *paths.Paths, imageDigest strin
 
 		artifact, reused, err := exportLayerArtifact(p, img, i, desc, diffID)
 		if err != nil {
-			var unpackErr *layerUnpackError
-			if errors.As(err, &unpackErr) {
+			var skipErr *layerSkipError
+			if errors.As(err, &skipErr) {
 				report.Skipped = append(report.Skipped, SkippedLayer{
 					Index:       i,
 					LayerDigest: desc.Digest.String(),
-					Reason:      unpackErr.Error(),
+					Reason:      skipErr.Error(),
 				})
 				continue
 			}
@@ -177,16 +188,55 @@ func ExportLayerArtifacts(ctx context.Context, p *paths.Paths, imageDigest strin
 	return report, nil
 }
 
-// layerUnpackError marks failures from unpacking a single layer in isolation.
-// These reflect layer content that cannot be represented standalone (e.g.
-// hardlinks into earlier layers), so the exporter skips the layer instead of
-// aborting the whole image.
-type layerUnpackError struct {
-	err error
+// layerSkipError marks a layer that cannot be represented as a standalone
+// artifact (deletion semantics, cross-layer references, unsupported media).
+// The exporter reports these in Skipped instead of aborting the whole image.
+type layerSkipError struct {
+	reason string
+	cause  error
 }
 
-func (e *layerUnpackError) Error() string { return e.err.Error() }
-func (e *layerUnpackError) Unwrap() error { return e.err }
+func (e *layerSkipError) Error() string {
+	if e.cause != nil {
+		return e.reason + ": " + e.cause.Error()
+	}
+	return e.reason
+}
+
+func (e *layerSkipError) Unwrap() error { return e.cause }
+
+// whiteoutPrefix and opaqueWhiteout follow the OCI layer conventions:
+// ".wh.<name>" deletes <name> from lower layers and ".wh..wh..opq" marks its
+// containing directory opaque (all lower-layer children deleted).
+const (
+	whiteoutPrefix = ".wh."
+	opaqueWhiteout = ".wh..wh..opq"
+)
+
+// firstWhiteoutMarker scans the uncompressed layer tar and returns the name
+// of the first OCI whiteout or opaque-directory entry, or "" when the layer
+// carries no deletion semantics. The blob is local; the unpack reads it again
+// afterwards. The scan short-circuits on the first marker.
+func firstWhiteoutMarker(l v1.Layer) (string, error) {
+	rc, err := l.Uncompressed()
+	if err != nil {
+		return "", err
+	}
+	defer rc.Close()
+	tr := tar.NewReader(rc)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			return "", nil
+		}
+		if err != nil {
+			return "", fmt.Errorf("read layer tar: %w", err)
+		}
+		if base := path.Base(hdr.Name); strings.HasPrefix(base, whiteoutPrefix) {
+			return hdr.Name, nil
+		}
+	}
+}
 
 // supportedLayerMediaType reports whether the OCI cache can serve a layer
 // media type uncompressed; when not, it returns the skip reason. Docker v2
@@ -233,6 +283,26 @@ func exportLayerArtifact(p *paths.Paths, img v1.Image, index int, desc v1.Descri
 	if err != nil {
 		return LayerArtifact{}, false, fmt.Errorf("find layer in cache: %w", err)
 	}
+
+	// Refuse layers with OCI deletion semantics up front: unpacking them
+	// standalone would apply their whiteouts against an empty root and drop
+	// the deletions silently.
+	marker, err := firstWhiteoutMarker(layerReader)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return LayerArtifact{}, false, fmt.Errorf("layer blob missing from OCI cache: %w", err)
+		}
+		return LayerArtifact{}, false, fmt.Errorf("scan layer for whiteouts: %w", err)
+	}
+	if marker != "" {
+		return LayerArtifact{}, false, &layerSkipError{
+			reason: fmt.Sprintf(
+				"layer contains OCI whiteout or opaque-directory marker %q: deletions of lower-layer content cannot be represented in a standalone artifact",
+				marker,
+			),
+		}
+	}
+
 	uncompressed, err := layerReader.Uncompressed()
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -257,7 +327,7 @@ func exportLayerArtifact(p *paths.Paths, img v1.Image, index int, desc v1.Descri
 	hasher := sha256.New()
 	if err := layer.UnpackLayer(unpackDir, io.TeeReader(uncompressed, hasher), rootlessUnpackOptions()); err != nil {
 		uncompressed.Close()
-		return LayerArtifact{}, false, &layerUnpackError{err: fmt.Errorf("unpack layer standalone: %w", err)}
+		return LayerArtifact{}, false, &layerSkipError{reason: "cannot unpack layer standalone", cause: err}
 	}
 	if err := uncompressed.Close(); err != nil {
 		return LayerArtifact{}, false, fmt.Errorf("read layer: %w", err)
@@ -296,6 +366,8 @@ func writeLayerArtifactMetadata(p *paths.Paths, desc v1.Descriptor, diffID v1.Ha
 		LayerDigest: desc.Digest.String(),
 		DiffID:      diffID.String(),
 		Format:      FormatErofs,
+		Compression: ErofsCompression,
+		SectorSize:  sectorSize,
 		SizeBytes:   sizeBytes,
 		CreatedAt:   time.Now(),
 	}
