@@ -143,17 +143,13 @@ func restoreStartMutatedFields(dst, src *StoredMetadata) {
 }
 
 func (m *manager) releaseStoredVGPU(ctx context.Context, stored *StoredMetadata) error {
-	return m.releaseStoredVGPUExcluding(ctx, stored, stored.Id)
-}
-
-func (m *manager) releaseStoredVGPUExcluding(ctx context.Context, stored *StoredMetadata, excludeID string) error {
 	path := storedVGPUDevicePath(stored)
 	if path != "" {
 		// Vendor VFIO VFs are reusable, so release fails closed on an incomplete inventory.
 		claimed := false
 		if stored.GPUFramework == devices.VGPUFrameworkVendorVFIO {
 			var err error
-			claimed, err = m.vgpuAssignmentClaimedByLiveInstance(ctx, excludeID, path)
+			claimed, err = m.vgpuAssignmentClaimedByLiveInstance(ctx, stored.Id, path)
 			if err != nil {
 				return err
 			}
@@ -204,8 +200,8 @@ func (m *manager) vgpuAssignmentClaimedByLiveInstance(ctx context.Context, exclu
 		if err != nil {
 			return false, fmt.Errorf("cannot confirm liveness of vGPU claimant %s on %s: %w", id, devicePath, err)
 		}
-		live, remaining := vgpuAssignmentLiveness(stored, m.nowUTC(), pid > 0)
-		if pid > 0 && live {
+		_, remaining := vgpuAssignmentLiveness(stored, m.nowUTC(), pid > 0)
+		if pid > 0 {
 			return true, nil
 		}
 		if remaining > 0 {

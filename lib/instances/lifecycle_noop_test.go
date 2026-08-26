@@ -214,10 +214,11 @@ func TestDeleteReleasesRetainedCreateStub(t *testing.T) {
 	require.NoError(t, m.ensureDirectories(id))
 	assignedAt := time.Now().UTC()
 	require.NoError(t, m.saveMetadata(&metadata{StoredMetadata: StoredMetadata{
-		Id:            id,
-		GPUFramework:  devices.VGPUFrameworkVendorVFIO,
-		GPUDevicePath: "/sys/bus/pci/devices/0000:82:00.4",
-		GPUAssignedAt: &assignedAt,
+		Id:                    id,
+		GPUFramework:          devices.VGPUFrameworkVendorVFIO,
+		GPUDevicePath:         "/sys/bus/pci/devices/0000:82:00.4",
+		GPUAssignedAt:         &assignedAt,
+		GPURetainedForCleanup: true,
 	}}))
 
 	require.NoError(t, m.DeleteInstance(context.Background(), id))
@@ -339,9 +340,8 @@ func TestStartRejectsVGPURetentionRecord(t *testing.T) {
 	assert.Equal(t, "/sys/bus/pci/devices/0000:82:00.4", stored.GPUDevicePath)
 }
 
-func TestReconcileReleasesRetainedVGPUOnStoppedInstance(t *testing.T) {
+func TestStopStoppedInstanceLeavesVGPUForReconcile(t *testing.T) {
 	m, id := newLifecycleNoopManagerWithInstance(t, StateStopped, time.Now().UTC())
-	m.reconcileVGPUDevices = func(context.Context, map[string]struct{}, bool) error { return nil }
 	meta, err := m.loadMetadata(id)
 	require.NoError(t, err)
 	meta.GPUProfile = "NVIDIA L40S-2Q"
@@ -358,12 +358,6 @@ func TestReconcileReleasesRetainedVGPUOnStoppedInstance(t *testing.T) {
 	stored, err := m.loadMetadata(id)
 	require.NoError(t, err)
 	assert.Equal(t, "/sys/bus/pci/devices/0000:82:00.4", stored.GPUDevicePath)
-
-	m.ReconcileVGPUs(context.Background())
-	stored, err = m.loadMetadata(id)
-	require.NoError(t, err)
-	assert.Empty(t, stored.GPUDevicePath)
-	assert.Equal(t, "NVIDIA L40S-2Q", stored.GPUProfile, "profile is kept for the next start")
 }
 
 func TestReconcileVGPUReleaseFailureKeepsStoppedInstanceUsable(t *testing.T) {

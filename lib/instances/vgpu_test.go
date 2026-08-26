@@ -526,87 +526,48 @@ func TestVGPUAssignmentClaimedByLiveInstanceNormalizesLegacyMdevPath(t *testing.
 	assert.True(t, claimed)
 }
 
-func TestVGPUAssignmentClaimedByLiveInstanceErrorsOnRecentNilPIDClaim(t *testing.T) {
+func TestVGPUAssignmentClaimedByLiveInstanceLiveness(t *testing.T) {
 	t.Parallel()
 
-	m := &manager{paths: paths.New(t.TempDir())}
-	require.NoError(t, m.ensureDirectories("booting-claimant"))
-	assignedAt := time.Now().UTC()
-	require.NoError(t, m.saveMetadata(&metadata{StoredMetadata: StoredMetadata{
-		Id:            "booting-claimant",
-		Name:          "booting-claimant",
-		GPUDevicePath: "/sys/bus/pci/devices/0000:82:00.4",
-		GPUAssignedAt: &assignedAt,
-	}}))
-
-	_, err := m.vgpuAssignmentClaimedByLiveInstance(context.Background(), "other-instance", "/sys/bus/pci/devices/0000:82:00.4")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "booting-claimant")
-}
-
-func TestVGPUAssignmentClaimedByLiveInstanceIgnoresStaleNilPIDClaim(t *testing.T) {
-	t.Parallel()
-
-	m := &manager{paths: paths.New(t.TempDir())}
-	require.NoError(t, m.ensureDirectories("stale-claimant"))
-	assignedAt := time.Now().Add(-VGPUAssignmentStartupGracePeriod - time.Minute)
-	require.NoError(t, m.saveMetadata(&metadata{StoredMetadata: StoredMetadata{
-		Id:            "stale-claimant",
-		Name:          "stale-claimant",
-		GPUDevicePath: "/sys/bus/pci/devices/0000:82:00.4",
-		GPUAssignedAt: &assignedAt,
-	}}))
-
-	claimed, err := m.vgpuAssignmentClaimedByLiveInstance(context.Background(), "other-instance", "/sys/bus/pci/devices/0000:82:00.4")
-	require.NoError(t, err)
-	assert.False(t, claimed)
-}
-
-func TestVGPUAssignmentClaimedByLiveInstanceGracesRecentDeadPIDClaim(t *testing.T) {
-	m := &manager{paths: paths.New(t.TempDir())}
-	claimantID := "claimant-dead-pid"
-	require.NoError(t, m.ensureDirectories(claimantID))
-	deadPID := 1<<22 - 1
-	require.False(t, ProcessExists(deadPID))
-	assignedAt := time.Now().UTC()
-	require.NoError(t, m.saveMetadata(&metadata{StoredMetadata: StoredMetadata{
-		Id:                        claimantID,
-		HypervisorProcessIdentity: HypervisorProcessIdentity{HypervisorPID: &deadPID},
-		GPUFramework:              devices.VGPUFrameworkVendorVFIO,
-		GPUDevicePath:             "/sys/bus/pci/devices/0000:82:00.4",
-		GPUAssignedAt:             &assignedAt,
-	}}))
-
-	_, err := m.vgpuAssignmentClaimedByLiveInstance(context.Background(), "requester", "/sys/bus/pci/devices/0000:82:00.4")
-	require.Error(t, err)
-
-	stale := assignedAt.Add(-2 * VGPUAssignmentStartupGracePeriod)
-	meta, err := m.loadMetadata(claimantID)
-	require.NoError(t, err)
-	meta.GPUAssignedAt = &stale
-	require.NoError(t, m.saveMetadata(meta))
-
-	claimed, err := m.vgpuAssignmentClaimedByLiveInstance(context.Background(), "requester", "/sys/bus/pci/devices/0000:82:00.4")
-	require.NoError(t, err)
-	assert.False(t, claimed)
-}
-
-func TestVGPUAssignmentClaimedByLiveInstanceIgnoresDeadClaim(t *testing.T) {
-	t.Parallel()
-
-	m := &manager{paths: paths.New(t.TempDir())}
-	require.NoError(t, m.ensureDirectories("dead-claimant"))
+	const devicePath = "/sys/bus/pci/devices/0000:82:00.4"
 	deadPID := 1 << 30
-	require.NoError(t, m.saveMetadata(&metadata{StoredMetadata: StoredMetadata{
-		Id:                        "dead-claimant",
-		Name:                      "dead-claimant",
-		GPUDevicePath:             "/sys/bus/pci/devices/0000:82:00.4",
-		HypervisorProcessIdentity: HypervisorProcessIdentity{HypervisorPID: &deadPID},
-	}}))
+	require.False(t, ProcessExists(deadPID))
+	recent := time.Now().UTC()
+	stale := recent.Add(-VGPUAssignmentStartupGracePeriod - time.Minute)
+	tests := []struct {
+		name       string
+		assignedAt *time.Time
+		pid        *int
+		wantErr    string
+	}{
+		{name: "recent without PID", assignedAt: &recent, wantErr: "no persisted hypervisor PID"},
+		{name: "stale without PID", assignedAt: &stale},
+		{name: "recent dead PID", assignedAt: &recent, pid: &deadPID, wantErr: "recorded hypervisor is not running"},
+		{name: "legacy dead PID", pid: &deadPID},
+	}
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			m := &manager{paths: paths.New(t.TempDir())}
+			id := fmt.Sprintf("claimant-%d", i)
+			require.NoError(t, m.ensureDirectories(id))
+			require.NoError(t, m.saveMetadata(&metadata{StoredMetadata: StoredMetadata{
+				Id:                        id,
+				GPUFramework:              devices.VGPUFrameworkVendorVFIO,
+				GPUDevicePath:             devicePath,
+				GPUAssignedAt:             tt.assignedAt,
+				HypervisorProcessIdentity: HypervisorProcessIdentity{HypervisorPID: tt.pid},
+			}}))
 
-	claimed, err := m.vgpuAssignmentClaimedByLiveInstance(context.Background(), "other-instance", "/sys/bus/pci/devices/0000:82:00.4")
-	require.NoError(t, err)
-	assert.False(t, claimed, "a claim whose hypervisor is gone must not block the release")
+			claimed, err := m.vgpuAssignmentClaimedByLiveInstance(context.Background(), "requester", devicePath)
+			if tt.wantErr != "" {
+				require.ErrorContains(t, err, tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			assert.False(t, claimed)
+		})
+	}
 }
 
 func TestReleaseStoredVGPUSkipsClaimScanForMdev(t *testing.T) {
