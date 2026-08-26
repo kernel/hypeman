@@ -2,6 +2,7 @@ package instances
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -554,6 +555,50 @@ func TestEnsureSnapshotMemoryReadySkipsPendingCompressionWithoutPreemptionMetric
 	assert.Equal(t, "skipped", metricLabel(t, waitDurations.DataPoints[0].Attributes, "outcome"))
 
 	assert.False(t, metricExists(rm, "hypeman_snapshot_compression_preemptions_total"), "pending-delay cancellation should not record a preemption")
+}
+
+func TestVGPUReconcileFailureMetric_RecordStages(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses directory permissions")
+	}
+
+	reader := otelmetric.NewManualReader()
+	provider := otelmetric.NewMeterProvider(otelmetric.WithReader(reader))
+
+	m := &manager{
+		paths: paths.New(t.TempDir()),
+		reconcileVGPUDevices: func(context.Context, map[string]struct{}, bool) error {
+			return errors.New("sweep failed")
+		},
+	}
+	metrics, err := newInstanceMetrics(provider.Meter("test"), nil, m)
+	require.NoError(t, err)
+	m.metrics = metrics
+
+	const id = "unreadable"
+	require.NoError(t, m.ensureDirectories(id))
+	require.NoError(t, m.saveMetadata(&metadata{StoredMetadata: StoredMetadata{Id: id}}))
+	instanceDir := filepath.Dir(m.paths.InstanceMetadata(id))
+	require.NoError(t, os.Chmod(instanceDir, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(instanceDir, 0o755) })
+
+	m.ReconcileVGPUs(t.Context())
+
+	var rm metricdata.ResourceMetrics
+	require.NoError(t, reader.Collect(t.Context(), &rm))
+
+	failuresMetric := findMetric(t, rm, "hypeman_instances_vgpu_reconcile_failures_total")
+	failures, ok := failuresMetric.Data.(metricdata.Sum[int64])
+	require.True(t, ok)
+	require.Len(t, failures.DataPoints, 2)
+	for _, point := range failures.DataPoints {
+		switch metricLabel(t, point.Attributes, "stage") {
+		case "list_instances", "reconcile_devices":
+			assert.Equal(t, int64(1), point.Value)
+		default:
+			t.Fatalf("unexpected reconcile failure stage datapoint: %s", metricLabel(t, point.Attributes, "stage"))
+		}
+	}
 }
 
 func assertMetricNames(t *testing.T, rm metricdata.ResourceMetrics, expected []string) {

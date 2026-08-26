@@ -73,6 +73,20 @@ type lifecycleEventDropReason string
 
 const lifecycleEventDropReasonBufferFull lifecycleEventDropReason = "buffer_full"
 
+type vgpuReconcileStage string
+
+const (
+	vgpuReconcileStageListInstances    vgpuReconcileStage = "list_instances"
+	vgpuReconcileStageReconcileDevices vgpuReconcileStage = "reconcile_devices"
+)
+
+type vgpuRetentionOperation string
+
+const (
+	vgpuRetentionOperationCreate vgpuRetentionOperation = "create"
+	vgpuRetentionOperationStart  vgpuRetentionOperation = "start"
+)
+
 // Metrics holds the metrics instruments for instance operations.
 type Metrics struct {
 	createDuration                       metric.Float64Histogram
@@ -94,6 +108,9 @@ type Metrics struct {
 	lifecycleEventsDroppedTotal          metric.Int64Counter
 	forkMemFileShareFallbacksTotal       metric.Int64Counter
 	ttlReaperDeletionsTotal              metric.Int64Counter
+	vgpuReconcileFailuresTotal           metric.Int64Counter
+	vgpuStaleReleaseFailuresTotal        metric.Int64Counter
+	vgpuAssignmentsRetainedTotal         metric.Int64Counter
 	tracer                               trace.Tracer
 }
 
@@ -265,6 +282,30 @@ func newInstanceMetrics(meter metric.Meter, tracer trace.Tracer, m *manager) (*M
 	ttlReaperDeletionsTotal, err := meter.Int64Counter(
 		"hypeman_instances_ttl_reaper_deletions_total",
 		metric.WithDescription("Total number of instance TTL reaper deletion attempts"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	vgpuReconcileFailuresTotal, err := meter.Int64Counter(
+		"hypeman_instances_vgpu_reconcile_failures_total",
+		metric.WithDescription("Total number of vGPU reconcile pass stages that failed, leaving stale assignments or device leftovers allocated while /resources still advertises the capacity"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	vgpuStaleReleaseFailuresTotal, err := meter.Int64Counter(
+		"hypeman_instances_vgpu_stale_release_failures_total",
+		metric.WithDescription("Total number of stale vGPU assignment releases that failed, keeping the VF allocated until a later reconcile pass succeeds"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	vgpuAssignmentsRetainedTotal, err := meter.Int64Counter(
+		"hypeman_instances_vgpu_assignments_retained_total",
+		metric.WithDescription("Total number of failed rollbacks that left a vGPU assignment behind, by whether the retention record the periodic reconcile needs was persisted"),
 	)
 	if err != nil {
 		return nil, err
@@ -464,6 +505,9 @@ func newInstanceMetrics(meter metric.Meter, tracer trace.Tracer, m *manager) (*M
 		lifecycleEventsDroppedTotal:          lifecycleEventsDroppedTotal,
 		forkMemFileShareFallbacksTotal:       forkMemFileShareFallbacksTotal,
 		ttlReaperDeletionsTotal:              ttlReaperDeletionsTotal,
+		vgpuReconcileFailuresTotal:           vgpuReconcileFailuresTotal,
+		vgpuStaleReleaseFailuresTotal:        vgpuStaleReleaseFailuresTotal,
+		vgpuAssignmentsRetainedTotal:         vgpuAssignmentsRetainedTotal,
 		tracer:                               tracer,
 	}, nil
 }
@@ -561,6 +605,43 @@ func (m *manager) recordTimeToRunning(ctx context.Context, stored *StoredMetadat
 		attrs = append(attrs, attribute.String("hypervisor", string(stored.HypervisorType)))
 	}
 	m.metrics.timeToRunning.Record(ctx, duration, metric.WithAttributes(attrs...))
+}
+
+// recordVGPUReconcileFailure records a vGPU reconcile stage failing: stale
+// assignments or device leftovers stay allocated (capacity silently reduced
+// while /resources reports full) until a later pass succeeds, so sustained
+// failure must be alertable beyond a log line.
+func (m *manager) recordVGPUReconcileFailure(ctx context.Context, stage vgpuReconcileStage) {
+	if m.metrics == nil {
+		return
+	}
+	m.metrics.vgpuReconcileFailuresTotal.Add(ctx, 1, metric.WithAttributes(
+		attribute.String("stage", string(stage)),
+	))
+}
+
+// recordVGPUStaleReleaseFailure records a stale vGPU release failing: the VF
+// stays allocated while /resources still advertises it, so a wedged release
+// that fails every pass must be alertable beyond a log line.
+func (m *manager) recordVGPUStaleReleaseFailure(ctx context.Context) {
+	if m.metrics == nil {
+		return
+	}
+	m.metrics.vgpuStaleReleaseFailuresTotal.Add(ctx, 1)
+}
+
+// recordVGPURetainedAssignment records a failed rollback leaving a vGPU
+// assignment behind. An unpersisted retention record has no metadata claim,
+// so the device is only recovered by the periodic reconcile sweep; either way
+// the VF is unavailable while /resources still advertises it.
+func (m *manager) recordVGPURetainedAssignment(ctx context.Context, operation vgpuRetentionOperation, persisted bool) {
+	if m.metrics == nil {
+		return
+	}
+	m.metrics.vgpuAssignmentsRetainedTotal.Add(ctx, 1, metric.WithAttributes(
+		attribute.String("operation", string(operation)),
+		attribute.String("persisted", strconv.FormatBool(persisted)),
+	))
 }
 
 // recordStateTransition records a state transition with hypervisor label.

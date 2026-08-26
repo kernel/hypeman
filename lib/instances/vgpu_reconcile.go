@@ -56,6 +56,7 @@ func (m *manager) ReconcileVGPUs(ctx context.Context) {
 	protected, err := m.reconcileVGPUAssignments(ctx)
 	sweepVendorVFIO := err == nil
 	if err != nil {
+		m.recordVGPUReconcileFailure(ctx, vgpuReconcileStageListInstances)
 		log.ErrorContext(ctx, "failed to list instances for vGPU reconcile protection; skipping vendor VFIO sweep until the next pass, mdev reconcile still runs", "error", err)
 		protected = make(map[string]struct{})
 	}
@@ -64,6 +65,7 @@ func (m *manager) ReconcileVGPUs(ctx context.Context) {
 		reconcileDevices = devices.ReconcileVGPUs
 	}
 	if err := reconcileDevices(ctx, protected, sweepVendorVFIO); err != nil {
+		m.recordVGPUReconcileFailure(ctx, vgpuReconcileStageReconcileDevices)
 		log.WarnContext(ctx, "failed to reconcile vGPU devices", "error", err)
 	}
 }
@@ -125,6 +127,7 @@ func (m *manager) releaseStaleVGPUAssignment(ctx context.Context, id string) {
 		return
 	}
 	if err := m.releaseStoredVGPU(ctx, stored); err != nil {
+		m.recordVGPUStaleReleaseFailure(ctx)
 		log.WarnContext(ctx, "failed to release stale vGPU assignment; retrying on the next reconcile pass", "instance_id", id, "device_path", path, "error", err)
 		return
 	}
