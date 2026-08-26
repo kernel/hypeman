@@ -878,38 +878,12 @@ func (m *manager) WaitForReady(ctx context.Context, name string) error {
 	if err != nil {
 		return fmt.Errorf("parse image name: %w", err)
 	}
-
-	const maxWaitForExist = 30 * time.Second
-	const pollInterval = 100 * time.Millisecond
-
-	var img *Image
-	deadline := time.Now().Add(maxWaitForExist)
-	for {
-		if !ref.IsDigest() {
-			img = m.findRequestedTagImage(ref)
-		}
-		if img == nil {
-			img, err = m.GetImage(ctx, name)
-		}
-		if img != nil {
-			break
-		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("get image: %w", err)
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(pollInterval):
-		}
+	img, err := m.waitForImage(ctx, name, ref)
+	if err != nil {
+		return err
 	}
-
-	// Check if already in terminal state
-	switch img.Status {
-	case StatusReady:
-		return nil
-	case StatusFailed:
-		return conversionFailedErr(img.Error, nil)
+	if terminal, err := terminalImageError(img); terminal {
+		return err
 	}
 
 	digestHex := strings.TrimPrefix(img.Digest, "sha256:")
@@ -922,11 +896,8 @@ func (m *manager) WaitForReady(ctx context.Context, name string) error {
 	// Re-check after subscribing to close the race window
 	img, err = m.GetImage(ctx, ref.Repository()+"@"+img.Digest)
 	if err == nil {
-		switch img.Status {
-		case StatusReady:
-			return nil
-		case StatusFailed:
-			return conversionFailedErr(img.Error, nil)
+		if terminal, terminalErr := terminalImageError(img); terminal {
+			return terminalErr
 		}
 	}
 
@@ -939,6 +910,44 @@ func (m *manager) WaitForReady(ctx context.Context, name string) error {
 		return conversionFailedErr(nil, event.Err)
 	case <-ctx.Done():
 		return ctx.Err()
+	}
+}
+
+func (m *manager) waitForImage(ctx context.Context, name string, ref *NormalizedRef) (*Image, error) {
+	const maxWaitForExist = 30 * time.Second
+	const pollInterval = 100 * time.Millisecond
+	var lastErr error
+	deadline := time.Now().Add(maxWaitForExist)
+	for {
+		var img *Image
+		if !ref.IsDigest() {
+			img = m.findRequestedTagImage(ref)
+		}
+		if img == nil {
+			img, lastErr = m.GetImage(ctx, name)
+		}
+		if img != nil {
+			return img, nil
+		}
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("get image: %w", lastErr)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(pollInterval):
+		}
+	}
+}
+
+func terminalImageError(img *Image) (bool, error) {
+	switch img.Status {
+	case StatusReady:
+		return true, nil
+	case StatusFailed:
+		return true, conversionFailedErr(img.Error, nil)
+	default:
+		return false, nil
 	}
 }
 
