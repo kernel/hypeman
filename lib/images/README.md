@@ -65,6 +65,10 @@ Content-addressable storage with tag symlinks (similar to Docker/Unikraft):
         rootfs.erofs
       latest -> abc123def456...   # Tag symlink to digest
       3.18 -> def456abc123...     # Another tag
+    layers/                 # Content-addressed per-layer erofs artifacts (layer_artifacts.go)
+      <diff-id-hex>/        # sha256 of the layer's uncompressed tar (rootfs.diff_ids)
+        layer.erofs         # Layer contribution converted with mkfs.erofs -zlz4
+        metadata.json       # Source blob digest, diff id, format, size
   system/
     oci-cache/              # Shared OCI layout for all images
       index.json            # Manifest index with digest-based tags
@@ -92,6 +96,39 @@ Content-addressable storage with tag symlinks (similar to Docker/Unikraft):
 - Shared blob storage enables automatic layer deduplication across all images
 - Orphaned digests are automatically deleted when the last tag referencing them is removed
 - Symlinks only created after successful build (status: ready)
+
+## Layer Artifacts (layer_artifacts.go)
+
+`ExportLayerArtifacts` converts individual OCI layers from the shared OCI
+cache into content-addressed erofs artifacts under `images/layers/<diff-id>/`,
+keyed by the layer's diff ID (the sha256 of its uncompressed tar, from the
+image config's `rootfs.diff_ids`). A layer shared by any number of images
+converts once; the unpacked stream is hashed and verified against the config's
+diff ID during export.
+
+Scope and behavior:
+
+- Reusable exporter only: the flattened image build path (`buildImage` -> one
+  rootfs per image digest) and VM boot are unchanged, and nothing is recorded
+  in image metadata yet.
+- Layers with an unsupported media type (e.g. zstd) or that cannot be
+  unpacked standalone (e.g. hardlinks into an earlier layer) are reported as
+  skipped, not errors.
+- Requires Linux and `mkfs.erofs`; otherwise returns
+  `ErrLayerArtifactsUnsupported`.
+
+Known limitations a future layer-composition step must resolve:
+
+1. Whiteouts targeting lower layers are dropped: umoci applies OCI whiteouts
+   as removals against the (empty) standalone unpack root. An artifact holds
+   only what the layer contributes; expressing deletions needs an
+   overlayfs-style or custom composition format that hasn't been chosen yet.
+2. The image -> ordered artifact mapping is returned to the caller but not
+   persisted; `imageMetadata` gains layer fields once a composition consumer
+   exists.
+3. Artifacts are not reference-counted against the OCI cache GC. Safe today
+   (an artifact is self-contained once installed), but a GC policy for
+   `images/layers` is future work.
 
 ## Reference Handling (reference.go)
 

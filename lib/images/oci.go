@@ -510,10 +510,23 @@ func (c *ociClient) unpackLayers(ctx context.Context, layoutTag, targetDir strin
 
 	// Unpack layers using umoci's layer package with rootless mode
 	// Map container UIDs to current user's UID (identity mapping)
+	unpackOpts := rootlessUnpackOptions()
+
+	err = layer.UnpackRootfs(ctx, casEngine, targetDir, ociManifest, unpackOpts)
+	if err != nil {
+		return fmt.Errorf("unpack rootfs: %w", err)
+	}
+
+	return nil
+}
+
+// rootlessUnpackOptions builds the umoci unpack options hypeman uses for OCI
+// layer extraction: rootless, with container root mapped to the current user
+// so chown is never required.
+func rootlessUnpackOptions() *layer.UnpackOptions {
 	uid := uint32(os.Getuid())
 	gid := uint32(os.Getgid())
-
-	unpackOpts := &layer.UnpackOptions{
+	return &layer.UnpackOptions{
 		OnDiskFormat: layer.DirRootfs{
 			MapOptions: layer.MapOptions{
 				Rootless: true, // Don't fail on chown errors
@@ -526,13 +539,6 @@ func (c *ociClient) unpackLayers(ctx context.Context, layoutTag, targetDir strin
 			},
 		},
 	}
-
-	err = layer.UnpackRootfs(ctx, casEngine, targetDir, ociManifest, unpackOpts)
-	if err != nil {
-		return fmt.Errorf("unpack rootfs: %w", err)
-	}
-
-	return nil
 }
 
 // validateConfigFileForUnpack rejects malformed image configs before calling

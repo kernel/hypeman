@@ -161,6 +161,27 @@ func (p *Paths) ImageContentMetadata(digestHex string) string {
 	return filepath.Join(p.ImageContentDir(digestHex), "metadata.json")
 }
 
+// LayerArtifactsDir returns the root directory for content-addressed layer artifacts.
+func (p *Paths) LayerArtifactsDir() string {
+	return filepath.Join(p.dataDir, "images", "layers")
+}
+
+// LayerArtifactDir returns the directory for one layer artifact, keyed by the
+// layer's diff ID hex (the sha256 of its uncompressed tar).
+func (p *Paths) LayerArtifactDir(diffHex string) string {
+	return filepath.Join(p.LayerArtifactsDir(), diffHex)
+}
+
+// LayerArtifactPath returns the path to a layer's erofs artifact file.
+func (p *Paths) LayerArtifactPath(diffHex string) string {
+	return filepath.Join(p.LayerArtifactDir(diffHex), "layer.erofs")
+}
+
+// LayerArtifactMetadata returns the path to a layer artifact's metadata.json.
+func (p *Paths) LayerArtifactMetadata(diffHex string) string {
+	return filepath.Join(p.LayerArtifactDir(diffHex), "metadata.json")
+}
+
 // ImageRepositoriesDir returns the root directory for repository tag references.
 func (p *Paths) ImageRepositoriesDir() string {
 	return filepath.Join(p.dataDir, "images", "repositories")
