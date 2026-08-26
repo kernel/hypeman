@@ -15,6 +15,8 @@ Like Cloud Hypervisor, Firecracker binaries are embedded and extracted into `dat
 - Download helper: `make download-firecracker-binaries`
 - Runtime override: `hypervisor.firecracker_binary_path` (uses external binary instead of embedded)
 
+Multiple versions are embedded so snapshots can be restored with the Firecracker version recorded in their instance metadata. `defaultVersion` in `binaries.go` controls the version used for new instances; changing it does not migrate running or standby instances.
+
 ## VM State Mapping
 
 `mapVMState()` maps Firecracker `GET /` state strings to internal states:
