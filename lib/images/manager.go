@@ -264,12 +264,16 @@ func (m *manager) CreateImage(ctx context.Context, req CreateImageRequest) (*Ima
 			}
 			// Fall through to re-queue the build
 		} else {
-			// We have this digest already (ready, pending, pulling, or converting).
-			// Register the requested tag immediately so a second caller can wait on
-			// the same shared content while its build is still in progress.
+			// Keep an existing ready tag visible until a replacement is ready.
 			if ref.Tag() != "" {
-				if err := createTagSymlink(m.paths, ref.Repository(), ref.Tag(), ref.DigestHex()); err != nil {
-					return nil, fmt.Errorf("create image tag: %w", err)
+				var tagErr error
+				if meta.Status == StatusReady {
+					tagErr = createTagSymlink(m.paths, ref.Repository(), ref.Tag(), ref.DigestHex())
+				} else {
+					tagErr = ensurePendingTag(m.paths, ref.Repository(), ref.Tag(), ref.DigestHex())
+				}
+				if tagErr != nil {
+					return nil, fmt.Errorf("create image tag: %w", tagErr)
 				}
 			}
 			img := meta.toImage()
@@ -326,11 +330,15 @@ func (m *manager) ImportLocalImage(ctx context.Context, repo, reference, digest 
 			}
 			// Fall through to re-queue the build
 		} else {
-			// Register the requested tag immediately so callers can wait on shared
-			// content while its build is still in progress.
 			if ref.Tag() != "" {
-				if err := createTagSymlink(m.paths, ref.Repository(), ref.Tag(), ref.DigestHex()); err != nil {
-					return nil, fmt.Errorf("create image tag: %w", err)
+				var tagErr error
+				if meta.Status == StatusReady {
+					tagErr = createTagSymlink(m.paths, ref.Repository(), ref.Tag(), ref.DigestHex())
+				} else {
+					tagErr = ensurePendingTag(m.paths, ref.Repository(), ref.Tag(), ref.DigestHex())
+				}
+				if tagErr != nil {
+					return nil, fmt.Errorf("create image tag: %w", tagErr)
 				}
 			}
 			img := meta.toImage()
@@ -426,21 +434,36 @@ func (m *manager) createAndQueueImage(ref *ResolvedRef, req CreateImageRequest, 
 	// Record the requested platform optimistically while the build is pending;
 	// buildImage overwrites it with the authoritative manifest platform once the
 	// image config is pulled.
+	previousTagDigest := ""
+	var err error
+	if ref.Tag() != "" {
+		previousTagDigest, err = resolveTag(m.paths, ref.Repository(), ref.Tag())
+		if err != nil && !errors.Is(err, ErrNotFound) {
+			return nil, fmt.Errorf("resolve existing image tag: %w", err)
+		}
+	}
 	meta := &imageMetadata{
-		Name:         ref.String(),
-		Digest:       ref.Digest(),
-		Platform:     requestedPlatform.String(),
-		Status:       StatusPending,
-		Request:      &storedReq,
-		BorrowedAuth: req.Credentials != nil,
-		BuildID:      uuid.New().String(),
-		Tags:         tags.Clone(req.Tags),
-		CreatedAt:    time.Now(),
+		Name:              ref.String(),
+		Digest:            ref.Digest(),
+		Platform:          requestedPlatform.String(),
+		Status:            StatusPending,
+		Request:           &storedReq,
+		BorrowedAuth:      req.Credentials != nil,
+		BuildID:           uuid.New().String(),
+		Tags:              tags.Clone(req.Tags),
+		RequestedTag:      ref.Tag(),
+		PreviousTagDigest: previousTagDigest,
+		CreatedAt:         time.Now(),
 	}
 
 	// Write initial metadata
 	if err := writeMetadata(m.paths, ref.Repository(), ref.DigestHex(), meta); err != nil {
 		return nil, fmt.Errorf("write initial metadata: %w", err)
+	}
+	if ref.Tag() != "" && previousTagDigest == "" {
+		if err := createTagSymlink(m.paths, ref.Repository(), ref.Tag(), ref.DigestHex()); err != nil {
+			return nil, fmt.Errorf("create pending image tag: %w", err)
+		}
 	}
 
 	// Keep borrowed credentials outside the queued closure so their lifetime is
@@ -598,9 +621,12 @@ func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, diskSize i
 	}
 
 	m.notifyReady(ref.DigestHex(), StatusReady, nil)
-	if ref.Tag() != "" {
-		if err := createTagSymlink(m.paths, ref.Repository(), ref.Tag(), ref.DigestHex()); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to create tag symlink: %v\n", err)
+	if meta.RequestedTag != "" {
+		current, resolveErr := resolveTag(m.paths, ref.Repository(), meta.RequestedTag)
+		if resolveErr == nil && (current == ref.DigestHex() || current == meta.PreviousTagDigest) {
+			if err := createTagSymlink(m.paths, ref.Repository(), meta.RequestedTag, ref.DigestHex()); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: failed to create tag symlink: %v\n", err)
+			}
 		}
 	}
 	m.refreshDiskUsageTotals()
@@ -824,25 +850,49 @@ func (m *manager) TotalOCICacheBytes(ctx context.Context) (int64, error) {
 	return ociCacheBytes, nil
 }
 
+func (m *manager) findRequestedTagImage(ref *NormalizedRef) *Image {
+	metas, err := listAllMetadata(m.paths)
+	if err != nil {
+		return nil
+	}
+	var newest *imageMetadata
+	for _, meta := range metas {
+		if meta.RequestedTag != ref.Tag() || !strings.HasPrefix(meta.Name, ref.Repository()+":") {
+			continue
+		}
+		if newest == nil || newest.CreatedAt.Before(meta.CreatedAt) {
+			newest = meta
+		}
+	}
+	if newest == nil {
+		return nil
+	}
+	image := newest.toImage()
+	image.Name = ref.String()
+	return image
+}
+
 // WaitForReady blocks until the image reaches a terminal state (ready or failed)
 // or the context is cancelled.
-//
-// The image may not exist yet when this is called (e.g., the registry's
-// triggerConversion goroutine hasn't called ImportLocalImage yet), so we
-// poll briefly for the image to appear before subscribing for notifications.
 func (m *manager) WaitForReady(ctx context.Context, name string) error {
-	// Wait for the image to appear in the store. In the build flow, the
-	// registry triggers ImportLocalImage asynchronously after a push, so the
-	// image may not exist when the build manager calls WaitForReady.
+	ref, err := ParseNormalizedRef(name)
+	if err != nil {
+		return fmt.Errorf("parse image name: %w", err)
+	}
+
 	const maxWaitForExist = 30 * time.Second
 	const pollInterval = 100 * time.Millisecond
 
 	var img *Image
 	deadline := time.Now().Add(maxWaitForExist)
 	for {
-		got, err := m.GetImage(ctx, name)
-		if err == nil {
-			img = got
+		if !ref.IsDigest() {
+			img = m.findRequestedTagImage(ref)
+		}
+		if img == nil {
+			img, err = m.GetImage(ctx, name)
+		}
+		if img != nil {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -871,7 +921,7 @@ func (m *manager) WaitForReady(ctx context.Context, name string) error {
 	defer m.unsubscribeFromReady(digestHex, ch)
 
 	// Re-check after subscribing to close the race window
-	img, err := m.GetImage(ctx, name)
+	img, err = m.GetImage(ctx, ref.Repository()+"@"+img.Digest)
 	if err == nil {
 		switch img.Status {
 		case StatusReady:
