@@ -546,7 +546,7 @@ func TestVGPUAssignmentClaimedByLiveInstanceProtectsReusedPIDClaim(t *testing.T)
 		SocketPath:                socketPath,
 	}}))
 
-	claimed, err := m.vgpuAssignmentClaimedByLiveInstance(context.Background(), "other-instance", devicePath)
+	claimed, err := m.vgpuAssignmentClaimedByLiveInstance("other-instance", devicePath)
 	require.NoError(t, err)
 	assert.True(t, claimed)
 }
@@ -740,7 +740,7 @@ func TestKillHypervisorEscalatesToSIGKILLWhenSIGTERMIgnored(t *testing.T) {
 	pid, identity := startTrapProcess(t, "")
 	socketPath := filepath.Join(t.TempDir(), "missing.sock")
 
-	m := &manager{vgpuInitTermGrace: 50 * time.Millisecond}
+	m := &manager{vfioTermGrace: 50 * time.Millisecond}
 	require.NoError(t, m.killHypervisor(context.Background(), &Instance{
 		State: StateInitializing,
 		StoredMetadata: StoredMetadata{

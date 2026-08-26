@@ -22,7 +22,7 @@ func TestReconcileVGPUsBoundsStartupProtection(t *testing.T) {
 	deadPID := dead.Process.Pid
 	now := time.Now().UTC()
 	recent := now.Add(-time.Minute)
-	stale := now.Add(-VGPUAssignmentStartupGracePeriod - time.Minute)
+	stale := now.Add(-devices.VGPUAssignmentGracePeriod - time.Minute)
 
 	var protected map[string]struct{}
 	var destroyed []devices.VGPUAssignment

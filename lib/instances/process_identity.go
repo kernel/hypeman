@@ -27,9 +27,9 @@ const linuxBootIDPath = "/proc/sys/kernel/random/boot_id"
 // does not unstick it, so the wait is short to keep stop and delete fast.
 const hypervisorSIGKILLWaitTimeout = 2 * time.Second
 
-func (m *manager) vgpuTermGrace() time.Duration {
-	if m.vgpuInitTermGrace > 0 {
-		return m.vgpuInitTermGrace
+func (m *manager) vfioTerminationGrace() time.Duration {
+	if m.vfioTermGrace > 0 {
+		return m.vfioTermGrace
 	}
 	return hypervisor.VFIOTermGrace
 }
@@ -37,7 +37,7 @@ func (m *manager) vgpuTermGrace() time.Duration {
 // SIGKILL during guest driver init can wedge a VF until the parent GPU is reset.
 func (m *manager) terminateThenKill(ctx context.Context, inst *Instance, pid int) error {
 	if inst.GPUProfile != "" || len(inst.Devices) > 0 {
-		if syscall.Kill(pid, syscall.SIGTERM) == nil && WaitForProcessExit(pid, m.vgpuTermGrace()) {
+		if syscall.Kill(pid, syscall.SIGTERM) == nil && WaitForProcessExit(pid, m.vfioTerminationGrace()) {
 			return nil
 		}
 		logger.FromContext(ctx).WarnContext(ctx, "hypervisor with VFIO devices did not exit on SIGTERM; hard-killing, device may wedge if the guest driver was initializing",

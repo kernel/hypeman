@@ -219,7 +219,7 @@ type manager struct {
 	vgpuReconcileInterval time.Duration
 	discoverVGPU          func() (devices.VGPUFramework, []devices.VirtualFunction, error)
 
-	vgpuInitTermGrace time.Duration
+	vfioTermGrace time.Duration
 
 	// Hypervisor support
 	vmStarters                       map[hypervisor.Type]hypervisor.VMStarter
@@ -293,8 +293,6 @@ func NewManagerWithConfigE(p *paths.Paths, imageManager images.Manager, systemMa
 		defaultHypervisor:                defaultHypervisor,
 		now:                              time.Now,
 		writeFile:                        os.WriteFile,
-		createVGPU:                       devices.CreateVGPU,
-		destroyVGPU:                      devices.DestroyVGPU,
 		meter:                            meter,
 		tracer:                           tracer,
 		guestMemoryPolicy:                policy,
@@ -740,12 +738,12 @@ func (m *manager) DefaultHypervisor() hypervisor.Type {
 	return m.defaultHypervisor
 }
 
-func (m *manager) listInstancesForReconcile(ctx context.Context) ([]Instance, error) {
+func (m *manager) listMetadataForReconcile() ([]StoredMetadata, error) {
 	files, err := m.listMetadataFilesStrict()
 	if err != nil {
 		return nil, err
 	}
-	result := make([]Instance, 0, len(files))
+	result := make([]StoredMetadata, 0, len(files))
 	for _, file := range files {
 		id := filepath.Base(filepath.Dir(file))
 		meta, err := m.loadMetadata(id)
@@ -755,7 +753,7 @@ func (m *manager) listInstancesForReconcile(ctx context.Context) ([]Instance, er
 			}
 			return nil, fmt.Errorf("load metadata for instance %s: %w", id, err)
 		}
-		result = append(result, Instance{StoredMetadata: meta.StoredMetadata})
+		result = append(result, meta.StoredMetadata)
 	}
 	return result, nil
 }

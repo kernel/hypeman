@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestListInstancesForReconcileFailsOnInvalidMetadata(t *testing.T) {
+func TestListMetadataForReconcileFailsOnInvalidMetadata(t *testing.T) {
 	m := &manager{paths: paths.New(t.TempDir())}
 
 	require.NoError(t, m.ensureDirectories("valid"))
@@ -31,18 +31,18 @@ func TestListInstancesForReconcileFailsOnInvalidMetadata(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, listed, 1)
 
-	_, err = m.listInstancesForReconcile(context.Background())
+	_, err = m.listMetadataForReconcile()
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "load metadata for instance invalid")
 
 	require.NoError(t, os.Remove(m.paths.InstanceMetadata("invalid")))
-	listed, err = m.listInstancesForReconcile(context.Background())
+	metadata, err := m.listMetadataForReconcile()
 	require.NoError(t, err)
-	require.Len(t, listed, 1)
-	assert.Equal(t, "valid", listed[0].Id)
+	require.Len(t, metadata, 1)
+	assert.Equal(t, "valid", metadata[0].Id)
 }
 
-func TestListInstancesForReconcileSkipsInstanceDeletedDuringListing(t *testing.T) {
+func TestListMetadataForReconcileSkipsInstanceDeletedDuringListing(t *testing.T) {
 	m := &manager{paths: paths.New(t.TempDir())}
 
 	for _, id := range []string{"aaa-ghost", "zzz-live"} {
@@ -57,13 +57,13 @@ func TestListInstancesForReconcileSkipsInstanceDeletedDuringListing(t *testing.T
 
 	unlock := hypervisor.LockSnapshotSourceAliasMutation()
 	type result struct {
-		listed []Instance
-		err    error
+		metadata []StoredMetadata
+		err      error
 	}
 	done := make(chan result, 1)
 	go func() {
-		listed, err := m.listInstancesForReconcile(context.Background())
-		done <- result{listed, err}
+		metadata, err := m.listMetadataForReconcile()
+		done <- result{metadata, err}
 	}()
 	time.Sleep(100 * time.Millisecond)
 	require.NoError(t, os.Remove(m.paths.InstanceMetadata("aaa-ghost")))
@@ -71,8 +71,8 @@ func TestListInstancesForReconcileSkipsInstanceDeletedDuringListing(t *testing.T
 
 	res := <-done
 	require.NoError(t, res.err)
-	require.Len(t, res.listed, 1)
-	assert.Equal(t, "zzz-live", res.listed[0].Id)
+	require.Len(t, res.metadata, 1)
+	assert.Equal(t, "zzz-live", res.metadata[0].Id)
 }
 
 func TestParseExitSentinelLine(t *testing.T) {
