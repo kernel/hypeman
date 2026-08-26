@@ -82,6 +82,7 @@ type imageLayout struct {
 	dir      string
 	metadata string
 	disk     string
+	layers   string
 	content  bool
 }
 
@@ -94,11 +95,13 @@ func resolveImageLayout(p *paths.Paths, repository, digestHex string) imageLayou
 		dir:      p.ImageDigestDir(repository, digestHex),
 		metadata: p.ImageMetadata(repository, digestHex),
 		disk:     p.ImageDigestPath(repository, digestHex),
+		layers:   p.ImageLayers(repository, digestHex),
 	}
 	content := imageLayout{
 		dir:      p.ImageContentDir(digestHex),
 		metadata: p.ImageContentMetadata(digestHex),
 		disk:     p.ImageContentPath(digestHex),
+		layers:   p.ImageContentLayers(digestHex),
 		content:  true,
 	}
 
@@ -212,6 +215,7 @@ func readContentMetadata(p *paths.Paths, digestHex string) (*imageMetadata, erro
 		dir:      p.ImageContentDir(digestHex),
 		metadata: p.ImageContentMetadata(digestHex),
 		disk:     p.ImageContentPath(digestHex),
+		layers:   p.ImageContentLayers(digestHex),
 		content:  true,
 	})
 }
@@ -269,6 +273,15 @@ func promoteImageToContent(p *paths.Paths, sourceRepository, digestHex string, s
 		}
 		if err := writeMetadataFile(p.ImageContentMetadata(digestHex), sourceMeta); err != nil {
 			return fmt.Errorf("finalize content metadata: %w", err)
+		}
+		// The layer list lives beside the source metadata; carry it over before
+		// the legacy tree below is removed.
+		if layerData, err := os.ReadFile(p.ImageLayers(sourceRepository, digestHex)); err == nil {
+			if err := installAtomically(p.ImageContentLayers(digestHex), func(path string) error {
+				return os.WriteFile(path, layerData, 0644)
+			}); err != nil {
+				return fmt.Errorf("promote layer manifest: %w", err)
+			}
 		}
 	}
 

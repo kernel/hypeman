@@ -434,3 +434,66 @@ func TestDockerSaveToOCILayoutCacheHit(t *testing.T) {
 
 	t.Log("Cache hit verified: pullAndExport skipped remote pull and used OCI layout cache")
 }
+
+// TestExtractOCIImageDetailsReturnsOrderedLayers verifies that the layer
+// descriptors extracted from the OCI layout preserve manifest order and carry
+// the digests, sizes, and diff_ids needed for future layer deduplication.
+func TestExtractOCIImageDetailsReturnsOrderedLayers(t *testing.T) {
+	// Start from the synthetic builder image and append a second layer so
+	// ordering is actually exercised.
+	img := createTestDockerImage(t)
+	secondLayer, err := tarball.LayerFromOpener(func() (io.ReadCloser, error) {
+		var buf bytes.Buffer
+		gzw := gzip.NewWriter(&buf)
+		tw := tar.NewWriter(gzw)
+		content := "second-layer-content"
+		require.NoError(t, tw.WriteHeader(&tar.Header{
+			Name:     "app/second.txt",
+			Size:     int64(len(content)),
+			Typeflag: tar.TypeReg,
+			Mode:     0644,
+		}))
+		_, err := tw.Write([]byte(content))
+		require.NoError(t, err)
+		require.NoError(t, tw.Close())
+		require.NoError(t, gzw.Close())
+		return io.NopCloser(bytes.NewReader(buf.Bytes())), nil
+	})
+	require.NoError(t, err)
+	img, err = mutate.AppendLayers(img, secondLayer)
+	require.NoError(t, err)
+
+	cacheDir := t.TempDir()
+	imgDigest, err := img.Digest()
+	require.NoError(t, err)
+	layoutTag := digestToLayoutTag(imgDigest.String())
+
+	path, err := layout.Write(cacheDir, empty.Index)
+	require.NoError(t, err)
+	require.NoError(t, path.AppendImage(img, layout.WithAnnotations(map[string]string{
+		"org.opencontainers.image.ref.name": layoutTag,
+	})))
+
+	client, err := newOCIClient(cacheDir)
+	require.NoError(t, err)
+
+	_, layers, err := client.extractOCIImageDetails(layoutTag)
+	require.NoError(t, err)
+
+	manifest, err := img.Manifest()
+	require.NoError(t, err)
+	configFile, err := img.ConfigFile()
+	require.NoError(t, err)
+
+	require.Len(t, layers, len(manifest.Layers))
+	require.Len(t, layers, len(configFile.RootFS.DiffIDs))
+	for i, want := range manifest.Layers {
+		assert.Equal(t, string(want.MediaType), layers[i].MediaType, "layer %d mediatype", i)
+		assert.Equal(t, want.Digest.String(), layers[i].Digest, "layer %d digest", i)
+		assert.Equal(t, want.Size, layers[i].Size, "layer %d size", i)
+		assert.Equal(t, configFile.RootFS.DiffIDs[i].String(), layers[i].DiffID, "layer %d diff_id", i)
+	}
+	// The two layers must be distinct so order is observable.
+	require.NotEqual(t, layers[0].Digest, layers[1].Digest)
+	assert.NoError(t, newImageLayers(layers).validate())
+}

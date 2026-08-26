@@ -729,7 +729,7 @@ func TestDeleteAndRecreateDuringBuildTail(t *testing.T) {
 	require.NoError(t, err)
 	staleRef := NewResolvedRef(normalized, digestStr)
 	m.updateStatusByDigest(staleRef, StatusFailed, errors.New("stale build"), firstMeta.BuildID)
-	staleResult, _, _, err := m.ociClient.extractOCIImageDetails(digestHex)
+	staleResult, _, err := m.ociClient.extractOCIImageDetails(digestHex)
 	require.NoError(t, err)
 	require.ErrorIs(t, m.finalizeImage(staleRef, &pullResult{Metadata: staleResult}, 1, firstMeta.BuildID, ""), errStaleBuild)
 	currentMeta, err = readMetadata(p, repo, digestHex)
@@ -781,4 +781,60 @@ func waitForReady(t *testing.T, mgr Manager, ctx context.Context, imageName stri
 	}
 
 	t.Fatal("Build did not complete within 60 seconds")
+}
+
+// TestImportLocalImagePersistsLayerManifest verifies the full local build
+// pipeline persists the ordered layer list beside the flattened rootfs. The
+// rootfs stays a single bootable disk; the layer list is metadata only.
+func TestImportLocalImagePersistsLayerManifest(t *testing.T) {
+	origFormat := DefaultImageFormat
+	DefaultImageFormat = FormatCpio
+	defer func() { DefaultImageFormat = origFormat }()
+
+	dataDir := t.TempDir()
+	p := paths.New(dataDir)
+	mgr, err := NewManager(p, 1, nil)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	img := createTestDockerImage(t)
+	imgDigest, err := img.Digest()
+	require.NoError(t, err)
+	digestStr := imgDigest.String()
+
+	cacheDir := p.SystemOCICache()
+	require.NoError(t, os.MkdirAll(cacheDir, 0755))
+	layoutPath, err := layout.Write(cacheDir, empty.Index)
+	require.NoError(t, err)
+	require.NoError(t, layoutPath.AppendImage(img, layout.WithAnnotations(map[string]string{
+		"org.opencontainers.image.ref.name": digestToLayoutTag(digestStr),
+	})))
+
+	imported, err := mgr.ImportLocalImage(ctx, "localhost:8080/internal/builder", "latest", digestStr)
+	require.NoError(t, err)
+	waitForReady(t, mgr, ctx, imported.Name)
+
+	manifest, err := img.Manifest()
+	require.NoError(t, err)
+	configFile, err := img.ConfigFile()
+	require.NoError(t, err)
+
+	repository := "localhost:8080/internal/builder"
+	ref, err := parseContentRef(digestStr)
+	require.NoError(t, err)
+	layers, err := readImageLayers(p, repository, ref)
+	require.NoError(t, err)
+	require.Len(t, layers.Layers, len(manifest.Layers))
+	for i, want := range manifest.Layers {
+		assert.Equal(t, want.Digest.String(), layers.Layers[i].Digest, "layer %d digest", i)
+		assert.Equal(t, want.Size, layers.Layers[i].Size, "layer %d size", i)
+		assert.Equal(t, configFile.RootFS.DiffIDs[i].String(), layers.Layers[i].DiffID, "layer %d diff_id", i)
+	}
+
+	// Boot behavior is unchanged: the flattened rootfs disk sits beside the
+	// layer list in the same layout directory.
+	diskPath, err := GetDiskPath(p, imported.Name, digestStr)
+	require.NoError(t, err)
+	require.FileExists(t, diskPath)
+	require.Equal(t, filepath.Dir(diskPath), filepath.Dir(layersPath(p, repository, ref.Hex())))
 }

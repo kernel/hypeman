@@ -161,6 +161,12 @@ func (p *Paths) ImageContentMetadata(digestHex string) string {
 	return filepath.Join(p.ImageContentDir(digestHex), "metadata.json")
 }
 
+// ImageContentLayers returns the path to the persisted ordered layer list for
+// content-addressed image data.
+func (p *Paths) ImageContentLayers(digestHex string) string {
+	return filepath.Join(p.ImageContentDir(digestHex), "layers.json")
+}
+
 // ImageRepositoriesDir returns the root directory for repository tag references.
 func (p *Paths) ImageRepositoriesDir() string {
 	return filepath.Join(p.dataDir, "images", "repositories")
@@ -189,6 +195,11 @@ func (p *Paths) ImageDigestPath(repository, digestHex string) string {
 // ImageMetadata returns the path to metadata.json for a digest.
 func (p *Paths) ImageMetadata(repository, digestHex string) string {
 	return filepath.Join(p.ImageDigestDir(repository, digestHex), "metadata.json")
+}
+
+// ImageLayers returns the path to the persisted ordered layer list for a digest.
+func (p *Paths) ImageLayers(repository, digestHex string) string {
+	return filepath.Join(p.ImageDigestDir(repository, digestHex), "layers.json")
 }
 
 // ImageTagSymlink returns the path to a tag symlink.

@@ -545,6 +545,17 @@ func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, diskSize i
 	meta.Labels = result.Metadata.Labels
 	meta.WorkingDir = result.Metadata.WorkingDir
 
+	// Persist the ordered layer descriptors before the metadata flips to ready,
+	// so a ready image always carries its layer list for future deduplication.
+	// The bootable disk above stays a flattened rootfs; this is metadata only.
+	contentRef, err := parseContentRef(ref.Digest())
+	if err != nil {
+		return fmt.Errorf("parse image digest: %w", err)
+	}
+	if err := writeImageLayers(m.paths, ref.Repository(), contentRef, newImageLayers(result.Layers)); err != nil {
+		return fmt.Errorf("write layer list: %w", err)
+	}
+
 	if err := writeMetadata(m.paths, ref.Repository(), ref.DigestHex(), meta); err != nil {
 		return fmt.Errorf("write final metadata: %w", err)
 	}

@@ -59,9 +59,11 @@ Content-addressable storage with tag symlinks (similar to Docker/Unikraft):
     docker.io/library/alpine/
       abc123def456.../      # Digest (sha256:abc123def456...)
         metadata.json       # Status, entrypoint, cmd, env
+        layers.json         # Ordered OCI layer descriptors (digests, sizes, diff_ids)
         rootfs.erofs        # Compressed read-only disk
       def456abc123.../      # Another version (digest)
         metadata.json
+        layers.json
         rootfs.erofs
       latest -> abc123def456...   # Tag symlink to digest
       3.18 -> def456abc123...     # Another tag
@@ -90,6 +92,10 @@ Content-addressable storage with tag symlinks (similar to Docker/Unikraft):
 - Pulling same tag twice updates the symlink if digest changed
 - OCI cache uses digest hex as layout tag for true content-addressable caching
 - Shared blob storage enables automatic layer deduplication across all images
+- Each digest stores layers.json: the ordered OCI layer descriptors (media type,
+  compressed digest, size, diff_id) persisted at build time. Boot still uses the
+  flattened rootfs disk; the layer list exists so future work can deduplicate and
+  recompose layers without re-pulling from a registry
 - Orphaned digests are automatically deleted when the last tag referencing them is removed
 - Symlinks only created after successful build (status: ready)
 
