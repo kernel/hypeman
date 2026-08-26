@@ -109,7 +109,7 @@ func TestCleanupFailedCreateReportsUnpersistedRetention(t *testing.T) {
 	require.Error(t, err, "the lost retention leaves no metadata claim, so the periodic sweep releases the VF")
 }
 
-func TestCleanupFailedCreateReportsRetainedWhenFullMetadataSurvives(t *testing.T) {
+func TestCleanupFailedCreateRewritesFullMetadataWhenDirectoryIsReadOnly(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root bypasses directory permissions")
 	}
@@ -133,6 +133,10 @@ func TestCleanupFailedCreateReportsRetainedWhenFullMetadataSurvives(t *testing.T
 	require.NoError(t, err)
 	assert.Equal(t, stored.GPUFramework, retained.GPUFramework)
 	assert.Equal(t, stored.GPUDevicePath, retained.GPUDevicePath)
+	assert.True(t, retained.GPURetainedForCleanup)
+
+	_, err = m.startInstance(context.Background(), id, StartInstanceRequest{})
+	assert.ErrorIs(t, err, errVGPURetentionStub)
 }
 
 func TestVGPURetentionWrapPending(t *testing.T) {

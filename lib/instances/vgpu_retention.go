@@ -2,9 +2,13 @@ package instances
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"os"
 	"time"
 
 	"github.com/kernel/hypeman/lib/devices"
+	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/logger"
 )
 
@@ -62,7 +66,16 @@ func (m *manager) persistVGPURetention(ctx context.Context, retention *vgpuReten
 	retentionSurvives := func() bool {
 		meta, err := m.loadMetadata(id)
 		if err == nil && storedVGPUDevicePath(&meta.StoredMetadata) != "" {
-			return true
+			saveErr := m.saveVGPURetentionStub(retainedVGPU)
+			if saveErr == nil {
+				return true
+			}
+			log.ErrorContext(ctx, "failed to replace surviving instance metadata with vGPU retention stub", "instance_id", id, "error", saveErr)
+			overwriteErr := m.overwriteVGPURetentionStub(retainedVGPU)
+			if overwriteErr == nil {
+				return true
+			}
+			log.ErrorContext(ctx, "failed to overwrite surviving instance metadata with vGPU retention stub", "instance_id", id, "error", overwriteErr)
 		}
 		if err := m.deleteInstanceData(id); err != nil {
 			log.ErrorContext(ctx, "failed to delete stale instance data after retention failure", "instance_id", id, "error", err)
@@ -79,28 +92,56 @@ func (m *manager) persistVGPURetention(ctx context.Context, retention *vgpuReten
 		retention.persisted = retentionSurvives()
 		return
 	}
-	retained := StoredMetadata{
-		Id:                    id,
-		Name:                  retainedVGPU.Name,
-		Image:                 retainedVGPU.Image,
-		ResolvedImage:         retainedVGPU.ResolvedImage,
-		Platform:              retainedVGPU.Platform,
-		CreatedAt:             retainedVGPU.CreatedAt,
-		HypervisorType:        retainedVGPU.HypervisorType,
-		HypervisorVersion:     retainedVGPU.HypervisorVersion,
-		SocketPath:            retainedVGPU.SocketPath,
-		DataDir:               retainedVGPU.DataDir,
-		GPUProfile:            retainedVGPU.GPUProfile,
-		GPUFramework:          retainedVGPU.GPUFramework,
-		GPUDevicePath:         retainedVGPU.GPUDevicePath,
-		GPUMdevUUID:           retainedVGPU.GPUMdevUUID,
-		GPUAssignedAt:         retainedVGPU.GPUAssignedAt,
-		GPURetainedForCleanup: true,
-	}
-	if err := m.saveMetadata(&metadata{StoredMetadata: retained}); err != nil {
+	if err := m.saveVGPURetentionStub(retainedVGPU); err != nil {
 		log.ErrorContext(ctx, "failed to retain vGPU assignment metadata after cleanup failure", "instance_id", id, "error", err)
 		retention.persisted = retentionSurvives()
 		return
 	}
 	retention.persisted = true
+}
+
+func vgpuRetentionMetadata(source *StoredMetadata) *metadata {
+	return &metadata{StoredMetadata: StoredMetadata{
+		Id:                    source.Id,
+		Name:                  source.Name,
+		Image:                 source.Image,
+		ResolvedImage:         source.ResolvedImage,
+		Platform:              source.Platform,
+		CreatedAt:             source.CreatedAt,
+		HypervisorType:        source.HypervisorType,
+		HypervisorVersion:     source.HypervisorVersion,
+		SocketPath:            source.SocketPath,
+		DataDir:               source.DataDir,
+		GPUProfile:            source.GPUProfile,
+		GPUFramework:          source.GPUFramework,
+		GPUDevicePath:         source.GPUDevicePath,
+		GPUMdevUUID:           source.GPUMdevUUID,
+		GPUAssignedAt:         source.GPUAssignedAt,
+		GPURetainedForCleanup: true,
+	}}
+}
+
+func (m *manager) saveVGPURetentionStub(source *StoredMetadata) error {
+	return m.saveMetadata(vgpuRetentionMetadata(source))
+}
+
+// overwriteVGPURetentionStub handles a surviving metadata file when its
+// directory cannot create the temporary file used by saveMetadata.
+func (m *manager) overwriteVGPURetentionStub(source *StoredMetadata) error {
+	retained := vgpuRetentionMetadata(source)
+	data, err := json.MarshalIndent(retained, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal metadata: %w", err)
+	}
+	unlockAliasReaders := hypervisor.LockSnapshotSourceAliasReaders()
+	defer unlockAliasReaders()
+	writeFile := m.writeFile
+	if writeFile == nil {
+		writeFile = os.WriteFile
+	}
+	if err := writeFile(m.paths.InstanceMetadata(source.Id), data, 0644); err != nil {
+		return fmt.Errorf("write metadata: %w", err)
+	}
+	m.syncAdmissionAllocation(retained)
+	return nil
 }
