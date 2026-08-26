@@ -36,9 +36,34 @@ func TestResolveBinaryPathInvalidCustomPath(t *testing.T) {
 }
 
 func TestParseVersionFallback(t *testing.T) {
+	assert.Equal(t, V1_16_1, defaultVersion)
 	assert.Equal(t, defaultVersion, parseVersion(""))
 	assert.Equal(t, defaultVersion, parseVersion("unknown"))
 	assert.Equal(t, V1_14_2, parseVersion("v1.14.2"))
+	assert.Equal(t, V1_16_1, parseVersion("v1.16.1"))
+}
+
+func TestResolveEmbeddedBinaryVersions(t *testing.T) {
+	SetCustomBinaryPath("")
+	t.Cleanup(func() { SetCustomBinaryPath("") })
+
+	arch, err := normalizeArch()
+	require.NoError(t, err)
+
+	for _, version := range supportedVersions {
+		t.Run(string(version), func(t *testing.T) {
+			embeddedPath := filepath.ToSlash(filepath.Join("binaries", "firecracker", string(version), arch, "firecracker"))
+			if _, err := binaryFS.ReadFile(embeddedPath); err != nil {
+				t.Skipf("embedded binary %s not present in this checkout", embeddedPath)
+			}
+
+			path, err := resolveBinaryPath(paths.New(t.TempDir()), string(version))
+			require.NoError(t, err)
+			detected, err := detectVersion(path)
+			require.NoError(t, err)
+			assert.Equal(t, string(version), detected)
+		})
+	}
 }
 
 func TestResolveBinaryPathConcurrentExtraction(t *testing.T) {
