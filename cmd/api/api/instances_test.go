@@ -899,9 +899,7 @@ func TestCreateInstance_ErrorStatusMapping(t *testing.T) {
 }
 
 // errActionInstanceManager is a fake whose lifecycle actions always fail with a
-// preset error, used to assert action handlers map a deleted-image
-// images.ErrNotFound (resolved at action time, e.g. start/restore/fork of a
-// stopped instance whose image was removed) to a 404 instead of a blanket 500.
+// preset error.
 type errActionInstanceManager struct {
 	instances.Manager
 	err error
@@ -921,6 +919,51 @@ func (m *errActionInstanceManager) ForkInstance(context.Context, string, instanc
 
 func (m *errActionInstanceManager) RestoreSnapshot(context.Context, string, string, instances.RestoreSnapshotRequest) (*instances.Instance, error) {
 	return nil, m.err
+}
+
+func TestRestoreInstance_ErrorMapping(t *testing.T) {
+	t.Parallel()
+
+	resolved := &instances.Instance{
+		StoredMetadata: instances.StoredMetadata{Id: "inst-restore-error"},
+	}
+	tests := []struct {
+		name         string
+		err          error
+		wantResponse oapi.RestoreInstanceResponseObject
+	}{
+		{
+			name: "client cancellation -> 499",
+			err:  fmt.Errorf("restore from snapshot: %w", context.Canceled),
+			wantResponse: oapi.RestoreInstance499JSONResponse{
+				Code:    "client_closed_request",
+				Message: "request canceled",
+			},
+		},
+		{
+			name: "internal failure -> 500",
+			err:  fmt.Errorf("restore from snapshot: hypervisor failed"),
+			wantResponse: oapi.RestoreInstance500JSONResponse{
+				Code:    "internal_error",
+				Message: "failed to restore instance",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			svc := newTestService(t)
+			svc.InstanceManager = &errActionInstanceManager{Manager: svc.InstanceManager, err: tt.err}
+
+			resp, err := svc.RestoreInstance(
+				mw.WithResolvedInstance(ctx(), resolved.Id, resolved),
+				oapi.RestoreInstanceRequestObject{Id: resolved.Id},
+			)
+			require.NoError(t, err)
+			require.Equal(t, tt.wantResponse, resp)
+		})
+	}
 }
 
 func TestInstanceActions_ImageNotFoundMapsTo404(t *testing.T) {
