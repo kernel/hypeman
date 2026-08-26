@@ -111,7 +111,55 @@ func NewManager(p *paths.Paths, maxConcurrentBuilds int, meter metric.Meter) (Ma
 	}
 
 	m.RecoverInterruptedBuilds()
+	m.promoteLegacyImages()
 	return m, nil
+}
+
+// promoteLegacyImages migrates ready legacy per-repository images into the
+// shared content layout so every repository referencing the same digest
+// shares one rootfs copy. Promotion hardlinks the disk, repoints tags, and
+// removes the legacy tree; failures only warn so a partial migration never
+// blocks startup.
+func (m *manager) promoteLegacyImages() {
+	imagesDir := m.paths.ImagesDir()
+	type legacyRef struct {
+		repository string
+		digestHex  string
+	}
+	refs := make([]legacyRef, 0)
+	err := filepath.Walk(imagesDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() || info.Name() != "metadata.json" {
+			return nil
+		}
+		rel, relErr := filepath.Rel(imagesDir, path)
+		if relErr != nil {
+			return nil
+		}
+		parts := strings.Split(rel, string(filepath.Separator))
+		if len(parts) < 3 || parts[0] == "content" || parts[0] == "repositories" {
+			return nil
+		}
+		refs = append(refs, legacyRef{
+			repository: filepath.Join(parts[:len(parts)-2]...),
+			digestHex:  parts[len(parts)-2],
+		})
+		return nil
+	})
+	if err != nil && !os.IsNotExist(err) {
+		fmt.Fprintf(os.Stderr, "Warning: failed to scan legacy images for promotion: %v\n", err)
+		return
+	}
+
+	for _, ref := range refs {
+		layout := resolveImageLayout(m.paths, ref.repository, ref.digestHex)
+		meta, readErr := readMetadataAt(layout)
+		if readErr != nil || meta.Status != StatusReady {
+			continue
+		}
+		if promoteErr := promoteImageToContent(m.paths, ref.repository, ref.digestHex, meta); promoteErr != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to promote legacy image %s@%s: %v\n", ref.repository, ref.digestHex, promoteErr)
+		}
+	}
 }
 
 func credentialsPresent(credentials *authn.AuthConfig) bool {

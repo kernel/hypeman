@@ -224,3 +224,69 @@ func TestImageMetadataToImage_EmptyMetadataOmitted(t *testing.T) {
 
 	require.Nil(t, img.Tags)
 }
+
+func TestPromoteLegacyImagesMovesContentAndTags(t *testing.T) {
+	p := paths.New(t.TempDir())
+	repository := "docker.io/library/alpine"
+	tag := "latest"
+	digest := "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+
+	// Ready legacy image with a legacy tag symlink.
+	legacyDir := p.ImageDigestDir(repository, digest)
+	require.NoError(t, os.MkdirAll(legacyDir, 0o755))
+	meta := &imageMetadata{
+		Name:      repository + ":" + tag,
+		Digest:    "sha256:" + digest,
+		Status:    StatusReady,
+		SizeBytes: 7,
+		CreatedAt: time.Now().UTC(),
+	}
+	require.NoError(t, writeMetadataFile(p.ImageMetadata(repository, digest), meta))
+	require.NoError(t, os.WriteFile(p.ImageDigestPath(repository, digest), []byte("rootfs!"), 0o644))
+	tagPath := p.ImageTagSymlink(repository, tag)
+	require.NoError(t, os.MkdirAll(filepath.Dir(tagPath), 0o755))
+	require.NoError(t, os.Symlink(digest, tagPath))
+
+	m := &manager{paths: p}
+	m.promoteLegacyImages()
+
+	// Content exists with the same bytes and is ready.
+	contentMeta, err := readContentMetadata(p, digest)
+	require.NoError(t, err)
+	require.Equal(t, StatusReady, contentMeta.Status)
+	data, err := os.ReadFile(p.ImageContentPath(digest))
+	require.NoError(t, err)
+	require.Equal(t, "rootfs!", string(data))
+
+	// Legacy digest tree is retired once content is installed and tags moved.
+	_, err = os.Stat(legacyDir)
+	require.True(t, os.IsNotExist(err), "legacy digest dir should be removed")
+
+	// The tag now resolves through the shared content layout.
+	resolved, err := resolveTag(p, repository, tag)
+	require.NoError(t, err)
+	require.Equal(t, digest, resolved)
+}
+
+func TestPromoteLegacyImagesSkipsNonReady(t *testing.T) {
+	p := paths.New(t.TempDir())
+	repository := "docker.io/library/alpine"
+	digest := "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+
+	legacyDir := p.ImageDigestDir(repository, digest)
+	require.NoError(t, os.MkdirAll(legacyDir, 0o755))
+	require.NoError(t, writeMetadataFile(p.ImageMetadata(repository, digest), &imageMetadata{
+		Name:      repository + ":latest",
+		Digest:    "sha256:" + digest,
+		Status:    StatusConverting,
+		CreatedAt: time.Now().UTC(),
+	}))
+
+	m := &manager{paths: p}
+	m.promoteLegacyImages()
+
+	_, err := os.Stat(p.ImageContentMetadata(digest))
+	require.True(t, os.IsNotExist(err), "non-ready legacy image must not be promoted")
+	_, err = os.Stat(legacyDir)
+	require.NoError(t, err, "non-ready legacy tree must be preserved")
+}
