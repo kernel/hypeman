@@ -395,6 +395,39 @@ func TestDeleteImagePreservesSharedDigest(t *testing.T) {
 	require.True(t, os.IsNotExist(err), "digest directory should be deleted when last tag is removed")
 }
 
+func TestDeleteImagePreservesCrossRepositoryContent(t *testing.T) {
+	p := paths.New(t.TempDir())
+	mgr, err := NewManager(p, 1, nil)
+	require.NoError(t, err)
+
+	const digest = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	meta := &imageMetadata{
+		Name:      "docker.io/library/alpine@sha256:" + digest,
+		Digest:    "sha256:" + digest,
+		Status:    StatusReady,
+		SizeBytes: 6,
+		CreatedAt: time.Now().UTC(),
+	}
+	require.NoError(t, writeMetadataFile(p.ImageContentMetadata(digest), meta))
+	require.NoError(t, os.WriteFile(p.ImageContentPath(digest), []byte("rootfs"), 0o644))
+	require.NoError(t, createTagSymlink(p, "docker.io/library/alpine", "latest", digest))
+	require.NoError(t, createTagSymlink(p, "registry.example.com/app", "v1", digest))
+
+	require.NoError(t, mgr.DeleteImage(context.Background(), "docker.io/library/alpine:latest"))
+	_, err = mgr.GetImage(context.Background(), "registry.example.com/app:v1")
+	require.NoError(t, err)
+	_, err = os.Stat(p.ImageContentPath(digest))
+	require.NoError(t, err)
+
+	require.NoError(t, mgr.DeleteImage(context.Background(), "registry.example.com/app:v1"))
+	_, err = os.Stat(p.ImageContentDir(digest))
+	require.NoError(t, err)
+
+	require.NoError(t, mgr.DeleteImage(context.Background(), "docker.io/library/alpine@sha256:"+digest))
+	_, err = os.Stat(p.ImageContentDir(digest))
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
 func TestNormalizedRefParsing(t *testing.T) {
 	tests := []struct {
 		input      string
@@ -698,7 +731,7 @@ func TestDeleteAndRecreateDuringBuildTail(t *testing.T) {
 	m.updateStatusByDigest(staleRef, StatusFailed, errors.New("stale build"), firstMeta.BuildID)
 	staleResult, _, _, err := m.ociClient.extractOCIImageDetails(digestHex)
 	require.NoError(t, err)
-	require.ErrorIs(t, m.finalizeImage(staleRef, &pullResult{Metadata: staleResult}, 1, firstMeta.BuildID), errStaleBuild)
+	require.ErrorIs(t, m.finalizeImage(staleRef, &pullResult{Metadata: staleResult}, 1, firstMeta.BuildID, ""), errStaleBuild)
 	currentMeta, err = readMetadata(p, repo, digestHex)
 	require.NoError(t, err)
 	require.Equal(t, StatusPending, currentMeta.Status)

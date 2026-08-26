@@ -209,23 +209,29 @@ func (m *manager) CreateImage(ctx context.Context, req CreateImageRequest) (*Ima
 	if meta, err := readMetadata(m.paths, ref.Repository(), ref.DigestHex()); err == nil {
 		// Don't cache failed builds - allow retry
 		if meta.Status == StatusFailed {
-			// Clean up the failed build directory so we can retry
-			digestDir := filepath.Join(m.paths.ImagesDir(), ref.Repository(), ref.DigestHex())
-			os.RemoveAll(digestDir)
+			// Clean up the failed build directory so we can retry. Shared content
+			// is retained if another tag or pull still references it.
+			if err := removeDigestIfUnreferenced(m.paths, ref.Repository(), ref.DigestHex(), false); err != nil {
+				return nil, fmt.Errorf("remove failed image: %w", err)
+			}
 			// Fall through to re-queue the build
 		} else {
 			// We have this digest already (ready, pending, pulling, or converting).
-			// last-pull-wins: repoint the tag to it (see createTagSymlink).
-			if meta.Status == StatusReady {
-				if ref.Tag() != "" {
-					createTagSymlink(m.paths, ref.Repository(), ref.Tag(), ref.DigestHex())
+			// Register the requested tag immediately so a second caller can wait on
+			// the same shared content while its build is still in progress.
+			if ref.Tag() != "" {
+				if err := createTagSymlink(m.paths, ref.Repository(), ref.Tag(), ref.DigestHex()); err != nil {
+					return nil, fmt.Errorf("create image tag: %w", err)
 				}
-				return meta.toImage(), nil
+			}
+			img := meta.toImage()
+			img.Name = ref.String()
+			if meta.Status == StatusReady {
+				return img, nil
 			}
 			if !m.inflightCredentialsMatch(ref.Digest(), req.Credentials) {
 				return nil, fmt.Errorf("%w: retry after the current pull completes", ErrCredentialConflict)
 			}
-			img := meta.toImage()
 			if meta.Status == StatusPending {
 				img.QueuePosition = m.queue.GetPosition(meta.Digest)
 			}
@@ -267,15 +273,20 @@ func (m *manager) ImportLocalImage(ctx context.Context, repo, reference, digest 
 	if meta, err := readMetadata(m.paths, ref.Repository(), ref.DigestHex()); err == nil {
 		// Don't cache failed builds - allow retry
 		if meta.Status == StatusFailed {
-			digestDir := filepath.Join(m.paths.ImagesDir(), ref.Repository(), ref.DigestHex())
-			os.RemoveAll(digestDir)
+			if err := removeDigestIfUnreferenced(m.paths, ref.Repository(), ref.DigestHex(), false); err != nil {
+				return nil, fmt.Errorf("remove failed image: %w", err)
+			}
 			// Fall through to re-queue the build
 		} else {
-			// We have this digest already; last-pull-wins repoints the tag.
-			if meta.Status == StatusReady && ref.Tag() != "" {
-				createTagSymlink(m.paths, ref.Repository(), ref.Tag(), ref.DigestHex())
+			// Register the requested tag immediately so callers can wait on shared
+			// content while its build is still in progress.
+			if ref.Tag() != "" {
+				if err := createTagSymlink(m.paths, ref.Repository(), ref.Tag(), ref.DigestHex()); err != nil {
+					return nil, fmt.Errorf("create image tag: %w", err)
+				}
 			}
 			img := meta.toImage()
+			img.Name = ref.String()
 			if meta.Status == StatusPending {
 				img.QueuePosition = m.queue.GetPosition(meta.Digest)
 			}
@@ -465,10 +476,14 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef, credentials 
 
 	m.updateStatusByDigest(ref, StatusConverting, nil, buildID)
 
-	diskPath := digestPath(m.paths, ref.Repository(), ref.DigestHex())
+	diskPath := resolveImageLayout(m.paths, ref.Repository(), ref.DigestHex()).disk
+	// Keep the temporary filesystem beside its final path so finalization stays
+	// atomic even when system/builds and images are on different filesystems.
+	diskTempPath := diskPath + ".tmp-" + buildID
+	defer os.Remove(diskTempPath)
 	// Use default image format (erofs on Linux, ext4 on Darwin)
 	convertStart := time.Now()
-	diskSize, err := ExportRootfs(tempDir, diskPath, DefaultImageFormat)
+	diskSize, err := ExportRootfs(tempDir, diskTempPath, DefaultImageFormat)
 	m.recordImageBuildPhase(ctx, ref.Digest(), "filesystem_export", time.Since(convertStart), phaseStatus(err), "not_applicable")
 	if err != nil {
 		m.updateStatusByDigest(ref, StatusFailed, fmt.Errorf("convert to %s: %w", DefaultImageFormat, err), buildID)
@@ -476,7 +491,7 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef, credentials 
 	}
 
 	finalizeStart := time.Now()
-	err = m.finalizeImage(ref, result, diskSize, buildID)
+	err = m.finalizeImage(ref, result, diskSize, buildID, diskTempPath)
 	m.recordImageBuildPhase(ctx, ref.Digest(), "finalize", time.Since(finalizeStart), phaseStatus(err), "not_applicable")
 	if err != nil {
 		if errors.Is(err, errStaleBuild) {
@@ -489,7 +504,11 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef, credentials 
 	buildStatus = "success"
 }
 
-func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, diskSize int64, buildID string) error {
+func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, diskSize int64, buildID, diskTempPath string) error {
+	if diskTempPath != "" {
+		defer os.Remove(diskTempPath)
+	}
+
 	m.createMu.Lock()
 	defer m.createMu.Unlock()
 
@@ -497,6 +516,13 @@ func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, diskSize i
 	meta, err := readMetadata(m.paths, ref.Repository(), ref.DigestHex())
 	if err != nil || meta.BuildID != buildID {
 		return errStaleBuild
+	}
+
+	finalDiskPath := resolveImageLayout(m.paths, ref.Repository(), ref.DigestHex()).disk
+	if err := installAtomically(finalDiskPath, func(path string) error {
+		return os.Rename(diskTempPath, path)
+	}); err != nil {
+		return fmt.Errorf("install image disk: %w", err)
 	}
 
 	// The pulled image config is the source of truth for the platform.
@@ -608,6 +634,7 @@ func (m *manager) RecoverInterruptedBuilds() {
 		return metas[i].CreatedAt.Before(metas[j].CreatedAt)
 	})
 
+	seenDigests := make(map[string]struct{})
 	for _, meta := range metas {
 		if meta.Status != StatusPending && meta.Status != StatusPulling && meta.Status != StatusConverting {
 			continue
@@ -615,6 +642,10 @@ func (m *manager) RecoverInterruptedBuilds() {
 		if meta.Request == nil || meta.Digest == "" {
 			continue
 		}
+		if _, seen := seenDigests[meta.Digest]; seen {
+			continue
+		}
+		seenDigests[meta.Digest] = struct{}{}
 		normalized, err := ParseNormalizedRef(meta.Name)
 		if err != nil {
 			continue
@@ -660,6 +691,7 @@ func (m *manager) GetImage(ctx context.Context, name string) (*Image, error) {
 	}
 
 	img := meta.toImage()
+	img.Name = ref.String()
 
 	if meta.Status == StatusPending {
 		img.QueuePosition = m.queue.GetPosition(meta.Digest)
@@ -690,7 +722,7 @@ func (m *manager) DeleteImage(ctx context.Context, name string) error {
 		if err := deleteTagsForDigest(m.paths, repository, digestHex); err != nil {
 			return err
 		}
-		if err := deleteDigest(m.paths, repository, digestHex); err != nil {
+		if err := removeDigestIfUnreferenced(m.paths, repository, digestHex, false); err != nil {
 			return err
 		}
 		m.refreshDiskUsageTotals()
@@ -713,15 +745,12 @@ func (m *manager) DeleteImage(ctx context.Context, name string) error {
 	// Check if the digest is now orphaned (no other tags reference it)
 	count, err := countTagsForDigest(m.paths, repository, digestHex)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to count tags for digest %s: %v\n", digestHex, err)
-		return nil
+		return fmt.Errorf("count tags for digest %s: %w", digestHex, err)
 	}
 
 	if count == 0 {
-		// Digest is orphaned, delete it
-		if err := deleteDigest(m.paths, repository, digestHex); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to delete orphaned digest %s: %v\n", digestHex, err)
-			return nil
+		if err := removeDigestIfUnreferenced(m.paths, repository, digestHex, true); err != nil {
+			return fmt.Errorf("delete orphaned digest %s: %w", digestHex, err)
 		}
 		m.refreshDiskUsageTotals()
 	}
