@@ -72,6 +72,7 @@ type manager struct {
 	queue                      *queue.Queue
 	createMu                   sync.Mutex
 	diskUsageMu                sync.RWMutex
+	tagGenerations             map[string]uint64
 	diskUsageLoaded            bool
 	readyImageBytes            int64
 	ociCacheBytes              int64
@@ -99,6 +100,7 @@ func NewManager(p *paths.Paths, maxConcurrentBuilds int, meter metric.Meter) (Ma
 		inflightPulls:              make(map[string]*inflightImagePull),
 		borrowedCredentialsTimeout: DefaultBorrowedCredentialsTimeout,
 		readySubscribers:           make(map[string][]chan StatusEvent),
+		tagGenerations:             make(map[string]uint64),
 	}
 
 	// Initialize metrics if meter is provided
@@ -315,6 +317,16 @@ func (m *manager) reuseExistingImage(ref *ResolvedRef, credentials *authn.AuthCo
 	return img, true, nil
 }
 
+func tagGenerationKey(repository, tag string) string {
+	return repository + ":" + tag
+}
+
+func (m *manager) nextTagGeneration(repository, tag string) uint64 {
+	key := tagGenerationKey(repository, tag)
+	m.tagGenerations[key]++
+	return m.tagGenerations[key]
+}
+
 func (m *manager) inflightCredentialsMatch(digest string, credentials *authn.AuthConfig) bool {
 	inflight := m.inflightPulls[digest]
 	var existingFingerprint [32]byte
@@ -403,6 +415,10 @@ func (m *manager) createAndQueueImage(ref *ResolvedRef, req CreateImageRequest, 
 			return nil, fmt.Errorf("resolve existing image tag: %w", err)
 		}
 	}
+	tagGeneration := uint64(0)
+	if ref.Tag() != "" {
+		tagGeneration = m.nextTagGeneration(ref.Repository(), ref.Tag())
+	}
 	meta := &imageMetadata{
 		Name:              ref.String(),
 		Digest:            ref.Digest(),
@@ -414,6 +430,7 @@ func (m *manager) createAndQueueImage(ref *ResolvedRef, req CreateImageRequest, 
 		Tags:              tags.Clone(req.Tags),
 		RequestedTag:      ref.Tag(),
 		PreviousTagDigest: previousTagDigest,
+		TagGeneration:     tagGeneration,
 		CreatedAt:         time.Now(),
 	}
 
@@ -584,7 +601,8 @@ func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, diskSize i
 	m.notifyReady(ref.DigestHex(), StatusReady, nil)
 	if meta.RequestedTag != "" {
 		current, resolveErr := resolveTag(m.paths, ref.Repository(), meta.RequestedTag)
-		if resolveErr == nil && (current == ref.DigestHex() || current == meta.PreviousTagDigest) {
+		generationMatches := m.tagGenerations[tagGenerationKey(ref.Repository(), meta.RequestedTag)] == meta.TagGeneration
+		if resolveErr == nil && generationMatches && (current == ref.DigestHex() || current == meta.PreviousTagDigest) {
 			if err := createTagSymlink(m.paths, ref.Repository(), meta.RequestedTag, ref.DigestHex()); err != nil {
 				fmt.Fprintf(os.Stderr, "Warning: failed to create tag symlink: %v\n", err)
 			}
@@ -765,6 +783,7 @@ func (m *manager) DeleteImage(ctx context.Context, name string) error {
 	}
 
 	tag := ref.Tag()
+	m.nextTagGeneration(repository, tag)
 
 	// Resolve the tag to get the digest before deleting
 	digestHex, err := resolveTag(m.paths, repository, tag)

@@ -32,6 +32,7 @@ type imageMetadata struct {
 	BuildID           string              `json:"build_id,omitempty"`
 	RequestedTag      string              `json:"requested_tag,omitempty"`
 	PreviousTagDigest string              `json:"previous_tag_digest,omitempty"`
+	TagGeneration     uint64              `json:"tag_generation,omitempty"`
 }
 
 func (m *imageMetadata) toImage() *Image {
