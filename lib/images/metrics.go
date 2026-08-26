@@ -95,6 +95,15 @@ func newMetrics(meter metric.Meter, m *manager) (*Metrics, error) {
 		return nil, err
 	}
 
+	referencedLayerBytes, err := meter.Int64ObservableGauge(
+		"hypeman_images_referenced_layer_bytes",
+		metric.WithDescription("Bytes of OCI layers referenced by image metadata; shared layers counted once"),
+		metric.WithUnit("By"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
 	_, err = meter.RegisterCallback(
 		func(ctx context.Context, o metric.Observer) error {
 			// Report queue length
@@ -113,10 +122,17 @@ func newMetrics(meter metric.Meter, m *manager) (*Metrics, error) {
 				o.ObserveInt64(imagesTotal, count,
 					metric.WithAttributes(attribute.String("status", status)))
 			}
+
+			accounting := computeLayerAccounting(metas)
+			o.ObserveInt64(referencedLayerBytes, accounting.uniqueBytes,
+				metric.WithAttributes(attribute.String("scope", "unique")))
+			o.ObserveInt64(referencedLayerBytes, accounting.sharedBytes,
+				metric.WithAttributes(attribute.String("scope", "shared")))
 			return nil
 		},
 		buildQueueLength,
 		imagesTotal,
+		referencedLayerBytes,
 	)
 	if err != nil {
 		return nil, err

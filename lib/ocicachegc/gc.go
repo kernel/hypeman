@@ -35,10 +35,12 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-// RootsProvider returns extra manifest digests (in "sha256:<hex>" form)
-// that should be treated as live alongside everything reachable from
-// index.json. Used for blobs the registry tracks in memory but does not
-// root in the OCI layout (e.g. BuildKit cache exports under cache/*).
+// RootsProvider returns extra digests (in "sha256:<hex>" form) that should
+// be treated as live alongside everything reachable from index.json. Used
+// for blobs the registry tracks in memory but does not root in the OCI
+// layout (e.g. BuildKit cache exports under cache/*), and for digests
+// recorded in image metadata. Digests whose blobs are not manifests (or are
+// missing) are marked live and treated as opaque leaves.
 type RootsProvider interface {
 	LiveCacheManifestDigests() []string
 }

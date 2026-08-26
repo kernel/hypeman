@@ -196,7 +196,7 @@ type pullResult struct {
 	Metadata        *containerMetadata
 	Digest          string // sha256:abc123...
 	CacheHit        bool
-	LayerCount      int
+	Layers          []LayerRef
 	CompressedBytes int64
 	Phases          []imageBuildPhaseMeasurement
 }
@@ -261,18 +261,18 @@ func (c *ociClient) pullAndExportWithPlatformAuth(ctx context.Context, imageRef,
 
 	// Extract metadata (from cache or freshly pulled)
 	var meta *containerMetadata
-	var layerCount int
+	var layers []LayerRef
 	var compressedBytes int64
 	err := result.measure("metadata_extract", func() error {
 		var err error
-		meta, layerCount, compressedBytes, err = c.extractOCIImageDetails(layoutTag)
+		meta, layers, compressedBytes, err = c.extractOCIImageDetails(layoutTag)
 		return err
 	})
 	if err != nil {
 		return result, fmt.Errorf("extract metadata: %w", err)
 	}
 	result.Metadata = meta
-	result.LayerCount = layerCount
+	result.Layers = layers
 	result.CompressedBytes = compressedBytes
 
 	// Unpack layers to the export directory
@@ -402,32 +402,38 @@ func (c *ociClient) extractOCIMetadata(layoutTag string) (*containerMetadata, er
 	return meta, err
 }
 
-func (c *ociClient) extractOCIImageDetails(layoutTag string) (*containerMetadata, int, int64, error) {
+func (c *ociClient) extractOCIImageDetails(layoutTag string) (*containerMetadata, []LayerRef, int64, error) {
 	// Open OCI layout using go-containerregistry (handles Docker v2 and OCI v1)
 	path, err := layout.FromPath(c.cacheDir)
 	if err != nil {
-		return nil, 0, 0, fmt.Errorf("open oci layout: %w", err)
+		return nil, nil, 0, fmt.Errorf("open oci layout: %w", err)
 	}
 
 	// Get the image by annotation tag from the layout
 	img, err := imageByAnnotation(path, layoutTag)
 	if err != nil {
-		return nil, 0, 0, fmt.Errorf("find image by tag %s: %w", layoutTag, err)
+		return nil, nil, 0, fmt.Errorf("find image by tag %s: %w", layoutTag, err)
 	}
 
 	// Get config file (go-containerregistry handles manifest format automatically)
 	configFile, err := img.ConfigFile()
 	if err != nil {
-		return nil, 0, 0, fmt.Errorf("get config file: %w", err)
+		return nil, nil, 0, fmt.Errorf("get config file: %w", err)
 	}
 
 	manifest, err := img.Manifest()
 	if err != nil {
-		return nil, 0, 0, fmt.Errorf("get manifest: %w", err)
+		return nil, nil, 0, fmt.Errorf("get manifest: %w", err)
 	}
+	layers := make([]LayerRef, len(manifest.Layers))
 	var compressedBytes int64
-	for _, layer := range manifest.Layers {
+	for i, layer := range manifest.Layers {
 		compressedBytes += layer.Size
+		layers[i] = LayerRef{
+			Digest:    layer.Digest.String(),
+			Size:      layer.Size,
+			MediaType: string(layer.MediaType),
+		}
 	}
 
 	// Extract metadata from config. OS/Architecture/Variant come straight from
@@ -460,7 +466,7 @@ func (c *ociClient) extractOCIImageDetails(layoutTag string) (*containerMetadata
 		meta.Labels[key] = value
 	}
 
-	return meta, len(manifest.Layers), compressedBytes, nil
+	return meta, layers, compressedBytes, nil
 }
 
 // unpackLayers unpacks all OCI layers to a target directory using umoci

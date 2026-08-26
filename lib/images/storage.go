@@ -30,6 +30,17 @@ type imageMetadata struct {
 	CreatedAt    time.Time           `json:"created_at"`
 	BorrowedAuth bool                `json:"borrowed_auth,omitempty"`
 	BuildID      string              `json:"build_id,omitempty"`
+	Layers       []LayerRef          `json:"layers,omitempty"`
+}
+
+// LayerRef records one layer referenced by an image's manifest. The digest
+// is a content address into the shared OCI cache, so disk accounting can
+// count shared layers once and garbage collection can keep the blobs an
+// image depends on without re-reading the manifest.
+type LayerRef struct {
+	Digest    string `json:"digest"`
+	Size      int64  `json:"size,omitempty"`
+	MediaType string `json:"media_type,omitempty"`
 }
 
 func (m *imageMetadata) toImage() *Image {

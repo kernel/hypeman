@@ -544,6 +544,7 @@ func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, diskSize i
 	meta.Env = result.Metadata.Env
 	meta.Labels = result.Metadata.Labels
 	meta.WorkingDir = result.Metadata.WorkingDir
+	meta.Layers = result.Layers
 
 	if err := writeMetadata(m.paths, ref.Repository(), ref.DigestHex(), meta); err != nil {
 		return fmt.Errorf("write final metadata: %w", err)
@@ -578,11 +579,11 @@ func (m *manager) recordPullResultMetrics(ctx context.Context, digest string, re
 		m.recordImageBuildPhase(ctx, digest, phase.Phase, phase.Duration, phase.Status, cacheStatus)
 	}
 	if result.Metadata != nil {
-		m.recordOCIImageMetrics(ctx, result.LayerCount, result.CompressedBytes, cacheStatus)
+		m.recordOCIImageMetrics(ctx, len(result.Layers), result.CompressedBytes, cacheStatus)
 		slog.InfoContext(ctx, "OCI image inspected",
 			"digest", digest,
 			"cache_status", cacheStatus,
-			"layer_count", result.LayerCount,
+			"layer_count", len(result.Layers),
 			"compressed_bytes", result.CompressedBytes,
 		)
 	}

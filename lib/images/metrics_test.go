@@ -25,17 +25,18 @@ func TestImageBuildPhaseMetrics(t *testing.T) {
 	require.NoError(t, err)
 	m.metrics = metrics
 
-	m.recordPullResultMetrics(t.Context(), "sha256:test", &pullResult{
+	pull := &pullResult{
 		Metadata:        &containerMetadata{},
 		CacheHit:        true,
-		LayerCount:      74,
 		CompressedBytes: 2_467_319_902,
 		Phases: []imageBuildPhaseMeasurement{{
 			Phase:    "layer_unpack",
 			Duration: 1500 * time.Millisecond,
 			Status:   "success",
 		}},
-	})
+	}
+	pull.Layers = make([]LayerRef, 74)
+	m.recordPullResultMetrics(t.Context(), "sha256:test", pull)
 
 	var rm metricdata.ResourceMetrics
 	require.NoError(t, reader.Collect(context.Background(), &rm))

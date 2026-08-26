@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/google/go-containerregistry/pkg/name"
@@ -94,6 +95,27 @@ func TestExtractMetadataSucceedsOnBuildKitCache(t *testing.T) {
 
 	// But the metadata will be empty/invalid since it's not a real OCI config
 	t.Logf("Got metadata (likely empty): %+v", meta)
+}
+
+// TestExtractOCIImageDetailsReturnsLayerRefs verifies that manifest layer
+// descriptors are surfaced as LayerRefs so finalizeImage can persist the
+// manifest-to-layer reference model into image metadata.
+func TestExtractOCIImageDetailsReturnsLayerRefs(t *testing.T) {
+	cacheDir := t.TempDir()
+
+	err := createBuildKitCacheLayout(cacheDir, "test-cache")
+	require.NoError(t, err)
+
+	client, err := newOCIClient(cacheDir)
+	require.NoError(t, err)
+
+	_, layers, compressedBytes, err := client.extractOCIImageDetails("test-cache")
+	require.NoError(t, err)
+	require.Len(t, layers, 1)
+	assert.True(t, strings.HasPrefix(layers[0].Digest, "sha256:"))
+	assert.Positive(t, layers[0].Size)
+	assert.Equal(t, layers[0].Size, compressedBytes)
+	assert.Equal(t, "application/vnd.oci.image.layer.v1.tar+gzip", layers[0].MediaType)
 }
 
 // createBuildKitCacheLayout creates an OCI layout that mimics what BuildKit
@@ -416,7 +438,7 @@ func TestDockerSaveToOCILayoutCacheHit(t *testing.T) {
 	assert.Equal(t, digestStr, result.Digest)
 	assert.Equal(t, testImageKernelVersion, result.Metadata.Labels["io.kernel.kernel-version"])
 	assert.True(t, result.CacheHit)
-	assert.Positive(t, result.LayerCount)
+	assert.Positive(t, len(result.Layers))
 	assert.Positive(t, result.CompressedBytes)
 	require.Len(t, result.Phases, 3)
 	assert.Equal(t, "oci_cache_lookup", result.Phases[0].Phase)
