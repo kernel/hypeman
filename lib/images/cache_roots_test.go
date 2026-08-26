@@ -2,6 +2,7 @@ package images
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -75,6 +76,32 @@ func TestLiveOCICacheDigestsProtectsReferencedAndInflightArtifacts(t *testing.T)
 		}
 	}
 	assert.Equal(t, 1, count)
+}
+
+// TestLiveOCICacheDigestsLegacyMetadataWithoutLayers proves that metadata
+// written before layer tracking (no "layers" key) still loads and protects
+// its manifest digest.
+func TestLiveOCICacheDigestsLegacyMetadataWithoutLayers(t *testing.T) {
+	p := paths.New(t.TempDir())
+
+	ref, err := ParseNormalizedRef("docker.io/library/alpine@sha256:" + sha256Hash([]byte("legacy")))
+	require.NoError(t, err)
+
+	// Raw legacy shape: no layers key, matching pre-change metadata.json files.
+	legacyMeta := fmt.Sprintf(`{
+  "name": %q,
+  "digest": %q,
+  "status": %q,
+  "size_bytes": 6,
+  "created_at": %q
+}`, ref.String(), ref.Digest(), StatusReady, time.Now().Format(time.RFC3339Nano))
+	layout := resolveImageLayout(p, ref.Repository(), ref.DigestHex())
+	require.NoError(t, os.MkdirAll(filepath.Dir(layout.metadata), 0o755))
+	require.NoError(t, os.WriteFile(layout.metadata, []byte(legacyMeta), 0o644))
+	require.NoError(t, os.WriteFile(layout.disk, []byte("rootfs"), 0o644))
+
+	got := LiveOCICacheDigests(p)
+	assert.Equal(t, []string{ref.Digest()}, got)
 }
 
 func TestComputeLayerAccountingCountsSharedLayersOnce(t *testing.T) {
