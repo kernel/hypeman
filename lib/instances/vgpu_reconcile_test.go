@@ -25,10 +25,14 @@ func TestReconcileVGPUsBoundsStartupProtection(t *testing.T) {
 	stale := now.Add(-VGPUAssignmentStartupGracePeriod - time.Minute)
 
 	var protected map[string]struct{}
+	var destroyed []devices.VGPUAssignment
 	m := &manager{
-		paths:       paths.New(t.TempDir()),
-		now:         func() time.Time { return now },
-		destroyVGPU: func(context.Context, devices.VGPUAssignment) error { return nil },
+		paths: paths.New(t.TempDir()),
+		now:   func() time.Time { return now },
+		destroyVGPU: func(_ context.Context, assignment devices.VGPUAssignment) error {
+			destroyed = append(destroyed, assignment)
+			return nil
+		},
 		reconcileVGPUDevices: func(_ context.Context, p map[string]struct{}, sweepVendorVFIO bool) error {
 			protected = p
 			assert.True(t, sweepVendorVFIO)
@@ -37,7 +41,7 @@ func TestReconcileVGPUsBoundsStartupProtection(t *testing.T) {
 	}
 	instances := []StoredMetadata{
 		{Id: "booting", GPUDevicePath: "/sys/bus/pci/devices/0000:82:00.4", GPUAssignedAt: &recent},
-		{Id: "orphaned", GPUDevicePath: "/sys/bus/pci/devices/0000:82:00.5", GPUAssignedAt: &stale},
+		{Id: "orphaned", GPUProfile: "NVIDIA L40S-2Q", GPUFramework: devices.VGPUFrameworkVendorVFIO, GPUDevicePath: "/sys/bus/pci/devices/0000:82:00.5", GPUAssignedAt: &stale},
 		{Id: "legacy", GPUDevicePath: "/sys/bus/pci/devices/0000:82:00.6"},
 		{Id: "dead", GPUDevicePath: "/sys/bus/pci/devices/0000:82:00.7", HypervisorProcessIdentity: HypervisorProcessIdentity{HypervisorPID: &deadPID}},
 		{Id: "stale-pid-booting", GPUDevicePath: "/sys/bus/pci/devices/0000:82:00.8", HypervisorProcessIdentity: HypervisorProcessIdentity{HypervisorPID: &deadPID}, GPUAssignedAt: &recent},
@@ -59,6 +63,14 @@ func TestReconcileVGPUsBoundsStartupProtection(t *testing.T) {
 		require.NoError(t, err)
 		assert.Empty(t, stored.GPUDevicePath, "stale assignment on %s must be released", id)
 	}
+	assert.Contains(t, destroyed, devices.VGPUAssignment{
+		Framework:  devices.VGPUFrameworkVendorVFIO,
+		DevicePath: "/sys/bus/pci/devices/0000:82:00.5",
+		InstanceID: "orphaned",
+	})
+	orphaned, err := m.loadMetadata("orphaned")
+	require.NoError(t, err)
+	assert.Equal(t, "NVIDIA L40S-2Q", orphaned.GPUProfile)
 	for _, id := range []string{"booting", "stale-pid-booting"} {
 		stored, err := m.loadMetadata(id)
 		require.NoError(t, err)
@@ -93,41 +105,6 @@ func TestReconcileVGPUsSkipsVendorSweepWhenListingFails(t *testing.T) {
 	require.NoError(t, os.Chmod(instanceDir, 0o755))
 	m.ReconcileVGPUs(t.Context())
 	assert.Equal(t, []bool{false, true}, sweeps, "the next pass retries the vendor sweep")
-}
-
-func TestReconcileVGPUsReleasesStaleAssignment(t *testing.T) {
-	t.Parallel()
-
-	var destroyed []devices.VGPUAssignment
-	m := &manager{
-		paths: paths.New(t.TempDir()),
-		destroyVGPU: func(_ context.Context, assignment devices.VGPUAssignment) error {
-			destroyed = append(destroyed, assignment)
-			return nil
-		},
-		reconcileVGPUDevices: func(context.Context, map[string]struct{}, bool) error { return nil },
-	}
-	const id = "stopped-retained"
-	require.NoError(t, m.ensureDirectories(id))
-	require.NoError(t, m.saveMetadata(&metadata{StoredMetadata: StoredMetadata{
-		Id:            id,
-		GPUProfile:    "NVIDIA L40S-2Q",
-		GPUFramework:  devices.VGPUFrameworkVendorVFIO,
-		GPUDevicePath: "/sys/bus/pci/devices/0000:82:00.4",
-	}}))
-
-	m.ReconcileVGPUs(t.Context())
-
-	require.Len(t, destroyed, 1)
-	assert.Equal(t, devices.VGPUAssignment{
-		Framework:  devices.VGPUFrameworkVendorVFIO,
-		DevicePath: "/sys/bus/pci/devices/0000:82:00.4",
-		InstanceID: id,
-	}, destroyed[0])
-	stored, err := m.loadMetadata(id)
-	require.NoError(t, err)
-	assert.Empty(t, stored.GPUDevicePath)
-	assert.Equal(t, "NVIDIA L40S-2Q", stored.GPUProfile, "profile is kept for the next start")
 }
 
 func TestReconcileVGPUsKeepsAssignmentWhenReleaseFails(t *testing.T) {
