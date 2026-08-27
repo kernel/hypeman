@@ -291,9 +291,9 @@ NVRM: GPU 0000:00:03.0: RmInitAdapter failed! (0x22:0x65:884)
 `/proc/interrupts` shows the GPU's MSI-X vectors allocated but idle).
 
 Hypeman detects this automatically: the guest agent watches the guest kernel
-log (`/dev/kmsg`) for that line and reports it as a `HYPEMAN-GPU-INIT-FAILED`
-marker in the instance's `logs/app.log`, which the vGPU sentinel controller
-scans for every vendor VFIO instance. Each match records one init failure
+log (`/dev/kmsg`) for that line and records it as its GPU init state, which
+the vGPU sentinel controller polls over vsock (`GetGPUInitStatus`) for every
+vendor VFIO instance. A guest-reported failure records one init failure
 against the VF in `<data-dir>/gpu/vf-health.json` (it survives restarts),
 tallied per instance assignment; once failures accumulate from
 `gpu.vf_quarantine_threshold` distinct assignments (default 2), the VF is
@@ -302,10 +302,10 @@ availability, and its parent GPU becomes overflow-only — deprioritized for
 new placements. The guest agent also probes driver init at boot with
 `nvidia-smi -L` (when present in the image): the device open runs
 RmInitAdapter, so on a wedged VF the probe itself triggers the failure line
-without waiting for the workload to touch the GPU. On success it emits a
-terminal `HYPEMAN-GPU-INIT-OK` marker and suppresses later failure reports.
-The marker clears failures only when that exact assignment has a recorded
-failure, removing the match and older tallies. If that assignment crossed the
+without waiting for the workload to touch the GPU. On success the reported
+state becomes a terminal OK, suppressing later failure reports. An OK state
+clears failures only when that exact assignment has a recorded failure,
+removing the match and older tallies. If that assignment crossed the
 threshold, its later success also rescinds the quarantine. A success with no
 exact match clears nothing; other quarantines require manual recovery.
 
@@ -319,13 +319,11 @@ error and increment `hypeman_instances_vgpu_sentinel_quarantines_total`.
 guest/host driver mismatch can still quarantine every VF, so validate driver
 changes on a test host and alert on the failure counter.
 
-Detection requires the hypeman guest agent. Start archives the previous
-boot's app log before persisting a new assignment, so a report racing a
-stop/start may be deferred until the next victim boot. Only a complete,
-standalone guest-agent marker matches; ordinary output containing the token
-does not. A root guest can still forge the full serial-console line across
-enough assignments to quarantine its VFs, but quarantine only removes
-capacity and never touches an instance.
+Detection requires the hypeman guest agent and a running instance: the state
+lives in the agent, so a wedge whose instance stops before the next poll (5s)
+is detected on the next boot that lands on the VF. The state travels only
+over the vsock control channel — the serial console is shared with workload
+output, so nothing a workload prints can influence the tally.
 
 The wedge-creating kill itself leaves no host-side log: no kernel error, no
 XID, no plugin crash. Detection therefore happens on the next boot that lands

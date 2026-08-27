@@ -13,7 +13,6 @@ import (
 	"time"
 
 	pb "github.com/kernel/hypeman/lib/guest"
-	"github.com/kernel/hypeman/lib/instances"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -59,53 +58,26 @@ func captureAgentLog(t *testing.T) *bytes.Buffer {
 	return &buf
 }
 
-func TestEmitGPUInitReportsMatchHostSentinel(t *testing.T) {
-	tests := []struct {
-		name  string
-		emit  func()
-		event instances.VGPUSentinelEvent
-	}{
-		{
-			name: "failure",
-			emit: func() {
-				emitGPUInitFailureReport("NVRM: GPU 0000:00:03.0: RmInitAdapter failed! (0x22:0x65:884)")
-			},
-			event: instances.VGPUSentinelEventInitFailed,
-		},
-		{name: "success", emit: emitGPUInitOKReport, event: instances.VGPUSentinelEventInitOK},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			buf := captureAgentLog(t)
-			tt.emit()
-			lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
-			require.Len(t, lines, gpuReportRepeats)
-			for _, line := range lines {
-				_, event := instances.MatchVGPUSentinelLine([]byte(line))
-				require.Equal(t, tt.event, event, "host matcher rejected %q", line)
-			}
-		})
-	}
-}
-
-func TestProbeGPUInitEmitsOKOnceDriverResponds(t *testing.T) {
-	buf := captureAgentLog(t)
+func TestProbeGPUInitMarksOKOnceDriverResponds(t *testing.T) {
+	captureAgentLog(t)
 
 	binDir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(binDir, "nvidia-smi"), []byte("#!/bin/sh\nexit 0\n"), 0o755))
 	t.Setenv("PATH", binDir)
 
-	probeGPUInit(&gpuInitReporter{})
+	reporter := &gpuInitReporter{}
+	probeGPUInit(reporter)
 
-	assert.Contains(t, buf.String(), gpuInitOKSentinelPrefix)
+	state, _ := reporter.state()
+	assert.Equal(t, pb.GPUInitState_GPU_INIT_STATE_OK, state)
 }
 
 func TestProbeGPUInitRetriesAfterAttemptTimeout(t *testing.T) {
-	buf := captureAgentLog(t)
+	captureAgentLog(t)
 	attempts := 0
 
-	probeGPUInitUntil(&gpuInitReporter{}, time.Now().Add(time.Second), 10*time.Millisecond, 0, func() error {
+	reporter := &gpuInitReporter{}
+	probeGPUInitUntil(reporter, time.Now().Add(time.Second), 10*time.Millisecond, 0, func() error {
 		attempts++
 		if attempts == 1 {
 			return context.DeadlineExceeded
@@ -114,7 +86,8 @@ func TestProbeGPUInitRetriesAfterAttemptTimeout(t *testing.T) {
 	})
 
 	assert.Equal(t, 2, attempts)
-	assert.Contains(t, buf.String(), gpuInitOKSentinelPrefix)
+	state, _ := reporter.state()
+	assert.Equal(t, pb.GPUInitState_GPU_INIT_STATE_OK, state)
 }
 
 func TestProbeGPUInitSkipsWithoutNvidiaSMI(t *testing.T) {
@@ -127,16 +100,15 @@ func TestProbeGPUInitSkipsWithoutNvidiaSMI(t *testing.T) {
 }
 
 func TestGPUInitReporterMakesSuccessTerminal(t *testing.T) {
-	buf := captureAgentLog(t)
+	captureAgentLog(t)
 	reporter := &gpuInitReporter{}
 	reporter.reportFailure("NVRM: GPU 0000:00:03.0: RmInitAdapter failed!")
 	reporter.reportSuccess()
 	reporter.reportFailure("NVRM: GPU 0000:00:03.0: RmInitAdapter failed!")
 
-	output := buf.String()
-	assert.Equal(t, gpuReportRepeats, strings.Count(output, gpuInitFailedSentinelPrefix))
-	assert.Equal(t, gpuReportRepeats, strings.Count(output, gpuInitOKSentinelPrefix))
-	assert.Less(t, strings.Index(output, gpuInitFailedSentinelPrefix), strings.Index(output, gpuInitOKSentinelPrefix))
+	state, msg := reporter.state()
+	assert.Equal(t, pb.GPUInitState_GPU_INIT_STATE_OK, state)
+	assert.Empty(t, msg)
 }
 
 func TestGPUInitReporterState(t *testing.T) {
@@ -149,16 +121,21 @@ func TestGPUInitReporterState(t *testing.T) {
 
 	reporter := &gpuInitReporter{}
 	server = &guestServer{gpuReporter: reporter}
-	assert.Equal(t, pb.GPUInitState_GPU_INIT_STATE_UNKNOWN, reporter.state())
+	state, _ := reporter.state()
+	assert.Equal(t, pb.GPUInitState_GPU_INIT_STATE_UNKNOWN, state)
 
-	reporter.reportFailure("NVRM: GPU 0000:00:03.0: RmInitAdapter failed!")
-	reporter.reportFailure("NVRM: GPU 0000:00:03.0: RmInitAdapter failed!")
-	assert.Equal(t, pb.GPUInitState_GPU_INIT_STATE_FAILED, reporter.state(), "a throttled repeat still marks the init failed")
+	reporter.reportFailure("NVRM: GPU 0000:00:03.0: RmInitAdapter failed! (0x22:0x65:884)")
+	reporter.reportFailure("NVRM: GPU 0000:00:03.0: RmInitAdapter failed! (0x26:0xffff:1482)")
+	resp, err = server.GetGPUInitStatus(context.Background(), &pb.GetGPUInitStatusRequest{})
+	require.NoError(t, err)
+	assert.Equal(t, pb.GPUInitState_GPU_INIT_STATE_FAILED, resp.State)
+	assert.Equal(t, "NVRM: GPU 0000:00:03.0: RmInitAdapter failed! (0x26:0xffff:1482)", resp.FailureMessage, "the latest failure line wins")
 
 	reporter.reportSuccess()
 	resp, err = server.GetGPUInitStatus(context.Background(), &pb.GetGPUInitStatusRequest{})
 	require.NoError(t, err)
 	assert.Equal(t, pb.GPUInitState_GPU_INIT_STATE_OK, resp.State)
+	assert.Empty(t, resp.FailureMessage)
 }
 
 func TestRunGPUProbeAttemptReturnsOnTimeout(t *testing.T) {

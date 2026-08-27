@@ -186,4 +186,6 @@ message GetGPUInitStatusRequest {}
 // GetGPUInitStatusResponse reports the guest GPU driver init state
 message GetGPUInitStatusResponse {
   GPUInitState state = 1;
+  // Most recent NVRM init-failure line observed in kmsg; set when state is FAILED
+  string failure_message = 2;
 }
