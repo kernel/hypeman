@@ -17,6 +17,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/metric/noop"
+	otelmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 )
 
 const testNVRMMessage = "NVRM: GPU 0000:e3:00.4: RmInitAdapter failed! (0x22:0x65:884)"
@@ -79,6 +81,7 @@ func newTestSentinelController(t *testing.T, store *fakeSentinelStore) (*VGPUSen
 		guestGPUInitStatus: guestReportsFailed,
 		initFailures:       counter,
 		quarantines:        counter,
+		checks:             counter,
 	}
 	return c, &reported
 }
@@ -131,6 +134,87 @@ func TestVGPUSentinelControllerSkipsUnreachableGuest(t *testing.T) {
 	c.pollOnce(context.Background())
 	assert.Empty(t, *reported)
 	assert.Empty(t, successes)
+}
+
+func TestVGPUSentinelControllerPollsTargetsConcurrently(t *testing.T) {
+	t.Parallel()
+
+	store := &fakeSentinelStore{targets: []vgpuSentinelTarget{
+		{instanceID: "instance-1"},
+		{instanceID: "instance-2"},
+	}}
+	c, _ := newTestSentinelController(t, store)
+	started := make(chan struct{}, len(store.targets))
+	release := make(chan struct{})
+	released := false
+	defer func() {
+		if !released {
+			close(release)
+		}
+	}()
+	c.guestGPUInitStatus = func(context.Context, string) (guest.GPUInitState, string, error) {
+		started <- struct{}{}
+		<-release
+		return guest.GPUInitState_GPU_INIT_STATE_UNKNOWN, "", nil
+	}
+
+	done := make(chan struct{})
+	go func() {
+		c.pollOnce(context.Background())
+		close(done)
+	}()
+	for range store.targets {
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			t.Fatal("targets were not polled concurrently")
+		}
+	}
+	close(release)
+	released = true
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("poll did not finish")
+	}
+}
+
+func TestVGPUSentinelControllerRecordsCheckResults(t *testing.T) {
+	t.Parallel()
+
+	store := &fakeSentinelStore{targets: []vgpuSentinelTarget{
+		{instanceID: "ok"},
+		{instanceID: "unknown"},
+		{instanceID: "unreachable"},
+	}}
+	c, _ := newTestSentinelController(t, store)
+	reader := otelmetric.NewManualReader()
+	provider := otelmetric.NewMeterProvider(otelmetric.WithReader(reader))
+	checks, err := provider.Meter("test").Int64Counter("hypeman_instances_vgpu_sentinel_checks_total")
+	require.NoError(t, err)
+	c.checks = checks
+	c.guestGPUInitStatus = func(_ context.Context, instanceID string) (guest.GPUInitState, string, error) {
+		switch instanceID {
+		case "ok":
+			return guest.GPUInitState_GPU_INIT_STATE_OK, "", nil
+		case "unknown":
+			return guest.GPUInitState_GPU_INIT_STATE_UNKNOWN, "", nil
+		default:
+			return guest.GPUInitState_GPU_INIT_STATE_UNKNOWN, "", errors.New("vsock dial failed")
+		}
+	}
+
+	c.pollOnce(context.Background())
+	var rm metricdata.ResourceMetrics
+	require.NoError(t, reader.Collect(context.Background(), &rm))
+	metric := findMetric(t, rm, "hypeman_instances_vgpu_sentinel_checks_total")
+	checksTotal, ok := metric.Data.(metricdata.Sum[int64])
+	require.True(t, ok)
+	got := make(map[string]int64)
+	for _, point := range checksTotal.DataPoints {
+		got[metricLabel(t, point.Attributes, "result")] = point.Value
+	}
+	assert.Equal(t, map[string]int64{"ok": 1, "unknown": 1, "rpc_error": 1}, got)
 }
 
 func TestVGPUSentinelControllerProcessesSuccessAfterFailure(t *testing.T) {

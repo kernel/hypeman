@@ -321,9 +321,12 @@ can overlap `quarantined_slots`; use `allocatable_slots` for admission.
 Below-threshold failures log at warn and increment
 `hypeman_instances_vgpu_sentinel_init_failures_total`; quarantines log at
 error and increment `hypeman_instances_vgpu_sentinel_quarantines_total`.
-`hypeman_instances_vgpu_quarantined_vfs` gauges the current count. A systemic
-guest/host driver mismatch can still quarantine every VF, so validate driver
-changes on a test host and alert on the failure counter.
+`hypeman_instances_vgpu_sentinel_checks_total` records checks by result
+(`ok`, `failed`, `unknown`, `rpc_error`, or `list_error`) so hosts that lose
+sentinel coverage are visible. `hypeman_instances_vgpu_quarantined_vfs`
+gauges the current count. A systemic guest/host driver mismatch can still
+quarantine every VF, so validate driver changes on a test host and alert on
+the failure counter.
 
 Detection requires the hypeman guest agent and a running instance: the state
 lives in the agent, so a wedge whose instance stops before the next poll (5s)
