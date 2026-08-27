@@ -11,6 +11,7 @@ test_name=$2
 package=$3
 run_prefix="ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
 tmpdir=$(sudo mktemp -d /ci/wXXXXXX)
+echo "WINDOWS_TEST_TMPDIR=$tmpdir" >> "$GITHUB_ENV"
 test_path="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
 
 cleanup() {

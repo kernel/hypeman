@@ -309,6 +309,7 @@ jobs:
             echo "$units" | xargs -r sudo systemctl reset-failed || true
           fi
           sudo rm -f /run/hypeman/uffd/ci-${{ github.run_id }}-${{ github.run_attempt }}-*.env
+          sudo rm -rf -- "${WINDOWS_TEST_TMPDIR:-/ci/no-windows-test-tmpdir}"
           rm -f "${{ runner.temp }}/hypeman-uffd-pager-${{ github.run_id }}-${{ github.run_attempt }}"
 
   test-darwin:
