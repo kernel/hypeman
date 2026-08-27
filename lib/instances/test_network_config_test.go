@@ -131,9 +131,13 @@ func allocateTestNetworkLease(testName string, seq uint32) (*testNetworkLease, e
 		if err != nil {
 			return err
 		}
+		leases, err := loadSubnetLeases()
+		if err != nil {
+			return err
+		}
 
 		testNetworkGuardCleanupOnce.Do(func() {
-			cleanupStaleLinkDownRoutes(routes)
+			cleanupStaleLinkDownRoutes(routes, leases)
 			// Sweep iptables rules for test bridges that no longer exist. Once a
 			// bridge is fully deleted its route is gone too, so linkdown cleanup
 			// above can't catch these — they would otherwise leak forever.
@@ -144,11 +148,6 @@ func allocateTestNetworkLease(testName string, seq uint32) (*testNetworkLease, e
 				routes = refreshed
 			}
 		})
-
-		leases, err := loadSubnetLeases()
-		if err != nil {
-			return err
-		}
 
 		pruneStaleLeases(leases, routes)
 		if err := saveSubnetLeases(leases); err != nil {
@@ -344,7 +343,7 @@ func listHostRoutes() ([]hostRoute, error) {
 	return routes, nil
 }
 
-func cleanupStaleLinkDownRoutes(routes []hostRoute) {
+func cleanupStaleLinkDownRoutes(routes []hostRoute, leases map[string]subnetLease) {
 	for _, route := range routes {
 		if !route.linkDown {
 			continue
@@ -353,6 +352,9 @@ func cleanupStaleLinkDownRoutes(routes []hostRoute) {
 			continue
 		}
 		if !strings.HasPrefix(route.device, "hm") && !strings.HasPrefix(route.device, "ha") {
+			continue
+		}
+		if lease, ok := leases[route.cidr]; ok && lease.BridgeName == route.device && processIsAlive(lease.PID) {
 			continue
 		}
 
@@ -426,6 +428,14 @@ func sweepOrphanedTestRulesInChain(table, chain string) {
 	for _, comment := range orphanedComments {
 		deleteIPTablesRulesByComment(table, chain, comment)
 	}
+}
+
+func processIsAlive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	err := syscall.Kill(pid, 0)
+	return err == nil || errors.Is(err, syscall.EPERM)
 }
 
 func pruneStaleLeases(leases map[string]subnetLease, routes []hostRoute) {
