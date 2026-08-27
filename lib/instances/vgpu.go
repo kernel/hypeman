@@ -27,7 +27,7 @@ func (e *VGPUCleanupPendingError) Error() string {
 
 func (e *VGPUCleanupPendingError) Unwrap() error { return e.Err }
 
-var errVGPURetentionStub = fmt.Errorf("%w: instance retains a vGPU assignment from a failed create and has no boot configuration; delete it to release the assignment", ErrInvalidState)
+var errVGPURetentionStub = fmt.Errorf("%w: instance is a delete-only record of a failed create and has no boot configuration; delete it to remove the record and release any retained vGPU assignment", ErrInvalidState)
 
 func (m *manager) createVGPUDevice(ctx context.Context, profileName, instanceID string) (*devices.VGPUDevice, error) {
 	create := m.createVGPU

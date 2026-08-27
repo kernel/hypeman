@@ -54,6 +54,12 @@ func main() {
 
 	startClockKeeper()
 
+	if hasNVIDIADevice() {
+		reporter := &gpuInitReporter{}
+		go watchGPUInitFailure(reporter)
+		go probeGPUInit(reporter)
+	}
+
 	// Create gRPC server
 	grpcServer := grpc.NewServer()
 	pb.RegisterGuestServiceServer(grpcServer, &guestServer{})

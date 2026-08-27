@@ -72,7 +72,7 @@ func TestCreateSnapshotRejectsVGPURetentionRecord(t *testing.T) {
 		Name: "snapshot-vgpu-retention",
 	})
 	require.ErrorIs(t, err, ErrInvalidState)
-	require.ErrorContains(t, err, "delete it to release the assignment")
+	require.ErrorContains(t, err, "delete-only record of a failed create")
 }
 
 func TestRestoreSnapshotRejectsVGPURetentionRecord(t *testing.T) {
@@ -101,7 +101,7 @@ func TestRestoreSnapshotRejectsVGPURetentionRecord(t *testing.T) {
 		TargetHypervisor: mgr.defaultHypervisor,
 	})
 	require.ErrorIs(t, err, ErrInvalidState)
-	require.ErrorContains(t, err, "delete it to release the assignment")
+	require.ErrorContains(t, err, "delete-only record of a failed create")
 
 	stored, err := mgr.loadMetadata(sourceID)
 	require.NoError(t, err)
