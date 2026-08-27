@@ -24,7 +24,7 @@ import (
 func TestWindowsLifecycleIntegration(t *testing.T) {
 	manager, p, image := setupWindowsLifecycleIntegration(t)
 	ctx := context.Background()
-	source := createWindowsLifecycleInstance(t, ctx, manager, image, "windows-lifecycle-source", true)
+	source := createWindowsLifecycleInstance(t, ctx, manager, image, "windows-lifecycle-source")
 
 	sourceMachineID := windowsMachineID(t, ctx, manager, source.Id, `New-Item -ItemType Directory -Force C:\ProgramData\Hypeman | Out-Null; Set-Content C:\ProgramData\Hypeman\standby.txt inherited`)
 
@@ -53,7 +53,7 @@ func TestWindowsLifecycleIntegration(t *testing.T) {
 func TestWindowsStoppedForkIntegration(t *testing.T) {
 	manager, p, image := setupWindowsLifecycleIntegration(t)
 	ctx := context.Background()
-	source := createWindowsLifecycleInstance(t, ctx, manager, image, "windows-stopped-fork-source", false)
+	source := createWindowsLifecycleInstance(t, ctx, manager, image, "windows-stopped-fork-source")
 	sourceMachineID := windowsMachineID(t, ctx, manager, source.Id, `New-Item -ItemType Directory -Force C:\ProgramData\Hypeman | Out-Null; Set-Content C:\ProgramData\Hypeman\identity.txt source`)
 
 	stopped, err := manager.StopInstance(ctx, source.Id)
@@ -129,16 +129,15 @@ func setupWindowsLifecycleIntegration(t *testing.T) (*manager, *paths.Paths, *im
 	return manager, p, image
 }
 
-func createWindowsLifecycleInstance(t *testing.T, ctx context.Context, manager *manager, image *images.Image, name string, networkEnabled bool) *Instance {
+func createWindowsLifecycleInstance(t *testing.T, ctx context.Context, manager *manager, image *images.Image, name string) *Instance {
 	t.Helper()
 	instance, err := manager.CreateInstance(ctx, CreateInstanceRequest{
-		Name:           name,
-		Image:          image.Name,
-		Platform:       "windows/amd64",
-		Size:           4 << 30,
-		Vcpus:          4,
-		NetworkEnabled: networkEnabled,
-		Hypervisor:     hypervisor.TypeQEMU,
+		Name:       name,
+		Image:      image.Name,
+		Platform:   "windows/amd64",
+		Size:       4 << 30,
+		Vcpus:      4,
+		Hypervisor: hypervisor.TypeQEMU,
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = deleteTestInstanceNow(context.Background(), manager, instance.Id) })
