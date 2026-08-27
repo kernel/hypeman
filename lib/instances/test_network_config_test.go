@@ -161,7 +161,10 @@ func allocateTestNetworkLease(testName string, seq uint32) (*testNetworkLease, e
 			return err
 		}
 
-		bridgeName = fmt.Sprintf("hm%04x%03x", testNetworkRunSeed&0xffff, seq%0xfff)
+		bridgeName, err = testBridgeNameForSubnet(subnet)
+		if err != nil {
+			return err
+		}
 		allocatedSubnet = subnet
 		leases[subnet] = subnetLease{
 			TestName:   testName,
@@ -440,6 +443,34 @@ func pruneStaleLeases(leases map[string]subnetLease, routes []hostRoute) {
 			continue
 		}
 		delete(leases, subnet)
+	}
+}
+
+func testBridgeNameForSubnet(subnet string) (string, error) {
+	ip, _, err := net.ParseCIDR(subnet)
+	if err != nil {
+		return "", fmt.Errorf("parse test subnet %q: %w", subnet, err)
+	}
+	ip = ip.To4()
+	if ip == nil {
+		return "", fmt.Errorf("test subnet %q is not IPv4", subnet)
+	}
+	return fmt.Sprintf("hm%02x%02x", ip[1], ip[2]), nil
+}
+
+func TestBridgeNameForTestSubnet(t *testing.T) {
+	t.Parallel()
+
+	first, err := testBridgeNameForSubnet("10.200.1.0/24")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := testBridgeNameForSubnet("10.200.2.0/24")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first != "hmc801" || second != "hmc802" || first == second {
+		t.Fatalf("unexpected bridge names: %q %q", first, second)
 	}
 }
 
