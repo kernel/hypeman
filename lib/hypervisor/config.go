@@ -7,8 +7,11 @@ type VMConfig struct {
 	VCPUs        int
 	MemoryBytes  int64
 	HotplugBytes int64
-	Topology     *CPUTopology
-	GuestMemory  GuestMemoryConfig
+	// MemoryBackingFile enables private file-backed guest RAM for hypervisors
+	// that can restore snapshots through the kernel page cache.
+	MemoryBackingFile string
+	Topology          *CPUTopology
+	GuestMemory       GuestMemoryConfig
 
 	// Storage
 	Disks []DiskConfig

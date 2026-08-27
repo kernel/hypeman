@@ -10,19 +10,46 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/forkvm"
+	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/logger"
 )
 
-// linkForkFirecrackerMemFile hardlinks the source's snapshot mem-file into the
-// fork's guest dir so all forks of a snapshot share one inode: fanout costs no
-// copy I/O, and the pager's backing reads hit the kernel page cache warmed by
-// sibling forks. Falls back to a reflink/sparse copy when linking fails.
-// Sharing an inode is safe because Firecracker mmaps the mem-file MAP_PRIVATE
-// and the only file writer, the standby diff snapshot, unshares first via
-// ensureExclusiveSnapshotMemoryOwnership.
-func (m *manager) linkForkFirecrackerMemFile(ctx context.Context, srcGuestDir, dstGuestDir string) error {
-	srcMem := firecrackerSnapshotMemoryPathInGuestDir(srcGuestDir)
-	dstMem := firecrackerSnapshotMemoryPathInGuestDir(dstGuestDir)
+const cloudHypervisorSnapshotMemoryRelPath = "snapshots/snapshot-latest/memory-ranges"
+
+func sharedSnapshotMemoryRelPath(hvType hypervisor.Type) (string, bool) {
+	switch hvType {
+	case hypervisor.TypeFirecracker:
+		return firecrackerSnapshotMemoryRelPath, true
+	case hypervisor.TypeCloudHypervisor:
+		return cloudHypervisorSnapshotMemoryRelPath, true
+	default:
+		return "", false
+	}
+}
+
+func supportsSharedSnapshotMemory(hvType hypervisor.Type) bool {
+	_, ok := sharedSnapshotMemoryRelPath(hvType)
+	return ok
+}
+
+func sharedSnapshotMemoryPathInGuestDir(guestDir string, hvType hypervisor.Type) (string, bool) {
+	relPath, ok := sharedSnapshotMemoryRelPath(hvType)
+	if !ok {
+		return "", false
+	}
+	return filepath.Join(guestDir, relPath), true
+}
+
+// linkForkSnapshotMemory hardlinks the source snapshot memory into the fork so
+// sibling restores map the same inode and share the kernel page cache.
+// Firecracker and kernel-paged Cloud Hypervisor restores map the file privately;
+// ordinary Cloud Hypervisor restores only read it into guest RAM.
+func (m *manager) linkForkSnapshotMemory(ctx context.Context, hvType hypervisor.Type, srcGuestDir, dstGuestDir string) error {
+	srcMem, ok := sharedSnapshotMemoryPathInGuestDir(srcGuestDir, hvType)
+	if !ok {
+		return fmt.Errorf("snapshot memory sharing is not supported for hypervisor %s", hvType)
+	}
+	dstMem, _ := sharedSnapshotMemoryPathInGuestDir(dstGuestDir, hvType)
 	if err := os.MkdirAll(filepath.Dir(dstMem), 0755); err != nil {
 		return fmt.Errorf("create fork snapshot dir: %w", err)
 	}
@@ -30,12 +57,9 @@ func (m *manager) linkForkFirecrackerMemFile(ctx context.Context, srcGuestDir, d
 	if err == nil {
 		return nil
 	}
-	// A fallback copy loses the zero-copy fanout and the shared page cache
-	// across sibling forks; it should never happen on a correctly provisioned
-	// host, so make it visible.
 	logger.FromContext(ctx).WarnContext(ctx, "hardlink of fork snapshot memory failed; falling back to copy",
-		"source", srcMem, "target", dstMem, "error", err)
-	m.recordForkMemFileShareFallback(ctx, linkFallbackReason(err))
+		"hypervisor", hvType, "source", srcMem, "target", dstMem, "error", err)
+	m.recordForkMemFileShareFallback(ctx, hvType, linkFallbackReason(err))
 	if err := forkvm.CopyRegularFile(srcMem, dstMem); err != nil {
 		return fmt.Errorf("copy fork snapshot memory: %w", err)
 	}

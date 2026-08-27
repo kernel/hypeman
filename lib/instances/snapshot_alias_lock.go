@@ -73,7 +73,7 @@ func (m *manager) copyForkSourceGuestDirectory(ctx context.Context, sourceState 
 		attribute.Bool("share_mem_file", shareMemFile),
 	)
 	retErr = withSnapshotSourceAliasReadLock(func() error {
-		if err := m.cloneGuestDirectoryForFork(ctx, srcDir, dstDir, shareMemFile); err != nil {
+		if err := m.cloneGuestDirectoryForFork(ctx, stored.HypervisorType, srcDir, dstDir, shareMemFile); err != nil {
 			if errors.Is(err, forkvm.ErrSparseCopyUnsupported) {
 				return fmt.Errorf("fork requires sparse-capable filesystem (SEEK_DATA/SEEK_HOLE unsupported): %w", err)
 			}
@@ -115,7 +115,7 @@ func (m *manager) copySnapshotGuestDirectoryForFork(ctx context.Context, snapsho
 		attribute.Bool("share_mem_file", shareMemFile),
 	)
 	retErr = withSnapshotSourceAliasReadLock(func() error {
-		if err := m.cloneGuestDirectoryForFork(ctx, m.paths.SnapshotGuestDir(snapshotID), dstDir, shareMemFile); err != nil {
+		if err := m.cloneGuestDirectoryForFork(ctx, hvType, m.paths.SnapshotGuestDir(snapshotID), dstDir, shareMemFile); err != nil {
 			if errors.Is(err, forkvm.ErrSparseCopyUnsupported) {
 				return fmt.Errorf("fork from snapshot requires sparse-capable filesystem (SEEK_DATA/SEEK_HOLE unsupported): %w", err)
 			}
@@ -128,11 +128,14 @@ func (m *manager) copySnapshotGuestDirectoryForFork(ctx context.Context, snapsho
 }
 
 // cloneGuestDirectoryForFork copies a guest directory for a fork. When
-// shareMemFile is set and the source has a raw snapshot mem-file, the mem-file
-// is skipped from the copy walk and hardlinked into place instead.
-func (m *manager) cloneGuestDirectoryForFork(ctx context.Context, srcDir, dstDir string, shareMemFile bool) error {
+// shareMemFile is set and the source has raw snapshot memory, that file is
+// skipped from the copy walk and hardlinked into place instead.
+func (m *manager) cloneGuestDirectoryForFork(ctx context.Context, hvType hypervisor.Type, srcDir, dstDir string, shareMemFile bool) error {
+	memoryRelPath, supportsSharing := sharedSnapshotMemoryRelPath(hvType)
+	shareMemFile = shareMemFile && supportsSharing
 	if shareMemFile {
-		if _, err := os.Stat(firecrackerSnapshotMemoryPathInGuestDir(srcDir)); err != nil {
+		memoryPath, _ := sharedSnapshotMemoryPathInGuestDir(srcDir, hvType)
+		if _, err := os.Stat(memoryPath); err != nil {
 			if !os.IsNotExist(err) {
 				return fmt.Errorf("stat source snapshot memory: %w", err)
 			}
@@ -142,13 +145,13 @@ func (m *manager) cloneGuestDirectoryForFork(ctx context.Context, srcDir, dstDir
 
 	copyOptions := forkvm.CopyOptions{}
 	if shareMemFile {
-		copyOptions.SkipRelativePaths = map[string]struct{}{firecrackerSnapshotMemoryRelPath: {}}
+		copyOptions.SkipRelativePaths = map[string]struct{}{memoryRelPath: {}}
 	}
 	if err := forkvm.CopyGuestDirectoryWithOptions(srcDir, dstDir, copyOptions); err != nil {
 		return err
 	}
 	if shareMemFile {
-		return m.linkForkFirecrackerMemFile(ctx, srcDir, dstDir)
+		return m.linkForkSnapshotMemory(ctx, hvType, srcDir, dstDir)
 	}
 	return nil
 }
