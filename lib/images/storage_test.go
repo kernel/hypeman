@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/paths"
+	"github.com/kernel/hypeman/lib/tags"
 	"github.com/stretchr/testify/require"
 )
 
@@ -161,6 +162,79 @@ func TestContentLayoutResolvesDiskByDigest(t *testing.T) {
 	require.Equal(t, p.ImageContentPath(digest), got)
 }
 
+func TestSharedContentKeepsReferenceTags(t *testing.T) {
+	p := paths.New(t.TempDir())
+	digest := "abababababababababababababababababababababababababababababababab"
+	first := "docker.io/library/alpine:latest"
+	second := "registry.example.com/app:v1"
+	meta := &imageMetadata{
+		Name:   first,
+		Digest: "sha256:" + digest,
+		Status: StatusReady,
+		References: map[string]tags.Tags{
+			first:  {"team": "one"},
+			second: {"team": "two"},
+		},
+	}
+	require.NoError(t, writeMetadataFile(p.ImageContentMetadata(digest), meta))
+	require.NoError(t, os.WriteFile(p.ImageContentPath(digest), []byte("rootfs"), 0o644))
+	require.NoError(t, createTagSymlink(p, "docker.io/library/alpine", "latest", digest))
+	require.NoError(t, createTagSymlink(p, "registry.example.com/app", "v1", digest))
+
+	mgr := &manager{paths: p}
+	image, err := mgr.GetImage(nil, second)
+	require.NoError(t, err)
+	require.Equal(t, tags.Tags{"team": "two"}, image.Tags)
+
+	images, err := mgr.ListImages(nil)
+	require.NoError(t, err)
+	got := make(map[string]tags.Tags, len(images))
+	for _, image := range images {
+		got[image.Name] = image.Tags
+	}
+	require.Equal(t, map[string]tags.Tags{
+		first:  {"team": "one"},
+		second: {"team": "two"},
+	}, got)
+}
+
+func TestPendingTagClaimSurvivesSharedBuild(t *testing.T) {
+	p := paths.New(t.TempDir())
+	const repository = "docker.io/library/alpine"
+	const otherRepository = "registry.example.com/app"
+	const tag = "v1"
+	const digest = "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+	const previous = "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef"
+
+	require.NoError(t, createTagSymlink(p, otherRepository, tag, previous))
+	meta := &imageMetadata{
+		Name: repository + ":latest", Digest: "sha256:" + digest,
+		Status: StatusPending, RequestedTag: "latest",
+	}
+	normalized, err := ParseNormalizedRef(otherRepository + ":" + tag)
+	require.NoError(t, err)
+	m := &manager{paths: p, tagGenerations: make(map[string]uint64)}
+	ref := NewResolvedRef(normalized, "sha256:"+digest)
+	require.NoError(t, m.recordPendingTag(meta, ref))
+	require.Len(t, meta.TagClaims, 1)
+	claim := meta.TagClaims[0]
+	require.Equal(t, previous, claim.PreviousTagDigest)
+	require.Equal(t, previous, mustResolveTag(t, p, otherRepository, tag))
+
+	meta.Status = StatusReady
+	require.NoError(t, writeMetadataFile(p.ImageContentMetadata(digest), meta))
+	require.NoError(t, os.WriteFile(p.ImageContentPath(digest), []byte("rootfs"), 0o644))
+	m.claimTag(claim.Repository, digest, claim.Tag, claim.PreviousTagDigest, claim.TagGeneration, false)
+	require.Equal(t, digest, mustResolveTag(t, p, otherRepository, tag))
+}
+
+func mustResolveTag(t *testing.T, p *paths.Paths, repository, tag string) string {
+	t.Helper()
+	resolved, err := resolveTag(p, repository, tag)
+	require.NoError(t, err)
+	return resolved
+}
+
 func TestListAllMetadataContentLayout(t *testing.T) {
 	p := paths.New(t.TempDir())
 	digest := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -222,8 +296,7 @@ func TestPromoteLegacyImagesMovesContentAndTags(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "rootfs!", string(data))
 
-	_, err = os.Stat(legacyDir)
-	require.True(t, os.IsNotExist(err), "legacy digest dir should be removed")
+	require.FileExists(t, p.ImageDigestPath(repository, digest))
 
 	resolved, err := resolveTag(p, repository, tag)
 	require.NoError(t, err)

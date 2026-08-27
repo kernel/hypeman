@@ -144,7 +144,7 @@ func (m *manager) ListImages(ctx context.Context) ([]Image, error) {
 
 	images := make([]Image, 0, len(metas))
 	for _, meta := range metas {
-		images = append(images, *meta.toImage())
+		images = append(images, *meta.toImageFor(meta.Name))
 	}
 
 	return images, nil
@@ -208,7 +208,7 @@ func (m *manager) CreateImage(ctx context.Context, req CreateImageRequest) (*Ima
 	m.createMu.Lock()
 	defer m.createMu.Unlock()
 
-	if img, found, err := m.reuseExistingImage(ref, req.Credentials); found || err != nil {
+	if img, found, err := m.reuseExistingImage(ref, req.Credentials, req.Tags); found || err != nil {
 		return img, err
 	}
 	return m.createAndQueueImage(ref, req, platform)
@@ -240,41 +240,14 @@ func (m *manager) ImportLocalImage(ctx context.Context, repo, reference, digest 
 	m.createMu.Lock()
 	defer m.createMu.Unlock()
 
-	// Check if we already have this digest (deduplication)
-	if meta, err := readMetadata(m.paths, ref.Repository(), ref.DigestHex()); err == nil {
-		// Don't cache failed builds - allow retry
-		if meta.Status == StatusFailed {
-			if err := removeDigestIfUnreferenced(m.paths, ref.Repository(), ref.DigestHex(), false); err != nil {
-				return nil, fmt.Errorf("remove failed image: %w", err)
-			}
-			// Fall through to re-queue the build
-		} else {
-			if ref.Tag() != "" {
-				var tagErr error
-				if meta.Status == StatusReady {
-					m.nextTagGeneration(ref.Repository(), ref.Tag())
-					tagErr = createTagSymlink(m.paths, ref.Repository(), ref.Tag(), ref.DigestHex())
-				} else {
-					tagErr = ensurePendingTag(m.paths, ref.Repository(), ref.Tag(), ref.DigestHex())
-				}
-				if tagErr != nil {
-					return nil, fmt.Errorf("create image tag: %w", tagErr)
-				}
-			}
-			img := meta.toImage()
-			img.Name = ref.String()
-			if meta.Status == StatusPending {
-				img.QueuePosition = m.queue.GetPosition(meta.Digest)
-			}
-			return img, nil
-		}
+	if img, found, err := m.reuseExistingImage(ref, nil, nil); found || err != nil {
+		return img, err
 	}
 
-	// Don't have this digest yet, queue the build
 	return m.createAndQueueImage(ref, CreateImageRequest{Name: imageRef}, hostPlatform())
 }
 
-func (m *manager) reuseExistingImage(ref *ResolvedRef, credentials *authn.AuthConfig) (*Image, bool, error) {
+func (m *manager) reuseExistingImage(ref *ResolvedRef, credentials *authn.AuthConfig, resourceTags tags.Tags) (*Image, bool, error) {
 	meta, err := readMetadata(m.paths, ref.Repository(), ref.DigestHex())
 	if err != nil {
 		return nil, false, nil
@@ -290,14 +263,17 @@ func (m *manager) reuseExistingImage(ref *ResolvedRef, credentials *authn.AuthCo
 			m.nextTagGeneration(ref.Repository(), ref.Tag())
 			err = createTagSymlink(m.paths, ref.Repository(), ref.Tag(), ref.DigestHex())
 		} else {
-			err = ensurePendingTag(m.paths, ref.Repository(), ref.Tag(), ref.DigestHex())
+			err = m.recordPendingTag(meta, ref)
 		}
 		if err != nil {
 			return nil, true, fmt.Errorf("create image tag: %w", err)
 		}
+		setReferenceTags(meta, ref.String(), resourceTags)
+		if err := writeMetadata(m.paths, ref.Repository(), ref.DigestHex(), meta); err != nil {
+			return nil, true, fmt.Errorf("write image reference: %w", err)
+		}
 	}
-	img := meta.toImage()
-	img.Name = ref.String()
+	img := meta.toImageFor(ref.String())
 	if meta.Status == StatusReady {
 		return img, true, nil
 	}
@@ -320,21 +296,57 @@ func (m *manager) nextTagGeneration(repository, tag string) uint64 {
 	return m.tagGenerations[key]
 }
 
+func tagClaimExists(meta *imageMetadata, ref *ResolvedRef) bool {
+	if meta.RequestedTag == ref.Tag() && strings.HasPrefix(meta.Name, ref.Repository()+":") {
+		return true
+	}
+	for _, claim := range meta.TagClaims {
+		if claim.Repository == ref.Repository() && claim.Tag == ref.Tag() {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *manager) recordPendingTag(meta *imageMetadata, ref *ResolvedRef) error {
+	if tagClaimExists(meta, ref) {
+		return ensurePendingTag(m.paths, ref.Repository(), ref.Tag(), ref.DigestHex())
+	}
+	previous, err := resolveTag(m.paths, ref.Repository(), ref.Tag())
+	if err != nil && !errors.Is(err, ErrNotFound) {
+		return err
+	}
+	meta.TagClaims = append(meta.TagClaims, imageTagClaim{
+		Repository:        ref.Repository(),
+		Tag:               ref.Tag(),
+		PreviousTagDigest: previous,
+		TagGeneration:     m.nextTagGeneration(ref.Repository(), ref.Tag()),
+	})
+	return ensurePendingTag(m.paths, ref.Repository(), ref.Tag(), ref.DigestHex())
+}
+
 func (m *manager) restoreTagGenerations(metas []*imageMetadata) {
 	m.createMu.Lock()
 	defer m.createMu.Unlock()
 	for _, meta := range metas {
-		if meta.RequestedTag == "" {
-			continue
-		}
 		ref, err := ParseNormalizedRef(meta.Name)
 		if err != nil {
 			continue
 		}
-		key := tagGenerationKey(ref.Repository(), meta.RequestedTag)
-		if meta.TagGeneration > m.tagGenerations[key] {
-			m.tagGenerations[key] = meta.TagGeneration
+		m.restoreTagGeneration(ref.Repository(), meta.RequestedTag, meta.TagGeneration)
+		for _, claim := range meta.TagClaims {
+			m.restoreTagGeneration(claim.Repository, claim.Tag, claim.TagGeneration)
 		}
+	}
+}
+
+func (m *manager) restoreTagGeneration(repository, tag string, generation uint64) {
+	if tag == "" {
+		return
+	}
+	key := tagGenerationKey(repository, tag)
+	if generation > m.tagGenerations[key] {
+		m.tagGenerations[key] = generation
 	}
 }
 
@@ -442,6 +454,7 @@ func (m *manager) createAndQueueImage(ref *ResolvedRef, req CreateImageRequest, 
 		RequestedTag:      ref.Tag(),
 		PreviousTagDigest: previousTagDigest,
 		TagGeneration:     tagGeneration,
+		References:        map[string]tags.Tags{ref.String(): tags.Clone(req.Tags)},
 		CreatedAt:         time.Now(),
 	}
 
@@ -477,7 +490,7 @@ func (m *manager) createAndQueueImage(ref *ResolvedRef, req CreateImageRequest, 
 		m.buildImage(ctx, ref, credentials, buildID)
 	}, m.releaseInflightPull(ref.Digest(), inflight))
 
-	img := meta.toImage()
+	img := meta.toImageFor(ref.String())
 	if queuePos > 0 {
 		img.QueuePosition = &queuePos
 	}
@@ -618,19 +631,29 @@ func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, diskSize i
 	if requestedTag == "" {
 		requestedTag = ref.Tag()
 	}
-	if requestedTag != "" {
-		current, resolveErr := resolveTag(m.paths, ref.Repository(), requestedTag)
-		generationMatches := m.tagGenerations[tagGenerationKey(ref.Repository(), requestedTag)] == meta.TagGeneration
-		canClaim := meta.RequestedTag == "" && errors.Is(resolveErr, ErrNotFound)
-		canClaim = canClaim || resolveErr == nil && (current == ref.DigestHex() || current == meta.PreviousTagDigest)
-		if generationMatches && canClaim {
-			if err := createTagSymlink(m.paths, ref.Repository(), requestedTag, ref.DigestHex()); err != nil {
-				fmt.Fprintf(os.Stderr, "Warning: failed to create tag symlink: %v\n", err)
-			}
-		}
+	m.claimTag(ref.Repository(), ref.DigestHex(), requestedTag, meta.PreviousTagDigest, meta.TagGeneration, meta.RequestedTag == "")
+	for _, claim := range meta.TagClaims {
+		m.claimTag(claim.Repository, ref.DigestHex(), claim.Tag, claim.PreviousTagDigest, claim.TagGeneration, false)
 	}
 	m.refreshDiskUsageTotals()
 	return nil
+}
+
+func (m *manager) claimTag(repository, digestHex, tag, previous string, generation uint64, allowMissing bool) {
+	if tag == "" || m.tagGenerations[tagGenerationKey(repository, tag)] != generation {
+		return
+	}
+	current, err := resolveTag(m.paths, repository, tag)
+	if err != nil {
+		if !allowMissing || !errors.Is(err, ErrNotFound) {
+			return
+		}
+	} else if current != digestHex && current != previous {
+		return
+	}
+	if err := createTagSymlink(m.paths, repository, tag, digestHex); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to create tag symlink: %v\n", err)
+	}
 }
 
 func phaseStatus(err error) string {
@@ -765,8 +788,7 @@ func (m *manager) GetImage(ctx context.Context, name string) (*Image, error) {
 		return nil, err
 	}
 
-	img := meta.toImage()
-	img.Name = ref.String()
+	img := meta.toImageFor(ref.String())
 
 	if meta.Status == StatusPending {
 		img.QueuePosition = m.queue.GetPosition(meta.Digest)
@@ -873,9 +895,7 @@ func (m *manager) findRequestedTagImage(ref *NormalizedRef) *Image {
 	if newest == nil {
 		return nil
 	}
-	image := newest.toImage()
-	image.Name = ref.String()
-	return image
+	return newest.toImageFor(ref.String())
 }
 
 // WaitForReady blocks until the image reaches a terminal state (ready or failed)

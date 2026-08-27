@@ -14,25 +14,55 @@ import (
 )
 
 type imageMetadata struct {
-	Name              string              `json:"name"`   // Normalized ref (tag or digest)
-	Digest            string              `json:"digest"` // Always present: sha256:...
-	Platform          string              `json:"platform,omitempty"`
-	Status            string              `json:"status"`
-	Error             *string             `json:"error,omitempty"`
-	Request           *CreateImageRequest `json:"request,omitempty"`
-	SizeBytes         int64               `json:"size_bytes"`
-	Entrypoint        []string            `json:"entrypoint,omitempty"`
-	Cmd               []string            `json:"cmd,omitempty"`
-	Env               map[string]string   `json:"env,omitempty"`
-	Labels            map[string]string   `json:"labels,omitempty"`
-	Tags              tags.Tags           `json:"tags,omitempty"`
-	WorkingDir        string              `json:"working_dir,omitempty"`
-	CreatedAt         time.Time           `json:"created_at"`
-	BorrowedAuth      bool                `json:"borrowed_auth,omitempty"`
-	BuildID           string              `json:"build_id,omitempty"`
-	RequestedTag      string              `json:"requested_tag,omitempty"`
-	PreviousTagDigest string              `json:"previous_tag_digest,omitempty"`
-	TagGeneration     uint64              `json:"tag_generation,omitempty"`
+	Name              string               `json:"name"`   // Normalized ref (tag or digest)
+	Digest            string               `json:"digest"` // Always present: sha256:...
+	Platform          string               `json:"platform,omitempty"`
+	Status            string               `json:"status"`
+	Error             *string              `json:"error,omitempty"`
+	Request           *CreateImageRequest  `json:"request,omitempty"`
+	SizeBytes         int64                `json:"size_bytes"`
+	Entrypoint        []string             `json:"entrypoint,omitempty"`
+	Cmd               []string             `json:"cmd,omitempty"`
+	Env               map[string]string    `json:"env,omitempty"`
+	Labels            map[string]string    `json:"labels,omitempty"`
+	Tags              tags.Tags            `json:"tags,omitempty"`
+	WorkingDir        string               `json:"working_dir,omitempty"`
+	CreatedAt         time.Time            `json:"created_at"`
+	BorrowedAuth      bool                 `json:"borrowed_auth,omitempty"`
+	BuildID           string               `json:"build_id,omitempty"`
+	RequestedTag      string               `json:"requested_tag,omitempty"`
+	PreviousTagDigest string               `json:"previous_tag_digest,omitempty"`
+	TagGeneration     uint64               `json:"tag_generation,omitempty"`
+	References        map[string]tags.Tags `json:"references,omitempty"`
+	TagClaims         []imageTagClaim      `json:"tag_claims,omitempty"`
+}
+
+type imageTagClaim struct {
+	Repository        string `json:"repository"`
+	Tag               string `json:"tag"`
+	PreviousTagDigest string `json:"previous_tag_digest,omitempty"`
+	TagGeneration     uint64 `json:"tag_generation,omitempty"`
+}
+
+func referenceTags(meta *imageMetadata, reference string) (tags.Tags, bool) {
+	resourceTags, ok := meta.References[reference]
+	return tags.Clone(resourceTags), ok
+}
+
+func setReferenceTags(meta *imageMetadata, reference string, resourceTags tags.Tags) {
+	if meta.References == nil {
+		meta.References = make(map[string]tags.Tags)
+	}
+	meta.References[reference] = tags.Clone(resourceTags)
+}
+
+func (m *imageMetadata) toImageFor(reference string) *Image {
+	img := m.toImage()
+	if resourceTags, ok := referenceTags(m, reference); ok {
+		img.Tags = resourceTags
+	}
+	img.Name = reference
+	return img
 }
 
 func (m *imageMetadata) toImage() *Image {
@@ -300,18 +330,6 @@ func promoteImageToContent(p *paths.Paths, sourceRepository, digestHex string, s
 					return errors.Join(fmt.Errorf("promote legacy tag: %w", err), rollbackErr)
 				}
 				return fmt.Errorf("promote legacy tag: %w", err)
-			}
-		}
-		staleClean := true
-		for _, ref := range staged {
-			if err := removeStaleTagSymlink(p, &ref); err != nil {
-				staleClean = false
-				fmt.Fprintf(os.Stderr, "Warning: failed to remove stale tag symlink %s: %v\n", ref.tag, err)
-			}
-		}
-		if staleClean {
-			if err := os.RemoveAll(legacyDir); err != nil {
-				fmt.Fprintf(os.Stderr, "Warning: failed to remove legacy digest directory %s: %v\n", digestHex, err)
 			}
 		}
 	}
