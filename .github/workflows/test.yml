@@ -124,9 +124,6 @@ jobs:
           test -f "$HYPEMAN_WINDOWS_OVMF_VARS"
           test -r /ci/windows/image-agent.qcow2
 
-      - name: Test Windows hypervisor primitives
-        run: bash .github/scripts/run-windows-integration-test.sh HYPEMAN_RUN_WINDOWS_CONFIG_INTEGRATION TestWindowsConfigIntegration ./lib/hypervisor/qemu
-
       - name: Test Windows lifecycle
         run: |
           make build-embedded
@@ -134,6 +131,9 @@ jobs:
 
       - name: Test Windows stopped forks
         run: bash .github/scripts/run-windows-integration-test.sh HYPEMAN_RUN_WINDOWS_LIFECYCLE_INTEGRATION TestWindowsStoppedForkIntegration ./lib/instances
+
+      - name: Test Windows hypervisor primitives
+        run: bash .github/scripts/run-windows-integration-test.sh HYPEMAN_RUN_WINDOWS_CONFIG_INTEGRATION TestWindowsConfigIntegration ./lib/hypervisor/qemu
 
       # Slash-command runs are maintainer-approved and need authenticated pulls
       # for images that are not covered by the prewarm cache.
