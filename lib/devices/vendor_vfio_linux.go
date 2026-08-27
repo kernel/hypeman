@@ -30,6 +30,26 @@ type vendorVFIOOwner struct {
 	assignedAt time.Time
 }
 
+type vendorVFIOGPUPlacement struct {
+	usage        int
+	unknownUsage bool
+	quarantined  int
+	freeVFs      []VirtualFunction
+}
+
+func (p *vendorVFIOGPUPlacement) preferredTo(other *vendorVFIOGPUPlacement, gpu, otherGPU string) bool {
+	if p.quarantined != other.quarantined {
+		return p.quarantined < other.quarantined
+	}
+	if p.unknownUsage != other.unknownUsage {
+		return !p.unknownUsage
+	}
+	if p.usage != other.usage {
+		return p.usage < other.usage
+	}
+	return gpu < otherGPU
+}
+
 type vendorVFIOSysfs struct {
 	pciDevicesPath    string
 	procPath          string
@@ -317,71 +337,70 @@ func (s vendorVFIOSysfs) reconcile(ctx context.Context, protectedDevicePaths map
 	return nil
 }
 
+func (s vendorVFIOSysfs) addVFToPlacement(placement *vendorVFIOGPUPlacement, vf VirtualFunction, profileType string, quarantined bool) {
+	if quarantined {
+		placement.quarantined++
+		if !vf.Allocated {
+			return
+		}
+	}
+	if vf.Allocated {
+		// framebufferByType only covers currently creatable profiles, so
+		// after a restart an allocated type can be missing when its
+		// capacity is exhausted. Prefer GPUs whose load is fully known
+		// instead of rejecting placement outright; the kernel driver
+		// still enforces real capacity through creatable_vgpu_types.
+		framebuffer, ok := s.framebufferByType[vf.ProfileType]
+		if !ok {
+			placement.unknownUsage = true
+			return
+		}
+		placement.usage += framebuffer
+		return
+	}
+	profiles, err := s.readCreatableProfiles(vf.PCIAddress)
+	if err != nil {
+		// An unreadable free VF is just not a placement candidate.
+		slog.Default().Warn("skipping unreadable creatable vGPU types", "vf", vf.PCIAddress, "error", err)
+		return
+	}
+	for _, profile := range profiles {
+		if profile.TypeName == profileType {
+			placement.freeVFs = append(placement.freeVFs, vf)
+			return
+		}
+	}
+}
+
 func (s vendorVFIOSysfs) selectLeastLoadedVF(vfs []VirtualFunction, profileType string) (string, error) {
 	quarantined, err := vfHealth.checkedAddresses()
 	if err != nil {
 		return "", err
 	}
-	usageByGPU := make(map[string]int)
-	unknownUsageByGPU := make(map[string]bool)
-	quarantinedByGPU := make(map[string]int)
-	freeByGPU := make(map[string][]VirtualFunction)
+	placementByGPU := make(map[string]*vendorVFIOGPUPlacement)
 	for _, vf := range vfs {
+		placement := placementByGPU[vf.ParentGPU]
+		if placement == nil {
+			placement = &vendorVFIOGPUPlacement{}
+			placementByGPU[vf.ParentGPU] = placement
+		}
 		_, bad := quarantined[vf.PCIAddress]
-		if bad {
-			quarantinedByGPU[vf.ParentGPU]++
-			if !vf.Allocated {
-				continue
-			}
-		}
-		if vf.Allocated {
-			// framebufferByType only covers currently creatable profiles, so
-			// after a restart an allocated type can be missing when its
-			// capacity is exhausted. Prefer GPUs whose load is fully known
-			// instead of rejecting placement outright; the kernel driver
-			// still enforces real capacity through creatable_vgpu_types.
-			framebuffer, ok := s.framebufferByType[vf.ProfileType]
-			if !ok {
-				unknownUsageByGPU[vf.ParentGPU] = true
-				continue
-			}
-			usageByGPU[vf.ParentGPU] += framebuffer
-			continue
-		}
-		profiles, err := s.readCreatableProfiles(vf.PCIAddress)
-		if err != nil {
-			// An unreadable free VF is just not a placement candidate.
-			slog.Default().Warn("skipping unreadable creatable vGPU types", "vf", vf.PCIAddress, "error", err)
-			continue
-		}
-		for _, profile := range profiles {
-			if profile.TypeName == profileType {
-				freeByGPU[vf.ParentGPU] = append(freeByGPU[vf.ParentGPU], vf)
-				break
-			}
-		}
+		s.addVFToPlacement(placement, vf, profileType, bad)
 	}
 
-	gpus := make([]string, 0, len(freeByGPU))
-	for gpu := range freeByGPU {
-		gpus = append(gpus, gpu)
+	gpus := make([]string, 0, len(placementByGPU))
+	for gpu, placement := range placementByGPU {
+		if len(placement.freeVFs) > 0 {
+			gpus = append(gpus, gpu)
+		}
 	}
 	sort.Slice(gpus, func(i, j int) bool {
-		if quarantinedByGPU[gpus[i]] != quarantinedByGPU[gpus[j]] {
-			return quarantinedByGPU[gpus[i]] < quarantinedByGPU[gpus[j]]
-		}
-		if unknownUsageByGPU[gpus[i]] != unknownUsageByGPU[gpus[j]] {
-			return !unknownUsageByGPU[gpus[i]]
-		}
-		if usageByGPU[gpus[i]] == usageByGPU[gpus[j]] {
-			return gpus[i] < gpus[j]
-		}
-		return usageByGPU[gpus[i]] < usageByGPU[gpus[j]]
+		return placementByGPU[gpus[i]].preferredTo(placementByGPU[gpus[j]], gpus[i], gpus[j])
 	})
 	if len(gpus) == 0 {
 		return "", nil
 	}
-	candidates := freeByGPU[gpus[0]]
+	candidates := placementByGPU[gpus[0]].freeVFs
 	pick := s.pickVFIndex
 	if pick == nil {
 		pick = rand.IntN
