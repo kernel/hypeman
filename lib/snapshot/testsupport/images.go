@@ -73,15 +73,19 @@ func EnsureImageReady(t *testing.T, ctx context.Context, p *paths.Paths, imageMa
 	digestHex := strings.TrimPrefix(cached.Digest, "sha256:")
 	require.NotEmpty(t, digestHex)
 
-	srcDigestDir := cachePaths.ImageDigestDir(ref.Repository(), digestHex)
-	dstDigestDir := p.ImageDigestDir(ref.Repository(), digestHex)
+	srcDiskPath, err := images.GetDiskPath(cachePaths, waitName, cached.Digest)
+	require.NoError(t, err)
+	srcDigestDir := filepath.Dir(srcDiskPath)
+	dstDigestDir := p.ImageContentDir(digestHex)
 	require.NoError(t, copyDirWithHardlinks(srcDigestDir, dstDigestDir))
 
 	if ref.Tag() != "" {
-		linkPath := p.ImageTagSymlink(ref.Repository(), ref.Tag())
+		linkPath := p.ImageRepositoryTagSymlink(ref.Repository(), ref.Tag())
+		target, err := filepath.Rel(filepath.Dir(linkPath), dstDigestDir)
+		require.NoError(t, err)
 		require.NoError(t, os.MkdirAll(filepath.Dir(linkPath), 0755))
 		_ = os.Remove(linkPath)
-		require.NoError(t, os.Symlink(digestHex, linkPath))
+		require.NoError(t, os.Symlink(target, linkPath))
 	}
 
 	reference := ref.Tag()
