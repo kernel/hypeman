@@ -11,12 +11,15 @@ import (
 	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/guest"
 	"github.com/kernel/hypeman/lib/logger"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
+	"golang.org/x/sync/errgroup"
 )
 
 const (
-	vgpuSentinelPollInterval = 5 * time.Second
-	vgpuSentinelPollTimeout  = 5 * time.Second
+	vgpuSentinelPollInterval       = 5 * time.Second
+	vgpuSentinelPollTimeout        = 5 * time.Second
+	vgpuSentinelMaxConcurrentPolls = 64
 )
 
 type vgpuSentinelTarget struct {
@@ -46,6 +49,7 @@ type VGPUSentinelController struct {
 	guestGPUInitStatus func(ctx context.Context, instanceID string) (guest.GPUInitState, string, error)
 	initFailures       metric.Int64Counter
 	quarantines        metric.Int64Counter
+	checks             metric.Int64Counter
 	discoverFramework  func() (devices.VGPUFramework, []devices.VirtualFunction, error)
 	probeErrLoggedAt   time.Time
 }
@@ -72,6 +76,13 @@ func NewVGPUSentinelController(manager Manager, meter metric.Meter, log *slog.Lo
 	quarantines, err := meter.Int64Counter(
 		"hypeman_instances_vgpu_sentinel_quarantines_total",
 		metric.WithDescription("Total VFs quarantined by the vGPU sentinel"),
+	)
+	if err != nil {
+		return nil, err
+	}
+	checks, err := meter.Int64Counter(
+		"hypeman_instances_vgpu_sentinel_checks_total",
+		metric.WithDescription("Total vGPU sentinel checks by result"),
 	)
 	if err != nil {
 		return nil, err
@@ -119,6 +130,7 @@ func NewVGPUSentinelController(manager Manager, meter metric.Meter, log *slog.Lo
 		discoverFramework: devices.DiscoverVGPU,
 		initFailures:      initFailures,
 		quarantines:       quarantines,
+		checks:            checks,
 	}, nil
 }
 
@@ -169,12 +181,19 @@ func (c *VGPUSentinelController) probeVendorVFIO() (bool, error) {
 func (c *VGPUSentinelController) pollOnce(ctx context.Context) {
 	targets, err := c.store.listVGPUSentinelTargets(ctx)
 	if err != nil {
+		c.recordCheck(ctx, "list_error")
 		c.log.WarnContext(ctx, "vGPU sentinel failed to list instances", "error", err)
 		return
 	}
+	var group errgroup.Group
+	group.SetLimit(vgpuSentinelMaxConcurrentPolls)
 	for _, target := range targets {
-		c.pollTarget(ctx, target)
+		group.Go(func() error {
+			c.pollTarget(ctx, target)
+			return nil
+		})
 	}
+	_ = group.Wait()
 }
 
 func (c *VGPUSentinelController) pollTarget(ctx context.Context, target vgpuSentinelTarget) {
@@ -182,6 +201,7 @@ func (c *VGPUSentinelController) pollTarget(ctx context.Context, target vgpuSent
 	state, nvrm, err := c.guestGPUInitStatus(pollCtx, target.instanceID)
 	cancel()
 	if err != nil {
+		c.recordCheck(ctx, "rpc_error")
 		// The agent is unreachable whenever the instance is not running or
 		// still booting; the next tick polls again.
 		c.log.DebugContext(ctx, "vGPU sentinel cannot reach the guest agent",
@@ -190,10 +210,18 @@ func (c *VGPUSentinelController) pollTarget(ctx context.Context, target vgpuSent
 	}
 	switch state {
 	case guest.GPUInitState_GPU_INIT_STATE_FAILED:
+		c.recordCheck(ctx, "failed")
 		c.handleFailure(ctx, target, nvrm)
 	case guest.GPUInitState_GPU_INIT_STATE_OK:
+		c.recordCheck(ctx, "ok")
 		c.handleSuccess(ctx, target)
+	default:
+		c.recordCheck(ctx, "unknown")
 	}
+}
+
+func (c *VGPUSentinelController) recordCheck(ctx context.Context, result string) {
+	c.checks.Add(ctx, 1, metric.WithAttributes(attribute.String("result", result)))
 }
 
 // confirmAssignment rejects a report only when the instance now holds a

@@ -22,11 +22,11 @@ const (
 	kmsgPath          = "/dev/kmsg"
 	nvidiaPCIVendorID = "0x10de"
 
-	gpuProbeInterval = 15 * time.Second
-	gpuProbeTimeout  = 10 * time.Minute
-	// nvidia-smi can hang indefinitely on a wedged VF; without a per-attempt
-	// bound the overall probe deadline is never reached.
-	gpuProbeAttemptTimeout = 30 * time.Second
+	gpuProbeInterval    = 15 * time.Second
+	gpuProbeRetryWindow = 10 * time.Minute
+	// A slow attempt is killed after this delay. If it is stuck in
+	// uninterruptible I/O, the probe waits for it instead of starting another.
+	gpuProbeAttemptKillAfter = 30 * time.Second
 
 	kmsgReopenDelay = 5 * time.Second
 
@@ -139,12 +139,12 @@ func probeGPUInit(reporter *gpuInitReporter) {
 	if err != nil {
 		return
 	}
-	probeGPUInitUntil(reporter, time.Now().Add(gpuProbeTimeout), gpuProbeAttemptTimeout, gpuProbeInterval, func() error {
-		return runGPUProbeAttempt(nvidiaSMI, gpuProbeAttemptTimeout)
+	probeGPUInitUntil(reporter, time.Now().Add(gpuProbeRetryWindow), gpuProbeAttemptKillAfter, gpuProbeInterval, func() error {
+		return runGPUProbeAttempt(nvidiaSMI, gpuProbeAttemptKillAfter)
 	})
 }
 
-func probeGPUInitUntil(reporter *gpuInitReporter, deadline time.Time, attemptTimeout, interval time.Duration, attempt func() error) {
+func probeGPUInitUntil(reporter *gpuInitReporter, deadline time.Time, attemptKillAfter, interval time.Duration, attempt func() error) {
 	for {
 		err := attempt()
 		if err == nil {
@@ -152,17 +152,17 @@ func probeGPUInitUntil(reporter *gpuInitReporter, deadline time.Time, attemptTim
 			return
 		}
 		if errors.Is(err, context.DeadlineExceeded) {
-			log.Printf("[guest-agent] GPU init probe attempt timed out after %s", attemptTimeout)
+			log.Printf("[guest-agent] GPU init probe attempt exceeded %s and was killed", attemptKillAfter)
 		}
 		if time.Now().After(deadline) {
-			log.Printf("[guest-agent] GPU init probe gave up after %s", gpuProbeTimeout)
+			log.Printf("[guest-agent] GPU init probe gave up after %s", gpuProbeRetryWindow)
 			return
 		}
 		time.Sleep(interval)
 	}
 }
 
-func runGPUProbeAttempt(nvidiaSMI string, timeout time.Duration) error {
+func runGPUProbeAttempt(nvidiaSMI string, killAfter time.Duration) error {
 	cmd := exec.Command(nvidiaSMI, "-L")
 	if err := cmd.Start(); err != nil {
 		return err
@@ -170,7 +170,7 @@ func runGPUProbeAttempt(nvidiaSMI string, timeout time.Duration) error {
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 
-	timer := time.NewTimer(timeout)
+	timer := time.NewTimer(killAfter)
 	defer timer.Stop()
 	select {
 	case err := <-done:

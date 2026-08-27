@@ -138,7 +138,7 @@ func TestGPUInitReporterState(t *testing.T) {
 	assert.Empty(t, resp.FailureMessage)
 }
 
-func TestRunGPUProbeAttemptReturnsOnTimeout(t *testing.T) {
+func TestRunGPUProbeAttemptKillsAndReapsAfterDeadline(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nvidia-smi")
 	require.NoError(t, os.WriteFile(path, []byte("#!/bin/sh\nexec sleep 10\n"), 0o755))
 
