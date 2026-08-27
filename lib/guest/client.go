@@ -938,6 +938,23 @@ func CopyFromInstance(ctx context.Context, dialer hypervisor.VsockDialer, opts C
 	return nil
 }
 
+// GetGPUInitStatus reports the guest GPU driver init state observed by the
+// guest agent. Serial-console GPU markers share the console with workload
+// output, so the host uses this to corroborate them before acting.
+func GetGPUInitStatus(ctx context.Context, dialer hypervisor.VsockDialer) (GPUInitState, error) {
+	grpcConn, err := GetOrCreateConn(ctx, dialer)
+	if err != nil {
+		return GPUInitState_GPU_INIT_STATE_UNKNOWN, fmt.Errorf("get grpc connection: %w", err)
+	}
+
+	client := NewGuestServiceClient(grpcConn)
+	resp, err := client.GetGPUInitStatus(ctx, &GetGPUInitStatusRequest{})
+	if err != nil {
+		return GPUInitState_GPU_INIT_STATE_UNKNOWN, fmt.Errorf("gpu init status RPC: %w", err)
+	}
+	return resp.State, nil
+}
+
 // ShutdownInstance sends a shutdown signal to the guest VM's init process (PID 1).
 // The guest-agent forwards the signal to init, which forwards it to the entrypoint.
 // sig is the signal number to send (0 = SIGTERM default).

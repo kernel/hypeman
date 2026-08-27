@@ -13,13 +13,15 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/devices"
+	"github.com/kernel/hypeman/lib/guest"
 	"github.com/kernel/hypeman/lib/logger"
 	"go.opentelemetry.io/otel/metric"
 )
 
 const (
-	vgpuSentinelScanInterval = 5 * time.Second
-	vgpuSentinelMaxLineBytes = 64 * 1024
+	vgpuSentinelScanInterval       = 5 * time.Second
+	vgpuSentinelMaxLineBytes       = 64 * 1024
+	vgpuSentinelCorroborateTimeout = 5 * time.Second
 )
 
 // Require a standalone guest-agent line so echoed marker text cannot count against a VF.
@@ -67,6 +69,7 @@ type vgpuSentinelTail struct {
 	assignedAt       string
 	offset           int64
 	skippingLongLine bool
+	pendingSuccess   bool
 }
 
 // VGPUSentinelController quarantines VFs reported as wedged by the guest agent.
@@ -76,6 +79,7 @@ type VGPUSentinelController struct {
 	interval          time.Duration
 	reportFailure     func(devices.VFInitFailureReport) (devices.VFReportResult, error)
 	reportSuccess     func(devices.VFInitSuccessReport) (devices.VFSuccessResult, error)
+	guestGPUInitState func(ctx context.Context, instanceID string) (guest.GPUInitState, error)
 	initFailures      metric.Int64Counter
 	quarantines       metric.Int64Counter
 	tails             map[string]*vgpuSentinelTail
@@ -122,7 +126,7 @@ func NewVGPUSentinelController(manager Manager, meter metric.Meter, log *slog.Lo
 	}
 	_, err = meter.Int64ObservableGauge(
 		"hypeman_instances_vgpu_vf_health_store_unavailable",
-		metric.WithDescription("1 when the persisted VF health state failed to load; quarantine mutations are refused and vGPU placement is disabled until it is repaired"),
+		metric.WithDescription("1 when the persisted VF health state failed to load or persist; quarantine mutations are refused and vGPU placement is disabled until it is repaired"),
 		metric.WithInt64Callback(func(_ context.Context, o metric.Int64Observer) error {
 			if devices.VFHealthStoreUnavailable() {
 				o.Observe(1)
@@ -137,11 +141,18 @@ func NewVGPUSentinelController(manager Manager, meter metric.Meter, log *slog.Lo
 	}
 
 	return &VGPUSentinelController{
-		store:             store,
-		log:               log.With("controller", "vgpu_sentinel"),
-		interval:          vgpuSentinelScanInterval,
-		reportFailure:     devices.ReportVFInitFailure,
-		reportSuccess:     devices.ReportVFInitSuccess,
+		store:         store,
+		log:           log.With("controller", "vgpu_sentinel"),
+		interval:      vgpuSentinelScanInterval,
+		reportFailure: devices.ReportVFInitFailure,
+		reportSuccess: devices.ReportVFInitSuccess,
+		guestGPUInitState: func(ctx context.Context, instanceID string) (guest.GPUInitState, error) {
+			dialer, err := manager.GetVsockDialer(ctx, instanceID)
+			if err != nil {
+				return guest.GPUInitState_GPU_INIT_STATE_UNKNOWN, err
+			}
+			return guest.GetGPUInitStatus(ctx, dialer)
+		},
 		discoverFramework: devices.DiscoverVGPU,
 		initFailures:      initFailures,
 		quarantines:       quarantines,
@@ -214,21 +225,55 @@ func (c *VGPUSentinelController) scanOnce(ctx context.Context) {
 func (c *VGPUSentinelController) scanTarget(ctx context.Context, target vgpuSentinelTarget) {
 	tail := c.tails[target.instanceID]
 	if tail == nil || tail.vfAddress != target.vfAddress || tail.assignedAt != target.assignedAt {
+		if tail != nil && tail.pendingSuccess {
+			// Last chance to retry the previous assignment's clear before its
+			// tail is replaced.
+			c.retryPendingSuccess(ctx, target.instanceID, tail)
+		}
 		tail = &vgpuSentinelTail{vfAddress: target.vfAddress, assignedAt: target.assignedAt}
 		c.tails[target.instanceID] = tail
 	}
+	if tail.pendingSuccess {
+		c.retryPendingSuccess(ctx, target.instanceID, tail)
+	}
 
+	// Only the latest marker in a pass matters: a FAILED with a later OK is a
+	// resolved pair (e.g. replayed after a restart) and must not be recorded.
+	var lastLine string
+	lastEvent := VGPUSentinelEventNone
 	err := scanSentinelLog(target.appLogPath, tail, func(line string, event VGPUSentinelEvent) {
-		if event == VGPUSentinelEventInitFailed {
-			c.handleFailure(ctx, target, line)
-			return
-		}
-		c.processSuccess(ctx, target)
+		lastLine, lastEvent = line, event
 	})
 	if err != nil {
 		c.log.WarnContext(ctx, "vGPU sentinel scan failed to read app log",
 			"instance_id", target.instanceID, "error", err)
 	}
+	switch lastEvent {
+	case VGPUSentinelEventInitFailed:
+		c.handleFailure(ctx, target, lastLine)
+	case VGPUSentinelEventInitOK:
+		c.processSuccess(ctx, target, tail)
+	}
+}
+
+// corroborate accepts a marker only when the guest agent reports the matching
+// init state over vsock. Markers share the serial console with workload
+// output, so a bare log line does not establish that the guest agent wrote it.
+func (c *VGPUSentinelController) corroborate(ctx context.Context, target vgpuSentinelTarget, want guest.GPUInitState) bool {
+	ctx, cancel := context.WithTimeout(ctx, vgpuSentinelCorroborateTimeout)
+	defer cancel()
+	state, err := c.guestGPUInitState(ctx, target.instanceID)
+	if err != nil {
+		c.log.WarnContext(ctx, "vGPU sentinel cannot corroborate a marker with the guest agent; ignoring it",
+			"vf", target.vfAddress, "instance_id", target.instanceID, "error", err)
+		return false
+	}
+	if state != want {
+		c.log.WarnContext(ctx, "vGPU sentinel ignoring a marker the guest agent does not corroborate",
+			"vf", target.vfAddress, "instance_id", target.instanceID, "guest_state", state.String())
+		return false
+	}
+	return true
 }
 
 // confirmAssignment rejects a marker only when the instance now holds a
@@ -252,6 +297,9 @@ func (c *VGPUSentinelController) handleFailure(ctx context.Context, target vgpuS
 	if !unchanged {
 		c.log.InfoContext(ctx, "vGPU sentinel skipping init failure: assignment changed during scan",
 			"vf", target.vfAddress, "instance_id", target.instanceID)
+		return
+	}
+	if !c.corroborate(ctx, target, guest.GPUInitState_GPU_INIT_STATE_FAILED) {
 		return
 	}
 	result, err := c.reportFailure(devices.VFInitFailureReport{
@@ -287,7 +335,7 @@ func (c *VGPUSentinelController) handleFailure(ctx context.Context, target vgpuS
 	}
 }
 
-func (c *VGPUSentinelController) processSuccess(ctx context.Context, target vgpuSentinelTarget) {
+func (c *VGPUSentinelController) processSuccess(ctx context.Context, target vgpuSentinelTarget, tail *vgpuSentinelTail) {
 	unchanged, err := c.confirmAssignment(ctx, target)
 	if err != nil {
 		c.log.WarnContext(ctx, "vGPU sentinel could not confirm assignment before clearing init failures",
@@ -297,6 +345,9 @@ func (c *VGPUSentinelController) processSuccess(ctx context.Context, target vgpu
 	if !unchanged {
 		return
 	}
+	if !c.corroborate(ctx, target, guest.GPUInitState_GPU_INIT_STATE_OK) {
+		return
+	}
 
 	result, err := c.reportSuccess(devices.VFInitSuccessReport{
 		VFAddress:  target.vfAddress,
@@ -304,16 +355,40 @@ func (c *VGPUSentinelController) processSuccess(ctx context.Context, target vgpu
 		AssignedAt: target.assignedAt,
 	})
 	if err != nil {
-		c.log.WarnContext(ctx, "vGPU sentinel failed to clear recorded init failures",
+		// The offset has already advanced past the once-per-boot OK marker, so
+		// remember the clear and retry it on later scans.
+		tail.pendingSuccess = true
+		c.log.WarnContext(ctx, "vGPU sentinel failed to clear recorded init failures; will retry",
 			"vf", target.vfAddress, "instance_id", target.instanceID, "error", err)
 		return
 	}
+	c.logSuccessResult(ctx, target.vfAddress, target.instanceID, result)
+}
+
+// retryPendingSuccess retries a corroborated clear whose persist failed. The
+// store only clears exact assignment matches, so no reconfirmation is needed.
+func (c *VGPUSentinelController) retryPendingSuccess(ctx context.Context, instanceID string, tail *vgpuSentinelTail) {
+	result, err := c.reportSuccess(devices.VFInitSuccessReport{
+		VFAddress:  tail.vfAddress,
+		InstanceID: instanceID,
+		AssignedAt: tail.assignedAt,
+	})
+	if err != nil {
+		c.log.WarnContext(ctx, "vGPU sentinel failed to clear recorded init failures; will retry",
+			"vf", tail.vfAddress, "instance_id", instanceID, "error", err)
+		return
+	}
+	tail.pendingSuccess = false
+	c.logSuccessResult(ctx, tail.vfAddress, instanceID, result)
+}
+
+func (c *VGPUSentinelController) logSuccessResult(ctx context.Context, vfAddress, instanceID string, result devices.VFSuccessResult) {
 	if result.Rescinded {
 		c.log.InfoContext(ctx, "rescinded vGPU VF quarantine after successful driver init from the triggering assignment",
-			"vf", target.vfAddress, "instance_id", target.instanceID, "cleared", result.Cleared)
+			"vf", vfAddress, "instance_id", instanceID, "cleared", result.Cleared)
 	} else if result.Cleared > 0 {
 		c.log.InfoContext(ctx, "cleared recorded vGPU VF init failures after successful driver init",
-			"vf", target.vfAddress, "instance_id", target.instanceID, "cleared", result.Cleared)
+			"vf", vfAddress, "instance_id", instanceID, "cleared", result.Cleared)
 	}
 }
 
@@ -332,6 +407,9 @@ func scanSentinelLog(path string, tail *vgpuSentinelTail, handle func(string, VG
 		return err
 	}
 	if info.Size() < tail.offset {
+		// Copy-truncate rotation moved unread bytes to the .1 backup; scan the
+		// remainder there before restarting at the head of the active file.
+		scanRotatedBackup(path+".1", tail, handle)
 		tail.offset = 0
 		tail.skippingLongLine = false
 	}
@@ -339,14 +417,39 @@ func scanSentinelLog(path string, tail *vgpuSentinelTail, handle func(string, VG
 		return err
 	}
 
-	reader := bufio.NewReaderSize(f, vgpuSentinelMaxLineBytes)
+	consumed, skipping, err := readSentinelLines(f, tail.skippingLongLine, handle)
+	tail.offset += consumed
+	tail.skippingLongLine = skipping
+	return err
+}
+
+func scanRotatedBackup(path string, tail *vgpuSentinelTail, handle func(string, VGPUSentinelEvent)) {
+	f, err := os.Open(path)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil || info.Size() < tail.offset {
+		// The backup does not contain the unread tail (e.g. the log was
+		// archived for a new boot rather than rotated).
+		return
+	}
+	if _, err := f.Seek(tail.offset, io.SeekStart); err != nil {
+		return
+	}
+	_, _, _ = readSentinelLines(f, tail.skippingLongLine, handle)
+}
+
+func readSentinelLines(r io.Reader, skipping bool, handle func(string, VGPUSentinelEvent)) (consumed int64, stillSkipping bool, err error) {
+	reader := bufio.NewReaderSize(r, vgpuSentinelMaxLineBytes)
 	for {
 		line, err := reader.ReadSlice('\n')
 		switch {
 		case err == nil:
-			tail.offset += int64(len(line))
-			if tail.skippingLongLine {
-				tail.skippingLongLine = false
+			consumed += int64(len(line))
+			if skipping {
+				skipping = false
 				continue
 			}
 			marker, event := MatchVGPUSentinelLine(line)
@@ -354,15 +457,15 @@ func scanSentinelLog(path string, tail *vgpuSentinelTail, handle func(string, VG
 				handle(marker, event)
 			}
 		case errors.Is(err, bufio.ErrBufferFull):
-			tail.offset += int64(len(line))
-			tail.skippingLongLine = true
+			consumed += int64(len(line))
+			skipping = true
 		case errors.Is(err, io.EOF):
-			if tail.skippingLongLine {
-				tail.offset += int64(len(line))
+			if skipping {
+				consumed += int64(len(line))
 			}
-			return nil
+			return consumed, skipping, nil
 		default:
-			return err
+			return consumed, skipping, err
 		}
 	}
 }

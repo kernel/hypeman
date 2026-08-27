@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/devices"
+	"github.com/kernel/hypeman/lib/guest"
 	"github.com/kernel/hypeman/lib/logger"
 	"github.com/kernel/hypeman/lib/paths"
 	"github.com/stretchr/testify/assert"
@@ -94,11 +95,19 @@ func newTestSentinelController(t *testing.T, store vgpuSentinelStore) (*VGPUSent
 		reportSuccess: func(devices.VFInitSuccessReport) (devices.VFSuccessResult, error) {
 			return devices.VFSuccessResult{}, nil
 		},
+		// Failure markers corroborate by default; success-path tests override.
+		guestGPUInitState: func(context.Context, string) (guest.GPUInitState, error) {
+			return guest.GPUInitState_GPU_INIT_STATE_FAILED, nil
+		},
 		initFailures: counter,
 		quarantines:  counter,
 		tails:        make(map[string]*vgpuSentinelTail),
 	}
 	return c, &reported
+}
+
+func corroborateOK(context.Context, string) (guest.GPUInitState, error) {
+	return guest.GPUInitState_GPU_INIT_STATE_OK, nil
 }
 
 func TestVGPUSentinelControllerReportsFailureOnce(t *testing.T) {
@@ -158,7 +167,7 @@ func TestVGPUSentinelControllerProcessesSuccessAfterFailure(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			logPath := filepath.Join(t.TempDir(), "app.log")
-			require.NoError(t, os.WriteFile(logPath, []byte(testSentinelLine+testSentinelOKLine), 0644))
+			require.NoError(t, os.WriteFile(logPath, []byte(testSentinelLine), 0644))
 			store := &fakeSentinelStore{targets: []vgpuSentinelTarget{{
 				instanceID: "instance-1",
 				vfAddress:  "0000:e3:00.4",
@@ -178,13 +187,105 @@ func TestVGPUSentinelControllerProcessesSuccessAfterFailure(t *testing.T) {
 
 			c.scanOnce(context.Background())
 			require.Len(t, *reported, 1)
+			require.Empty(t, successes)
+
+			c.guestGPUInitState = corroborateOK
+			f, err := os.OpenFile(logPath, os.O_APPEND|os.O_WRONLY, 0644)
+			require.NoError(t, err)
+			_, err = f.WriteString(testSentinelOKLine)
+			require.NoError(t, err)
+			require.NoError(t, f.Close())
+			c.scanOnce(context.Background())
+			require.Len(t, *reported, 1)
 			require.Len(t, successes, 1)
 			assert.Equal(t, "instance-1", successes[0].InstanceID)
 		})
 	}
 }
 
-func TestVGPUSentinelControllerDropsFailedTallyClear(t *testing.T) {
+func TestVGPUSentinelControllerSkipsReplayedResolvedPair(t *testing.T) {
+	t.Parallel()
+
+	// A restart rescans the log from offset zero; a FAILED marker that was
+	// already resolved by a later OK must not be recorded again.
+	logPath := filepath.Join(t.TempDir(), "app.log")
+	require.NoError(t, os.WriteFile(logPath, []byte(testSentinelLine+testSentinelOKLine), 0644))
+	store := &fakeSentinelStore{targets: []vgpuSentinelTarget{{
+		instanceID: "instance-1",
+		vfAddress:  "0000:e3:00.4",
+		appLogPath: logPath,
+		assignedAt: "2026-08-20T15:00:00Z",
+	}}}
+	c, reported := newTestSentinelController(t, store)
+	c.guestGPUInitState = corroborateOK
+	var successes []devices.VFInitSuccessReport
+	c.reportSuccess = func(report devices.VFInitSuccessReport) (devices.VFSuccessResult, error) {
+		successes = append(successes, report)
+		return devices.VFSuccessResult{}, nil
+	}
+
+	c.scanOnce(context.Background())
+	assert.Empty(t, *reported)
+	require.Len(t, successes, 1)
+}
+
+func TestVGPUSentinelControllerIgnoresUncorroboratedMarkers(t *testing.T) {
+	tests := []struct {
+		name       string
+		line       string
+		guestState func(context.Context, string) (guest.GPUInitState, error)
+	}{
+		{
+			name: "forged failure marker",
+			line: testSentinelLine,
+			guestState: func(context.Context, string) (guest.GPUInitState, error) {
+				return guest.GPUInitState_GPU_INIT_STATE_UNKNOWN, nil
+			},
+		},
+		{
+			name: "unreachable guest agent",
+			line: testSentinelLine,
+			guestState: func(context.Context, string) (guest.GPUInitState, error) {
+				return guest.GPUInitState_GPU_INIT_STATE_UNKNOWN, errors.New("vsock dial failed")
+			},
+		},
+		{
+			name: "forged success marker",
+			line: testSentinelOKLine,
+			guestState: func(context.Context, string) (guest.GPUInitState, error) {
+				return guest.GPUInitState_GPU_INIT_STATE_UNKNOWN, nil
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			logPath := filepath.Join(t.TempDir(), "app.log")
+			require.NoError(t, os.WriteFile(logPath, []byte(tt.line), 0644))
+			store := &fakeSentinelStore{targets: []vgpuSentinelTarget{{
+				instanceID: "instance-1",
+				vfAddress:  "0000:e3:00.4",
+				appLogPath: logPath,
+				assignedAt: "2026-08-20T15:00:00Z",
+			}}}
+			c, reported := newTestSentinelController(t, store)
+			var logs bytes.Buffer
+			c.log = slog.New(slog.NewTextHandler(&logs, nil))
+			c.guestGPUInitState = tt.guestState
+			var successes []devices.VFInitSuccessReport
+			c.reportSuccess = func(report devices.VFInitSuccessReport) (devices.VFSuccessResult, error) {
+				successes = append(successes, report)
+				return devices.VFSuccessResult{}, nil
+			}
+
+			c.scanOnce(context.Background())
+			assert.Empty(t, *reported)
+			assert.Empty(t, successes)
+			assert.Contains(t, logs.String(), "corroborate")
+		})
+	}
+}
+
+func TestVGPUSentinelControllerRetriesFailedTallyClear(t *testing.T) {
 	t.Parallel()
 
 	logPath := filepath.Join(t.TempDir(), "app.log")
@@ -196,20 +297,67 @@ func TestVGPUSentinelControllerDropsFailedTallyClear(t *testing.T) {
 		assignedAt: "2026-08-20T15:00:00Z",
 	}}}
 	c, _ := newTestSentinelController(t, store)
+	c.guestGPUInitState = corroborateOK
 	var logs bytes.Buffer
 	c.log = slog.New(slog.NewTextHandler(&logs, nil))
 	var reports []devices.VFInitSuccessReport
 	c.reportSuccess = func(report devices.VFInitSuccessReport) (devices.VFSuccessResult, error) {
 		reports = append(reports, report)
-		return devices.VFSuccessResult{}, errors.New("persist failed")
+		if len(reports) == 1 {
+			return devices.VFSuccessResult{}, errors.New("persist failed")
+		}
+		return devices.VFSuccessResult{Cleared: 1}, nil
 	}
 
 	c.scanOnce(context.Background())
-	c.scanOnce(context.Background())
-
 	require.Len(t, reports, 1)
-	assert.Contains(t, logs.String(), "vGPU sentinel failed to clear recorded init failures")
 	assert.Contains(t, logs.String(), "persist failed")
+
+	// The once-per-boot OK marker is already consumed; the clear must be
+	// retried without a new marker.
+	c.scanOnce(context.Background())
+	require.Len(t, reports, 2)
+	assert.Equal(t, "0000:e3:00.4", reports[1].VFAddress)
+
+	c.scanOnce(context.Background())
+	require.Len(t, reports, 2)
+}
+
+func TestVGPUSentinelControllerRetriesPendingClearBeforeTailReplacement(t *testing.T) {
+	t.Parallel()
+
+	logPath := filepath.Join(t.TempDir(), "app.log")
+	require.NoError(t, os.WriteFile(logPath, []byte(testSentinelOKLine), 0644))
+	store := &fakeSentinelStore{targets: []vgpuSentinelTarget{{
+		instanceID: "instance-1",
+		vfAddress:  "0000:e3:00.4",
+		appLogPath: logPath,
+		assignedAt: "2026-08-20T15:00:00Z",
+	}}}
+	c, _ := newTestSentinelController(t, store)
+	c.guestGPUInitState = corroborateOK
+	var reports []devices.VFInitSuccessReport
+	c.reportSuccess = func(report devices.VFInitSuccessReport) (devices.VFSuccessResult, error) {
+		reports = append(reports, report)
+		if len(reports) == 1 {
+			return devices.VFSuccessResult{}, errors.New("persist failed")
+		}
+		return devices.VFSuccessResult{Cleared: 1}, nil
+	}
+
+	c.scanOnce(context.Background())
+	require.Len(t, reports, 1)
+
+	// A stop/start replaces the assignment; the old assignment's clear must be
+	// retried before its tail is dropped.
+	require.NoError(t, os.WriteFile(logPath, nil, 0644))
+	store.targets[0].vfAddress = "0000:e3:00.5"
+	store.targets[0].assignedAt = "2026-08-20T16:00:00Z"
+	c.scanOnce(context.Background())
+	require.Len(t, reports, 2)
+	assert.Equal(t, "0000:e3:00.4", reports[1].VFAddress)
+	assert.Equal(t, "2026-08-20T15:00:00Z", reports[1].AssignedAt)
+	assert.False(t, c.tails["instance-1"].pendingSuccess)
 }
 
 func TestVGPUSentinelControllerSkipsInitOKOnChangedAssignment(t *testing.T) {
@@ -245,6 +393,7 @@ func TestVGPUSentinelControllerAppliesInitOKFromReleasedAssignment(t *testing.T)
 	logPath := filepath.Join(t.TempDir(), "app.log")
 	require.NoError(t, os.WriteFile(logPath, []byte(testSentinelOKLine), 0644))
 	c, _ := newTestSentinelController(t, &fakeSentinelStore{})
+	c.guestGPUInitState = corroborateOK
 	var cleared []devices.VFInitSuccessReport
 	c.reportSuccess = func(report devices.VFInitSuccessReport) (devices.VFSuccessResult, error) {
 		cleared = append(cleared, report)
@@ -545,6 +694,37 @@ func TestScanForSentinelResetsSkipStateOnTruncatedLog(t *testing.T) {
 	require.Equal(t, VGPUSentinelEventInitFailed, event)
 	assert.Contains(t, line, "RmInitAdapter failed!")
 	assert.False(t, tail.skippingLongLine)
+}
+
+func TestScanForSentinelScansRotatedBackupAfterCopyTruncate(t *testing.T) {
+	t.Parallel()
+
+	logPath := filepath.Join(t.TempDir(), "app.log")
+	tail := &vgpuSentinelTail{}
+
+	require.NoError(t, os.WriteFile(logPath, []byte("booting\n"), 0644))
+	_, event, err := scanForSentinel(logPath, tail)
+	require.NoError(t, err)
+	require.Equal(t, VGPUSentinelEventNone, event)
+
+	// A marker lands and rotation copies it to the .1 backup before the
+	// sentinel reads it.
+	appendSentinelLine(t, logPath)
+	data, err := os.ReadFile(logPath)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(logPath+".1", data, 0644))
+	require.NoError(t, os.Truncate(logPath, 0))
+
+	line, event, err := scanForSentinel(logPath, tail)
+	require.NoError(t, err)
+	require.Equal(t, VGPUSentinelEventInitFailed, event)
+	assert.Contains(t, line, "RmInitAdapter failed!")
+
+	// The offset restarts at the head of the truncated active file.
+	require.NoError(t, os.WriteFile(logPath, []byte(testSentinelOKLine), 0644))
+	_, event, err = scanForSentinel(logPath, tail)
+	require.NoError(t, err)
+	assert.Equal(t, VGPUSentinelEventInitOK, event)
 }
 
 func appendSentinelLine(t *testing.T, path string) {

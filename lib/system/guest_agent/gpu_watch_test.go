@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	pb "github.com/kernel/hypeman/lib/guest"
 	"github.com/kernel/hypeman/lib/instances"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -136,6 +137,28 @@ func TestGPUInitReporterMakesSuccessTerminal(t *testing.T) {
 	assert.Equal(t, gpuReportRepeats, strings.Count(output, gpuInitFailedSentinelPrefix))
 	assert.Equal(t, gpuReportRepeats, strings.Count(output, gpuInitOKSentinelPrefix))
 	assert.Less(t, strings.Index(output, gpuInitFailedSentinelPrefix), strings.Index(output, gpuInitOKSentinelPrefix))
+}
+
+func TestGPUInitReporterState(t *testing.T) {
+	captureAgentLog(t)
+
+	server := &guestServer{}
+	resp, err := server.GetGPUInitStatus(context.Background(), &pb.GetGPUInitStatusRequest{})
+	require.NoError(t, err)
+	assert.Equal(t, pb.GPUInitState_GPU_INIT_STATE_UNKNOWN, resp.State, "a host without an NVIDIA device has no reporter")
+
+	reporter := &gpuInitReporter{}
+	server = &guestServer{gpuReporter: reporter}
+	assert.Equal(t, pb.GPUInitState_GPU_INIT_STATE_UNKNOWN, reporter.state())
+
+	reporter.reportFailure("NVRM: GPU 0000:00:03.0: RmInitAdapter failed!")
+	reporter.reportFailure("NVRM: GPU 0000:00:03.0: RmInitAdapter failed!")
+	assert.Equal(t, pb.GPUInitState_GPU_INIT_STATE_FAILED, reporter.state(), "a throttled repeat still marks the init failed")
+
+	reporter.reportSuccess()
+	resp, err = server.GetGPUInitStatus(context.Background(), &pb.GetGPUInitStatusRequest{})
+	require.NoError(t, err)
+	assert.Equal(t, pb.GPUInitState_GPU_INIT_STATE_OK, resp.State)
 }
 
 func TestRunGPUProbeAttemptReturnsOnTimeout(t *testing.T) {

@@ -22,6 +22,7 @@ const (
 // guestServer implements the gRPC GuestService
 type guestServer struct {
 	pb.UnimplementedGuestServiceServer
+	gpuReporter *gpuInitReporter
 }
 
 func main() {
@@ -54,15 +55,16 @@ func main() {
 
 	startClockKeeper()
 
+	var reporter *gpuInitReporter
 	if hasNVIDIADevice() {
-		reporter := &gpuInitReporter{}
+		reporter = &gpuInitReporter{}
 		go watchGPUInitFailure(reporter)
 		go probeGPUInit(reporter)
 	}
 
 	// Create gRPC server
 	grpcServer := grpc.NewServer()
-	pb.RegisterGuestServiceServer(grpcServer, &guestServer{})
+	pb.RegisterGuestServiceServer(grpcServer, &guestServer{gpuReporter: reporter})
 
 	// Serve gRPC over vsock
 	if err := grpcServer.Serve(l); err != nil {

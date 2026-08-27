@@ -14,6 +14,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	pb "github.com/kernel/hypeman/lib/guest"
 )
 
 const (
@@ -61,17 +63,45 @@ func hasNVIDIADevice() bool {
 type gpuInitReporter struct {
 	mu          sync.Mutex
 	succeeded   bool
+	failed      bool
 	lastFailure time.Time
 }
 
 func (r *gpuInitReporter) reportFailure(msg string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.succeeded || time.Since(r.lastFailure) < gpuReportThrottle {
+	if r.succeeded {
+		return
+	}
+	r.failed = true
+	if time.Since(r.lastFailure) < gpuReportThrottle {
 		return
 	}
 	r.lastFailure = time.Now()
 	emitGPUInitFailureReport(msg)
+}
+
+func (r *gpuInitReporter) state() pb.GPUInitState {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	switch {
+	case r.succeeded:
+		return pb.GPUInitState_GPU_INIT_STATE_OK
+	case r.failed:
+		return pb.GPUInitState_GPU_INIT_STATE_FAILED
+	default:
+		return pb.GPUInitState_GPU_INIT_STATE_UNKNOWN
+	}
+}
+
+// GetGPUInitStatus lets the host corroborate serial-console GPU markers, which
+// share the console with workload output and are forgeable on their own.
+func (s *guestServer) GetGPUInitStatus(context.Context, *pb.GetGPUInitStatusRequest) (*pb.GetGPUInitStatusResponse, error) {
+	state := pb.GPUInitState_GPU_INIT_STATE_UNKNOWN
+	if s.gpuReporter != nil {
+		state = s.gpuReporter.state()
+	}
+	return &pb.GetGPUInitStatusResponse{State: state}, nil
 }
 
 func (r *gpuInitReporter) reportSuccess() {
@@ -163,6 +193,11 @@ func runGPUProbeAttempt(nvidiaSMI string, timeout time.Duration) error {
 		return err
 	case <-timer.C:
 		_ = cmd.Process.Kill()
+		// Wait for the process to be reaped so at most one nvidia-smi attempt is
+		// ever outstanding; a probe stuck in an uninterruptible ioctl blocks here
+		// instead of accumulating processes, and the kmsg watcher still reports
+		// the underlying init failure.
+		<-done
 		return context.DeadlineExceeded
 	}
 }
