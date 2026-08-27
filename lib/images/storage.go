@@ -98,12 +98,7 @@ func resolveImageLayout(p *paths.Paths, repository, digestHex string) imageLayou
 		metadata: p.ImageMetadata(repository, digestHex),
 		disk:     p.ImageDigestPath(repository, digestHex),
 	}
-	content := imageLayout{
-		dir:      p.ImageContentDir(digestHex),
-		metadata: p.ImageContentMetadata(digestHex),
-		disk:     p.ImageContentPath(digestHex),
-		content:  true,
-	}
+	content := contentLayout(p, digestHex)
 
 	if legacyImageExists(p, repository, digestHex) {
 		contentStatus, contentOK := metadataStatus(content.metadata)
@@ -120,13 +115,20 @@ func resolveImageLayout(p *paths.Paths, repository, digestHex string) imageLayou
 	return content
 }
 
+func contentLayout(p *paths.Paths, digestHex string) imageLayout {
+	return imageLayout{
+		dir:      p.ImageContentDir(digestHex),
+		metadata: p.ImageContentMetadata(digestHex),
+		disk:     p.ImageContentPath(digestHex),
+		content:  true,
+	}
+}
+
 func pathExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
 }
 
-// digestDir returns the directory for a specific digest, using the same layout
-// selection as metadata and disk lookup.
 func digestDir(p *paths.Paths, repository, digestHex string) string {
 	return resolveImageLayout(p, repository, digestHex).dir
 }
@@ -171,7 +173,6 @@ func metadataPath(p *paths.Paths, repository, digestHex string) string {
 	return resolveImageLayout(p, repository, digestHex).metadata
 }
 
-// tagSymlinkPath returns the path to a tag symlink in the active layout.
 func tagSymlinkPath(p *paths.Paths, repository, tag string) string {
 	newPath := p.ImageRepositoryTagSymlink(repository, tag)
 	if _, err := os.Lstat(newPath); err == nil {
@@ -180,7 +181,6 @@ func tagSymlinkPath(p *paths.Paths, repository, tag string) string {
 	return p.ImageTagSymlink(repository, tag)
 }
 
-// writeMetadata writes metadata for a digest.
 func writeMetadata(p *paths.Paths, repository, digestHex string, meta *imageMetadata) error {
 	return writeMetadataFile(resolveImageLayout(p, repository, digestHex).metadata, meta)
 }
@@ -211,12 +211,7 @@ func readMetadata(p *paths.Paths, repository, digestHex string) (*imageMetadata,
 }
 
 func readContentMetadata(p *paths.Paths, digestHex string) (*imageMetadata, error) {
-	return readMetadataAt(imageLayout{
-		dir:      p.ImageContentDir(digestHex),
-		metadata: p.ImageContentMetadata(digestHex),
-		disk:     p.ImageContentPath(digestHex),
-		content:  true,
-	})
+	return readMetadataAt(contentLayout(p, digestHex))
 }
 
 func readMetadataAt(layout imageLayout) (*imageMetadata, error) {
@@ -275,9 +270,6 @@ func promoteImageToContent(p *paths.Paths, sourceRepository, digestHex string, s
 		}
 	}
 
-	// A legacy source may still have tags pointing at its repository-local
-	// digest directory. Move those references to the shared content before
-	// removing the duplicate legacy tree.
 	legacyDir := p.ImageDigestDir(sourceRepository, digestHex)
 	if _, err := os.Stat(legacyDir); err == nil {
 		tags, err := listTags(p, sourceRepository)
@@ -442,15 +434,6 @@ func removeStaleTagSymlink(p *paths.Paths, ref *stagedTagSymlink) error {
 	return nil
 }
 
-// createTagSymlink creates or updates a tag symlink to point to a digest (only
-// if the digest dir exists and the build is ready).
-//
-// Tag ownership is Docker last-pull-wins: the most recent pull of a tag always
-// owns the symlink, regardless of platform. An earlier gate only repointed for
-// host-native pulls, which silently stranded emulated variants (e.g.
-// `pull --platform linux/amd64 alpine:3.19` could never make `image get` report
-// amd64) and was non-recoverable. Always repointing is symmetric and matches
-// Docker; callers repoint unconditionally on a ready digest.
 func createTagSymlink(p *paths.Paths, repository, tag, digestHex string) error {
 	ref, err := stageTagSymlink(p, repository, tag, digestHex)
 	if err != nil {
@@ -467,11 +450,9 @@ func createTagSymlink(p *paths.Paths, repository, tag, digestHex string) error {
 	return nil
 }
 
-// resolveTag follows a tag symlink to get the digest hex
 func resolveTag(p *paths.Paths, repository, tag string) (string, error) {
 	linkPath := tagSymlinkPath(p, repository, tag)
 
-	// Read the symlink
 	target, err := os.Readlink(linkPath)
 	if err != nil {
 		if os.IsNotExist(err) {

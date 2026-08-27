@@ -113,17 +113,8 @@ func NewManager(p *paths.Paths, maxConcurrentBuilds int, meter metric.Meter) (Ma
 	}
 
 	m.RecoverInterruptedBuilds()
-	m.promoteLegacyImages()
-	return m, nil
-}
-
-// promoteLegacyImages migrates ready legacy per-repository images into the
-// shared content layout so every repository referencing the same digest
-// shares one rootfs copy. Promotion hardlinks the disk, repoints tags, and
-// removes the legacy tree; failures only warn so a partial migration never
-// blocks startup.
-func (m *manager) promoteLegacyImages() {
 	promoteLegacyImages(m.paths)
+	return m, nil
 }
 
 func credentialsPresent(credentials *authn.AuthConfig) bool {
@@ -552,8 +543,6 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef, credentials 
 	m.updateStatusByDigest(ref, StatusConverting, nil, buildID)
 
 	diskPath := resolveImageLayout(m.paths, ref.Repository(), ref.DigestHex()).disk
-	// Keep the temporary filesystem beside its final path so finalization stays
-	// atomic even when system/builds and images are on different filesystems.
 	diskTempPath := diskPath + ".tmp-" + buildID
 	defer os.Remove(diskTempPath)
 	// Use default image format (erofs on Linux, ext4 on Darwin)
@@ -890,8 +879,11 @@ func (m *manager) WaitForReady(ctx context.Context, name string) error {
 	if err != nil {
 		return err
 	}
-	if terminal, err := terminalImageError(img); terminal {
-		return err
+	if img.Status == StatusReady {
+		return nil
+	}
+	if img.Status == StatusFailed {
+		return conversionFailedErr(img.Error, nil)
 	}
 
 	digestHex := strings.TrimPrefix(img.Digest, "sha256:")
@@ -904,8 +896,11 @@ func (m *manager) WaitForReady(ctx context.Context, name string) error {
 	// Re-check after subscribing to close the race window
 	img, err = m.GetImage(ctx, ref.Repository()+"@"+img.Digest)
 	if err == nil {
-		if terminal, terminalErr := terminalImageError(img); terminal {
-			return terminalErr
+		if img.Status == StatusReady {
+			return nil
+		}
+		if img.Status == StatusFailed {
+			return conversionFailedErr(img.Error, nil)
 		}
 	}
 
@@ -945,17 +940,6 @@ func (m *manager) waitForImage(ctx context.Context, name string, ref *Normalized
 			return nil, ctx.Err()
 		case <-time.After(pollInterval):
 		}
-	}
-}
-
-func terminalImageError(img *Image) (bool, error) {
-	switch img.Status {
-	case StatusReady:
-		return true, nil
-	case StatusFailed:
-		return true, conversionFailedErr(img.Error, nil)
-	default:
-		return false, nil
 	}
 }
 

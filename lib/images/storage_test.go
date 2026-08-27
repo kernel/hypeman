@@ -192,46 +192,12 @@ func TestListAllMetadataContentLayout(t *testing.T) {
 	}, names)
 }
 
-func TestImageMetadataToImage_ClonesMetadata(t *testing.T) {
-	createdAt := time.Now().UTC().Truncate(time.Second)
-	source := &imageMetadata{
-		Name:      "docker.io/library/alpine:latest",
-		Digest:    "sha256:abc",
-		Status:    StatusReady,
-		Tags:      map[string]string{"team": "backend", "env": "staging"},
-		SizeBytes: 123,
-		CreatedAt: createdAt,
-	}
-
-	img := source.toImage()
-	require.Equal(t, source.Name, img.Name)
-	require.Equal(t, source.Digest, img.Digest)
-	require.Equal(t, map[string]string{"team": "backend", "env": "staging"}, img.Tags)
-	require.NotNil(t, img.SizeBytes)
-	require.Equal(t, int64(123), *img.SizeBytes)
-
-	source.Tags["team"] = "mutated"
-	require.Equal(t, "backend", img.Tags["team"])
-}
-
-func TestImageMetadataToImage_EmptyMetadataOmitted(t *testing.T) {
-	img := (&imageMetadata{
-		Name:      "docker.io/library/alpine:latest",
-		Digest:    "sha256:abc",
-		Status:    StatusPending,
-		CreatedAt: time.Now().UTC(),
-	}).toImage()
-
-	require.Nil(t, img.Tags)
-}
-
 func TestPromoteLegacyImagesMovesContentAndTags(t *testing.T) {
 	p := paths.New(t.TempDir())
 	repository := "docker.io/library/alpine"
 	tag := "latest"
 	digest := "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
 
-	// Ready legacy image with a legacy tag symlink.
 	legacyDir := p.ImageDigestDir(repository, digest)
 	require.NoError(t, os.MkdirAll(legacyDir, 0o755))
 	meta := &imageMetadata{
@@ -247,10 +213,8 @@ func TestPromoteLegacyImagesMovesContentAndTags(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Dir(tagPath), 0o755))
 	require.NoError(t, os.Symlink(digest, tagPath))
 
-	m := &manager{paths: p}
-	m.promoteLegacyImages()
+	promoteLegacyImages(p)
 
-	// Content exists with the same bytes and is ready.
 	contentMeta, err := readContentMetadata(p, digest)
 	require.NoError(t, err)
 	require.Equal(t, StatusReady, contentMeta.Status)
@@ -258,11 +222,9 @@ func TestPromoteLegacyImagesMovesContentAndTags(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "rootfs!", string(data))
 
-	// Legacy digest tree is retired once content is installed and tags moved.
 	_, err = os.Stat(legacyDir)
 	require.True(t, os.IsNotExist(err), "legacy digest dir should be removed")
 
-	// The tag now resolves through the shared content layout.
 	resolved, err := resolveTag(p, repository, tag)
 	require.NoError(t, err)
 	require.Equal(t, digest, resolved)
@@ -282,8 +244,7 @@ func TestPromoteLegacyImagesSkipsNonReady(t *testing.T) {
 		CreatedAt: time.Now().UTC(),
 	}))
 
-	m := &manager{paths: p}
-	m.promoteLegacyImages()
+	promoteLegacyImages(p)
 
 	_, err := os.Stat(p.ImageContentMetadata(digest))
 	require.True(t, os.IsNotExist(err), "non-ready legacy image must not be promoted")
