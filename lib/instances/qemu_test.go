@@ -36,12 +36,20 @@ import (
 
 // setupTestManagerForQEMU creates a manager configured to use QEMU as the default hypervisor
 func setupTestManagerForQEMU(t *testing.T) (*manager, string) {
+	return setupTestManagerForQEMUWithNetwork(t, newParallelTestNetworkConfig(t))
+}
+
+func setupTestManagerForQEMUWithoutNetwork(t *testing.T) (*manager, string) {
+	return setupTestManagerForQEMUWithNetwork(t, config.NetworkConfig{})
+}
+
+func setupTestManagerForQEMUWithNetwork(t *testing.T, networkConfig config.NetworkConfig) (*manager, string) {
 	tmpDir := t.TempDir()
 	prepareIntegrationTestDataDir(t, tmpDir)
 
 	cfg := &config.Config{
 		DataDir: tmpDir,
-		Network: newParallelTestNetworkConfig(t),
+		Network: networkConfig,
 	}
 
 	p := paths.New(tmpDir)

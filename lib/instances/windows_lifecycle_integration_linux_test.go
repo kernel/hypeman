@@ -104,7 +104,7 @@ func setupWindowsLifecycleIntegration(t *testing.T) (*manager, *paths.Paths, *im
 	}
 	acquireHeavyIO(t)
 
-	manager, dataDir := setupTestManagerForQEMU(t)
+	manager, dataDir := setupTestManagerForQEMUWithoutNetwork(t)
 	p := paths.New(dataDir)
 	const digestHex = "acacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacac"
 	image := &images.Image{
