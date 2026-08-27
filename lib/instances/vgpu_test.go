@@ -309,33 +309,47 @@ func TestStartRollbackRetainsVGPUAssignmentAfterFailedDestroy(t *testing.T) {
 	assert.Empty(t, stored.Entrypoint)
 }
 
-func TestCleanupStartVGPUReportsUnpersistedRetentionWhenRollbackSaveFails(t *testing.T) {
+func TestCleanupStartVGPUReportsRetentionWhenRollbackSaveFails(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root bypasses directory permissions")
 	}
 
-	m, id := newStartRollbackVGPUManager(t, func(context.Context, devices.VGPUAssignment) error {
-		return errors.New("destroy failed")
-	})
-	device := devices.VGPUDevice{
-		Framework: devices.VGPUFrameworkVendorVFIO,
-		SysfsPath: "/sys/bus/pci/devices/0000:82:00.4",
+	tests := []struct {
+		name            string
+		assignmentSaved bool
+		wantPersisted   bool
+	}{
+		{name: "assignment save survived", assignmentSaved: true, wantPersisted: true},
+		{name: "assignment never saved", assignmentSaved: false, wantPersisted: false},
 	}
-	assignedAt := time.Now().UTC()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m, id := newStartRollbackVGPUManager(t, func(context.Context, devices.VGPUAssignment) error {
+				return errors.New("destroy failed")
+			})
+			device := devices.VGPUDevice{
+				Framework: devices.VGPUFrameworkVendorVFIO,
+				SysfsPath: "/sys/bus/pci/devices/0000:82:00.4",
+			}
+			assignedAt := time.Now().UTC()
 
-	meta, err := m.loadMetadata(id)
-	require.NoError(t, err)
-	rollbackMeta := *meta
-	setStoredVGPUDevice(&meta.StoredMetadata, &device, assignedAt)
-	require.NoError(t, m.saveMetadata(meta))
+			meta, err := m.loadMetadata(id)
+			require.NoError(t, err)
+			rollbackMeta := *meta
+			if tt.assignmentSaved {
+				setStoredVGPUDevice(&meta.StoredMetadata, &device, assignedAt)
+				require.NoError(t, m.saveMetadata(meta))
+			}
 
-	instanceDir := filepath.Dir(m.paths.InstanceMetadata(id))
-	require.NoError(t, os.Chmod(instanceDir, 0o555))
-	t.Cleanup(func() { _ = os.Chmod(instanceDir, 0o755) })
+			instanceDir := filepath.Dir(m.paths.InstanceMetadata(id))
+			require.NoError(t, os.Chmod(instanceDir, 0o555))
+			t.Cleanup(func() { _ = os.Chmod(instanceDir, 0o755) })
 
-	retained, persisted := m.cleanupStartVGPU(context.Background(), id, &device, assignedAt, rollbackMeta)
-	assert.True(t, retained)
-	assert.False(t, persisted)
+			retained, persisted := m.cleanupStartVGPU(context.Background(), id, &device, assignedAt, rollbackMeta)
+			assert.True(t, retained)
+			assert.Equal(t, tt.wantPersisted, persisted)
+		})
+	}
 }
 
 func TestCleanupStartVGPURestoresMetadataAfterBootFailure(t *testing.T) {

@@ -94,6 +94,13 @@ func (m *manager) cleanupStartVGPU(ctx context.Context, instanceID string, devic
 		if !retained {
 			return false, false
 		}
+		// The pre-cleanup assignment save may already hold this claim on disk, in
+		// which case the retention is durable despite the failed rollback save.
+		if onDisk, loadErr := m.loadMetadata(instanceID); loadErr == nil &&
+			onDisk.GPUDevicePath == device.SysfsPath &&
+			onDisk.GPUAssignedAt != nil && onDisk.GPUAssignedAt.Equal(assignedAt) {
+			return true, true
+		}
 		return true, false
 	}
 	return retained, retained
