@@ -1,0 +1,88 @@
+package resources
+
+import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/kernel/hypeman/cmd/api/config"
+	"github.com/kernel/hypeman/lib/devices"
+	"github.com/kernel/hypeman/lib/paths"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func initVFHealthForTest(t *testing.T, state []byte) {
+	t.Helper()
+	dataDir := t.TempDir()
+	if state != nil {
+		path := paths.New(dataDir).VFHealthState()
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+		require.NoError(t, os.WriteFile(path, state, 0o644))
+	}
+	devices.NewManager(paths.New(dataDir))
+	resetDir := t.TempDir()
+	t.Cleanup(func() { devices.NewManager(paths.New(resetDir)) })
+}
+
+func TestGetVGPUStatusFailsClosedWhenVFHealthIsUnavailable(t *testing.T) {
+	initVFHealthForTest(t, []byte("not json"))
+
+	status, err := getVGPUStatus(context.Background(), devices.VGPUFrameworkVendorVFIO, []devices.VirtualFunction{{PCIAddress: "0000:82:00.4"}})
+	assert.Zero(t, status.AllocatableSlots)
+	assert.Zero(t, status.QuarantinedSlots)
+	require.ErrorContains(t, err, "VF health state unavailable")
+}
+
+func TestGetVGPUStatusReportsQuarantinedSlots(t *testing.T) {
+	initVFHealthForTest(t, nil)
+	for _, instance := range []string{"instance-1", "instance-2"} {
+		_, err := devices.ReportVFInitFailure(devices.VFInitFailureReport{VFAddress: "0000:82:00.4", InstanceID: instance})
+		require.NoError(t, err)
+	}
+
+	status, err := getVGPUStatus(context.Background(), devices.VGPUFrameworkVendorVFIO, []devices.VirtualFunction{
+		{PCIAddress: "0000:82:00.4"},
+		{PCIAddress: "0000:82:00.5", Allocated: true},
+		{PCIAddress: "0000:82:00.6"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 3, status.TotalSlots)
+	assert.Equal(t, 1, status.UsedSlots)
+	assert.Equal(t, 1, status.AllocatableSlots)
+	assert.Equal(t, 1, status.QuarantinedSlots)
+}
+
+func TestReserveAllocationUsesAllocatableGPUSlots(t *testing.T) {
+	status := &GPUResourceStatus{
+		Mode:             string(devices.GPUModeVGPU),
+		TotalSlots:       4,
+		UsedSlots:        1,
+		AllocatableSlots: 0,
+	}
+	setGPUStatusProvider(func(context.Context) (*GPUResourceStatus, error) { return status, nil })
+	t.Cleanup(func() { setGPUStatusProvider(nil) })
+
+	mgr := NewManager(&config.Config{}, paths.New(t.TempDir()))
+	ctx := context.Background()
+
+	err := mgr.ValidateAllocation(ctx, 0, 0, 0, 0, 0, 0, true)
+	require.ErrorContains(t, err, "no allocatable vgpu slots")
+
+	setGPUStatusProvider(func(context.Context) (*GPUResourceStatus, error) {
+		return status, errors.New("VF health state unavailable: read failed")
+	})
+	err = mgr.ValidateAllocation(ctx, 0, 0, 0, 0, 0, 0, true)
+	require.ErrorContains(t, err, "vGPU placement is disabled: VF health state unavailable")
+	setGPUStatusProvider(func(context.Context) (*GPUResourceStatus, error) { return status, nil })
+
+	status.AllocatableSlots = 1
+	require.NoError(t, mgr.ReserveAllocation(ctx, "pending-a", 0, 0, 0, 0, 0, 0, true))
+	err = mgr.ReserveAllocation(ctx, "pending-b", 0, 0, 0, 0, 0, 0, true)
+	require.ErrorContains(t, err, "no allocatable vgpu slots")
+
+	mgr.FinishAllocation("pending-a")
+	require.NoError(t, mgr.ReserveAllocation(ctx, "pending-b", 0, 0, 0, 0, 0, 0, true))
+}

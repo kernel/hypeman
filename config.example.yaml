@@ -170,6 +170,12 @@ data_dir: /var/lib/hypeman
 #   idle_ttl: ""                    # delete builders idle this long (e.g. "24h");
 #                                   # destructive, empty = disabled
 
+# gpu:
+#   profile_cache_ttl: 30m          # vGPU profile metadata cache TTL
+#   vf_quarantine_threshold: 2      # distinct instance assignments that must report
+#                                   # a guest driver init failure before the VF is
+#                                   # quarantined (must be >= 1)
+
 # =============================================================================
 # Resource Limits
 # =============================================================================

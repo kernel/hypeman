@@ -10,16 +10,19 @@ import (
 // GPUResourceStatus represents the GPU resource status for the API response.
 // Returns nil if no GPU is available on the host.
 type GPUResourceStatus struct {
-	Mode       string                      `json:"mode"`               // "vgpu" or "passthrough"
-	TotalSlots int                         `json:"total_slots"`        // VFs for vGPU, physical GPUs for passthrough
-	UsedSlots  int                         `json:"used_slots"`         // Slots currently in use
-	Profiles   []devices.GPUProfile        `json:"profiles,omitempty"` // vGPU mode only
-	Devices    []devices.PassthroughDevice `json:"devices,omitempty"`  // passthrough mode only
+	Mode             string                      `json:"mode"`               // "vgpu" or "passthrough"
+	TotalSlots       int                         `json:"total_slots"`        // VFs for vGPU, physical GPUs for passthrough
+	UsedSlots        int                         `json:"used_slots"`         // Slots currently in use, including assigned quarantined VFs
+	AllocatableSlots int                         `json:"allocatable_slots"`  // Healthy free slots used by admission control
+	QuarantinedSlots int                         `json:"quarantined_slots"`  // Quarantined VFs; may overlap UsedSlots
+	Profiles         []devices.GPUProfile        `json:"profiles,omitempty"` // vGPU mode only
+	Devices          []devices.PassthroughDevice `json:"devices,omitempty"`  // passthrough mode only
 }
 
-// GetGPUStatus returns the current GPU resource status.
-// Returns nil if no GPU is available or the mode is "none".
-func GetGPUStatus(ctx context.Context) *GPUResourceStatus {
+// GetGPUStatus returns the current GPU resource status and any error that
+// prevents determining allocatable vGPU capacity. It returns nil if no GPU is
+// available or the mode is "none".
+func GetGPUStatus(ctx context.Context) (*GPUResourceStatus, error) {
 	framework, vfs, err := devices.DiscoverVGPU()
 	if err != nil {
 		// Only report passthrough once vGPU discovery confirms no vGPU
@@ -27,16 +30,16 @@ func GetGPUStatus(ctx context.Context) *GPUResourceStatus {
 		// expose the PFs/VFs as available passthrough slots while active vGPU
 		// assignments exist.
 		logger.FromContext(ctx).WarnContext(ctx, "failed to discover vGPU state", "error", err)
-		return nil
+		return nil, nil
 	}
 	if framework != devices.VGPUFrameworkNone {
 		return getVGPUStatus(ctx, framework, vfs)
 	}
-	return getPassthroughStatus()
+	return getPassthroughStatus(), nil
 }
 
 // getVGPUStatus returns GPU status for vGPU mode (SR-IOV).
-func getVGPUStatus(ctx context.Context, framework devices.VGPUFramework, vfs []devices.VirtualFunction) *GPUResourceStatus {
+func getVGPUStatus(ctx context.Context, framework devices.VGPUFramework, vfs []devices.VirtualFunction) (*GPUResourceStatus, error) {
 	usedSlots := 0
 	// Count used VFs (those with a vGPU assigned)
 	for _, vf := range vfs {
@@ -51,13 +54,20 @@ func getVGPUStatus(ctx context.Context, framework devices.VGPUFramework, vfs []d
 		logger.FromContext(ctx).WarnContext(ctx, "failed to list vGPU profiles; reporting none", "framework", framework, "error", err)
 		profiles = nil
 	}
-
-	return &GPUResourceStatus{
-		Mode:       string(devices.GPUModeVGPU),
-		TotalSlots: len(vfs),
-		UsedSlots:  usedSlots,
-		Profiles:   profiles,
+	allocatableSlots, quarantinedSlots, err := devices.VGPUAvailability(framework, vfs)
+	status := &GPUResourceStatus{
+		Mode:             string(devices.GPUModeVGPU),
+		TotalSlots:       len(vfs),
+		UsedSlots:        usedSlots,
+		AllocatableSlots: allocatableSlots,
+		QuarantinedSlots: quarantinedSlots,
+		Profiles:         profiles,
 	}
+	if err != nil {
+		logger.FromContext(ctx).WarnContext(ctx, "failed to count allocatable vGPU slots; reporting none", "framework", framework, "error", err)
+		status.AllocatableSlots = 0
+	}
+	return status, err
 }
 
 // getPassthroughStatus returns GPU status for whole-GPU passthrough mode.
@@ -92,9 +102,10 @@ func getPassthroughStatus() *GPUResourceStatus {
 	}
 
 	return &GPUResourceStatus{
-		Mode:       string(devices.GPUModePassthrough),
-		TotalSlots: len(passthroughDevices),
-		UsedSlots:  usedSlots,
-		Devices:    passthroughDevices,
+		Mode:             string(devices.GPUModePassthrough),
+		TotalSlots:       len(passthroughDevices),
+		UsedSlots:        usedSlots,
+		AllocatableSlots: len(passthroughDevices) - usedSlots,
+		Devices:          passthroughDevices,
 	}
 }

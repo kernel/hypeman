@@ -12,7 +12,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 
 	"github.com/kernel/hypeman/lib/logger"
@@ -30,14 +29,11 @@ type vendorVFIOSysfs struct {
 	openVFIOPathsFunc func() (map[string]struct{}, error)
 }
 
-var (
-	hostVendorVFIO = vendorVFIOSysfs{
-		pciDevicesPath:  pciDevicesPath,
-		procPath:        procPath,
-		vfioDevicesPath: vfioDevicesPath,
-	}
-	vendorVFIOMu sync.Mutex
-)
+var hostVendorVFIO = vendorVFIOSysfs{
+	pciDevicesPath:  pciDevicesPath,
+	procPath:        procPath,
+	vfioDevicesPath: vfioDevicesPath,
+}
 
 func (s vendorVFIOSysfs) discoverVFs() ([]VirtualFunction, error) {
 	entries, err := os.ReadDir(s.pciDevicesPath)
@@ -99,6 +95,10 @@ func (s vendorVFIOSysfs) discoverVFs() ([]VirtualFunction, error) {
 // available_instances. This is a best-effort snapshot because creating on one
 // VF may revoke the type from siblings that share its GPU framebuffer.
 func (s vendorVFIOSysfs) listProfiles(vfs []VirtualFunction) ([]GPUProfile, error) {
+	quarantined, err := vfHealth.checkedAddresses()
+	if err != nil {
+		return nil, err
+	}
 	profilesByType := make(map[string]VGPUProfileType)
 	creatableVFs := make(map[string]int)
 	profilesByVF, err := s.profileTypes(vfs)
@@ -106,9 +106,10 @@ func (s vendorVFIOSysfs) listProfiles(vfs []VirtualFunction) ([]GPUProfile, erro
 		return nil, err
 	}
 	for _, vf := range vfs {
+		_, bad := quarantined[vf.PCIAddress]
 		for _, profile := range profilesByVF[vf.PCIAddress] {
 			profilesByType[profile.TypeName] = profile
-			if !vf.Allocated {
+			if !vf.Allocated && !bad {
 				creatableVFs[profile.TypeName]++
 			}
 		}
@@ -158,6 +159,17 @@ func (s vendorVFIOSysfs) configure(ctx context.Context, vfAddress, profileType s
 
 	if profileType == "" || profileType == "0" {
 		return fmt.Errorf("invalid vendor VFIO vGPU profile type %q", profileType)
+	}
+	// Placement filters quarantined VFs from a snapshot taken outside this
+	// lock. Re-checking here, under the lock quarantine mutations take,
+	// closes the window where a VF is quarantined between selection and
+	// configuration.
+	quarantined, err := vfHealth.checkedAddresses()
+	if err != nil {
+		return err
+	}
+	if _, bad := quarantined[vfAddress]; bad {
+		return fmt.Errorf("vendor VFIO vGPU on VF %s is quarantined", vfAddress)
 	}
 	currentTypePath := filepath.Join(s.pciDevicesPath, vfAddress, "nvidia", "current_vgpu_type")
 	currentType, err := readCurrentVGPUType(currentTypePath)

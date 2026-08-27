@@ -37,13 +37,13 @@ var (
 	gpuStatusProvider   = GetGPUStatus
 )
 
-func currentGPUStatusProvider() func(context.Context) *GPUResourceStatus {
+func currentGPUStatusProvider() func(context.Context) (*GPUResourceStatus, error) {
 	gpuStatusProviderMu.RLock()
 	defer gpuStatusProviderMu.RUnlock()
 	return gpuStatusProvider
 }
 
-func setGPUStatusProvider(fn func(context.Context) *GPUResourceStatus) {
+func setGPUStatusProvider(fn func(context.Context) (*GPUResourceStatus, error)) {
 	if fn == nil {
 		fn = GetGPUStatus
 	}
@@ -427,7 +427,7 @@ func (m *Manager) GetFullStatus(ctx context.Context) (*FullResourceStatus, error
 	}
 
 	// Get GPU status
-	gpuStatus := currentGPUStatusProvider()(ctx)
+	gpuStatus, _ := currentGPUStatusProvider()(ctx)
 
 	return &FullResourceStatus{
 		CPU:         *cpuStatus,
@@ -691,15 +691,18 @@ func (m *Manager) validateAllocationLocked(ctx context.Context, excludeID string
 
 	// Check GPU if needed
 	if req.GPUSlots > 0 {
-		gpuStatus := currentGPUStatusProvider()(ctx)
+		gpuStatus, gpuStatusErr := currentGPUStatusProvider()(ctx)
 		if gpuStatus == nil {
 			return fmt.Errorf("insufficient GPU: no GPU available on this host")
 		}
-		availableSlots := gpuStatus.TotalSlots - gpuStatus.UsedSlots - pending.GPUSlots
+		availableSlots := gpuStatus.AllocatableSlots - pending.GPUSlots
 		if availableSlots < req.GPUSlots {
+			if gpuStatusErr != nil {
+				return fmt.Errorf("insufficient GPU: vGPU placement is disabled: %w", gpuStatusErr)
+			}
 			if availableSlots <= 0 {
-				return fmt.Errorf("insufficient GPU: all %d %s slots are in use",
-					gpuStatus.TotalSlots, gpuStatus.Mode)
+				return fmt.Errorf("insufficient GPU: no allocatable %s slots available (%d total, %d in use)",
+					gpuStatus.Mode, gpuStatus.TotalSlots, gpuStatus.UsedSlots)
 			}
 			return fmt.Errorf("insufficient GPU: requested %d %s slot(s), but only %d available",
 				req.GPUSlots, gpuStatus.Mode, availableSlots)
