@@ -49,8 +49,10 @@ curl -s http://localhost:4973/resources | jq .gpu
   "mode": "vgpu",
   "total_slots": 64,
   "used_slots": 5,
+  "allocatable_slots": 57,
+  "quarantined_slots": 2,
   "profiles": [
-    {"name": "L40S-1Q", "framebuffer_mb": 1024, "available": 59},
+    {"name": "L40S-1Q", "framebuffer_mb": 1024, "available": 57},
     {"name": "L40S-2Q", "framebuffer_mb": 2048, "available": 30},
     {"name": "L40S-4Q", "framebuffer_mb": 4096, "available": 16}
   ]
@@ -121,6 +123,8 @@ curl -s http://localhost:4973/resources | jq .gpu
   "mode": "passthrough",
   "total_slots": 4,
   "used_slots": 2,
+  "allocatable_slots": 2,
+  "quarantined_slots": 0,
   "devices": [
     {"name": "NVIDIA L40S", "available": true},
     {"name": "NVIDIA L40S", "available": false}
@@ -185,8 +189,10 @@ Returns GPU status along with other resources:
     "mode": "vgpu",
     "total_slots": 64,
     "used_slots": 5,
+    "allocatable_slots": 57,
+    "quarantined_slots": 2,
     "profiles": [
-      {"name": "L40S-1Q", "framebuffer_mb": 1024, "available": 59}
+      {"name": "L40S-1Q", "framebuffer_mb": 1024, "available": 57}
     ]
   }
 }
@@ -282,10 +288,25 @@ NVRM: GPU 0000:00:03.0: RmInitAdapter failed! (0x22:0x65:884)
 ```
 
 (0x65 = timeout; the guest's init requests are never answered, and
-`/proc/interrupts` shows the GPU's MSI-X vectors allocated but idle). Because
-placement is deterministic least-loaded, an idle host re-picks the same VF for
-every request, so one wedged VF presents as all vGPU instances failing while
-`/resources` reports full capacity.
+`/proc/interrupts` shows the GPU's MSI-X vectors allocated but idle).
+
+Hypeman tracks these failures in `<data-dir>/gpu/vf-health.json` (it survives
+restarts): each reported init failure is tallied per instance assignment, and
+once failures accumulate from `gpu.vf_quarantine_threshold` distinct
+assignments (default 2), the VF is quarantined: excluded from placement and
+from advertised profile availability, and its parent GPU becomes
+overflow-only — deprioritized for new placements. Selection among a card's
+equivalent free VFs is randomized so a wedged VF cannot capture every
+placement. A reported init success clears failures only when that exact
+assignment has a recorded failure, removing the match and older tallies; if
+that assignment crossed the threshold, its later success also rescinds the
+quarantine. If the state file exists but cannot be loaded, placement and
+advertised availability fail closed until it is repaired or removed.
+
+`used_slots` includes quarantined VFs still held by running instances, so it
+can overlap `quarantined_slots`; use `allocatable_slots` for admission.
+
+Quarantine only removes capacity — it never touches a running instance.
 
 The wedge itself leaves no host-side log: no kernel error, no XID, no plugin
 crash. The trigger is a SIGKILL delivered to QEMU while the vGPU plugin is
@@ -303,18 +324,44 @@ External SIGKILLs (OOM killer, manual `kill -9`) can still trigger it.
 Confirm by assigning the same profile on a different VF: if that guest
 initializes, the VF is wedged, not the driver stack. Remediate by cycling
 SR-IOV on the parent GPU (this destroys and recreates all of its VFs, so it
-requires no vGPU assignments on that GPU):
+requires no vGPU assignments on that GPU). The DCGM quiesce is not optional:
+with `nv-hostengine`/`dcgm-exporter` holding the GPUs open, `sriov-manage -d`
+fails with `Cannot obtain unbindLock` on first contact.
+
+Any manual edit to `vf-health.json` needs an immediate hypeman restart: the
+store loads only at startup, and a failure report landing first re-persists
+the in-memory set over your edit. The restart does not disturb running VMs —
+startup reconciliation protects live VFs.
+
+**Draining the parent GPU.** Overflow-only is a preference, not a cordon:
+under capacity pressure new placements still land on the card's healthy VFs
+and refill it. To drain the card, quarantine all of its VFs by hand — add
+records to the versioned `vf-health.json` (`{"version": 1, "records":
+[{"vf_address": "...", "quarantined_at": "..."}]}`) and restart. Running
+instances are untouched and
+drain through their normal lifecycle: standby is blocked for vGPU instances,
+so only a running VM pins a VF, and each stop or delete frees one for good.
+Monitor by listing instances whose `gpu.device_path` sits under the parent
+GPU; once none remain, run the cycle below.
 
 ```bash
+# 1. Quiesce the services holding the GPU (required for the unbind lock).
+systemctl stop nvidia-dcgm-exporter nvidia-dcgm
+
+# 2. Cycle SR-IOV on the parent GPU.
 /usr/lib/nvidia/sriov-manage -d <parent-gpu-pci-addr>
 /usr/lib/nvidia/sriov-manage -e <parent-gpu-pci-addr>
+
+# 3. Restart the quiesced services.
+systemctl start nvidia-dcgm nvidia-dcgm-exporter
 ```
+
+After the cycle, remove the card's entries from `vf-health.json`, restart,
+and boot a GPU instance to verify recovery.
 
 Do not unbind/rebind the VF from the nvidia driver — it breaks the
 nvidia-vgpu-vfio core-device registration (`vfio_pci_core_device not found`)
 and the VF stops accepting assignments entirely until the SR-IOV cycle.
-Services holding the GPU (DCGM, persistenced) must be stopped for the cycle
-to obtain the unbind lock.
 
 ### vGPU assignment fails
 

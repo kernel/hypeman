@@ -621,3 +621,69 @@ func assertFileValue(t *testing.T, path, expected string) {
 	require.NoError(t, err)
 	assert.Equal(t, expected, string(value))
 }
+
+func TestVendorVFIOSkipsQuarantinedVF(t *testing.T) {
+	resetVFHealthStore(t)
+	quarantineVF(t, "0000:82:00.4")
+
+	sysfs := newTestVendorVFIOSysfs(t)
+	sysfs.pickVFIndex = func(int) int { return 0 }
+	sysfs.addVF(t, "0000:82:00.0", "0000:82:00.4", "42", "0", testCreatableTypes)
+	sysfs.addVF(t, "0000:82:00.0", "0000:82:00.5", "43", "0", testCreatableTypes)
+
+	device, err := sysfs.create(context.Background(), "NVIDIA L40S-1Q", "instance-1")
+	require.NoError(t, err)
+	assert.Equal(t, "0000:82:00.5", device.VFAddress)
+}
+
+func TestVendorVFIONoVFWhenAllQuarantined(t *testing.T) {
+	resetVFHealthStore(t)
+	quarantineVF(t, "0000:82:00.4")
+
+	sysfs := newTestVendorVFIOSysfs(t)
+	sysfs.addVF(t, "0000:82:00.0", "0000:82:00.4", "42", "0", testCreatableTypes)
+
+	_, err := sysfs.create(context.Background(), "NVIDIA L40S-1Q", "instance-1")
+	require.ErrorContains(t, err, "no available VF")
+}
+
+func TestVendorVFIOCardBiasAvoidsGPUWithQuarantinedVF(t *testing.T) {
+	resetVFHealthStore(t)
+	quarantineVF(t, "0000:82:00.4")
+
+	sysfs := newTestVendorVFIOSysfs(t)
+	sysfs.pickVFIndex = func(int) int { return 0 }
+	sysfs.addVF(t, "0000:82:00.0", "0000:82:00.4", "42", "0", testCreatableTypes)
+	sysfs.addVF(t, "0000:82:00.0", "0000:82:00.5", "43", "0", testCreatableTypes)
+	sysfs.addVF(t, "0000:e3:00.0", "0000:e3:00.4", "44", "0", testCreatableTypes)
+
+	device, err := sysfs.create(context.Background(), "NVIDIA L40S-1Q", "instance-1")
+	require.NoError(t, err)
+	assert.Equal(t, "0000:e3:00.4", device.VFAddress)
+}
+
+func TestVendorVFIOSelectUsesTiebreakAmongFreeVFs(t *testing.T) {
+	sysfs := newTestVendorVFIOSysfs(t)
+	sysfs.pickVFIndex = func(n int) int { return n - 1 }
+	sysfs.addVF(t, "0000:82:00.0", "0000:82:00.4", "42", "0", testCreatableTypes)
+	sysfs.addVF(t, "0000:82:00.0", "0000:82:00.5", "43", "0", testCreatableTypes)
+
+	device, err := sysfs.create(context.Background(), "NVIDIA L40S-1Q", "instance-1")
+	require.NoError(t, err)
+	assert.Equal(t, "0000:82:00.5", device.VFAddress)
+}
+
+func TestVendorVFIOListProfilesExcludesQuarantinedFromAvailability(t *testing.T) {
+	resetVFHealthStore(t)
+	quarantineVF(t, "0000:82:00.4")
+
+	sysfs := newTestVendorVFIOSysfs(t)
+	sysfs.addVF(t, "0000:82:00.0", "0000:82:00.4", "42", "0", testCreatableTypes)
+	sysfs.addVF(t, "0000:82:00.0", "0000:82:00.5", "43", "0", testCreatableTypes)
+
+	vfs, err := sysfs.discoverVFs()
+	require.NoError(t, err)
+	profiles, err := sysfs.listProfiles(vfs)
+	require.NoError(t, err)
+	assert.Equal(t, 1, profileAvailability(profiles, "NVIDIA L40S-1Q"))
+}

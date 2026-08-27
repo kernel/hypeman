@@ -204,6 +204,7 @@ func run() error {
 
 	// Configure GPU profile cache TTL
 	devices.SetGPUProfileCacheTTL(cfg.GPU.ProfileCacheTTL)
+	devices.SetVFQuarantineThreshold(cfg.GPU.VFQuarantineThreshold)
 
 	// Initialize OpenTelemetry (before wire initialization)
 	otelCfg := otel.Config{

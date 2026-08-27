@@ -198,7 +198,7 @@ func TestStartMonitoringPublishesGPUMetrics(t *testing.T) {
 	mgr, _, _ := monitoringTestManager(t)
 
 	originalProvider := currentGPUStatusProvider()
-	setGPUStatusProvider(func(context.Context) *GPUResourceStatus {
+	setGPUStatusProvider(func(context.Context) (*GPUResourceStatus, error) {
 		return &GPUResourceStatus{
 			Mode:       "vgpu",
 			TotalSlots: 8,
@@ -207,7 +207,7 @@ func TestStartMonitoringPublishesGPUMetrics(t *testing.T) {
 				{Name: "L40S-1Q", Available: 5},
 				{Name: "L40S-2Q", Available: 2},
 			},
-		}
+		}, nil
 	})
 	defer func() {
 		setGPUStatusProvider(originalProvider)

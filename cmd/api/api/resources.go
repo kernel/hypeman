@@ -87,9 +87,11 @@ func convertResourceStatus(rs resources.ResourceStatus) oapi.ResourceStatus {
 
 func convertGPUResourceStatus(gs *resources.GPUResourceStatus) oapi.GPUResourceStatus {
 	result := oapi.GPUResourceStatus{
-		Mode:       oapi.GPUResourceStatusMode(gs.Mode),
-		TotalSlots: gs.TotalSlots,
-		UsedSlots:  gs.UsedSlots,
+		Mode:             oapi.GPUResourceStatusMode(gs.Mode),
+		TotalSlots:       gs.TotalSlots,
+		UsedSlots:        gs.UsedSlots,
+		AllocatableSlots: gs.AllocatableSlots,
+		QuarantinedSlots: gs.QuarantinedSlots,
 	}
 
 	// Convert profiles (vGPU mode)
