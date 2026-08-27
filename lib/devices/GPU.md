@@ -300,8 +300,11 @@ equivalent free VFs is randomized so a wedged VF cannot capture every
 placement. A reported init success clears failures only when that exact
 assignment has a recorded failure, removing the match and older tallies; if
 that assignment crossed the threshold, its later success also rescinds the
-quarantine. If the state file exists but cannot be loaded, placement and
-advertised availability fail closed until it is repaired or removed.
+quarantine. If the state file exists but cannot be loaded, or the last write
+to it failed, placement and advertised availability fail closed until a load
+or write succeeds. Recorded tallies are re-evaluated against the configured
+threshold at load, so lowering `gpu.vf_quarantine_threshold` quarantines VFs
+whose persisted failures already meet the new value.
 
 `used_slots` includes quarantined VFs still held by running instances, so it
 can overlap `quarantined_slots`; use `allocatable_slots` for admission.
