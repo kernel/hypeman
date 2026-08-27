@@ -202,9 +202,10 @@ func classifyResolvedHypervisorOwner(socketPath string, stored, resolved int, er
 }
 
 // Ambiguous ownership is treated as live; this must not authorize teardown.
-func hypervisorMayBeAlive(id HypervisorProcessIdentity, socketPath string) bool {
+// The error is returned so callers can surface why teardown was suppressed.
+func hypervisorMayBeAlive(id HypervisorProcessIdentity, socketPath string) (bool, error) {
 	pid, err := resolveLiveHypervisorPID(id, socketPath)
-	return err != nil || pid > 0
+	return err != nil || pid > 0, err
 }
 
 // ProcessExists reports whether pid belongs to a live, non-zombie process.

@@ -156,7 +156,7 @@ type StoredMetadata struct {
 	GPUDevicePath         string
 	GPUMdevUUID           string     // populated for mdev-backed vGPUs
 	GPUAssignedAt         *time.Time // set before hypervisor startup to bound crash recovery protection
-	GPURetainedForCleanup bool       // delete-only stub holding a vGPU assignment
+	GPURetainedForCleanup bool       // delete-only failed-create record; the assignment may already be released
 
 	// Command overrides (like docker run <image> <command>)
 	Entrypoint []string // Override image entrypoint (nil = use image default)

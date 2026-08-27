@@ -111,6 +111,7 @@ type Metrics struct {
 	vgpuReconcileFailuresTotal           metric.Int64Counter
 	vgpuStaleReleaseFailuresTotal        metric.Int64Counter
 	vgpuAssignmentsRetainedTotal         metric.Int64Counter
+	vgpuReconcileLivenessUncertainTotal  metric.Int64Counter
 	tracer                               trace.Tracer
 }
 
@@ -306,6 +307,14 @@ func newInstanceMetrics(meter metric.Meter, tracer trace.Tracer, m *manager) (*M
 	vgpuAssignmentsRetainedTotal, err := meter.Int64Counter(
 		"hypeman_instances_vgpu_assignments_retained_total",
 		metric.WithDescription("Total number of failed rollbacks that left a vGPU assignment behind, by whether the retention record the periodic reconcile needs was persisted"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	vgpuReconcileLivenessUncertainTotal, err := meter.Int64Counter(
+		"hypeman_instances_vgpu_reconcile_liveness_uncertain_total",
+		metric.WithDescription("Total vGPU reconcile checks that preserved an assignment because hypervisor liveness was uncertain"),
 	)
 	if err != nil {
 		return nil, err
@@ -508,6 +517,7 @@ func newInstanceMetrics(meter metric.Meter, tracer trace.Tracer, m *manager) (*M
 		vgpuReconcileFailuresTotal:           vgpuReconcileFailuresTotal,
 		vgpuStaleReleaseFailuresTotal:        vgpuStaleReleaseFailuresTotal,
 		vgpuAssignmentsRetainedTotal:         vgpuAssignmentsRetainedTotal,
+		vgpuReconcileLivenessUncertainTotal:  vgpuReconcileLivenessUncertainTotal,
 		tracer:                               tracer,
 	}, nil
 }
@@ -631,6 +641,13 @@ func (m *manager) recordVGPURetainedAssignment(ctx context.Context, operation vg
 		attribute.String("operation", string(operation)),
 		attribute.String("persisted", strconv.FormatBool(persisted)),
 	))
+}
+
+func (m *manager) recordVGPUReconcileLivenessUncertain(ctx context.Context) {
+	if m.metrics == nil {
+		return
+	}
+	m.metrics.vgpuReconcileLivenessUncertainTotal.Add(ctx, 1)
 }
 
 // recordStateTransition records a state transition with hypervisor label.

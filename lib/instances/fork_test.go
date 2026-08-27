@@ -83,7 +83,7 @@ func TestForkInstanceRejectsVGPURetentionRecord(t *testing.T) {
 
 	_, err = manager.ForkInstance(ctx, sourceID, ForkInstanceRequest{Name: "fork-vgpu-retention-copy"})
 	require.ErrorIs(t, err, ErrInvalidState)
-	require.ErrorContains(t, err, "delete it to release the assignment")
+	require.ErrorContains(t, err, "delete-only record of a failed create")
 }
 
 func TestForkInstance_VZStoppedSourceSupported(t *testing.T) {

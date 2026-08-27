@@ -188,27 +188,34 @@ func removeAllWithRetry(path string, removeAll func(string) error, sleep func(ti
 }
 
 func (m *manager) listMetadataFiles() ([]string, error) {
-	return m.walkMetadataFiles(false)
+	files, _, err := m.walkMetadataFiles()
+	return files, err
 }
 
+// listMetadataFilesStrict returns readable metadata paths and joins any stat
+// errors other than absence. Fail-closed callers (the vGPU release claim scan
+// and startup reconcile protection) use it so an unreadable instance is an
+// error instead of silently missing.
 func (m *manager) listMetadataFilesStrict() ([]string, error) {
-	return m.walkMetadataFiles(true)
+	files, statErr, err := m.walkMetadataFiles()
+	return files, errors.Join(statErr, err)
 }
 
-func (m *manager) walkMetadataFiles(failOnStatError bool) ([]string, error) {
+func (m *manager) walkMetadataFiles() (files []string, statErr error, err error) {
 	guestsDir := m.paths.GuestsDir()
 
 	// Ensure guests directory exists
 	if err := os.MkdirAll(guestsDir, 0755); err != nil {
-		return nil, fmt.Errorf("create guests directory: %w", err)
+		return nil, nil, fmt.Errorf("create guests directory: %w", err)
 	}
 
 	entries, err := os.ReadDir(guestsDir)
 	if err != nil {
-		return nil, fmt.Errorf("read guests directory: %w", err)
+		return nil, nil, fmt.Errorf("read guests directory: %w", err)
 	}
 
-	var metaFiles []string
+	metaFiles := make([]string, 0, len(entries))
+	var statErrs []error
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -217,10 +224,10 @@ func (m *manager) walkMetadataFiles(failOnStatError bool) ([]string, error) {
 		metaPath := filepath.Join(guestsDir, entry.Name(), "metadata.json")
 		if _, err := os.Stat(metaPath); err == nil {
 			metaFiles = append(metaFiles, metaPath)
-		} else if failOnStatError && !os.IsNotExist(err) {
-			return nil, fmt.Errorf("stat metadata for instance %s: %w", entry.Name(), err)
+		} else if !os.IsNotExist(err) {
+			statErrs = append(statErrs, fmt.Errorf("stat metadata for instance %s: %w", entry.Name(), err))
 		}
 	}
 
-	return metaFiles, nil
+	return metaFiles, errors.Join(statErrs...), nil
 }

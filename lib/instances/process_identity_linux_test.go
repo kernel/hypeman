@@ -164,6 +164,10 @@ func TestResolveLiveHypervisorPIDFailsClosedWithoutSocketOrIdentity(t *testing.T
 	resolved, err := resolveLiveHypervisorPID(HypervisorProcessIdentity{HypervisorPID: &pid}, "")
 	require.ErrorContains(t, err, "without a socket path")
 	assert.Zero(t, resolved)
+
+	mayBeAlive, err := hypervisorMayBeAlive(HypervisorProcessIdentity{HypervisorPID: &pid}, "")
+	require.ErrorContains(t, err, "without a socket path")
+	assert.True(t, mayBeAlive, "ambiguous ownership must still fail closed")
 }
 
 func TestSocketListenerHelper(t *testing.T) {

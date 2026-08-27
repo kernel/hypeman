@@ -107,6 +107,41 @@ func TestReconcileVGPUsSkipsVendorSweepWhenListingFails(t *testing.T) {
 	assert.Equal(t, []bool{false, true}, sweeps, "the next pass retries the vendor sweep")
 }
 
+func TestReconcileVGPUsReleasesStaleAssignment(t *testing.T) {
+	t.Parallel()
+
+	var destroyed []devices.VGPUAssignment
+	m := &manager{
+		paths: paths.New(t.TempDir()),
+		destroyVGPU: func(_ context.Context, assignment devices.VGPUAssignment) error {
+			destroyed = append(destroyed, assignment)
+			return nil
+		},
+		reconcileVGPUDevices: func(context.Context, map[string]struct{}, bool) error { return nil },
+	}
+	const id = "stopped-retained"
+	require.NoError(t, m.ensureDirectories(id))
+	require.NoError(t, m.saveMetadata(&metadata{StoredMetadata: StoredMetadata{
+		Id:            id,
+		GPUProfile:    "NVIDIA L40S-2Q",
+		GPUFramework:  devices.VGPUFrameworkVendorVFIO,
+		GPUDevicePath: "/sys/bus/pci/devices/0000:82:00.4",
+	}}))
+
+	m.ReconcileVGPUs(t.Context())
+
+	require.Len(t, destroyed, 1)
+	assert.Equal(t, devices.VGPUAssignment{
+		Framework:  devices.VGPUFrameworkVendorVFIO,
+		DevicePath: "/sys/bus/pci/devices/0000:82:00.4",
+		InstanceID: id,
+	}, destroyed[0])
+	stored, err := m.loadMetadata(id)
+	require.NoError(t, err)
+	assert.Empty(t, stored.GPUDevicePath)
+	assert.Equal(t, "NVIDIA L40S-2Q", stored.GPUProfile, "profile is kept for the next start")
+}
+
 func TestReconcileVGPUsKeepsAssignmentWhenReleaseFails(t *testing.T) {
 	t.Parallel()
 

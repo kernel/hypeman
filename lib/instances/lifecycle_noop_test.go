@@ -315,7 +315,7 @@ func TestStartRejectsVGPURetentionRecord(t *testing.T) {
 
 	_, err = m.StartInstance(context.Background(), id, StartInstanceRequest{})
 	require.ErrorIs(t, err, ErrInvalidState)
-	require.ErrorContains(t, err, "delete it to release the assignment")
+	require.ErrorContains(t, err, "delete-only record of a failed create")
 
 	stored, err := m.loadMetadata(id)
 	require.NoError(t, err)

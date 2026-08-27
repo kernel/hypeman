@@ -85,7 +85,11 @@ func (m *manager) reconcileVGPUAssignments(ctx context.Context) (map[string]stru
 		if storedVGPUDevicePath(stored) == "" {
 			continue
 		}
-		hypervisorLive := hypervisorMayBeAlive(stored.HypervisorProcessIdentity, stored.SocketPath)
+		// The socket-ownership check runs even without a persisted PID: a VMM
+		// whose post-boot metadata save failed still holds its control-socket
+		// listener, and releasing its device would tear the vGPU out from
+		// under a live VM.
+		hypervisorLive := m.vgpuHypervisorMayBeAlive(ctx, stored)
 		if vgpuAssignmentMayBeLive(stored, m.nowUTC(), hypervisorLive) {
 			if stored.GPUDevicePath != "" {
 				protected[stored.GPUDevicePath] = struct{}{}
@@ -95,6 +99,21 @@ func (m *manager) reconcileVGPUAssignments(ctx context.Context) (map[string]stru
 		m.releaseStaleVGPUAssignment(ctx, stored.Id)
 	}
 	return protected, nil
+}
+
+// vgpuHypervisorMayBeAlive fails closed and records why reconciliation could
+// not establish ownership, so retained capacity remains diagnosable.
+func (m *manager) vgpuHypervisorMayBeAlive(ctx context.Context, stored *StoredMetadata) bool {
+	live, err := hypervisorMayBeAlive(stored.HypervisorProcessIdentity, stored.SocketPath)
+	if err == nil {
+		return live
+	}
+	logger.FromContext(ctx).WarnContext(ctx, "preserving vGPU assignment because hypervisor liveness is uncertain",
+		"instance_id", stored.Id,
+		"device_path", storedVGPUDevicePath(stored),
+		"error", err)
+	m.recordVGPUReconcileLivenessUncertain(ctx)
+	return true
 }
 
 // releaseStaleVGPUAssignment retries a release that previously failed, under
@@ -118,7 +137,7 @@ func (m *manager) releaseStaleVGPUAssignment(ctx context.Context, id string) {
 	if path == "" {
 		return
 	}
-	hypervisorLive := hypervisorMayBeAlive(stored.HypervisorProcessIdentity, stored.SocketPath)
+	hypervisorLive := m.vgpuHypervisorMayBeAlive(ctx, stored)
 	if vgpuAssignmentMayBeLive(stored, m.nowUTC(), hypervisorLive) {
 		return
 	}

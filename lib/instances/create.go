@@ -272,12 +272,6 @@ func (m *manager) createInstance(
 	// whatever devices have been attached when cleanup runs.
 	var attachedDeviceIDs []string
 	var resolvedDeviceIDs []string
-	var gpuDevice *devices.VGPUDevice
-	var gpuProfile string
-	var gpuFramework devices.VGPUFramework
-	var gpuDevicePath string
-	var gpuMdevUUID string
-	var gpuAssignedAt *time.Time
 	retention := vgpuRetention{instanceID: id}
 
 	defer retention.deferWrapPending(&retErr)
@@ -293,53 +287,6 @@ func (m *manager) createInstance(
 			for _, deviceID := range attachedDeviceIDs {
 				log.DebugContext(ctx, "detaching device on cleanup", "instance_id", id, "device", deviceID)
 				m.deviceManager.MarkDetached(ctx, deviceID)
-			}
-		})
-	}
-
-	// Handle vGPU profile request
-	if req.GPU != nil && req.GPU.Profile != "" {
-		retentionStub := func() StoredMetadata {
-			return StoredMetadata{
-				Id:                id,
-				Name:              req.Name,
-				Image:             req.Image,
-				ResolvedImage:     resolvedImageRef,
-				Platform:          imageInfo.Platform,
-				CreatedAt:         m.nowUTC(),
-				HypervisorType:    hvType,
-				HypervisorVersion: hvVersion,
-				SocketPath:        m.paths.InstanceSocket(id, starter.SocketName()),
-				DataDir:           m.paths.InstanceDir(id),
-			}
-		}
-		log.InfoContext(ctx, "creating vGPU", "instance_id", id, "profile", req.GPU.Profile)
-		gpuDevice, err = m.createVGPUDevice(ctx, req.GPU.Profile, id)
-		if err != nil {
-			retention.retainFromCreateError(retentionStub(), m.nowUTC(), err)
-			log.ErrorContext(ctx, "failed to create vGPU", "profile", req.GPU.Profile, "error", err)
-			return nil, wrapCreateVGPUErr(req.GPU.Profile, err)
-		}
-		gpuProfile = gpuDevice.ProfileName
-		gpuFramework = gpuDevice.Framework
-		gpuDevicePath = gpuDevice.SysfsPath
-		gpuMdevUUID = gpuDevice.MdevUUID
-		assignedAt := m.nowUTC()
-		gpuAssignedAt = &assignedAt
-		log.InfoContext(ctx, "created vGPU", "instance_id", id, "profile", gpuProfile, "uuid", gpuMdevUUID)
-
-		// Add vGPU cleanup to stack
-		cu.Add(func() {
-			log.DebugContext(ctx, "destroying vGPU on cleanup", "instance_id", id, "uuid", gpuDevice.MdevUUID)
-			assignment := devices.VGPUAssignment{
-				Framework:  gpuDevice.Framework,
-				DevicePath: gpuDevice.SysfsPath,
-				MdevUUID:   gpuDevice.MdevUUID,
-				InstanceID: id,
-			}
-			if err := m.destroyVGPUAssignment(ctx, assignment); err != nil {
-				log.WarnContext(ctx, "failed to destroy vGPU on cleanup", "instance_id", id, "uuid", gpuDevice.MdevUUID, "error", err)
-				retention.retainFromDevice(retentionStub(), gpuDevice, *gpuAssignedAt)
 			}
 		})
 	}
@@ -412,11 +359,6 @@ func (m *manager) createInstance(
 		VsockCID:                 vsockCID,
 		VsockSocket:              vsockSocket,
 		Devices:                  resolvedDeviceIDs,
-		GPUProfile:               gpuProfile,
-		GPUFramework:             gpuFramework,
-		GPUDevicePath:            gpuDevicePath,
-		GPUMdevUUID:              gpuMdevUUID,
-		GPUAssignedAt:            gpuAssignedAt,
 		Entrypoint:               req.Entrypoint,
 		Cmd:                      req.Cmd,
 		SkipKernelHeaders:        req.SkipKernelHeaders,
@@ -558,6 +500,36 @@ func (m *manager) createInstance(
 	bootStart := time.Now().UTC()
 	stored.StartedAt = &bootStart
 	stored.Phases.Record(phasetracking.PhaseCreated, bootStart)
+
+	// Allocate the vGPU after disk, network, volume, and config setup so the
+	// assignment can be persisted immediately.
+	if req.GPU != nil && req.GPU.Profile != "" {
+		log.InfoContext(ctx, "creating vGPU", "instance_id", id, "profile", req.GPU.Profile)
+		gpuDevice, err := m.createVGPUDevice(ctx, req.GPU.Profile, id)
+		if err != nil {
+			retention.retainFromCreateError(*stored, m.nowUTC(), err)
+			log.ErrorContext(ctx, "failed to create vGPU", "profile", req.GPU.Profile, "error", err)
+			return nil, wrapCreateVGPUErr(req.GPU.Profile, err)
+		}
+		assignedAt := m.nowUTC()
+		stored.GPUProfile = gpuDevice.ProfileName
+		setStoredVGPUDevice(stored, gpuDevice, assignedAt)
+		log.InfoContext(ctx, "created vGPU", "instance_id", id, "profile", stored.GPUProfile, "uuid", stored.GPUMdevUUID)
+
+		cu.Add(func() {
+			log.DebugContext(ctx, "destroying vGPU on cleanup", "instance_id", id, "uuid", gpuDevice.MdevUUID)
+			assignment := devices.VGPUAssignment{
+				Framework:  gpuDevice.Framework,
+				DevicePath: gpuDevice.SysfsPath,
+				MdevUUID:   gpuDevice.MdevUUID,
+				InstanceID: id,
+			}
+			if err := m.destroyVGPUAssignment(ctx, assignment); err != nil {
+				log.WarnContext(ctx, "failed to destroy vGPU on cleanup", "instance_id", id, "uuid", gpuDevice.MdevUUID, "error", err)
+				retention.retainFromDevice(*stored, gpuDevice, assignedAt)
+			}
+		})
+	}
 
 	// 18. Save metadata
 	log.DebugContext(ctx, "saving instance metadata", "instance_id", id)
