@@ -25,11 +25,6 @@ func TestShouldSkipAppLogLine(t *testing.T) {
 			want: true,
 		},
 		{
-			name: "gpu init marker",
-			line: "2026/08/20 15:04:05 [guest-agent] HYPEMAN-GPU-INIT-OK ts=2026-08-20T15:04:05Z",
-			want: true,
-		},
-		{
 			name: "headers marker",
 			line: "2026-03-10T10:00:02Z [INFO] HYPEMAN-HEADERS-READY",
 			want: true,

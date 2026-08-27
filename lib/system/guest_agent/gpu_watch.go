@@ -19,9 +19,6 @@ import (
 )
 
 const (
-	gpuInitFailedSentinelPrefix = "HYPEMAN-GPU-INIT-FAILED"
-	gpuInitOKSentinelPrefix     = "HYPEMAN-GPU-INIT-OK"
-
 	kmsgPath          = "/dev/kmsg"
 	nvidiaPCIVendorID = "0x10de"
 
@@ -30,13 +27,6 @@ const (
 	// nvidia-smi can hang indefinitely on a wedged VF; without a per-attempt
 	// bound the overall probe deadline is never reached.
 	gpuProbeAttemptTimeout = 30 * time.Second
-
-	gpuReportThrottle = 30 * time.Second
-
-	// Concurrent guest console output can corrupt a serial line. The host accepts
-	// only complete standalone markers and deduplicates repeats per assignment, so
-	// repetition is safe and improves the odds that one marker arrives intact.
-	gpuReportRepeats = 3
 
 	kmsgReopenDelay = 5 * time.Second
 
@@ -61,10 +51,10 @@ func hasNVIDIADevice() bool {
 }
 
 type gpuInitReporter struct {
-	mu          sync.Mutex
-	succeeded   bool
-	failed      bool
-	lastFailure time.Time
+	mu             sync.Mutex
+	succeeded      bool
+	failed         bool
+	failureMessage string
 }
 
 func (r *gpuInitReporter) reportFailure(msg string) {
@@ -73,35 +63,36 @@ func (r *gpuInitReporter) reportFailure(msg string) {
 	if r.succeeded {
 		return
 	}
-	r.failed = true
-	if time.Since(r.lastFailure) < gpuReportThrottle {
-		return
+	if !r.failed {
+		log.Printf("[guest-agent] GPU init failure detected: %s", msg)
 	}
-	r.lastFailure = time.Now()
-	emitGPUInitFailureReport(msg)
+	r.failed = true
+	r.failureMessage = msg
 }
 
-func (r *gpuInitReporter) state() pb.GPUInitState {
+func (r *gpuInitReporter) state() (pb.GPUInitState, string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	switch {
 	case r.succeeded:
-		return pb.GPUInitState_GPU_INIT_STATE_OK
+		return pb.GPUInitState_GPU_INIT_STATE_OK, ""
 	case r.failed:
-		return pb.GPUInitState_GPU_INIT_STATE_FAILED
+		return pb.GPUInitState_GPU_INIT_STATE_FAILED, r.failureMessage
 	default:
-		return pb.GPUInitState_GPU_INIT_STATE_UNKNOWN
+		return pb.GPUInitState_GPU_INIT_STATE_UNKNOWN, ""
 	}
 }
 
-// GetGPUInitStatus lets the host corroborate serial-console GPU markers, which
-// share the console with workload output and are forgeable on their own.
+// GetGPUInitStatus reports the GPU driver init state to the host sentinel.
+// The serial console is shared with workload output, so this vsock channel is
+// the only signal the host trusts.
 func (s *guestServer) GetGPUInitStatus(context.Context, *pb.GetGPUInitStatusRequest) (*pb.GetGPUInitStatusResponse, error) {
 	state := pb.GPUInitState_GPU_INIT_STATE_UNKNOWN
+	msg := ""
 	if s.gpuReporter != nil {
-		state = s.gpuReporter.state()
+		state, msg = s.gpuReporter.state()
 	}
-	return &pb.GetGPUInitStatusResponse{State: state}, nil
+	return &pb.GetGPUInitStatusResponse{State: state, FailureMessage: msg}, nil
 }
 
 func (r *gpuInitReporter) reportSuccess() {
@@ -111,7 +102,7 @@ func (r *gpuInitReporter) reportSuccess() {
 		return
 	}
 	r.succeeded = true
-	emitGPUInitOKReport()
+	log.Printf("[guest-agent] GPU driver initialized")
 }
 
 func watchGPUInitFailure(reporter *gpuInitReporter) {
@@ -137,13 +128,6 @@ func watchGPUInitFailure(reporter *gpuInitReporter) {
 			log.Printf("[guest-agent] GPU init watch read %s failed (reopening): %v", kmsgPath, err)
 		}
 		time.Sleep(kmsgReopenDelay)
-	}
-}
-
-func emitGPUInitFailureReport(msg string) {
-	ts := time.Now().UTC().Format(time.RFC3339Nano)
-	for range gpuReportRepeats {
-		log.Printf("[guest-agent] %s ts=%s nvrm=%q", gpuInitFailedSentinelPrefix, ts, msg)
 	}
 }
 
@@ -199,13 +183,6 @@ func runGPUProbeAttempt(nvidiaSMI string, timeout time.Duration) error {
 		// the underlying init failure.
 		<-done
 		return context.DeadlineExceeded
-	}
-}
-
-func emitGPUInitOKReport() {
-	ts := time.Now().UTC().Format(time.RFC3339Nano)
-	for range gpuReportRepeats {
-		log.Printf("[guest-agent] %s ts=%s", gpuInitOKSentinelPrefix, ts)
 	}
 }
 

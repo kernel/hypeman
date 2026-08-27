@@ -35,8 +35,6 @@ var ErrLogNotFound = fmt.Errorf("log file not found")
 var appLogNoiseMarkers = []string{
 	"HYPEMAN-PROGRAM-START",
 	"HYPEMAN-AGENT-READY",
-	"HYPEMAN-GPU-INIT-FAILED",
-	"HYPEMAN-GPU-INIT-OK",
 	"HYPEMAN-HEADERS-START",
 	"HYPEMAN-HEADERS-READY",
 	"HYPEMAN-HEADERS-FAILED",

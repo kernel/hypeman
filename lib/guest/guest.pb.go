@@ -1469,10 +1469,12 @@ func (*GetGPUInitStatusRequest) Descriptor() ([]byte, []int) {
 
 // GetGPUInitStatusResponse reports the guest GPU driver init state
 type GetGPUInitStatusResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	State         GPUInitState           `protobuf:"varint,1,opt,name=state,proto3,enum=guest.GPUInitState" json:"state,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state protoimpl.MessageState `protogen:"open.v1"`
+	State GPUInitState           `protobuf:"varint,1,opt,name=state,proto3,enum=guest.GPUInitState" json:"state,omitempty"`
+	// Most recent NVRM init-failure line observed in kmsg; set when state is FAILED
+	FailureMessage string `protobuf:"bytes,2,opt,name=failure_message,json=failureMessage,proto3" json:"failure_message,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *GetGPUInitStatusResponse) Reset() {
@@ -1510,6 +1512,13 @@ func (x *GetGPUInitStatusResponse) GetState() GPUInitState {
 		return x.State
 	}
 	return GPUInitState_GPU_INIT_STATE_UNKNOWN
+}
+
+func (x *GetGPUInitStatusResponse) GetFailureMessage() string {
+	if x != nil {
+		return x.FailureMessage
+	}
+	return ""
 }
 
 var File_lib_guest_guest_proto protoreflect.FileDescriptor
@@ -1612,9 +1621,10 @@ const file_lib_guest_guest_proto_rawDesc = "" +
 	"\x06prefix\x18\x04 \x01(\rR\x06prefix\x12\x18\n" +
 	"\agateway\x18\x05 \x01(\tR\agateway\"\x1c\n" +
 	"\x1aReconfigureNetworkResponse\"\x19\n" +
-	"\x17GetGPUInitStatusRequest\"E\n" +
+	"\x17GetGPUInitStatusRequest\"n\n" +
 	"\x18GetGPUInitStatusResponse\x12)\n" +
-	"\x05state\x18\x01 \x01(\x0e2\x13.guest.GPUInitStateR\x05state*\\\n" +
+	"\x05state\x18\x01 \x01(\x0e2\x13.guest.GPUInitStateR\x05state\x12'\n" +
+	"\x0ffailure_message\x18\x02 \x01(\tR\x0efailureMessage*\\\n" +
 	"\fGPUInitState\x12\x1a\n" +
 	"\x16GPU_INIT_STATE_UNKNOWN\x10\x00\x12\x15\n" +
 	"\x11GPU_INIT_STATE_OK\x10\x01\x12\x19\n" +
