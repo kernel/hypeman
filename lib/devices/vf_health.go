@@ -440,14 +440,11 @@ func (s *vfHealthStore) writeStateLocked() (bool, error) {
 		return false, fmt.Errorf("marshal VF health state: %w", err)
 	}
 	dirPath := filepath.Dir(s.path)
-	if _, err := os.Stat(dirPath); os.IsNotExist(err) {
-		if err := os.MkdirAll(dirPath, 0755); err != nil {
-			return false, fmt.Errorf("create VF health state dir: %w", err)
-		}
-		// Make the new directory entry itself durable.
-		if err := s.syncDirFunc(filepath.Dir(dirPath)); err != nil {
-			return false, fmt.Errorf("sync VF health state parent dir: %w", err)
-		}
+	if err := os.MkdirAll(dirPath, 0755); err != nil {
+		return false, fmt.Errorf("create VF health state dir: %w", err)
+	}
+	if err := s.syncDirFunc(filepath.Dir(dirPath)); err != nil {
+		return false, fmt.Errorf("sync VF health state parent dir: %w", err)
 	}
 	tmp := s.path + ".tmp"
 	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
