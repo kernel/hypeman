@@ -59,32 +59,19 @@ func (m *manager) persistVGPURetention(ctx context.Context, retention *vgpuReten
 	defer func() {
 		m.recordVGPURetainedAssignment(ctx, vgpuRetentionOperationCreate, retention.persisted)
 	}()
-	retentionSurvives := func() bool {
-		meta, err := m.loadMetadata(id)
-		if err == nil && storedVGPUDevicePath(&meta.StoredMetadata) != "" {
-			if err := m.saveVGPURetentionStub(retainedVGPU); err != nil {
-				log.ErrorContext(ctx, "failed to replace surviving instance metadata with vGPU retention stub; preserving existing assignment claim", "instance_id", id, "error", err)
-			}
-			return true
-		}
-		if err := m.deleteInstanceData(id); err != nil {
-			log.ErrorContext(ctx, "failed to delete stale instance data after retention failure", "instance_id", id, "error", err)
-		}
-		return false
-	}
+
+	// An unpersisted retention leaves no metadata claim. The periodic reconciler releases
+	// the VF after its grace period once no open VFIO handles remain.
 	if err := m.deleteInstanceData(id); err != nil {
 		log.ErrorContext(ctx, "failed to clean instance data before retaining vGPU assignment", "instance_id", id, "error", err)
-		retention.persisted = retentionSurvives()
 		return
 	}
 	if err := m.ensureDirectories(id); err != nil {
 		log.ErrorContext(ctx, "failed to retain instance data after vGPU cleanup failure", "instance_id", id, "error", err)
-		retention.persisted = retentionSurvives()
 		return
 	}
 	if err := m.saveVGPURetentionStub(retainedVGPU); err != nil {
 		log.ErrorContext(ctx, "failed to retain vGPU assignment metadata after cleanup failure", "instance_id", id, "error", err)
-		retention.persisted = retentionSurvives()
 		return
 	}
 	retention.persisted = true

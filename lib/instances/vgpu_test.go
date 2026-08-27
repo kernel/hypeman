@@ -107,35 +107,6 @@ func TestCleanupFailedCreateReportsUnpersistedRetention(t *testing.T) {
 	require.Error(t, err, "the lost retention leaves no metadata claim, so the periodic sweep releases the VF")
 }
 
-func TestCleanupFailedCreatePreservesClaimWhenStubSaveFails(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("root bypasses directory permissions")
-	}
-
-	m := &manager{paths: paths.New(t.TempDir())}
-	const id = "failed-create"
-	require.NoError(t, m.ensureDirectories(id))
-	stored := &StoredMetadata{
-		Id:            id,
-		Name:          "surviving metadata",
-		GPUFramework:  devices.VGPUFrameworkVendorVFIO,
-		GPUDevicePath: "/sys/bus/pci/devices/0000:82:00.4",
-	}
-	require.NoError(t, m.saveMetadata(&metadata{StoredMetadata: *stored}))
-
-	instanceDir := filepath.Dir(m.paths.InstanceMetadata(id))
-	require.NoError(t, os.Chmod(instanceDir, 0o555))
-	t.Cleanup(func() { _ = os.Chmod(instanceDir, 0o755) })
-
-	assert.True(t, persistTestVGPURetention(m, context.Background(), id, stored))
-	retained, err := m.loadMetadata(id)
-	require.NoError(t, err)
-	assert.Equal(t, stored.Name, retained.Name)
-	assert.Equal(t, stored.GPUFramework, retained.GPUFramework)
-	assert.Equal(t, stored.GPUDevicePath, retained.GPUDevicePath)
-	assert.False(t, retained.GPURetainedForCleanup)
-}
-
 type startRetentionNetworkManager struct {
 	network.Manager
 	config       network.NetworkConfig
@@ -338,7 +309,7 @@ func TestStartRollbackRetainsVGPUAssignmentAfterFailedDestroy(t *testing.T) {
 	assert.Empty(t, stored.Entrypoint)
 }
 
-func TestCleanupStartVGPUReportsRetainedWhenMidStartSaveSurvives(t *testing.T) {
+func TestCleanupStartVGPUReportsUnpersistedRetentionWhenRollbackSaveFails(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root bypasses directory permissions")
 	}
@@ -364,7 +335,7 @@ func TestCleanupStartVGPUReportsRetainedWhenMidStartSaveSurvives(t *testing.T) {
 
 	retained, persisted := m.cleanupStartVGPU(context.Background(), id, &device, assignedAt, rollbackMeta)
 	assert.True(t, retained)
-	assert.True(t, persisted, "a surviving mid-start save keeps the assignment recoverable via delete")
+	assert.False(t, persisted)
 }
 
 func TestCleanupStartVGPURestoresMetadataAfterBootFailure(t *testing.T) {

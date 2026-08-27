@@ -94,8 +94,7 @@ func (m *manager) cleanupStartVGPU(ctx context.Context, instanceID string, devic
 		if !retained {
 			return false, false
 		}
-		meta, loadErr := m.loadMetadata(instanceID)
-		return true, loadErr == nil && storedVGPUDevicePath(&meta.StoredMetadata) == device.SysfsPath
+		return true, false
 	}
 	return retained, retained
 }
@@ -132,6 +131,8 @@ func (m *manager) releaseStoredVGPU(ctx context.Context, stored *StoredMetadata)
 }
 
 func (m *manager) vgpuAssignmentClaimedByLiveInstance(excludeID, devicePath string) (bool, error) {
+	// Each vendor VFIO release lists and loads every instance's metadata. This is
+	// acceptable at GPU-host scale (tens of VFs and instances); revisit at hundreds.
 	allMetadata, err := m.listMetadataForReconcile()
 	if err != nil {
 		return false, fmt.Errorf("list instances for vGPU release check: %w", err)
