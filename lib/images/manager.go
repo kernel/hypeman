@@ -614,11 +614,17 @@ func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, diskSize i
 	}
 
 	m.notifyReady(ref.DigestHex(), StatusReady, nil)
-	if meta.RequestedTag != "" {
-		current, resolveErr := resolveTag(m.paths, ref.Repository(), meta.RequestedTag)
-		generationMatches := m.tagGenerations[tagGenerationKey(ref.Repository(), meta.RequestedTag)] == meta.TagGeneration
-		if resolveErr == nil && generationMatches && (current == ref.DigestHex() || current == meta.PreviousTagDigest) {
-			if err := createTagSymlink(m.paths, ref.Repository(), meta.RequestedTag, ref.DigestHex()); err != nil {
+	requestedTag := meta.RequestedTag
+	if requestedTag == "" {
+		requestedTag = ref.Tag()
+	}
+	if requestedTag != "" {
+		current, resolveErr := resolveTag(m.paths, ref.Repository(), requestedTag)
+		generationMatches := m.tagGenerations[tagGenerationKey(ref.Repository(), requestedTag)] == meta.TagGeneration
+		canClaim := meta.RequestedTag == "" && errors.Is(resolveErr, ErrNotFound)
+		canClaim = canClaim || resolveErr == nil && (current == ref.DigestHex() || current == meta.PreviousTagDigest)
+		if generationMatches && canClaim {
+			if err := createTagSymlink(m.paths, ref.Repository(), requestedTag, ref.DigestHex()); err != nil {
 				fmt.Fprintf(os.Stderr, "Warning: failed to create tag symlink: %v\n", err)
 			}
 		}
@@ -853,7 +859,11 @@ func (m *manager) findRequestedTagImage(ref *NormalizedRef) *Image {
 	}
 	var newest *imageMetadata
 	for _, meta := range metas {
-		if meta.RequestedTag != ref.Tag() || !strings.HasPrefix(meta.Name, ref.Repository()+":") {
+		requestedTag := meta.RequestedTag
+		if requestedTag == "" {
+			requestedTag = strings.TrimPrefix(meta.Name, ref.Repository()+":")
+		}
+		if requestedTag != ref.Tag() || !strings.HasPrefix(meta.Name, ref.Repository()+":") {
 			continue
 		}
 		if newest == nil || newest.CreatedAt.Before(meta.CreatedAt) {
