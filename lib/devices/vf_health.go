@@ -75,11 +75,12 @@ type VFSuccessResult struct {
 }
 
 type vfHealthStore struct {
-	mu        sync.Mutex
-	path      string
-	records   map[string]vfHealthRecord
-	threshold int
-	loadErr   error
+	mu         sync.Mutex
+	path       string
+	records    map[string]vfHealthRecord
+	threshold  int
+	loadErr    error
+	persistErr error
 }
 
 var vfHealthAddressPattern = regexp.MustCompile(`^[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]$`)
@@ -97,16 +98,39 @@ func initVFHealth(path string) error {
 }
 
 // SetVFQuarantineThreshold configures the number of failed assignments
-// required to quarantine a VF.
+// required to quarantine a VF. Already-recorded tallies are re-evaluated so a
+// lowered threshold applies to failures persisted before the change.
 func SetVFQuarantineThreshold(n int) {
 	vfHealth.mu.Lock()
 	defer vfHealth.mu.Unlock()
 	vfHealth.threshold = n
+	vfHealth.requarantineLocked()
+}
+
+// requarantineLocked quarantines records whose failure tallies meet the
+// current threshold, so threshold changes and loaded state agree.
+func (s *vfHealthStore) requarantineLocked() {
+	changed := false
+	for address, record := range s.records {
+		if record.QuarantinedAt != nil || len(record.Failures) < s.threshold {
+			continue
+		}
+		now := time.Now().UTC()
+		record.QuarantinedAt = &now
+		s.records[address] = record
+		changed = true
+	}
+	if changed {
+		if err := s.persistLocked(); err != nil {
+			slog.Default().Error("failed to persist re-evaluated VF quarantines; vGPU placement is disabled until a write succeeds", "error", err)
+		}
+	}
 }
 
 func (s *vfHealthStore) loadLocked() error {
 	s.records = make(map[string]vfHealthRecord)
 	s.loadErr = nil
+	s.persistErr = nil
 
 	data, err := os.ReadFile(s.path)
 	if err != nil {
@@ -163,6 +187,7 @@ func (s *vfHealthStore) loadLocked() error {
 		loaded[record.VFAddress] = record
 	}
 	s.records = loaded
+	s.requarantineLocked()
 	return nil
 }
 
@@ -178,6 +203,9 @@ func (s *vfHealthStore) checkedAddresses() (map[string]struct{}, error) {
 	defer s.mu.Unlock()
 	if err := s.ensureLoadedLocked(); err != nil {
 		return nil, fmt.Errorf("VF health state unavailable: %w", err)
+	}
+	if s.persistErr != nil {
+		return nil, fmt.Errorf("VF health state unavailable: last write failed: %w", s.persistErr)
 	}
 	addresses := make(map[string]struct{}, len(s.records))
 	for address, record := range s.records {
@@ -240,11 +268,12 @@ func ReportVFInitSuccess(report VFInitSuccessReport) (VFSuccessResult, error) {
 	return vfHealth.reportSuccess(report)
 }
 
-// VFHealthStoreUnavailable reports whether persisted state failed to load.
+// VFHealthStoreUnavailable reports whether persisted state failed to load or
+// the last write failed.
 func VFHealthStoreUnavailable() bool {
 	vfHealth.mu.Lock()
 	defer vfHealth.mu.Unlock()
-	return vfHealth.loadErr != nil
+	return vfHealth.loadErr != nil || vfHealth.persistErr != nil
 }
 
 // TotalQuarantinedVFs returns the number of quarantined VFs in persisted state.
@@ -365,10 +394,19 @@ func (s *vfHealthStore) reportSuccess(report VFInitSuccessReport) (VFSuccessResu
 	return result, nil
 }
 
+// persistLocked writes the current records to disk. A failure is latched and
+// fails placement closed until a later write succeeds, because in-memory
+// rollback alone would leave a reported-unhealthy VF allocatable.
 func (s *vfHealthStore) persistLocked() error {
 	if s.path == "" {
 		return nil
 	}
+	err := s.writeStateLocked()
+	s.persistErr = err
+	return err
+}
+
+func (s *vfHealthStore) writeStateLocked() error {
 	data, err := json.MarshalIndent(vfHealthFile{
 		Version: vfHealthFileVersion,
 		Records: s.sortedRecordsLocked(),
@@ -376,8 +414,15 @@ func (s *vfHealthStore) persistLocked() error {
 	if err != nil {
 		return fmt.Errorf("marshal VF health state: %w", err)
 	}
-	if err := os.MkdirAll(filepath.Dir(s.path), 0755); err != nil {
-		return fmt.Errorf("create VF health state dir: %w", err)
+	dirPath := filepath.Dir(s.path)
+	if _, err := os.Stat(dirPath); os.IsNotExist(err) {
+		if err := os.MkdirAll(dirPath, 0755); err != nil {
+			return fmt.Errorf("create VF health state dir: %w", err)
+		}
+		// Make the new directory entry itself durable.
+		if err := syncDir(filepath.Dir(dirPath)); err != nil {
+			return fmt.Errorf("sync VF health state parent dir: %w", err)
+		}
 	}
 	tmp := s.path + ".tmp"
 	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
@@ -402,15 +447,17 @@ func (s *vfHealthStore) persistLocked() error {
 		os.Remove(tmp)
 		return fmt.Errorf("rename VF health state: %w", err)
 	}
-	dirPath := filepath.Dir(s.path)
-	dir, err := os.Open(dirPath)
-	if err != nil {
-		slog.Default().Warn("failed to open VF health state directory for sync", "path", dirPath, "error", err)
-		return nil
+	if err := syncDir(dirPath); err != nil {
+		return fmt.Errorf("sync VF health state dir: %w", err)
 	}
-	if err := dir.Sync(); err != nil {
-		slog.Default().Warn("failed to sync VF health state directory", "path", dirPath, "error", err)
-	}
-	_ = dir.Close()
 	return nil
+}
+
+func syncDir(path string) error {
+	dir, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	return dir.Sync()
 }

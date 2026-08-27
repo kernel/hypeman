@@ -1,6 +1,7 @@
 package devices
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -20,6 +21,7 @@ func resetVFHealthStore(t *testing.T) string {
 		vfHealth.records = make(map[string]vfHealthRecord)
 		vfHealth.threshold = defaultVFQuarantineThreshold
 		vfHealth.loadErr = nil
+		vfHealth.persistErr = nil
 	})
 	return path
 }
@@ -90,6 +92,77 @@ func TestVGPUAvailabilityFailsWhenStoreUnavailable(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, available)
 	assert.Zero(t, quarantined)
+}
+
+func TestVGPUAvailabilityFailsClosedAfterPersistFailure(t *testing.T) {
+	resetVFHealthStore(t)
+	SetVFQuarantineThreshold(1)
+	blocker := filepath.Join(t.TempDir(), "blocker")
+	require.NoError(t, os.WriteFile(blocker, nil, 0o644))
+	goodPath := vfHealth.path
+	vfHealth.path = filepath.Join(blocker, "vf-health.json")
+
+	_, err := ReportVFInitFailure(VFInitFailureReport{VFAddress: "0000:e3:00.4", InstanceID: "instance-1"})
+	require.Error(t, err)
+	assert.True(t, VFHealthStoreUnavailable())
+	_, _, err = VGPUAvailability(VGPUFrameworkVendorVFIO, []VirtualFunction{{PCIAddress: "0000:e3:00.4"}})
+	require.ErrorContains(t, err, "last write failed")
+
+	vfHealth.path = goodPath
+	result, err := ReportVFInitFailure(VFInitFailureReport{VFAddress: "0000:e3:00.4", InstanceID: "instance-1"})
+	require.NoError(t, err)
+	assert.Equal(t, VFReportQuarantined, result.Outcome)
+	assert.False(t, VFHealthStoreUnavailable())
+
+	available, quarantined, err := VGPUAvailability(VGPUFrameworkVendorVFIO, []VirtualFunction{{PCIAddress: "0000:e3:00.4"}})
+	require.NoError(t, err)
+	assert.Zero(t, available)
+	assert.Equal(t, 1, quarantined)
+}
+
+func TestSetVFQuarantineThresholdReevaluatesRecordedFailures(t *testing.T) {
+	path := resetVFHealthStore(t)
+	SetVFQuarantineThreshold(3)
+	for _, instance := range []string{"instance-1", "instance-2"} {
+		result, err := ReportVFInitFailure(VFInitFailureReport{VFAddress: "0000:e3:00.4", InstanceID: instance})
+		require.NoError(t, err)
+		require.Equal(t, VFReportRecorded, result.Outcome)
+	}
+
+	SetVFQuarantineThreshold(2)
+
+	records := quarantinedVFs()
+	require.Len(t, records, 1)
+	assert.Equal(t, "0000:e3:00.4", records[0].VFAddress)
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	var state vfHealthFile
+	require.NoError(t, json.Unmarshal(data, &state))
+	require.Len(t, state.Records, 1)
+	assert.NotNil(t, state.Records[0].QuarantinedAt, "the re-evaluated quarantine must be persisted")
+}
+
+func TestLoadReevaluatesTalliesAgainstConfiguredThreshold(t *testing.T) {
+	path := resetVFHealthStore(t)
+	SetVFQuarantineThreshold(3)
+	for _, instance := range []string{"instance-1", "instance-2"} {
+		result, err := ReportVFInitFailure(VFInitFailureReport{VFAddress: "0000:e3:00.4", InstanceID: instance})
+		require.NoError(t, err)
+		require.Equal(t, VFReportRecorded, result.Outcome)
+	}
+
+	// Simulate a restart where the threshold is configured lower before the
+	// persisted tallies are loaded.
+	vfHealth.mu.Lock()
+	vfHealth.records = make(map[string]vfHealthRecord)
+	vfHealth.threshold = 2
+	vfHealth.mu.Unlock()
+	require.NoError(t, initVFHealth(path))
+
+	records := quarantinedVFs()
+	require.Len(t, records, 1)
+	assert.Equal(t, "0000:e3:00.4", records[0].VFAddress)
 }
 
 func TestReportVFInitFailureQuarantinesAtThreshold(t *testing.T) {
