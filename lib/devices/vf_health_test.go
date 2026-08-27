@@ -364,13 +364,52 @@ func TestReportVFInitFailureRollsBackOnPersistFailure(t *testing.T) {
 	assert.False(t, exists, "a failure whose persist failed must be retried by the next report")
 }
 
+func TestReportVFInitFailureRetriesParentSyncAfterFailure(t *testing.T) {
+	resetVFHealthStore(t)
+	parentDir := t.TempDir()
+	vfHealth.path = filepath.Join(parentDir, "gpu", "vf-health.json")
+
+	parentSyncs := 0
+	retrySawPersistErr := false
+	vfHealth.syncDirFunc = func(path string) error {
+		if path != parentDir {
+			return syncDir(path)
+		}
+		parentSyncs++
+		if parentSyncs == 1 {
+			return errors.New("injected parent sync failure")
+		}
+		if parentSyncs == 2 {
+			retrySawPersistErr = vfHealth.persistErr != nil
+		}
+		return syncDir(path)
+	}
+
+	report := VFInitFailureReport{VFAddress: "0000:e3:00.4", InstanceID: "instance-1"}
+	_, err := ReportVFInitFailure(report)
+	require.ErrorContains(t, err, "sync VF health state parent dir")
+	assert.True(t, VFHealthStoreUnavailable())
+
+	result, err := ReportVFInitFailure(report)
+	require.NoError(t, err)
+	assert.Equal(t, VFReportRecorded, result.Outcome)
+	assert.Equal(t, 3, parentSyncs)
+	assert.True(t, retrySawPersistErr, "retry must sync the parent before clearing the write failure")
+	assert.False(t, VFHealthStoreUnavailable())
+}
+
 func TestReportVFInitFailureRetainsRenamedStateAfterSyncFailure(t *testing.T) {
 	path := resetVFHealthStore(t)
 	vf := "0000:e3:00.4"
 	_, err := ReportVFInitFailure(VFInitFailureReport{VFAddress: vf, InstanceID: "instance-1"})
 	require.NoError(t, err)
 
-	vfHealth.syncDirFunc = func(string) error { return errors.New("injected sync failure") }
+	vfHealth.syncDirFunc = func(path string) error {
+		if path == filepath.Dir(vfHealth.path) {
+			return errors.New("injected sync failure")
+		}
+		return syncDir(path)
+	}
 	_, err = ReportVFInitFailure(VFInitFailureReport{VFAddress: vf, InstanceID: "instance-2"})
 	require.ErrorContains(t, err, "sync VF health state dir")
 
