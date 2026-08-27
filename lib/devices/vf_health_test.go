@@ -2,6 +2,7 @@ package devices
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -22,6 +23,7 @@ func resetVFHealthStore(t *testing.T) string {
 		vfHealth.threshold = defaultVFQuarantineThreshold
 		vfHealth.loadErr = nil
 		vfHealth.persistErr = nil
+		vfHealth.syncDirFunc = syncDir
 	})
 	return path
 }
@@ -360,6 +362,79 @@ func TestReportVFInitFailureRollsBackOnPersistFailure(t *testing.T) {
 	_, exists := vfHealth.records["0000:e3:00.4"]
 	vfHealth.mu.Unlock()
 	assert.False(t, exists, "a failure whose persist failed must be retried by the next report")
+}
+
+func TestReportVFInitFailureRetainsRenamedStateAfterSyncFailure(t *testing.T) {
+	path := resetVFHealthStore(t)
+	vf := "0000:e3:00.4"
+	_, err := ReportVFInitFailure(VFInitFailureReport{VFAddress: vf, InstanceID: "instance-1"})
+	require.NoError(t, err)
+
+	vfHealth.syncDirFunc = func(string) error { return errors.New("injected sync failure") }
+	_, err = ReportVFInitFailure(VFInitFailureReport{VFAddress: vf, InstanceID: "instance-2"})
+	require.ErrorContains(t, err, "sync VF health state dir")
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	var state vfHealthFile
+	require.NoError(t, json.Unmarshal(data, &state))
+	require.Len(t, state.Records, 1)
+	assert.NotNil(t, state.Records[0].QuarantinedAt)
+	require.Len(t, quarantinedVFs(), 1, "memory must retain state already renamed into place")
+	assert.True(t, VFHealthStoreUnavailable())
+
+	vfHealth.syncDirFunc = syncDir
+	result, err := ReportVFInitFailure(VFInitFailureReport{VFAddress: "0000:e3:00.5", InstanceID: "other-instance"})
+	require.NoError(t, err)
+	assert.Equal(t, VFReportRecorded, result.Outcome)
+	assert.False(t, VFHealthStoreUnavailable())
+
+	data, err = os.ReadFile(path)
+	require.NoError(t, err)
+	state = vfHealthFile{}
+	require.NoError(t, json.Unmarshal(data, &state))
+	found := false
+	for _, record := range state.Records {
+		if record.VFAddress == vf {
+			found = true
+			assert.NotNil(t, record.QuarantinedAt, "a later write must not erase the renamed quarantine")
+		}
+	}
+	require.True(t, found)
+
+	available, quarantined, err := VGPUAvailability(VGPUFrameworkVendorVFIO, []VirtualFunction{{PCIAddress: vf}})
+	require.NoError(t, err)
+	assert.Zero(t, available)
+	assert.Equal(t, 1, quarantined)
+}
+
+func TestReportRetriesFailedThresholdPersistence(t *testing.T) {
+	path := resetVFHealthStore(t)
+	vf := "0000:e3:00.4"
+	SetVFQuarantineThreshold(3)
+	for _, instance := range []string{"instance-1", "instance-2"} {
+		_, err := ReportVFInitFailure(VFInitFailureReport{VFAddress: vf, InstanceID: instance})
+		require.NoError(t, err)
+	}
+
+	blocker := filepath.Join(t.TempDir(), "blocker")
+	require.NoError(t, os.WriteFile(blocker, nil, 0644))
+	vfHealth.path = filepath.Join(blocker, "vf-health.json")
+	SetVFQuarantineThreshold(2)
+	assert.True(t, VFHealthStoreUnavailable())
+
+	vfHealth.path = path
+	result, err := ReportVFInitFailure(VFInitFailureReport{VFAddress: vf, InstanceID: "instance-3"})
+	require.NoError(t, err)
+	assert.Equal(t, VFReportUnchanged, result.Outcome)
+	assert.False(t, VFHealthStoreUnavailable())
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	var state vfHealthFile
+	require.NoError(t, json.Unmarshal(data, &state))
+	require.Len(t, state.Records, 1)
+	assert.NotNil(t, state.Records[0].QuarantinedAt)
 }
 
 func TestReportVFInitSuccessRollsBackOnPersistFailure(t *testing.T) {

@@ -75,18 +75,23 @@ type VFSuccessResult struct {
 }
 
 type vfHealthStore struct {
-	mu         sync.Mutex
-	path       string
-	records    map[string]vfHealthRecord
-	threshold  int
-	loadErr    error
-	persistErr error
+	mu          sync.Mutex
+	path        string
+	records     map[string]vfHealthRecord
+	threshold   int
+	loadErr     error
+	persistErr  error
+	syncDirFunc func(string) error
 }
 
 var vfHealthAddressPattern = regexp.MustCompile(`^[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]$`)
 
 var (
-	vfHealth     = &vfHealthStore{records: make(map[string]vfHealthRecord), threshold: defaultVFQuarantineThreshold}
+	vfHealth = &vfHealthStore{
+		records:     make(map[string]vfHealthRecord),
+		threshold:   defaultVFQuarantineThreshold,
+		syncDirFunc: syncDir,
+	}
 	vendorVFIOMu sync.Mutex
 )
 
@@ -121,7 +126,7 @@ func (s *vfHealthStore) requarantineLocked() {
 		changed = true
 	}
 	if changed {
-		if err := s.persistLocked(); err != nil {
+		if _, err := s.persistLocked(); err != nil {
 			slog.Default().Error("failed to persist re-evaluated VF quarantines; vGPU placement is disabled until a write succeeds", "error", err)
 		}
 	}
@@ -307,6 +312,9 @@ func (s *vfHealthStore) reportFailure(report VFInitFailureReport) (VFReportResul
 	if !vfHealthAddressPattern.MatchString(report.VFAddress) {
 		return VFReportResult{}, fmt.Errorf("invalid VF address %q", report.VFAddress)
 	}
+	if err := s.retryPersistLocked(); err != nil {
+		return VFReportResult{}, err
+	}
 
 	previous, existed := s.records[report.VFAddress]
 	result := VFReportResult{Failures: len(previous.Failures), Threshold: s.threshold}
@@ -335,11 +343,14 @@ func (s *vfHealthStore) reportFailure(report VFInitFailureReport) (VFReportResul
 		result.Outcome = VFReportQuarantined
 	}
 	s.records[report.VFAddress] = record
-	if err := s.persistLocked(); err != nil {
-		if existed {
-			s.records[report.VFAddress] = previous
-		} else {
-			delete(s.records, report.VFAddress)
+	renamed, err := s.persistLocked()
+	if err != nil {
+		if !renamed {
+			if existed {
+				s.records[report.VFAddress] = previous
+			} else {
+				delete(s.records, report.VFAddress)
+			}
 		}
 		return VFReportResult{}, err
 	}
@@ -358,6 +369,9 @@ func (s *vfHealthStore) reportSuccess(report VFInitSuccessReport) (VFSuccessResu
 	}
 	if !vfHealthAddressPattern.MatchString(report.VFAddress) {
 		return VFSuccessResult{}, fmt.Errorf("invalid VF address %q", report.VFAddress)
+	}
+	if err := s.retryPersistLocked(); err != nil {
+		return VFSuccessResult{}, err
 	}
 	previous, ok := s.records[report.VFAddress]
 	if !ok || len(previous.Failures) == 0 {
@@ -387,70 +401,81 @@ func (s *vfHealthStore) reportSuccess(report VFInitSuccessReport) (VFSuccessResu
 		record.Failures = remaining
 		s.records[report.VFAddress] = record
 	}
-	if err := s.persistLocked(); err != nil {
-		s.records[report.VFAddress] = previous
+	renamed, err := s.persistLocked()
+	if err != nil {
+		if !renamed {
+			s.records[report.VFAddress] = previous
+		}
 		return VFSuccessResult{}, err
 	}
 	return result, nil
 }
 
-// persistLocked writes the current records to disk. A failure is latched and
-// fails placement closed until a later write succeeds, because in-memory
-// rollback alone would leave a reported-unhealthy VF allocatable.
-func (s *vfHealthStore) persistLocked() error {
-	if s.path == "" {
+func (s *vfHealthStore) retryPersistLocked() error {
+	if s.persistErr == nil {
 		return nil
 	}
-	err := s.writeStateLocked()
-	s.persistErr = err
+	_, err := s.persistLocked()
 	return err
 }
 
-func (s *vfHealthStore) writeStateLocked() error {
+// persistLocked writes the current records to disk. A failure is latched and
+// fails placement closed until a later write succeeds. The returned boolean
+// reports whether the rename made the new state visible.
+func (s *vfHealthStore) persistLocked() (bool, error) {
+	if s.path == "" {
+		return false, nil
+	}
+	renamed, err := s.writeStateLocked()
+	s.persistErr = err
+	return renamed, err
+}
+
+func (s *vfHealthStore) writeStateLocked() (bool, error) {
 	data, err := json.MarshalIndent(vfHealthFile{
 		Version: vfHealthFileVersion,
 		Records: s.sortedRecordsLocked(),
 	}, "", "  ")
 	if err != nil {
-		return fmt.Errorf("marshal VF health state: %w", err)
+		return false, fmt.Errorf("marshal VF health state: %w", err)
 	}
 	dirPath := filepath.Dir(s.path)
 	if _, err := os.Stat(dirPath); os.IsNotExist(err) {
 		if err := os.MkdirAll(dirPath, 0755); err != nil {
-			return fmt.Errorf("create VF health state dir: %w", err)
+			return false, fmt.Errorf("create VF health state dir: %w", err)
 		}
 		// Make the new directory entry itself durable.
-		if err := syncDir(filepath.Dir(dirPath)); err != nil {
-			return fmt.Errorf("sync VF health state parent dir: %w", err)
+		if err := s.syncDirFunc(filepath.Dir(dirPath)); err != nil {
+			return false, fmt.Errorf("sync VF health state parent dir: %w", err)
 		}
 	}
 	tmp := s.path + ".tmp"
 	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
 	if err != nil {
-		return fmt.Errorf("create VF health state: %w", err)
+		return false, fmt.Errorf("create VF health state: %w", err)
 	}
 	if _, err := f.Write(data); err != nil {
 		f.Close()
 		os.Remove(tmp)
-		return fmt.Errorf("write VF health state: %w", err)
+		return false, fmt.Errorf("write VF health state: %w", err)
 	}
 	if err := f.Sync(); err != nil {
 		f.Close()
 		os.Remove(tmp)
-		return fmt.Errorf("sync VF health state: %w", err)
+		return false, fmt.Errorf("sync VF health state: %w", err)
 	}
 	if err := f.Close(); err != nil {
 		os.Remove(tmp)
-		return fmt.Errorf("close VF health state: %w", err)
+		return false, fmt.Errorf("close VF health state: %w", err)
 	}
 	if err := os.Rename(tmp, s.path); err != nil {
 		os.Remove(tmp)
-		return fmt.Errorf("rename VF health state: %w", err)
+		return false, fmt.Errorf("rename VF health state: %w", err)
 	}
-	if err := syncDir(dirPath); err != nil {
-		return fmt.Errorf("sync VF health state dir: %w", err)
+	if err := s.syncDirFunc(dirPath); err != nil {
+		return true, fmt.Errorf("sync VF health state dir: %w", err)
 	}
-	return nil
+	return true, nil
 }
 
 func syncDir(path string) error {
