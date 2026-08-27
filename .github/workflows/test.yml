@@ -125,56 +125,15 @@ jobs:
           test -r /ci/windows/image-agent.qcow2
 
       - name: Test Windows hypervisor primitives
-        run: |
-          TEST_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
-          for attempt in 1 2 3; do
-            if sudo env \
-              "PATH=$TEST_PATH" \
-              "CI=true" \
-              "HYPEMAN_RUN_WINDOWS_CONFIG_INTEGRATION=1" \
-              "HYPEMAN_WINDOWS_OVMF_CODE=$HYPEMAN_WINDOWS_OVMF_CODE" \
-              "HYPEMAN_WINDOWS_OVMF_VARS=$HYPEMAN_WINDOWS_OVMF_VARS" \
-              go test -count=1 -run '^TestWindowsConfigIntegration$' -timeout 2m ./lib/hypervisor/qemu; then
-              exit 0
-            fi
-            test "$attempt" = 3 || sleep 5
-          done
-          exit 1
+        run: bash .github/scripts/run-windows-integration-test.sh HYPEMAN_RUN_WINDOWS_CONFIG_INTEGRATION TestWindowsConfigIntegration ./lib/hypervisor/qemu
 
       - name: Test Windows lifecycle
         run: |
           make build-embedded
-          TEST_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
-          for attempt in 1 2 3; do
-            if sudo env \
-              "PATH=$TEST_PATH" \
-              "CI=true" \
-              "HYPEMAN_RUN_WINDOWS_LIFECYCLE_INTEGRATION=1" \
-              "HYPEMAN_WINDOWS_OVMF_CODE=$HYPEMAN_WINDOWS_OVMF_CODE" \
-              "HYPEMAN_WINDOWS_OVMF_VARS=$HYPEMAN_WINDOWS_OVMF_VARS" \
-              go test -count=1 -run '^TestWindowsLifecycleIntegration$' -timeout 2m ./lib/instances; then
-              exit 0
-            fi
-            test "$attempt" = 3 || sleep 5
-          done
-          exit 1
+          bash .github/scripts/run-windows-integration-test.sh HYPEMAN_RUN_WINDOWS_LIFECYCLE_INTEGRATION TestWindowsLifecycleIntegration ./lib/instances
 
       - name: Test Windows stopped forks
-        run: |
-          TEST_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
-          for attempt in 1 2 3; do
-            if sudo env \
-              "PATH=$TEST_PATH" \
-              "CI=true" \
-              "HYPEMAN_RUN_WINDOWS_LIFECYCLE_INTEGRATION=1" \
-              "HYPEMAN_WINDOWS_OVMF_CODE=$HYPEMAN_WINDOWS_OVMF_CODE" \
-              "HYPEMAN_WINDOWS_OVMF_VARS=$HYPEMAN_WINDOWS_OVMF_VARS" \
-              go test -count=1 -run '^TestWindowsStoppedForkIntegration$' -timeout 2m ./lib/instances; then
-              exit 0
-            fi
-            test "$attempt" = 3 || sleep 5
-          done
-          exit 1
+        run: bash .github/scripts/run-windows-integration-test.sh HYPEMAN_RUN_WINDOWS_LIFECYCLE_INTEGRATION TestWindowsStoppedForkIntegration ./lib/instances
 
       # Slash-command runs are maintainer-approved and need authenticated pulls
       # for images that are not covered by the prewarm cache.
@@ -324,7 +283,7 @@ jobs:
 
           run_prefix="ci-${{ github.run_id }}-${{ github.run_attempt }}"
           guest_pids=()
-          mapfile -t vmm_pids < <(pgrep -x 'cloud-hyperviso|firecracker|qemu-system-.*' || true)
+          mapfile -t vmm_pids < <(pgrep -x 'cloud-hyperviso|firecracker|qemu-system-.*|swtpm' || true)
           for pid in "${vmm_pids[@]}"; do
             proc="/proc/$pid"
             cmdline="$(cat "$proc/cmdline" 2>/dev/null | tr '\0' ' ' || true)"
@@ -350,6 +309,7 @@ jobs:
             echo "$units" | xargs -r sudo systemctl reset-failed || true
           fi
           sudo rm -f /run/hypeman/uffd/ci-${{ github.run_id }}-${{ github.run_attempt }}-*.env
+          sudo rm -rf "/ci/w${{ github.run_id }}-${{ github.run_attempt }}"
           rm -f "${{ runner.temp }}/hypeman-uffd-pager-${{ github.run_id }}-${{ github.run_attempt }}"
 
   test-darwin:
