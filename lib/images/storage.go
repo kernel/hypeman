@@ -300,40 +300,42 @@ func promoteImageToContent(p *paths.Paths, sourceRepository, digestHex string, s
 		}
 	}
 
-	legacyDir := p.ImageDigestDir(sourceRepository, digestHex)
-	if _, err := os.Stat(legacyDir); err == nil {
-		tags, err := listTags(p, sourceRepository)
+	return promoteLegacyTags(p, sourceRepository, digestHex)
+}
+
+func promoteLegacyTags(p *paths.Paths, repository, digestHex string) error {
+	if _, err := os.Stat(p.ImageDigestDir(repository, digestHex)); err != nil {
+		return nil
+	}
+	tags, err := listTags(p, repository)
+	if err != nil {
+		return err
+	}
+	staged := make([]stagedTagSymlink, 0, len(tags))
+	defer func() {
+		for _, ref := range staged {
+			_ = os.RemoveAll(ref.tempDir)
+		}
+	}()
+	for _, tag := range tags {
+		target, err := resolveTag(p, repository, tag)
+		if err != nil || target != digestHex {
+			continue
+		}
+		ref, err := stageTagSymlink(p, repository, tag, digestHex)
 		if err != nil {
-			return err
+			return fmt.Errorf("stage legacy tag %s: %w", tag, err)
 		}
-		staged := make([]stagedTagSymlink, 0, len(tags))
-		cleanupStaged := func() {
-			for _, ref := range staged {
-				_ = os.RemoveAll(ref.tempDir)
+		staged = append(staged, ref)
+	}
+	for i, ref := range staged {
+		if err := os.Rename(ref.tempPath, ref.linkPath); err != nil {
+			if rollbackErr := rollbackTagSymlinks(staged[:i]); rollbackErr != nil {
+				return errors.Join(fmt.Errorf("promote legacy tag: %w", err), rollbackErr)
 			}
-		}
-		defer cleanupStaged()
-		for _, tag := range tags {
-			target, err := resolveTag(p, sourceRepository, tag)
-			if err != nil || target != digestHex {
-				continue
-			}
-			ref, err := stageTagSymlink(p, sourceRepository, tag, digestHex)
-			if err != nil {
-				return fmt.Errorf("stage legacy tag %s: %w", tag, err)
-			}
-			staged = append(staged, ref)
-		}
-		for i, ref := range staged {
-			if err := os.Rename(ref.tempPath, ref.linkPath); err != nil {
-				if rollbackErr := rollbackTagSymlinks(staged[:i]); rollbackErr != nil {
-					return errors.Join(fmt.Errorf("promote legacy tag: %w", err), rollbackErr)
-				}
-				return fmt.Errorf("promote legacy tag: %w", err)
-			}
+			return fmt.Errorf("promote legacy tag: %w", err)
 		}
 	}
-
 	return nil
 }
 

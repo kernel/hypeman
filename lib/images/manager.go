@@ -258,20 +258,8 @@ func (m *manager) reuseExistingImage(ref *ResolvedRef, credentials *authn.AuthCo
 		}
 		return nil, false, nil
 	}
-	if ref.Tag() != "" {
-		if meta.Status == StatusReady {
-			m.nextTagGeneration(ref.Repository(), ref.Tag())
-			err = createTagSymlink(m.paths, ref.Repository(), ref.Tag(), ref.DigestHex())
-		} else {
-			err = m.recordPendingTag(meta, ref)
-		}
-		if err != nil {
-			return nil, true, fmt.Errorf("create image tag: %w", err)
-		}
-		setReferenceTags(meta, ref.String(), resourceTags)
-		if err := writeMetadata(m.paths, ref.Repository(), ref.DigestHex(), meta); err != nil {
-			return nil, true, fmt.Errorf("write image reference: %w", err)
-		}
+	if err := m.updateExistingReference(meta, ref, resourceTags); err != nil {
+		return nil, true, fmt.Errorf("update image reference: %w", err)
 	}
 	img := meta.toImageFor(ref.String())
 	if meta.Status == StatusReady {
@@ -286,6 +274,22 @@ func (m *manager) reuseExistingImage(ref *ResolvedRef, credentials *authn.AuthCo
 	return img, true, nil
 }
 
+func (m *manager) updateExistingReference(meta *imageMetadata, ref *ResolvedRef, resourceTags tags.Tags) error {
+	if ref.Tag() == "" {
+		return nil
+	}
+	if meta.Status == StatusReady {
+		m.nextTagGeneration(ref.Repository(), ref.Tag())
+		if err := createTagSymlink(m.paths, ref.Repository(), ref.Tag(), ref.DigestHex()); err != nil {
+			return err
+		}
+	} else if err := m.recordPendingTag(meta, ref); err != nil {
+		return err
+	}
+	setReferenceTags(meta, ref.String(), resourceTags)
+	return writeMetadata(m.paths, ref.Repository(), ref.DigestHex(), meta)
+}
+
 func tagGenerationKey(repository, tag string) string {
 	return repository + ":" + tag
 }
@@ -296,21 +300,14 @@ func (m *manager) nextTagGeneration(repository, tag string) uint64 {
 	return m.tagGenerations[key]
 }
 
-func tagClaimExists(meta *imageMetadata, ref *ResolvedRef) bool {
+func (m *manager) recordPendingTag(meta *imageMetadata, ref *ResolvedRef) error {
 	if meta.RequestedTag == ref.Tag() && strings.HasPrefix(meta.Name, ref.Repository()+":") {
-		return true
+		return ensurePendingTag(m.paths, ref.Repository(), ref.Tag(), ref.DigestHex())
 	}
 	for _, claim := range meta.TagClaims {
 		if claim.Repository == ref.Repository() && claim.Tag == ref.Tag() {
-			return true
+			return ensurePendingTag(m.paths, ref.Repository(), ref.Tag(), ref.DigestHex())
 		}
-	}
-	return false
-}
-
-func (m *manager) recordPendingTag(meta *imageMetadata, ref *ResolvedRef) error {
-	if tagClaimExists(meta, ref) {
-		return ensurePendingTag(m.paths, ref.Repository(), ref.Tag(), ref.DigestHex())
 	}
 	previous, err := resolveTag(m.paths, ref.Repository(), ref.Tag())
 	if err != nil && !errors.Is(err, ErrNotFound) {
@@ -627,6 +624,12 @@ func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, diskSize i
 	}
 
 	m.notifyReady(ref.DigestHex(), StatusReady, nil)
+	m.claimImageTags(ref, meta)
+	m.refreshDiskUsageTotals()
+	return nil
+}
+
+func (m *manager) claimImageTags(ref *ResolvedRef, meta *imageMetadata) {
 	requestedTag := meta.RequestedTag
 	if requestedTag == "" {
 		requestedTag = ref.Tag()
@@ -635,8 +638,6 @@ func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, diskSize i
 	for _, claim := range meta.TagClaims {
 		m.claimTag(claim.Repository, ref.DigestHex(), claim.Tag, claim.PreviousTagDigest, claim.TagGeneration, false)
 	}
-	m.refreshDiskUsageTotals()
-	return nil
 }
 
 func (m *manager) claimTag(repository, digestHex, tag, previous string, generation uint64, allowMissing bool) {
