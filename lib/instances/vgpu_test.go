@@ -18,6 +18,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func testVendorVFIODevice(profileName string) devices.VGPUDevice {
+	return devices.VGPUDevice{
+		Framework:   devices.VGPUFrameworkVendorVFIO,
+		VFAddress:   "0000:82:00.4",
+		ProfileType: "1148",
+		ProfileName: profileName,
+		SysfsPath:   "/sys/bus/pci/devices/0000:82:00.4",
+	}
+}
+
 func persistTestVGPURetention(m *manager, ctx context.Context, id string, stub *StoredMetadata) bool {
 	retention := vgpuRetention{instanceID: id, stub: stub, retained: stub != nil}
 	m.persistVGPURetention(ctx, &retention)
@@ -131,13 +141,8 @@ func newStartRollbackVGPUManager(t *testing.T, destroy func(context.Context, dev
 		instanceLocks:   sync.Map{},
 		bootMarkerScans: sync.Map{},
 		createVGPU: func(_ context.Context, profileName, _ string) (*devices.VGPUDevice, error) {
-			return &devices.VGPUDevice{
-				Framework:   devices.VGPUFrameworkVendorVFIO,
-				VFAddress:   "0000:82:00.4",
-				ProfileType: "1148",
-				ProfileName: profileName,
-				SysfsPath:   "/sys/bus/pci/devices/0000:82:00.4",
-			}, nil
+			device := testVendorVFIODevice(profileName)
+			return &device, nil
 		},
 		destroyVGPU: destroy,
 	}
@@ -180,13 +185,7 @@ func TestStartRetainsVGPUWhenCreateRollbackFails(t *testing.T) {
 	meta.ExitMessage = "previous exit"
 	require.NoError(t, m.saveMetadata(meta))
 
-	device := devices.VGPUDevice{
-		Framework:   devices.VGPUFrameworkVendorVFIO,
-		VFAddress:   "0000:82:00.4",
-		ProfileType: "1148",
-		ProfileName: "NVIDIA L40S-2Q",
-		SysfsPath:   "/sys/bus/pci/devices/0000:82:00.4",
-	}
+	device := testVendorVFIODevice("NVIDIA L40S-2Q")
 	cause := errors.New("create verification and rollback failed")
 	m.createVGPU = func(context.Context, string, string) (*devices.VGPUDevice, error) {
 		return nil, &devices.VGPUCreateCleanupPendingError{Device: device, Err: cause}
@@ -225,13 +224,7 @@ func TestStartReportsUnretainedVGPUWhenRetentionSaveFails(t *testing.T) {
 	m, id := newStartRollbackVGPUManager(t, func(context.Context, devices.VGPUAssignment) error {
 		return nil
 	})
-	device := devices.VGPUDevice{
-		Framework:   devices.VGPUFrameworkVendorVFIO,
-		VFAddress:   "0000:82:00.4",
-		ProfileType: "1148",
-		ProfileName: "NVIDIA L40S-2Q",
-		SysfsPath:   "/sys/bus/pci/devices/0000:82:00.4",
-	}
+	device := testVendorVFIODevice("NVIDIA L40S-2Q")
 	cause := errors.New("create verification and rollback failed")
 	m.createVGPU = func(context.Context, string, string) (*devices.VGPUDevice, error) {
 		instanceDir := filepath.Dir(m.paths.InstanceMetadata(id))
