@@ -707,17 +707,27 @@ func mdevPastGracePeriod(mdevUUID string, gracePeriod time.Duration) (bool, time
 	return age >= gracePeriod, age, nil
 }
 
+func protectedMdevUUIDs(instanceInfos []MdevReconcileInfo) map[string]struct{} {
+	protected := make(map[string]struct{}, len(instanceInfos))
+	for _, info := range instanceInfos {
+		if info.MdevUUID != "" && info.IsRunning {
+			protected[info.MdevUUID] = struct{}{}
+		}
+	}
+	return protected
+}
+
 // ReconcileMdevs destroys orphaned mdevs on managed VFs.
-// This is called on server startup to clean up stale mdevs from previous runs.
 //
 // Policy:
 //   - Consider only mdevs whose parent VF is currently managed by hypeman (discoverable via /sys/class/mdev_bus)
+//   - Keep mdevs claimed by live instance metadata
 //   - Keep mdevs whose VFIO group has an open file handle (/dev/vfio/<group>)
 //   - Keep mdevs younger than a short grace period to avoid racing very recent state transitions
 //   - Delete all remaining mdevs
 func ReconcileMdevs(ctx context.Context, instanceInfos []MdevReconcileInfo) error {
 	log := logger.FromContext(ctx)
-	_ = instanceInfos
+	protectedMdevs := protectedMdevUUIDs(instanceInfos)
 
 	vfs, err := discoverMdevVFs()
 	if err != nil {
@@ -750,11 +760,16 @@ func ReconcileMdevs(ctx context.Context, instanceInfos []MdevReconcileInfo) erro
 	)
 
 	groupInUseCache := make(map[int]bool)
-	var destroyed, failedDestroy, skippedUnmanagedVF, skippedInUse, skippedGrace, skippedProbeError int
+	var destroyed, failedDestroy, skippedUnmanagedVF, skippedClaimed, skippedInUse, skippedGrace, skippedProbeError int
 	for _, mdev := range mdevs {
 		if _, ok := managedVFs[mdev.VFAddress]; !ok {
 			log.DebugContext(ctx, "skipping mdev on unmanaged VF", "uuid", mdev.UUID, "vf", mdev.VFAddress)
 			skippedUnmanagedVF++
+			continue
+		}
+		if _, ok := protectedMdevs[mdev.UUID]; ok {
+			log.DebugContext(ctx, "skipping mdev claimed by live instance", "uuid", mdev.UUID)
+			skippedClaimed++
 			continue
 		}
 
@@ -817,6 +832,7 @@ func ReconcileMdevs(ctx context.Context, instanceInfos []MdevReconcileInfo) erro
 		"destroyed", destroyed,
 		"failed_destroy", failedDestroy,
 		"skipped_unmanaged_vf", skippedUnmanagedVF,
+		"skipped_claimed", skippedClaimed,
 		"skipped_in_use", skippedInUse,
 		"skipped_grace", skippedGrace,
 		"skipped_probe_error", skippedProbeError,

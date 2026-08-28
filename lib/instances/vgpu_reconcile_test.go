@@ -33,9 +33,9 @@ func TestReconcileVGPUsBoundsStartupProtection(t *testing.T) {
 			destroyed = append(destroyed, assignment)
 			return nil
 		},
-		reconcileVGPUDevices: func(_ context.Context, p map[string]struct{}, sweepVendorVFIO bool) error {
+		reconcileVGPUDevices: func(_ context.Context, p map[string]struct{}, sweepDevices bool) error {
 			protected = p
-			assert.True(t, sweepVendorVFIO)
+			assert.True(t, sweepDevices)
 			return nil
 		},
 	}
@@ -45,6 +45,7 @@ func TestReconcileVGPUsBoundsStartupProtection(t *testing.T) {
 		{Id: "legacy", GPUDevicePath: "/sys/bus/pci/devices/0000:82:00.6"},
 		{Id: "dead", GPUDevicePath: "/sys/bus/pci/devices/0000:82:00.7", HypervisorProcessIdentity: HypervisorProcessIdentity{HypervisorPID: &deadPID}},
 		{Id: "stale-pid-booting", GPUDevicePath: "/sys/bus/pci/devices/0000:82:00.8", HypervisorProcessIdentity: HypervisorProcessIdentity{HypervisorPID: &deadPID}, GPUAssignedAt: &recent},
+		{Id: "legacy-mdev-booting", GPUMdevUUID: "test-mdev", GPUAssignedAt: &recent},
 	}
 	for i := range instances {
 		require.NoError(t, m.ensureDirectories(instances[i].Id))
@@ -57,6 +58,7 @@ func TestReconcileVGPUsBoundsStartupProtection(t *testing.T) {
 	assert.NotContains(t, protected, "/sys/bus/pci/devices/0000:82:00.6")
 	assert.NotContains(t, protected, "/sys/bus/pci/devices/0000:82:00.7")
 	assert.Contains(t, protected, "/sys/bus/pci/devices/0000:82:00.8")
+	assert.Contains(t, protected, "/sys/bus/mdev/devices/test-mdev")
 
 	for _, id := range []string{"orphaned", "legacy", "dead"} {
 		stored, err := m.loadMetadata(id)
@@ -71,14 +73,14 @@ func TestReconcileVGPUsBoundsStartupProtection(t *testing.T) {
 	orphaned, err := m.loadMetadata("orphaned")
 	require.NoError(t, err)
 	assert.Equal(t, "NVIDIA L40S-2Q", orphaned.GPUProfile)
-	for _, id := range []string{"booting", "stale-pid-booting"} {
+	for _, id := range []string{"booting", "stale-pid-booting", "legacy-mdev-booting"} {
 		stored, err := m.loadMetadata(id)
 		require.NoError(t, err)
-		assert.NotEmpty(t, stored.GPUDevicePath, "live assignment on %s must be kept", id)
+		assert.NotEmpty(t, storedVGPUDevicePath(&stored.StoredMetadata), "live assignment on %s must be kept", id)
 	}
 }
 
-func TestReconcileVGPUsSkipsVendorSweepWhenListingFails(t *testing.T) {
+func TestReconcileVGPUsSkipsDeviceSweepWhenListingFails(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root bypasses directory permissions")
 	}
@@ -86,8 +88,8 @@ func TestReconcileVGPUsSkipsVendorSweepWhenListingFails(t *testing.T) {
 	var sweeps []bool
 	m := &manager{
 		paths: paths.New(t.TempDir()),
-		reconcileVGPUDevices: func(_ context.Context, _ map[string]struct{}, sweepVendorVFIO bool) error {
-			sweeps = append(sweeps, sweepVendorVFIO)
+		reconcileVGPUDevices: func(_ context.Context, _ map[string]struct{}, sweepDevices bool) error {
+			sweeps = append(sweeps, sweepDevices)
 			return nil
 		},
 	}
@@ -100,11 +102,11 @@ func TestReconcileVGPUsSkipsVendorSweepWhenListingFails(t *testing.T) {
 
 	m.ReconcileVGPUs(t.Context())
 	require.Equal(t, []bool{false}, sweeps,
-		"a listing failure must skip the vendor sweep, not run it with an empty protection set")
+		"a listing failure must skip the device sweep, not run it with an empty protection set")
 
 	require.NoError(t, os.Chmod(instanceDir, 0o755))
 	m.ReconcileVGPUs(t.Context())
-	assert.Equal(t, []bool{false, true}, sweeps, "the next pass retries the vendor sweep")
+	assert.Equal(t, []bool{false, true}, sweeps, "the next pass retries the device sweep")
 }
 
 func TestReconcileVGPUsKeepsAssignmentWhenReleaseFails(t *testing.T) {

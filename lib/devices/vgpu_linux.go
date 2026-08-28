@@ -104,20 +104,32 @@ func DestroyVGPU(ctx context.Context, assignment VGPUAssignment) error {
 	}
 }
 
+func mdevReconcileInfos(protectedDevicePaths map[string]struct{}) []MdevReconcileInfo {
+	instanceInfos := make([]MdevReconcileInfo, 0, len(protectedDevicePaths))
+	for devicePath := range protectedDevicePaths {
+		instanceInfos = append(instanceInfos, MdevReconcileInfo{
+			MdevUUID:  filepath.Base(devicePath),
+			IsRunning: true,
+		})
+	}
+	return instanceInfos
+}
+
 // ReconcileVGPUs releases orphaned vGPU assignments.
-func ReconcileVGPUs(ctx context.Context, protectedDevicePaths map[string]struct{}, sweepVendorVFIO bool) error {
+func ReconcileVGPUs(ctx context.Context, protectedDevicePaths map[string]struct{}, sweepDevices bool) error {
 	framework, _, err := DiscoverVGPU()
 	if err != nil {
 		return err
 	}
+	if !sweepDevices {
+		return nil
+	}
 
 	switch framework {
 	case VGPUFrameworkMdev:
-		return ReconcileMdevs(ctx, nil)
+		return ReconcileMdevs(ctx, mdevReconcileInfos(protectedDevicePaths))
 	case VGPUFrameworkVendorVFIO:
-		if sweepVendorVFIO {
-			return hostVendorVFIO.reconcile(ctx, protectedDevicePaths)
-		}
+		return hostVendorVFIO.reconcile(ctx, protectedDevicePaths)
 	}
 	return nil
 }

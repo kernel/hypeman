@@ -58,7 +58,7 @@ func DestroyVGPU(ctx context.Context, assignment VGPUAssignment) error {
 	return nil
 }
 
-func ReconcileVGPUs(ctx context.Context, protectedDevicePaths map[string]struct{}, sweepVendorVFIO bool) error {
+func ReconcileVGPUs(ctx context.Context, protectedDevicePaths map[string]struct{}, sweepDevices bool) error {
 	return nil
 }
 
