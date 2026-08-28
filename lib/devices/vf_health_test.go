@@ -3,8 +3,10 @@ package devices
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -111,6 +113,7 @@ func TestVGPUAvailabilityFailsClosedAfterPersistFailure(t *testing.T) {
 	require.ErrorContains(t, err, "last write failed")
 
 	vfHealth.path = goodPath
+	require.NoError(t, RepairVFHealthStore())
 	result, err := ReportVFInitFailure(VFInitFailureReport{VFAddress: "0000:e3:00.4", InstanceID: "instance-1"})
 	require.NoError(t, err)
 	assert.Equal(t, VFReportQuarantined, result.Outcome)
@@ -325,22 +328,45 @@ func TestReportVFInitSuccessWithoutMatchingFailureClearsNothing(t *testing.T) {
 	assert.False(t, result.Rescinded)
 }
 
-func TestReportVFInitSuccessNoopDoesNotRetryFailedPersist(t *testing.T) {
+func TestReportVFInitSuccessNoopFanoutDoesNotRetryFailedPersist(t *testing.T) {
 	resetVFHealthStore(t)
+	var syncCalls int
 	vfHealth.mu.Lock()
 	vfHealth.persistErr = errors.New("injected persist failure")
+	vfHealth.syncDirFunc = func(string) error {
+		syncCalls++
+		return nil
+	}
 	vfHealth.mu.Unlock()
 
-	result, err := ReportVFInitSuccess(VFInitSuccessReport{
-		VFAddress:  "0000:e3:00.4",
-		InstanceID: "healthy-instance",
-	})
-	require.NoError(t, err)
-	assert.Zero(t, result.Cleared)
-	assert.True(t, VFHealthStoreUnavailable(), "a no-op success must not clear the failed-write latch")
+	var wg sync.WaitGroup
+	errs := make(chan error, 64)
+	for i := 0; i < 64; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			result, err := ReportVFInitSuccess(VFInitSuccessReport{
+				VFAddress:  "0000:e3:00.4",
+				InstanceID: "healthy-instance",
+			})
+			if result != (VFSuccessResult{}) {
+				errs <- fmt.Errorf("unexpected result: %+v", result)
+				return
+			}
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
+	assert.Zero(t, syncCalls)
+	assert.True(t, VFHealthStoreUnavailable())
 
-	_, _, err = VGPUAvailability(VGPUFrameworkVendorVFIO, []VirtualFunction{{PCIAddress: "0000:e3:00.4"}})
-	require.ErrorContains(t, err, "last write failed")
+	require.NoError(t, RepairVFHealthStore())
+	assert.Equal(t, 2, syncCalls, "one repair performs one parent and state-directory sync")
+	assert.False(t, VFHealthStoreUnavailable())
 }
 
 func TestReportVFInitSuccessNeverClearsAnotherAssignmentsQuarantine(t *testing.T) {
@@ -408,6 +434,7 @@ func TestReportVFInitFailureRetriesParentSyncAfterFailure(t *testing.T) {
 	require.ErrorContains(t, err, "sync VF health state parent dir")
 	assert.True(t, VFHealthStoreUnavailable())
 
+	require.NoError(t, RepairVFHealthStore())
 	result, err := ReportVFInitFailure(report)
 	require.NoError(t, err)
 	assert.Equal(t, VFReportRecorded, result.Outcome)
@@ -441,6 +468,7 @@ func TestReportVFInitFailureRetainsRenamedStateAfterSyncFailure(t *testing.T) {
 	assert.True(t, VFHealthStoreUnavailable())
 
 	vfHealth.syncDirFunc = syncDir
+	require.NoError(t, RepairVFHealthStore())
 	result, err := ReportVFInitFailure(VFInitFailureReport{VFAddress: "0000:e3:00.5", InstanceID: "other-instance"})
 	require.NoError(t, err)
 	assert.Equal(t, VFReportRecorded, result.Outcome)
@@ -481,6 +509,7 @@ func TestReportRetriesFailedThresholdPersistence(t *testing.T) {
 	assert.True(t, VFHealthStoreUnavailable())
 
 	vfHealth.path = path
+	require.NoError(t, RepairVFHealthStore())
 	result, err := ReportVFInitFailure(VFInitFailureReport{VFAddress: vf, InstanceID: "instance-3"})
 	require.NoError(t, err)
 	assert.Equal(t, VFReportUnchanged, result.Outcome)
@@ -513,6 +542,49 @@ func TestReportVFInitSuccessRollsBackOnPersistFailure(t *testing.T) {
 	vfHealth.mu.Unlock()
 	require.True(t, exists, "a clear whose persist failed must be restored in memory")
 	assert.Len(t, record.Failures, 1)
+}
+
+func TestRepairVFHealthStoreRecoversPostRenameSuccessClearFailure(t *testing.T) {
+	path := resetVFHealthStore(t)
+	report := VFInitFailureReport{
+		VFAddress:  "0000:e3:00.4",
+		InstanceID: "instance-1",
+		AssignedAt: "2026-08-20T15:00:00Z",
+	}
+	_, err := ReportVFInitFailure(report)
+	require.NoError(t, err)
+
+	failed := false
+	vfHealth.syncDirFunc = func(path string) error {
+		if path == filepath.Dir(vfHealth.path) && !failed {
+			failed = true
+			return errors.New("injected sync failure")
+		}
+		return syncDir(path)
+	}
+	_, err = ReportVFInitSuccess(VFInitSuccessReport{
+		VFAddress:  report.VFAddress,
+		InstanceID: report.InstanceID,
+		AssignedAt: report.AssignedAt,
+	})
+	require.ErrorContains(t, err, "sync VF health state dir")
+	assert.True(t, VFHealthStoreUnavailable())
+
+	vfHealth.mu.Lock()
+	_, exists := vfHealth.records[report.VFAddress]
+	vfHealth.mu.Unlock()
+	assert.False(t, exists, "memory must retain the clear renamed into place")
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	var state vfHealthFile
+	require.NoError(t, json.Unmarshal(data, &state))
+	assert.Empty(t, state.Records)
+
+	require.NoError(t, RepairVFHealthStore())
+	assert.False(t, VFHealthStoreUnavailable())
+	_, _, err = VGPUAvailability(VGPUFrameworkVendorVFIO, []VirtualFunction{{PCIAddress: report.VFAddress}})
+	require.NoError(t, err)
 }
 
 func TestCheckedAddressesFailsClosedOnUnloadedState(t *testing.T) {

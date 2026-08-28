@@ -310,8 +310,10 @@ removing the match and older tallies. If that assignment crossed the threshold,
 its later success also rescinds the quarantine. A success with no exact match
 clears nothing; other quarantines require manual recovery. If the state file
 exists but cannot be loaded, or the last write to it failed, placement and
-advertised availability fail closed until a load or write succeeds. Recorded
-tallies are re-evaluated against the configured threshold at load, so lowering
+advertised availability fail closed until a load or write succeeds. The
+sentinel makes one repair attempt before each poll; individual guest reports do
+not retry the full-store write. Recorded tallies are re-evaluated against the
+configured threshold at load, so lowering
 `gpu.vf_quarantine_threshold` quarantines VFs whose persisted failures already
 meet the new value.
 

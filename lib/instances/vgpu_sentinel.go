@@ -41,11 +41,12 @@ var _ vgpuSentinelStore = (*manager)(nil)
 // init. It polls each vendor-VFIO instance's guest agent over vsock; the
 // serial console is shared with workload output, so nothing read from logs is
 // trusted. The health store deduplicates repeated reports per assignment, so
-// polling is idempotent and a failed persist retries on the next tick.
+// polling is idempotent and a failed persist retries once on the next tick.
 type VGPUSentinelController struct {
 	store              vgpuSentinelStore
 	log                *slog.Logger
 	interval           time.Duration
+	repairHealthStore  func() error
 	reportFailure      func(devices.VFInitFailureReport) (devices.VFReportResult, error)
 	reportSuccess      func(devices.VFInitSuccessReport) (devices.VFSuccessResult, error)
 	guestGPUInitStatus func(ctx context.Context, instanceID string) (guest.GPUInitState, string, error)
@@ -117,11 +118,12 @@ func NewVGPUSentinelController(manager Manager, meter metric.Meter, log *slog.Lo
 	}
 
 	return &VGPUSentinelController{
-		store:         store,
-		log:           log.With("controller", "vgpu_sentinel"),
-		interval:      vgpuSentinelPollInterval,
-		reportFailure: devices.ReportVFInitFailure,
-		reportSuccess: devices.ReportVFInitSuccess,
+		store:             store,
+		log:               log.With("controller", "vgpu_sentinel"),
+		interval:          vgpuSentinelPollInterval,
+		repairHealthStore: devices.RepairVFHealthStore,
+		reportFailure:     devices.ReportVFInitFailure,
+		reportSuccess:     devices.ReportVFInitSuccess,
 		guestGPUInitStatus: func(ctx context.Context, instanceID string) (guest.GPUInitState, string, error) {
 			dialer, err := manager.GetVsockDialer(ctx, instanceID)
 			if err != nil {
@@ -181,6 +183,9 @@ func (c *VGPUSentinelController) probeVendorVFIO() (bool, error) {
 }
 
 func (c *VGPUSentinelController) pollOnce(ctx context.Context) {
+	if err := c.repairHealthStore(); err != nil {
+		c.log.WarnContext(ctx, "vGPU sentinel failed to repair VF health state", "error", err)
+	}
 	targets, err := c.store.listVGPUSentinelTargets(ctx)
 	if err != nil {
 		c.recordCheck(ctx, "list_error")

@@ -273,6 +273,20 @@ func ReportVFInitSuccess(report VFInitSuccessReport) (VFSuccessResult, error) {
 	return vfHealth.reportSuccess(report)
 }
 
+// RepairVFHealthStore retries a failed load or persist. It serializes with
+// vendor-VFIO placement and health mutations.
+func RepairVFHealthStore() error {
+	vendorVFIOMu.Lock()
+	defer vendorVFIOMu.Unlock()
+
+	vfHealth.mu.Lock()
+	defer vfHealth.mu.Unlock()
+	if err := vfHealth.ensureLoadedLocked(); err != nil {
+		return err
+	}
+	return vfHealth.retryPersistLocked()
+}
+
 // VFHealthStoreUnavailable reports whether persisted state failed to load or
 // the last write failed.
 func VFHealthStoreUnavailable() bool {
@@ -312,8 +326,8 @@ func (s *vfHealthStore) reportFailure(report VFInitFailureReport) (VFReportResul
 	if !vfHealthAddressPattern.MatchString(report.VFAddress) {
 		return VFReportResult{}, fmt.Errorf("invalid VF address %q", report.VFAddress)
 	}
-	if err := s.retryPersistLocked(); err != nil {
-		return VFReportResult{}, err
+	if s.persistErr != nil {
+		return VFReportResult{}, fmt.Errorf("VF health state unavailable: last write failed: %w", s.persistErr)
 	}
 
 	previous, existed := s.records[report.VFAddress]
@@ -385,8 +399,8 @@ func (s *vfHealthStore) reportSuccess(report VFInitSuccessReport) (VFSuccessResu
 	if match < 0 || (previous.QuarantinedAt != nil && match != len(previous.Failures)-1) {
 		return VFSuccessResult{}, nil
 	}
-	if err := s.retryPersistLocked(); err != nil {
-		return VFSuccessResult{}, err
+	if s.persistErr != nil {
+		return VFSuccessResult{}, fmt.Errorf("VF health state unavailable: last write failed: %w", s.persistErr)
 	}
 
 	remaining := append([]vfInitFailure(nil), previous.Failures[match+1:]...)

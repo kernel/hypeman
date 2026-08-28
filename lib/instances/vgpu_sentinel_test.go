@@ -64,9 +64,10 @@ func newTestSentinelController(t *testing.T, store *fakeSentinelStore) (*VGPUSen
 	require.NoError(t, err)
 	var reported []devices.VFInitFailureReport
 	c := &VGPUSentinelController{
-		store:    store,
-		log:      slog.New(slog.DiscardHandler),
-		interval: time.Hour,
+		store:             store,
+		log:               slog.New(slog.DiscardHandler),
+		interval:          time.Hour,
+		repairHealthStore: func() error { return nil },
 		// Mirrors the real store: repeated reports for the same assignment are
 		// deduplicated.
 		reportFailure: func(report devices.VFInitFailureReport) (devices.VFReportResult, error) {
@@ -137,6 +138,25 @@ func TestVGPUSentinelControllerSkipsUnreachableGuest(t *testing.T) {
 	c.pollOnce(context.Background())
 	assert.Empty(t, *reported)
 	assert.Empty(t, successes)
+}
+
+func TestVGPUSentinelControllerRepairsHealthStoreOncePerPoll(t *testing.T) {
+	t.Parallel()
+
+	targets := make([]vgpuSentinelTarget, vgpuSentinelMaxConcurrentPolls)
+	for i := range targets {
+		targets[i] = vgpuSentinelTarget{instanceID: fmt.Sprintf("instance-%d", i)}
+	}
+	c, _ := newTestSentinelController(t, &fakeSentinelStore{targets: targets})
+	c.guestGPUInitStatus = guestReportsOK
+	var repairs int
+	c.repairHealthStore = func() error {
+		repairs++
+		return errors.New("persist failed")
+	}
+
+	c.pollOnce(context.Background())
+	assert.Equal(t, 1, repairs)
 }
 
 func TestVGPUSentinelControllerPollsTargetsConcurrently(t *testing.T) {
