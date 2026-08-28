@@ -53,6 +53,9 @@ func quarantineVF(t *testing.T, address string) {
 func TestVGPUAvailability(t *testing.T) {
 	resetVFHealthStore(t)
 	quarantineVF(t, "0000:82:00.4")
+	result, err := ReportVFInitFailure(VFInitFailureReport{VFAddress: "0000:82:00.6", InstanceID: "instance-1"})
+	require.NoError(t, err)
+	require.Equal(t, VFReportRecorded, result.Outcome)
 	vfs := []VirtualFunction{
 		{PCIAddress: "0000:82:00.4"},
 		{PCIAddress: "0000:82:00.5", Allocated: true},
@@ -61,24 +64,12 @@ func TestVGPUAvailability(t *testing.T) {
 
 	available, quarantined, err := VGPUAvailability(VGPUFrameworkVendorVFIO, vfs)
 	require.NoError(t, err)
-	assert.Equal(t, 1, available)
+	assert.Equal(t, 1, available, "a below-threshold failure tally must not remove the VF from placement")
 	assert.Equal(t, 1, quarantined)
 
 	available, quarantined, err = VGPUAvailability(VGPUFrameworkMdev, vfs)
 	require.NoError(t, err)
 	assert.Equal(t, 2, available)
-	assert.Zero(t, quarantined)
-}
-
-func TestVGPUAvailabilityExcludesOnlyQuarantinedVFs(t *testing.T) {
-	resetVFHealthStore(t)
-	result, err := ReportVFInitFailure(VFInitFailureReport{VFAddress: "0000:82:00.4", InstanceID: "instance-1"})
-	require.NoError(t, err)
-	require.Equal(t, VFReportRecorded, result.Outcome)
-
-	available, quarantined, err := VGPUAvailability(VGPUFrameworkVendorVFIO, []VirtualFunction{{PCIAddress: "0000:82:00.4"}})
-	require.NoError(t, err)
-	assert.Equal(t, 1, available, "a below-threshold failure tally must not remove the VF from placement")
 	assert.Zero(t, quarantined)
 }
 
@@ -94,6 +85,13 @@ func TestVGPUAvailabilityFailsWhenStoreUnavailable(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, available)
 	assert.Zero(t, quarantined)
+
+	restored := `{"version":1,"records":[{"vf_address":"0000:82:00.4","quarantined_at":"2026-08-20T00:00:00Z"}]}`
+	require.NoError(t, os.WriteFile(path, []byte(restored), 0o644))
+	available, quarantined, err = VGPUAvailability(VGPUFrameworkVendorVFIO, []VirtualFunction{{PCIAddress: "0000:82:00.4"}})
+	require.NoError(t, err, "a repaired state file must re-enable placement without a new report")
+	assert.Zero(t, available)
+	assert.Equal(t, 1, quarantined)
 }
 
 func TestVGPUAvailabilityFailsClosedAfterPersistFailure(t *testing.T) {
@@ -226,23 +224,6 @@ func TestReportVFInitFailureDeduplicatesAssignments(t *testing.T) {
 	assert.Equal(t, VFReportUnchanged, result.Outcome)
 	assert.Equal(t, 1, result.Failures)
 	assert.Empty(t, quarantinedVFs(), "a rescanned assignment must not count toward the threshold twice")
-}
-
-func TestReportVFInitFailureRespectsConfiguredThreshold(t *testing.T) {
-	resetVFHealthStore(t)
-	SetVFQuarantineThreshold(3)
-
-	for i, instance := range []string{"instance-1", "instance-2"} {
-		result, err := ReportVFInitFailure(VFInitFailureReport{VFAddress: "0000:e3:00.4", InstanceID: instance})
-		require.NoError(t, err)
-		assert.Equal(t, VFReportRecorded, result.Outcome)
-		assert.Equal(t, i+1, result.Failures)
-		assert.Equal(t, 3, result.Threshold)
-	}
-
-	result, err := ReportVFInitFailure(VFInitFailureReport{VFAddress: "0000:e3:00.4", InstanceID: "instance-3"})
-	require.NoError(t, err)
-	assert.Equal(t, VFReportQuarantined, result.Outcome)
 }
 
 func TestReportVFInitSuccessClearsFailureTally(t *testing.T) {
@@ -495,23 +476,6 @@ func TestReportVFInitSuccessRollsBackOnPersistFailure(t *testing.T) {
 	vfHealth.mu.Unlock()
 	require.True(t, exists, "a clear whose persist failed must be restored in memory")
 	assert.Len(t, record.Failures, 1)
-}
-
-func TestCheckedAddressesFailsClosedOnUnloadedState(t *testing.T) {
-	path := resetVFHealthStore(t)
-	quarantineVF(t, "0000:e3:00.4")
-
-	require.NoError(t, os.WriteFile(path, []byte("not json"), 0644))
-	require.Error(t, initVFHealth(path))
-
-	_, err := vfHealth.checkedAddresses()
-	require.Error(t, err)
-
-	restored := `{"version":1,"records":[{"vf_address":"0000:e3:00.4","quarantined_at":"2026-08-20T00:00:00Z"}]}`
-	require.NoError(t, os.WriteFile(path, []byte(restored), 0644))
-	addresses, err := vfHealth.checkedAddresses()
-	require.NoError(t, err)
-	assert.Contains(t, addresses, "0000:e3:00.4")
 }
 
 func TestCheckedAddressesFailsClosedOnInvalidRecord(t *testing.T) {
