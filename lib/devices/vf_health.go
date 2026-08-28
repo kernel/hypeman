@@ -92,6 +92,9 @@ var (
 		threshold:   defaultVFQuarantineThreshold,
 		syncDirFunc: syncDir,
 	}
+	// vendorVFIOMu is acquired before vfHealth.mu. It serializes quarantine
+	// mutations with vendor-VFIO create, destroy, and reconciliation so
+	// placement cannot select a VF while it is being quarantined.
 	vendorVFIOMu sync.Mutex
 )
 
@@ -254,9 +257,6 @@ func countFreeVFs(vfs []VirtualFunction, quarantined map[string]struct{}) int {
 // ReportVFInitFailure records a guest-reported driver init failure and
 // quarantines the VF once failures from enough distinct assignments accumulate.
 func ReportVFInitFailure(report VFInitFailureReport) (VFReportResult, error) {
-	// Lock order is vendorVFIOMu before vfHealth.mu. This serializes quarantine
-	// mutations with vendor-VFIO create, destroy, and reconciliation so placement
-	// cannot select a VF while it is being quarantined.
 	vendorVFIOMu.Lock()
 	defer vendorVFIOMu.Unlock()
 	return vfHealth.reportFailure(report)
@@ -265,9 +265,6 @@ func ReportVFInitFailure(report VFInitFailureReport) (VFReportResult, error) {
 // ReportVFInitSuccess clears failures through an exactly matched successful
 // assignment. A quarantine is rescinded only when that assignment triggered it.
 func ReportVFInitSuccess(report VFInitSuccessReport) (VFSuccessResult, error) {
-	// Lock order is vendorVFIOMu before vfHealth.mu. This serializes quarantine
-	// mutations with vendor-VFIO create, destroy, and reconciliation so placement
-	// cannot select a VF while it is being quarantined.
 	vendorVFIOMu.Lock()
 	defer vendorVFIOMu.Unlock()
 	return vfHealth.reportSuccess(report)
