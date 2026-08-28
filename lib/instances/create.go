@@ -280,7 +280,8 @@ func (m *manager) createInstance(
 	var gpuAssignedAt *time.Time
 	retention := vgpuRetention{instanceID: id}
 
-	defer retention.deferWrapPending(&retErr)
+	// Deferred before cu.Clean so rollback records retention before this wraps the error.
+	defer func() { retErr = retention.wrapPending(retErr) }()
 	cu := cleanup.Make(func() {
 		log.DebugContext(ctx, "cleaning up instance on error", "instance_id", id)
 		m.persistVGPURetention(ctx, &retention)

@@ -42,11 +42,6 @@ func (r *vgpuRetention) wrapPending(err error) error {
 	return &VGPUCleanupPendingError{InstanceID: r.instanceID, Retained: r.persisted, Err: err}
 }
 
-// Defer before cleanup so rollback records retention before this wraps the error.
-func (r *vgpuRetention) deferWrapPending(retErr *error) {
-	*retErr = r.wrapPending(*retErr)
-}
-
 func (m *manager) persistVGPURetention(ctx context.Context, retention *vgpuRetention) {
 	if retention.stub == nil {
 		m.deleteInstanceData(retention.instanceID)

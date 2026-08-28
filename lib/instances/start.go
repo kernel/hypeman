@@ -121,7 +121,8 @@ func (m *manager) startInstance(
 
 	// Setup cleanup stack for automatic rollback on errors
 	retention := vgpuRetention{instanceID: id}
-	defer retention.deferWrapPending(&retErr)
+	// Deferred before cu.Clean so rollback records retention before this wraps the error.
+	defer func() { retErr = retention.wrapPending(retErr) }()
 	cu := cleanup.Make(func() {})
 	defer cu.Clean()
 
@@ -177,20 +178,20 @@ func (m *manager) startInstance(
 		device, err := m.createVGPUDevice(ctx, stored.GPUProfile, id)
 		if err != nil {
 			log.ErrorContext(ctx, "failed to create vGPU", "instance_id", id, "profile", stored.GPUProfile, "error", err)
+			wrapped := fmt.Errorf("create vGPU for profile %s: %w", stored.GPUProfile, err)
 			if pendingDevice, ok := vgpuDevicePendingCleanup(err); ok {
-				assignedAt := m.nowUTC()
 				retentionMeta := rollbackMeta
-				setStoredVGPUDevice(&retentionMeta.StoredMetadata, pendingDevice, assignedAt)
-				wrapped := fmt.Errorf("create vGPU for profile %s: %w", stored.GPUProfile, err)
+				setStoredVGPUDevice(&retentionMeta.StoredMetadata, pendingDevice, m.nowUTC())
+				persisted := true
 				if saveErr := m.saveMetadata(&retentionMeta); saveErr != nil {
-					m.recordVGPURetainedAssignment(ctx, vgpuRetentionOperationStart, false)
 					log.ErrorContext(ctx, "failed to retain vGPU assignment after create rollback failure", "instance_id", id, "error", saveErr)
-					return nil, &VGPUCleanupPendingError{InstanceID: id, Err: fmt.Errorf("%w; retain assignment: %v", wrapped, saveErr)}
+					wrapped = fmt.Errorf("%w; retain assignment: %v", wrapped, saveErr)
+					persisted = false
 				}
-				m.recordVGPURetainedAssignment(ctx, vgpuRetentionOperationStart, true)
-				return nil, &VGPUCleanupPendingError{InstanceID: id, Retained: true, Err: wrapped}
+				retention.markRetained(persisted)
+				m.recordVGPURetainedAssignment(ctx, vgpuRetentionOperationStart, persisted)
 			}
-			return nil, fmt.Errorf("create vGPU for profile %s: %w", stored.GPUProfile, err)
+			return nil, wrapped
 		}
 		assignedAt := m.nowUTC()
 		setStoredVGPUDevice(stored, device, assignedAt)
