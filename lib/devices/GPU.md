@@ -317,16 +317,23 @@ meet the new value.
 
 `used_slots` includes quarantined VFs still held by running instances, so it
 can overlap `quarantined_slots`; use `allocatable_slots` for admission.
+Quarantine only removes a VF from future placement: it never detaches the VF
+or otherwise affects a running instance.
 
 Below-threshold failures log at warn and increment
 `hypeman_instances_vgpu_sentinel_init_failures_total`; quarantines log at
 error and increment `hypeman_instances_vgpu_sentinel_quarantines_total`.
 `hypeman_instances_vgpu_sentinel_checks_total` records checks by result
-(`ok`, `failed`, `unknown`, `rpc_error`, or `list_error`) so hosts that lose
-sentinel coverage are visible. `hypeman_instances_vgpu_quarantined_vfs`
-gauges the current count. A systemic guest/host driver mismatch can still
-quarantine every VF, so validate driver changes on a test host and alert on
-the failure counter.
+(`ok`, `failed`, `unknown`, `rpc_error`, `unsupported_agent`, or `list_error`)
+so hosts that lose sentinel coverage are visible. `unsupported_agent` means a
+running instance has a guest agent from before the status RPC was introduced;
+it is expected while those instances drain during an upgrade.
+`hypeman_instances_vgpu_quarantined_vfs` gauges the current count.
+`hypeman_instances_vgpu_vf_health_store_unavailable` is 1 while persisted
+health state cannot be loaded or the last write failed (and placement is
+therefore disabled), and 0 otherwise. A systemic guest/host driver mismatch
+can still quarantine every VF, so validate driver changes on a test host and
+alert on the failure counter.
 
 Detection requires the hypeman guest agent and a running instance: the state
 lives in the agent, so a wedge whose instance stops before the next poll (5s)

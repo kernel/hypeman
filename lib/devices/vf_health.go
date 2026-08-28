@@ -370,9 +370,6 @@ func (s *vfHealthStore) reportSuccess(report VFInitSuccessReport) (VFSuccessResu
 	if !vfHealthAddressPattern.MatchString(report.VFAddress) {
 		return VFSuccessResult{}, fmt.Errorf("invalid VF address %q", report.VFAddress)
 	}
-	if err := s.retryPersistLocked(); err != nil {
-		return VFSuccessResult{}, err
-	}
 	previous, ok := s.records[report.VFAddress]
 	if !ok || len(previous.Failures) == 0 {
 		return VFSuccessResult{}, nil
@@ -387,6 +384,9 @@ func (s *vfHealthStore) reportSuccess(report VFInitSuccessReport) (VFSuccessResu
 	}
 	if match < 0 || (previous.QuarantinedAt != nil && match != len(previous.Failures)-1) {
 		return VFSuccessResult{}, nil
+	}
+	if err := s.retryPersistLocked(); err != nil {
+		return VFSuccessResult{}, err
 	}
 
 	remaining := append([]vfInitFailure(nil), previous.Failures[match+1:]...)

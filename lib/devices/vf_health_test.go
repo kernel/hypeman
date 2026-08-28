@@ -325,6 +325,24 @@ func TestReportVFInitSuccessWithoutMatchingFailureClearsNothing(t *testing.T) {
 	assert.False(t, result.Rescinded)
 }
 
+func TestReportVFInitSuccessNoopDoesNotRetryFailedPersist(t *testing.T) {
+	resetVFHealthStore(t)
+	vfHealth.mu.Lock()
+	vfHealth.persistErr = errors.New("injected persist failure")
+	vfHealth.mu.Unlock()
+
+	result, err := ReportVFInitSuccess(VFInitSuccessReport{
+		VFAddress:  "0000:e3:00.4",
+		InstanceID: "healthy-instance",
+	})
+	require.NoError(t, err)
+	assert.Zero(t, result.Cleared)
+	assert.True(t, VFHealthStoreUnavailable(), "a no-op success must not clear the failed-write latch")
+
+	_, _, err = VGPUAvailability(VGPUFrameworkVendorVFIO, []VirtualFunction{{PCIAddress: "0000:e3:00.4"}})
+	require.ErrorContains(t, err, "last write failed")
+}
+
 func TestReportVFInitSuccessNeverClearsAnotherAssignmentsQuarantine(t *testing.T) {
 	resetVFHealthStore(t)
 	quarantineVF(t, "0000:e3:00.4")

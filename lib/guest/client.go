@@ -945,12 +945,18 @@ func CopyFromInstance(ctx context.Context, dialer hypervisor.VsockDialer, opts C
 func GetGPUInitStatus(ctx context.Context, dialer hypervisor.VsockDialer) (GPUInitState, string, error) {
 	grpcConn, err := GetOrCreateConn(ctx, dialer)
 	if err != nil {
+		if isRetryableConnectionError(err) {
+			CloseConn(dialer.Key())
+		}
 		return GPUInitState_GPU_INIT_STATE_UNKNOWN, "", fmt.Errorf("get grpc connection: %w", err)
 	}
 
 	client := NewGuestServiceClient(grpcConn)
 	resp, err := client.GetGPUInitStatus(ctx, &GetGPUInitStatusRequest{})
 	if err != nil {
+		if isRetryableConnectionError(err) {
+			CloseConn(dialer.Key())
+		}
 		return GPUInitState_GPU_INIT_STATE_UNKNOWN, "", fmt.Errorf("gpu init status RPC: %w", err)
 	}
 	return resp.State, resp.FailureMessage, nil

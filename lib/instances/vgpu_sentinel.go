@@ -14,6 +14,8 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 	"golang.org/x/sync/errgroup"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 const (
@@ -201,10 +203,14 @@ func (c *VGPUSentinelController) pollTarget(ctx context.Context, target vgpuSent
 	state, nvrm, err := c.guestGPUInitStatus(pollCtx, target.instanceID)
 	cancel()
 	if err != nil {
-		c.recordCheck(ctx, "rpc_error")
-		// The agent is unreachable whenever the instance is not running or
-		// still booting; the next tick polls again.
-		c.log.DebugContext(ctx, "vGPU sentinel cannot reach the guest agent",
+		result := "rpc_error"
+		if status.Code(err) == codes.Unimplemented {
+			result = "unsupported_agent"
+		}
+		c.recordCheck(ctx, result)
+		// The agent can be unreachable while the instance stops or boots; the
+		// next tick polls again.
+		c.log.DebugContext(ctx, "vGPU sentinel cannot query the guest agent",
 			"instance_id", target.instanceID, "error", err)
 		return
 	}
@@ -341,7 +347,7 @@ func (m *manager) getVGPUSentinelTarget(_ context.Context, instanceID string) (v
 		}
 		return vgpuSentinelTarget{}, false, err
 	}
-	if meta.GPUFramework != devices.VGPUFrameworkVendorVFIO || meta.GPUDevicePath == "" {
+	if meta.GPURetainedForCleanup || meta.GPUFramework != devices.VGPUFrameworkVendorVFIO || meta.GPUDevicePath == "" {
 		return vgpuSentinelTarget{}, false, nil
 	}
 	assignedAt := ""

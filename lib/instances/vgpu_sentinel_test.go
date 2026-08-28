@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -19,6 +20,8 @@ import (
 	"go.opentelemetry.io/otel/metric/noop"
 	otelmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 const testNVRMMessage = "NVRM: GPU 0000:e3:00.4: RmInitAdapter failed! (0x22:0x65:884)"
@@ -186,6 +189,7 @@ func TestVGPUSentinelControllerRecordsCheckResults(t *testing.T) {
 		{instanceID: "ok"},
 		{instanceID: "unknown"},
 		{instanceID: "unreachable"},
+		{instanceID: "unsupported"},
 	}}
 	c, _ := newTestSentinelController(t, store)
 	reader := otelmetric.NewManualReader()
@@ -199,6 +203,8 @@ func TestVGPUSentinelControllerRecordsCheckResults(t *testing.T) {
 			return guest.GPUInitState_GPU_INIT_STATE_OK, "", nil
 		case "unknown":
 			return guest.GPUInitState_GPU_INIT_STATE_UNKNOWN, "", nil
+		case "unsupported":
+			return guest.GPUInitState_GPU_INIT_STATE_UNKNOWN, "", fmt.Errorf("gpu init status RPC: %w", status.Error(codes.Unimplemented, "method not implemented"))
 		default:
 			return guest.GPUInitState_GPU_INIT_STATE_UNKNOWN, "", errors.New("vsock dial failed")
 		}
@@ -214,7 +220,7 @@ func TestVGPUSentinelControllerRecordsCheckResults(t *testing.T) {
 	for _, point := range checksTotal.DataPoints {
 		got[metricLabel(t, point.Attributes, "result")] = point.Value
 	}
-	assert.Equal(t, map[string]int64{"ok": 1, "unknown": 1, "rpc_error": 1}, got)
+	assert.Equal(t, map[string]int64{"ok": 1, "unknown": 1, "rpc_error": 1, "unsupported_agent": 1}, got)
 }
 
 func TestVGPUSentinelControllerProcessesSuccessAfterFailure(t *testing.T) {
@@ -403,6 +409,22 @@ func TestVGPUSentinelControllerAppliesInitOKFromReleasedAssignment(t *testing.T)
 	})
 	require.Len(t, cleared, 1)
 	assert.Equal(t, "2026-08-21T00:00:00Z", cleared[0].AssignedAt)
+}
+
+func TestGetVGPUSentinelTargetSkipsRetentionStub(t *testing.T) {
+	m := &manager{paths: paths.New(t.TempDir())}
+	const instanceID = "retained-vgpu"
+	require.NoError(t, m.ensureDirectories(instanceID))
+	require.NoError(t, m.saveMetadata(&metadata{StoredMetadata: StoredMetadata{
+		Id:                    instanceID,
+		GPUFramework:          devices.VGPUFrameworkVendorVFIO,
+		GPUDevicePath:         "/sys/bus/pci/devices/0000:e3:00.4",
+		GPURetainedForCleanup: true,
+	}}))
+
+	_, ok, err := m.getVGPUSentinelTarget(context.Background(), instanceID)
+	require.NoError(t, err)
+	assert.False(t, ok)
 }
 
 func TestListVGPUSentinelTargetsSkipsUnstattableMetadata(t *testing.T) {
