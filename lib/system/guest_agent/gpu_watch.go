@@ -83,6 +83,16 @@ func (r *gpuInitReporter) state() (pb.GPUInitState, string) {
 	}
 }
 
+func (r *gpuInitReporter) reportSuccess() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.succeeded {
+		return
+	}
+	r.succeeded = true
+	log.Printf("[guest-agent] GPU driver initialized")
+}
+
 // GetGPUInitStatus reports the GPU driver init state to the host sentinel.
 // The serial console is shared with workload output, so this vsock channel is
 // the only signal the host trusts.
@@ -93,16 +103,6 @@ func (s *guestServer) GetGPUInitStatus(context.Context, *pb.GetGPUInitStatusRequ
 		state, msg = s.gpuReporter.state()
 	}
 	return &pb.GetGPUInitStatusResponse{State: state, FailureMessage: msg}, nil
-}
-
-func (r *gpuInitReporter) reportSuccess() {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.succeeded {
-		return
-	}
-	r.succeeded = true
-	log.Printf("[guest-agent] GPU driver initialized")
 }
 
 func watchGPUInitFailure(reporter *gpuInitReporter) {

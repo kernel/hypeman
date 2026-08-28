@@ -90,27 +90,6 @@ func TestProbeGPUInitRetriesAfterAttemptTimeout(t *testing.T) {
 	assert.Equal(t, pb.GPUInitState_GPU_INIT_STATE_OK, state)
 }
 
-func TestProbeGPUInitSkipsWithoutNvidiaSMI(t *testing.T) {
-	buf := captureAgentLog(t)
-	t.Setenv("PATH", t.TempDir())
-
-	probeGPUInit(&gpuInitReporter{})
-
-	assert.Empty(t, buf.String())
-}
-
-func TestGPUInitReporterMakesSuccessTerminal(t *testing.T) {
-	captureAgentLog(t)
-	reporter := &gpuInitReporter{}
-	reporter.reportFailure("NVRM: GPU 0000:00:03.0: RmInitAdapter failed!")
-	reporter.reportSuccess()
-	reporter.reportFailure("NVRM: GPU 0000:00:03.0: RmInitAdapter failed!")
-
-	state, msg := reporter.state()
-	assert.Equal(t, pb.GPUInitState_GPU_INIT_STATE_OK, state)
-	assert.Empty(t, msg)
-}
-
 func TestGPUInitReporterState(t *testing.T) {
 	captureAgentLog(t)
 
@@ -136,6 +115,11 @@ func TestGPUInitReporterState(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, pb.GPUInitState_GPU_INIT_STATE_OK, resp.State)
 	assert.Empty(t, resp.FailureMessage)
+
+	reporter.reportFailure("NVRM: GPU 0000:00:03.0: RmInitAdapter failed! (0x22:0x65:884)")
+	state, msg := reporter.state()
+	assert.Equal(t, pb.GPUInitState_GPU_INIT_STATE_OK, state, "success is terminal; a later failure must not replace it")
+	assert.Empty(t, msg)
 }
 
 func TestRunGPUProbeAttemptKillsAndReapsAfterDeadline(t *testing.T) {

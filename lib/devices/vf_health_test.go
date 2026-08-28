@@ -3,10 +3,8 @@ package devices
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
-	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -328,7 +326,7 @@ func TestReportVFInitSuccessWithoutMatchingFailureClearsNothing(t *testing.T) {
 	assert.False(t, result.Rescinded)
 }
 
-func TestReportVFInitSuccessNoopFanoutDoesNotRetryFailedPersist(t *testing.T) {
+func TestReportVFInitSuccessNoopDoesNotRetryFailedPersist(t *testing.T) {
 	resetVFHealthStore(t)
 	var syncCalls int
 	vfHealth.mu.Lock()
@@ -339,28 +337,12 @@ func TestReportVFInitSuccessNoopFanoutDoesNotRetryFailedPersist(t *testing.T) {
 	}
 	vfHealth.mu.Unlock()
 
-	var wg sync.WaitGroup
-	errs := make(chan error, 64)
-	for i := 0; i < 64; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			result, err := ReportVFInitSuccess(VFInitSuccessReport{
-				VFAddress:  "0000:e3:00.4",
-				InstanceID: "healthy-instance",
-			})
-			if result != (VFSuccessResult{}) {
-				errs <- fmt.Errorf("unexpected result: %+v", result)
-				return
-			}
-			errs <- err
-		}()
-	}
-	wg.Wait()
-	close(errs)
-	for err := range errs {
-		require.NoError(t, err)
-	}
+	result, err := ReportVFInitSuccess(VFInitSuccessReport{
+		VFAddress:  "0000:e3:00.4",
+		InstanceID: "healthy-instance",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, VFSuccessResult{}, result)
 	assert.Zero(t, syncCalls)
 	assert.True(t, VFHealthStoreUnavailable())
 

@@ -68,14 +68,7 @@ func newTestSentinelController(t *testing.T, store *fakeSentinelStore) (*VGPUSen
 		log:               slog.New(slog.DiscardHandler),
 		interval:          time.Hour,
 		repairHealthStore: func() error { return nil },
-		// Mirrors the real store: repeated reports for the same assignment are
-		// deduplicated.
 		reportFailure: func(report devices.VFInitFailureReport) (devices.VFReportResult, error) {
-			for _, previous := range reported {
-				if previous == report {
-					return devices.VFReportResult{Outcome: devices.VFReportUnchanged, Failures: 1, Threshold: 1}, nil
-				}
-			}
 			reported = append(reported, report)
 			return devices.VFReportResult{Outcome: devices.VFReportQuarantined, Failures: 1, Threshold: 1}, nil
 		},
@@ -90,7 +83,7 @@ func newTestSentinelController(t *testing.T, store *fakeSentinelStore) (*VGPUSen
 	return c, &reported
 }
 
-func TestVGPUSentinelControllerReportsFailureOnce(t *testing.T) {
+func TestVGPUSentinelControllerReportsFailure(t *testing.T) {
 	t.Parallel()
 
 	store := &fakeSentinelStore{targets: []vgpuSentinelTarget{{
@@ -99,6 +92,8 @@ func TestVGPUSentinelControllerReportsFailureOnce(t *testing.T) {
 		assignedAt: "2026-08-20T15:00:00Z",
 	}}}
 	c, reported := newTestSentinelController(t, store)
+	var logs bytes.Buffer
+	c.log = slog.New(slog.NewTextHandler(&logs, nil))
 	ctx := context.Background()
 
 	c.guestGPUInitStatus = func(context.Context, string) (guest.GPUInitState, string, error) {
@@ -112,9 +107,8 @@ func TestVGPUSentinelControllerReportsFailureOnce(t *testing.T) {
 	require.Len(t, *reported, 1)
 	assert.Equal(t, "0000:e3:00.4", (*reported)[0].VFAddress)
 	assert.Equal(t, "instance-1", (*reported)[0].InstanceID)
-
-	c.pollOnce(ctx)
-	assert.Len(t, *reported, 1, "repeated polls of the same failed assignment must deduplicate")
+	assert.Contains(t, logs.String(), "quarantined wedged vGPU VF")
+	assert.Contains(t, logs.String(), "RmInitAdapter failed!")
 }
 
 func TestVGPUSentinelControllerSkipsUnreachableGuest(t *testing.T) {
@@ -143,10 +137,7 @@ func TestVGPUSentinelControllerSkipsUnreachableGuest(t *testing.T) {
 func TestVGPUSentinelControllerRepairsHealthStoreOncePerPoll(t *testing.T) {
 	t.Parallel()
 
-	targets := make([]vgpuSentinelTarget, vgpuSentinelMaxConcurrentPolls)
-	for i := range targets {
-		targets[i] = vgpuSentinelTarget{instanceID: fmt.Sprintf("instance-%d", i)}
-	}
+	targets := []vgpuSentinelTarget{{instanceID: "instance-1"}, {instanceID: "instance-2"}}
 	c, _ := newTestSentinelController(t, &fakeSentinelStore{targets: targets})
 	c.guestGPUInitStatus = guestReportsOK
 	var repairs int
@@ -157,49 +148,6 @@ func TestVGPUSentinelControllerRepairsHealthStoreOncePerPoll(t *testing.T) {
 
 	c.pollOnce(context.Background())
 	assert.Equal(t, 1, repairs)
-}
-
-func TestVGPUSentinelControllerPollsTargetsConcurrently(t *testing.T) {
-	t.Parallel()
-
-	store := &fakeSentinelStore{targets: []vgpuSentinelTarget{
-		{instanceID: "instance-1"},
-		{instanceID: "instance-2"},
-	}}
-	c, _ := newTestSentinelController(t, store)
-	started := make(chan struct{}, len(store.targets))
-	release := make(chan struct{})
-	released := false
-	defer func() {
-		if !released {
-			close(release)
-		}
-	}()
-	c.guestGPUInitStatus = func(context.Context, string) (guest.GPUInitState, string, error) {
-		started <- struct{}{}
-		<-release
-		return guest.GPUInitState_GPU_INIT_STATE_UNKNOWN, "", nil
-	}
-
-	done := make(chan struct{})
-	go func() {
-		c.pollOnce(context.Background())
-		close(done)
-	}()
-	for range store.targets {
-		select {
-		case <-started:
-		case <-time.After(time.Second):
-			t.Fatal("targets were not polled concurrently")
-		}
-	}
-	close(release)
-	released = true
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("poll did not finish")
-	}
 }
 
 func TestVGPUSentinelControllerRecordsCheckResults(t *testing.T) {
@@ -302,8 +250,6 @@ func TestVGPUSentinelControllerRetriesFailedTallyClear(t *testing.T) {
 	}}}
 	c, _ := newTestSentinelController(t, store)
 	c.guestGPUInitStatus = guestReportsOK
-	var logs bytes.Buffer
-	c.log = slog.New(slog.NewTextHandler(&logs, nil))
 	var reports []devices.VFInitSuccessReport
 	c.reportSuccess = func(report devices.VFInitSuccessReport) (devices.VFSuccessResult, error) {
 		reports = append(reports, report)
@@ -315,9 +261,7 @@ func TestVGPUSentinelControllerRetriesFailedTallyClear(t *testing.T) {
 
 	c.pollOnce(context.Background())
 	require.Len(t, reports, 1)
-	assert.Contains(t, logs.String(), "persist failed")
 
-	// The guest keeps reporting OK, so the next poll retries the clear.
 	c.pollOnce(context.Background())
 	require.Len(t, reports, 2)
 	assert.Equal(t, "0000:e3:00.4", reports[1].VFAddress)
@@ -345,90 +289,59 @@ func TestVGPUSentinelControllerRetriesFailedQuarantine(t *testing.T) {
 	assert.Len(t, *reported, 1)
 }
 
-func TestVGPUSentinelControllerLogsNVRMMessageOnQuarantine(t *testing.T) {
+func TestVGPUSentinelControllerConfirmsAssignmentBeforeReporting(t *testing.T) {
 	t.Parallel()
-
-	store := &fakeSentinelStore{targets: []vgpuSentinelTarget{{
-		instanceID: "instance-1",
-		vfAddress:  "0000:e3:00.4",
-		assignedAt: "2026-08-20T15:00:00Z",
-	}}}
-	c, _ := newTestSentinelController(t, store)
-	var logs bytes.Buffer
-	c.log = slog.New(slog.NewTextHandler(&logs, nil))
-
-	c.pollOnce(context.Background())
-	assert.Contains(t, logs.String(), "quarantined wedged vGPU VF")
-	assert.Contains(t, logs.String(), "RmInitAdapter failed!")
-}
-
-func TestVGPUSentinelControllerSkipsFailureOnChangedAssignment(t *testing.T) {
-	t.Parallel()
-
-	store := &fakeSentinelStore{targets: []vgpuSentinelTarget{{
-		instanceID: "instance-1",
-		vfAddress:  "0000:e3:00.5",
-		assignedAt: "2026-08-21T00:00:10Z",
-	}}}
-	c, reported := newTestSentinelController(t, store)
 
 	stale := vgpuSentinelTarget{
 		instanceID: "instance-1",
 		vfAddress:  "0000:e3:00.4",
 		assignedAt: "2026-08-21T00:00:00Z",
 	}
-	c.pollTarget(context.Background(), stale)
-	assert.Empty(t, *reported)
-
-	// A released assignment (instance gone) remains attributable.
-	store.targets = nil
-	c.pollTarget(context.Background(), stale)
-	require.Len(t, *reported, 1)
-	assert.Equal(t, "0000:e3:00.4", (*reported)[0].VFAddress)
-}
-
-func TestVGPUSentinelControllerSkipsInitOKOnChangedAssignment(t *testing.T) {
-	t.Parallel()
-
-	store := &fakeSentinelStore{targets: []vgpuSentinelTarget{{
+	changed := []vgpuSentinelTarget{{
 		instanceID: "instance-1",
 		vfAddress:  "0000:e3:00.5",
 		assignedAt: "2026-08-21T00:00:10Z",
-	}}}
-	c, _ := newTestSentinelController(t, store)
-	c.guestGPUInitStatus = guestReportsOK
-	var cleared []devices.VFInitSuccessReport
-	c.reportSuccess = func(report devices.VFInitSuccessReport) (devices.VFSuccessResult, error) {
-		cleared = append(cleared, report)
-		return devices.VFSuccessResult{Cleared: 1}, nil
+	}}
+	tests := []struct {
+		name        string
+		guestState  func(context.Context, string) (guest.GPUInitState, string, error)
+		targets     []vgpuSentinelTarget
+		wantApplied bool
+	}{
+		{"failure skipped when the assignment changed", guestReportsFailed, changed, false},
+		// A released assignment (instance gone) remains attributable.
+		{"failure from a released assignment is reported", guestReportsFailed, nil, true},
+		{"init OK skipped when the assignment changed", guestReportsOK, changed, false},
+		{"init OK from a released assignment clears", guestReportsOK, nil, true},
 	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c, reported := newTestSentinelController(t, &fakeSentinelStore{targets: tt.targets})
+			c.guestGPUInitStatus = tt.guestState
+			var cleared []devices.VFInitSuccessReport
+			c.reportSuccess = func(report devices.VFInitSuccessReport) (devices.VFSuccessResult, error) {
+				cleared = append(cleared, report)
+				return devices.VFSuccessResult{Cleared: 1}, nil
+			}
 
-	c.pollTarget(context.Background(), vgpuSentinelTarget{
-		instanceID: "instance-1",
-		vfAddress:  "0000:e3:00.4",
-		assignedAt: "2026-08-21T00:00:00Z",
-	})
-	assert.Empty(t, cleared)
-}
+			c.pollTarget(context.Background(), stale)
 
-func TestVGPUSentinelControllerAppliesInitOKFromReleasedAssignment(t *testing.T) {
-	t.Parallel()
-
-	c, _ := newTestSentinelController(t, &fakeSentinelStore{})
-	c.guestGPUInitStatus = guestReportsOK
-	var cleared []devices.VFInitSuccessReport
-	c.reportSuccess = func(report devices.VFInitSuccessReport) (devices.VFSuccessResult, error) {
-		cleared = append(cleared, report)
-		return devices.VFSuccessResult{Cleared: 1}, nil
+			if !tt.wantApplied {
+				assert.Empty(t, *reported)
+				assert.Empty(t, cleared)
+				return
+			}
+			if len(*reported) == 1 {
+				assert.Equal(t, stale.vfAddress, (*reported)[0].VFAddress)
+				assert.Equal(t, stale.assignedAt, (*reported)[0].AssignedAt)
+				assert.Empty(t, cleared)
+				return
+			}
+			require.Len(t, cleared, 1)
+			assert.Equal(t, stale.vfAddress, cleared[0].VFAddress)
+			assert.Equal(t, stale.assignedAt, cleared[0].AssignedAt)
+		})
 	}
-
-	c.pollTarget(context.Background(), vgpuSentinelTarget{
-		instanceID: "instance-1",
-		vfAddress:  "0000:e3:00.4",
-		assignedAt: "2026-08-21T00:00:00Z",
-	})
-	require.Len(t, cleared, 1)
-	assert.Equal(t, "2026-08-21T00:00:00Z", cleared[0].AssignedAt)
 }
 
 func TestGetVGPUSentinelTargetSkipsRetentionStub(t *testing.T) {

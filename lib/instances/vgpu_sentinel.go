@@ -238,24 +238,23 @@ func (c *VGPUSentinelController) recordCheck(ctx context.Context, result string)
 // confirmAssignment rejects a report only when the instance now holds a
 // different VF assignment. Released assignments remain attributable to the
 // assignment captured in the poll target.
-func (c *VGPUSentinelController) confirmAssignment(ctx context.Context, target vgpuSentinelTarget) (bool, error) {
+func (c *VGPUSentinelController) confirmAssignment(ctx context.Context, target vgpuSentinelTarget, action string) bool {
 	current, ok, err := c.store.getVGPUSentinelTarget(ctx, target.instanceID)
 	if err != nil {
-		return false, err
+		c.log.WarnContext(ctx, "vGPU sentinel could not confirm assignment; dropping report",
+			"action", action, "vf", target.vfAddress, "instance_id", target.instanceID, "error", err)
+		return false
 	}
-	return !ok || (current.vfAddress == target.vfAddress && current.assignedAt == target.assignedAt), nil
+	if ok && (current.vfAddress != target.vfAddress || current.assignedAt != target.assignedAt) {
+		c.log.InfoContext(ctx, "vGPU sentinel skipping report: assignment changed during poll",
+			"action", action, "vf", target.vfAddress, "instance_id", target.instanceID)
+		return false
+	}
+	return true
 }
 
 func (c *VGPUSentinelController) handleFailure(ctx context.Context, target vgpuSentinelTarget, nvrm string) {
-	unchanged, err := c.confirmAssignment(ctx, target)
-	if err != nil {
-		c.log.WarnContext(ctx, "vGPU sentinel could not confirm assignment before recording an init failure",
-			"vf", target.vfAddress, "instance_id", target.instanceID, "error", err)
-		return
-	}
-	if !unchanged {
-		c.log.InfoContext(ctx, "vGPU sentinel skipping init failure: assignment changed during poll",
-			"vf", target.vfAddress, "instance_id", target.instanceID)
+	if !c.confirmAssignment(ctx, target, "init_failure") {
 		return
 	}
 	result, err := c.reportFailure(devices.VFInitFailureReport{
@@ -292,13 +291,7 @@ func (c *VGPUSentinelController) handleFailure(ctx context.Context, target vgpuS
 }
 
 func (c *VGPUSentinelController) handleSuccess(ctx context.Context, target vgpuSentinelTarget) {
-	unchanged, err := c.confirmAssignment(ctx, target)
-	if err != nil {
-		c.log.WarnContext(ctx, "vGPU sentinel could not confirm assignment before clearing init failures",
-			"vf", target.vfAddress, "instance_id", target.instanceID, "error", err)
-		return
-	}
-	if !unchanged {
+	if !c.confirmAssignment(ctx, target, "init_success") {
 		return
 	}
 	result, err := c.reportSuccess(devices.VFInitSuccessReport{
