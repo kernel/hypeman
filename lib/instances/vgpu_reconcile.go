@@ -54,17 +54,17 @@ func (m *manager) StartVGPUReconciler(ctx context.Context) {
 func (m *manager) ReconcileVGPUs(ctx context.Context) {
 	log := logger.FromContext(ctx)
 	protected, err := m.reconcileVGPUAssignments(ctx)
-	sweepVendorVFIO := err == nil
+	sweepDevices := err == nil
 	if err != nil {
 		m.recordVGPUReconcileFailure(ctx, vgpuReconcileStageListInstances)
-		log.ErrorContext(ctx, "failed to list instances for vGPU reconcile protection; skipping vendor VFIO sweep until the next pass, mdev reconcile still runs", "error", err)
+		log.ErrorContext(ctx, "failed to list instances for vGPU reconcile protection; skipping device sweep until the next pass", "error", err)
 		protected = make(map[string]struct{})
 	}
 	reconcileDevices := m.reconcileVGPUDevices
 	if reconcileDevices == nil {
 		reconcileDevices = devices.ReconcileVGPUs
 	}
-	if err := reconcileDevices(ctx, protected, sweepVendorVFIO); err != nil {
+	if err := reconcileDevices(ctx, protected, sweepDevices); err != nil {
 		m.recordVGPUReconcileFailure(ctx, vgpuReconcileStageReconcileDevices)
 		log.WarnContext(ctx, "failed to reconcile vGPU devices", "error", err)
 	}
@@ -82,14 +82,13 @@ func (m *manager) reconcileVGPUAssignments(ctx context.Context) (map[string]stru
 	protected := make(map[string]struct{})
 	for i := range allMetadata {
 		stored := &allMetadata[i]
-		if storedVGPUDevicePath(stored) == "" {
+		devicePath := storedVGPUDevicePath(stored)
+		if devicePath == "" {
 			continue
 		}
 		hypervisorLive := hypervisorMayBeAlive(stored.HypervisorProcessIdentity, stored.SocketPath)
 		if vgpuAssignmentMayBeLive(stored, m.nowUTC(), hypervisorLive) {
-			if stored.GPUDevicePath != "" {
-				protected[stored.GPUDevicePath] = struct{}{}
-			}
+			protected[devicePath] = struct{}{}
 			continue
 		}
 		m.releaseStaleVGPUAssignment(ctx, stored.Id)
