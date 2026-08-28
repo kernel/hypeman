@@ -186,7 +186,7 @@ func startDesktopProcess(
 		ProcThreadAttributeList: attributes.List(),
 	}
 	processInfo := windows.ProcessInformation{}
-	flags := uint32(windows.CREATE_SUSPENDED | windows.CREATE_UNICODE_ENVIRONMENT | windows.EXTENDED_STARTUPINFO_PRESENT)
+	flags := uint32(windows.CREATE_SUSPENDED | windows.CREATE_UNICODE_ENVIRONMENT | windows.CREATE_NO_WINDOW | windows.EXTENDED_STARTUPINFO_PRESENT)
 	if err := windows.CreateProcessAsUser(
 		token,
 		nil,
