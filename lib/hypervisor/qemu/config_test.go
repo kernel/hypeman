@@ -49,6 +49,25 @@ func TestBuildArgs_Basic(t *testing.T) {
 	assert.Contains(t, args, "-nographic")
 }
 
+func TestBuildArgs_Display(t *testing.T) {
+	cfg := hypervisor.VMConfig{
+		VCPUs:       2,
+		MemoryBytes: 1024 * 1024 * 1024,
+		Display: &hypervisor.DisplayConfig{
+			Device:     "VGA",
+			SocketPath: "/instance/display.sock",
+		},
+	}
+
+	args := BuildArgs(cfg)
+	assert.Contains(t, args, "VGA")
+	assert.Contains(t, args, "-display")
+	assert.Contains(t, args, "none")
+	assert.Contains(t, args, "-vnc")
+	assert.Contains(t, args, "unix:/instance/display.sock")
+	assert.NotContains(t, args, "-nographic")
+}
+
 func TestBuildArgs_Disks(t *testing.T) {
 	cfg := hypervisor.VMConfig{
 		VCPUs:       1,

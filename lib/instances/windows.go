@@ -218,9 +218,13 @@ func (m *manager) buildWindowsHypervisorConfig(inst *Instance, image *images.Ima
 		Disks:         []hypervisor.DiskConfig{{Path: m.paths.InstanceWindowsDisk(inst.Id), Format: hypervisor.DiskFormatQCOW2, IOBps: ioBps, IOBurstBps: burstBps}},
 		Networks:      networks,
 		SerialLogPath: m.paths.InstanceAppLog(inst.Id),
-		VsockCID:      inst.VsockCID,
-		VsockSocket:   inst.VsockSocket,
-		BootMode:      hypervisor.BootModeUEFI,
+		Display: &hypervisor.DisplayConfig{
+			Device:     "VGA",
+			SocketPath: m.paths.InstanceSocket(inst.Id, "display.sock"),
+		},
+		VsockCID:    inst.VsockCID,
+		VsockSocket: inst.VsockSocket,
+		BootMode:    hypervisor.BootModeUEFI,
 		Firmware: &hypervisor.FirmwareConfig{
 			CodePath:   m.paths.InstanceOVMFCode(inst.Id),
 			VarsPath:   m.paths.InstanceOVMFVars(inst.Id),

@@ -151,8 +151,14 @@ func buildArgs(cfg hypervisor.VMConfig, machine MachineType) []string {
 		args = append(args, "-serial", "stdio")
 	}
 
-	// No graphics
-	args = append(args, "-nographic")
+	if cfg.Display != nil {
+		args = append(args, "-device", cfg.Display.Device, "-display", "none")
+		if cfg.Display.SocketPath != "" {
+			args = append(args, "-vnc", "unix:"+cfg.Display.SocketPath)
+		}
+	} else {
+		args = append(args, "-nographic")
+	}
 
 	// Disable default devices we don't need
 	args = append(args, "-nodefaults")
