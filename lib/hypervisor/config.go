@@ -18,6 +18,7 @@ type VMConfig struct {
 
 	// Console
 	SerialLogPath string
+	Display       *DisplayConfig
 
 	// Vsock
 	VsockCID    int64
@@ -39,6 +40,12 @@ type VMConfig struct {
 	// EnableRosetta attaches an Apple Rosetta virtio-fs share (vz on Apple
 	// silicon only) so the guest can execute x86-64 binaries.
 	EnableRosetta bool
+}
+
+// DisplayConfig describes an optional virtual display adapter.
+type DisplayConfig struct {
+	Device     string
+	SocketPath string
 }
 
 // GuestMemoryConfig contains hypervisor-agnostic guest memory feature toggles.
