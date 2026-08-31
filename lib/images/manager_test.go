@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -24,7 +23,6 @@ func newTestManager(p *paths.Paths) *manager {
 	return &manager{
 		paths:             p,
 		tagGenerations:    make(map[string]uint64),
-		layerDigestLocks:  make(map[string]*sync.Mutex),
 		inflightLayerRefs: make(map[string]int),
 		inflightPulls:     make(map[string]*inflightImagePull),
 		readySubscribers:  make(map[string][]chan StatusEvent),

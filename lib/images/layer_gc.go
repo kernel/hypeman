@@ -118,11 +118,11 @@ func (m *manager) evictUnreferencedLayerArtifacts() {
 // stale and no build is materializing it. The per-digest lock is taken with
 // TryLock so eviction never blocks behind an in-flight conversion.
 func (m *manager) tryEvictLayerArtifact(digestHex, dirPath string, cutoff time.Time) (int64, bool) {
-	lock := m.layerDigestLock(digestHex)
-	if !lock.TryLock() {
+	unlock, ok := m.layerLocks.tryLock(digestHex)
+	if !ok {
 		return 0, false
 	}
-	defer lock.Unlock()
+	defer unlock()
 
 	// The candidate was selected outside the lock; re-check that a build has
 	// not retained the digest and the artifact has not been rewritten since.
