@@ -2844,6 +2844,13 @@ paths:
           schema:
             type: string
           description: Instance ID or name
+        - name: graceful_shutdown
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: true
+          description: Whether to attempt graceful guest shutdown before deleting the instance
       responses:
         204:
           description: Instance deleted

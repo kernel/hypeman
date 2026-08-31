@@ -570,7 +570,12 @@ func (s *ApiService) DeleteInstance(ctx context.Context, request oapi.DeleteInst
 	}
 	log := logger.FromContext(ctx)
 
-	err := s.InstanceManager.DeleteInstance(ctx, inst.Id)
+	options := instances.DeleteInstanceOptions{}
+	if request.Params.GracefulShutdown != nil {
+		options.SkipGracefulShutdown = !*request.Params.GracefulShutdown
+	}
+
+	err := s.InstanceManager.DeleteInstanceWithOptions(ctx, inst.Id, options)
 	if err != nil {
 		log.ErrorContext(ctx, "failed to delete instance", "error", err)
 		return oapi.DeleteInstance500JSONResponse{

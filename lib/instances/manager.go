@@ -36,6 +36,7 @@ type Manager interface {
 	// Returns ErrAmbiguousName if prefix matches multiple instances.
 	GetInstance(ctx context.Context, idOrName string) (*Instance, error)
 	DeleteInstance(ctx context.Context, id string) error
+	DeleteInstanceWithOptions(ctx context.Context, id string, options DeleteInstanceOptions) error
 	DeleteSnapshot(ctx context.Context, snapshotID string) error
 	ForkInstance(ctx context.Context, id string, req ForkInstanceRequest) (*Instance, error)
 	ForkSnapshot(ctx context.Context, snapshotID string, req ForkSnapshotRequest) (*Instance, error)
@@ -441,17 +442,28 @@ func (m *manager) CreateInstance(ctx context.Context, req CreateInstanceRequest)
 	return inst, err
 }
 
-// DeleteInstance stops and deletes an instance
+// DeleteInstance stops and deletes an instance.
 func (m *manager) DeleteInstance(ctx context.Context, id string) error {
+	return m.DeleteInstanceWithOptions(ctx, id, DeleteInstanceOptions{})
+}
+
+// DeleteInstanceWithOptions stops and deletes an instance with the supplied options.
+func (m *manager) DeleteInstanceWithOptions(ctx context.Context, id string, options DeleteInstanceOptions) error {
 	lock := m.getInstanceLock(id)
 	lock.Lock()
 	defer lock.Unlock()
 
-	return m.deleteInstanceLocked(ctx, id)
+	return m.deleteInstanceLockedWithOptions(ctx, id, options)
 }
 
 func (m *manager) deleteInstanceLocked(ctx context.Context, id string) error {
-	deleteInstance := m.deleteInstance
+	return m.deleteInstanceLockedWithOptions(ctx, id, DeleteInstanceOptions{})
+}
+
+func (m *manager) deleteInstanceLockedWithOptions(ctx context.Context, id string, options DeleteInstanceOptions) error {
+	deleteInstance := func(ctx context.Context, id string) error {
+		return m.deleteInstanceWithOptions(ctx, id, options)
+	}
 	if m.deleteInstanceFn != nil {
 		deleteInstance = m.deleteInstanceFn
 	}

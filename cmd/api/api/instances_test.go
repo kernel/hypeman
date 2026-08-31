@@ -242,8 +242,18 @@ type captureCreateManager struct {
 	captureManager[instances.CreateInstanceRequest]
 }
 
+type captureDeleteManager struct {
+	instances.Manager
+	options instances.DeleteInstanceOptions
+}
+
 func newCaptureCreateManager(manager instances.Manager) *captureCreateManager {
 	return &captureCreateManager{captureManager: newCaptureManager[instances.CreateInstanceRequest](manager)}
+}
+
+func (m *captureDeleteManager) DeleteInstanceWithOptions(_ context.Context, _ string, options instances.DeleteInstanceOptions) error {
+	m.options = options
+	return nil
 }
 
 type captureForkManager struct {
@@ -337,6 +347,44 @@ func (m *captureCreateManager) CreateInstance(ctx context.Context, req instances
 		},
 		State: instances.StateRunning,
 	}, nil
+}
+
+func TestDeleteInstance_GracefulShutdown(t *testing.T) {
+	t.Parallel()
+
+	falseValue := false
+	trueValue := true
+	tests := []struct {
+		name                 string
+		gracefulShutdown     *bool
+		skipGracefulShutdown bool
+	}{
+		{name: "default"},
+		{name: "enabled", gracefulShutdown: &trueValue},
+		{name: "disabled", gracefulShutdown: &falseValue, skipGracefulShutdown: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := newTestService(t)
+			manager := &captureDeleteManager{Manager: svc.InstanceManager}
+			svc.InstanceManager = manager
+			inst := &instances.Instance{StoredMetadata: instances.StoredMetadata{Id: "inst-delete"}}
+			requestCtx := mw.WithResolvedInstance(ctx(), inst.Id, inst)
+
+			resp, err := svc.DeleteInstance(requestCtx, oapi.DeleteInstanceRequestObject{
+				Id: inst.Id,
+				Params: oapi.DeleteInstanceParams{
+					GracefulShutdown: tt.gracefulShutdown,
+				},
+			})
+
+			require.NoError(t, err)
+			_, ok := resp.(oapi.DeleteInstance204Response)
+			require.True(t, ok)
+			assert.Equal(t, tt.skipGracefulShutdown, manager.options.SkipGracefulShutdown)
+		})
+	}
 }
 
 func TestCreateInstance_TTL(t *testing.T) {
