@@ -299,6 +299,11 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 	// phase (Standby for snapshot forks, Stopped for stopped forks) will be
 	// recorded by the appropriate operation when the fork is acted on.
 	forkMeta.Phases.Reset()
+	// A vGPU assignment is never shared with a fork: normally stop already
+	// released it, and an assignment retained by a failed release must stay
+	// with the source so only one instance retries it. The fork acquires its
+	// own vGPU on start from GPUProfile.
+	clearStoredVGPUDevice(&forkMeta)
 	switch source.State {
 	case StateStandby:
 		forkMeta.Phases.Record(phasetracking.PhaseStandby, now)

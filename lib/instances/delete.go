@@ -85,6 +85,21 @@ func (m *manager) deleteInstanceWithOptions(
 		guest.CloseConn(dialer.Key())
 	}
 
+	// 3b. Block the restart policy before any teardown. If the delete fails
+	// partway (e.g. the hypervisor cannot be confirmed dead) the metadata is
+	// retained with the VMM already stopped, and without this marker the
+	// restart policy controller would start the instance again.
+	if err := m.markRestartManualStopLocked(ctx, id); err != nil {
+		return fmt.Errorf("block restart policy before delete: %w", err)
+	}
+	// markRestartManualStopLocked persists through a separate metadata load.
+	// Reload it so later saves in this delete do not overwrite the block.
+	meta, err = m.loadMetadata(id)
+	if err != nil {
+		return fmt.Errorf("reload metadata after blocking restart policy: %w", err)
+	}
+	stored = &meta.StoredMetadata
+
 	// 4. If active, try graceful guest shutdown before force kill.
 	gracefulShutdown := false
 	if !options.skipGracefulShutdown && (inst.State == StateRunning || inst.State == StateInitializing) {
@@ -124,6 +139,25 @@ func (m *manager) deleteInstanceWithOptions(
 		}
 	}
 	m.closeFirecrackerUFFDSession(ctx, stored)
+
+	// 5b. Release the vGPU assignment if present, before any network, device,
+	// or volume teardown. Release failure is logged and the delete continues,
+	// matching the pre-refactor contract: the VMM is already confirmed dead,
+	// the guards inside the release never destroy a device they cannot prove
+	// is unowned, and a skipped release is recovered by startup
+	// reconciliation.
+	hadVGPUAssignment := storedVGPUDevicePath(stored) != ""
+	if hadVGPUAssignment {
+		log.InfoContext(ctx, "destroying vGPU", "instance_id", id, "uuid", stored.GPUMdevUUID)
+	}
+	if err := releaseStoredVGPU(ctx, stored); err != nil {
+		// Log error but continue with cleanup.
+		log.WarnContext(ctx, "failed to destroy vGPU, continuing with cleanup", "instance_id", id, "uuid", stored.GPUMdevUUID, "error", err)
+	} else if hadVGPUAssignment {
+		if err := m.saveMetadata(meta); err != nil {
+			log.WarnContext(ctx, "failed to save metadata after vGPU release", "instance_id", id, "error", err)
+		}
+	}
 
 	// 6. Release network allocation
 	if inst.NetworkEnabled {
@@ -167,15 +201,6 @@ func (m *manager) deleteInstanceWithOptions(
 				// Log error but continue with cleanup
 				log.WarnContext(ctx, "failed to detach volume, continuing with cleanup", "instance_id", id, "volume_id", volAttach.VolumeID, "error", err)
 			}
-		}
-	}
-
-	// 7c. Release the vGPU assignment if present.
-	if path := storedVGPUDevicePath(stored); path != "" {
-		log.InfoContext(ctx, "destroying vGPU", "instance_id", id, "device_path", path)
-		if err := releaseStoredVGPU(ctx, stored); err != nil {
-			// Log error but continue with cleanup
-			log.WarnContext(ctx, "failed to destroy vGPU, continuing with cleanup", "instance_id", id, "device_path", path, "error", err)
 		}
 	}
 

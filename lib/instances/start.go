@@ -49,6 +49,21 @@ func (m *manager) startInstance(
 		return nil, fmt.Errorf("%w: cannot start from state %s, must be Stopped", ErrInvalidState, inst.State)
 	}
 
+	// Release any assignment retained by an earlier failed release and
+	// persist the cleared fields immediately, so a failure later in start
+	// cannot leave on-disk metadata pointing at a device that is already
+	// gone (matching releaseRetainedVGPULocked).
+	if storedVGPUDevicePath(stored) != "" {
+		if err := releaseStoredVGPU(ctx, stored); err != nil {
+			log.ErrorContext(ctx, "failed to release stale vGPU before start", "instance_id", id, "error", err)
+			return nil, fmt.Errorf("release stale vGPU before start: %w", err)
+		}
+		if err := m.saveMetadata(meta); err != nil {
+			log.ErrorContext(ctx, "failed to save metadata after stale vGPU release", "instance_id", id, "error", err)
+			return nil, fmt.Errorf("save metadata after stale vGPU release: %w", err)
+		}
+	}
+
 	// 2a. Clear stale exit info from previous run and apply command overrides
 	stored.ExitCode = nil
 	stored.ExitMessage = ""
