@@ -463,3 +463,21 @@ func createStandbySnapshotSourceFixture(t *testing.T, mgr *manager, id, name str
 	require.NoError(t, os.MkdirAll(snapshotDir, 0755))
 	require.NoError(t, os.WriteFile(filepath.Join(snapshotDir, "state"), []byte("snapshot"), 0644))
 }
+
+// A fork-snapshot request carries caller-supplied tags that get written into
+// instance metadata, so it must reject invalid tags exactly like the create
+// paths — the OpenAPI layer does not guard this direct manager entry point.
+func TestValidateForkSnapshotRequestValidatesTags(t *testing.T) {
+	t.Parallel()
+	require.NoError(t, validateForkSnapshotRequest(ForkSnapshotRequest{
+		Name: "fork-ok",
+		Tags: map[string]string{"env": "prod"},
+	}), "a well-formed tag set must pass")
+
+	err := validateForkSnapshotRequest(ForkSnapshotRequest{
+		Name: "fork-bad",
+		Tags: map[string]string{"bad!key": "v"}, // "!" is not an allowed key char
+	})
+	require.Error(t, err, "an invalid tag key must be refused")
+	assert.ErrorIs(t, err, ErrInvalidRequest)
+}

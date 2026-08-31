@@ -422,6 +422,24 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 	forkMeta := cloneStoredMetadataWithoutPendingStandbyCompression(rec.StoredMetadata)
 	forkMeta.Id = forkID
 	forkMeta.Name = req.Name
+	// Caller-supplied tags override the cloned source tags (request wins per
+	// key), so a fork can be re-identified rather than inherit the source's
+	// identity labels. Unrelated source tags are preserved.
+	if len(req.Tags) > 0 {
+		if forkMeta.Tags == nil {
+			forkMeta.Tags = make(map[string]string, len(req.Tags))
+		}
+		for k, v := range req.Tags {
+			forkMeta.Tags[k] = v
+		}
+	}
+	// Record the measured fork mode, mirroring the instance-fork path: a shared
+	// mem-file is copy-on-write, anything else is a full copy.
+	if shareMemFile {
+		forkMeta.ForkMode = ForkModeShared
+	} else {
+		forkMeta.ForkMode = ForkModeCopied
+	}
 	forkMeta.CreatedAt = now
 	forkMeta.ExpiresAt = nil
 	forkMeta.StartedAt = nil
@@ -588,6 +606,12 @@ func validateForkSnapshotRequest(req ForkSnapshotRequest) error {
 	}
 	if req.TargetState != "" && req.TargetState != StateStopped && req.TargetState != StateStandby && req.TargetState != StateRunning {
 		return fmt.Errorf("%w: invalid target_state %q", ErrInvalidRequest, req.TargetState)
+	}
+	// Caller-supplied tags are written into instance metadata below, so they must
+	// clear the same validation as create-instance and create-snapshot — the
+	// OpenAPI layer does not guard this direct manager path.
+	if err := tags.Validate(req.Tags); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidRequest, err)
 	}
 	return nil
 }
