@@ -46,6 +46,10 @@ type Manager interface {
 	// Unlike CreateImage, it does not resolve from a remote registry.
 	ImportLocalImage(ctx context.Context, repo, reference, digest string) (*Image, error)
 	GetImage(ctx context.Context, name string) (*Image, error)
+	// TagImage creates or updates a local tag pointing at an existing ready
+	// image, without pulling or reconverting. Source and target may be in
+	// different repositories.
+	TagImage(ctx context.Context, source, target string) (*Image, error)
 	DeleteImage(ctx context.Context, name string) error
 	RecoverInterruptedBuilds()
 	// TotalImageBytes returns the total size of all ready images on disk.
@@ -768,23 +772,7 @@ func (m *manager) GetImage(ctx context.Context, name string) (*Image, error) {
 		return nil, fmt.Errorf("%w: %s", ErrInvalidName, err.Error())
 	}
 
-	repository := ref.Repository()
-
-	var digestHex string
-	if ref.IsDigest() {
-		// Direct digest lookup
-		digestHex = ref.DigestHex()
-	} else {
-		// Tag lookup - resolve symlink
-		tag := ref.Tag()
-		d, err := resolveTag(m.paths, repository, tag)
-		if err != nil {
-			return nil, err
-		}
-		digestHex = d
-	}
-
-	meta, err := readMetadata(m.paths, repository, digestHex)
+	_, meta, err := resolveRefMetadata(m.paths, ref)
 	if err != nil {
 		return nil, err
 	}

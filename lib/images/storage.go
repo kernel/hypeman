@@ -240,6 +240,24 @@ func readMetadata(p *paths.Paths, repository, digestHex string) (*imageMetadata,
 	return readMetadataAt(resolveImageLayout(p, repository, digestHex))
 }
 
+// resolveRefMetadata resolves a digest reference directly or a tag reference
+// through its symlink, then reads the metadata it points at.
+func resolveRefMetadata(p *paths.Paths, ref *NormalizedRef) (string, *imageMetadata, error) {
+	digestHex := ref.DigestHex()
+	if !ref.IsDigest() {
+		var err error
+		digestHex, err = resolveTag(p, ref.Repository(), ref.Tag())
+		if err != nil {
+			return "", nil, err
+		}
+	}
+	meta, err := readMetadata(p, ref.Repository(), digestHex)
+	if err != nil {
+		return "", nil, err
+	}
+	return digestHex, meta, nil
+}
+
 func readContentMetadata(p *paths.Paths, digestHex string) (*imageMetadata, error) {
 	return readMetadataAt(contentLayout(p, digestHex))
 }
@@ -320,6 +338,12 @@ func promoteLegacyTags(p *paths.Paths, repository, digestHex string) error {
 	for _, tag := range tags {
 		target, err := resolveTag(p, repository, tag)
 		if err != nil || target != digestHex {
+			continue
+		}
+		// resolveTag validated that content-relative links resolve to this
+		// digest's content dir, so only legacy links (bare digest target)
+		// still need restaging.
+		if raw, err := os.Readlink(tagSymlinkPath(p, repository, tag)); err == nil && raw != digestHex {
 			continue
 		}
 		ref, err := stageTagSymlink(p, repository, tag, digestHex)
@@ -470,6 +494,10 @@ func createTagSymlink(p *paths.Paths, repository, tag, digestHex string) error {
 	return nil
 }
 
+// errInvalidSymlinkTarget marks a tag symlink that does not resolve to a
+// digest or the shared content directory.
+var errInvalidSymlinkTarget = errors.New("invalid symlink target")
+
 func resolveTag(p *paths.Paths, repository, tag string) (string, error) {
 	linkPath := tagSymlinkPath(p, repository, tag)
 
@@ -484,16 +512,16 @@ func resolveTag(p *paths.Paths, repository, tag string) (string, error) {
 	// Legacy links contain only the digest. New links point relatively into the
 	// shared content directory; validate that they resolve to that digest only.
 	if filepath.IsAbs(target) {
-		return "", fmt.Errorf("invalid symlink target: %s", target)
+		return "", fmt.Errorf("%w: %s", errInvalidSymlinkTarget, target)
 	}
 	digestHex := filepath.Base(target)
 	if digestHex == "." || digestHex == string(filepath.Separator) {
-		return "", fmt.Errorf("invalid symlink target: %s", target)
+		return "", fmt.Errorf("%w: %s", errInvalidSymlinkTarget, target)
 	}
 	if target != digestHex {
 		resolved := filepath.Clean(filepath.Join(filepath.Dir(linkPath), target))
 		if resolved != filepath.Clean(p.ImageContentDir(digestHex)) {
-			return "", fmt.Errorf("invalid symlink target: %s", target)
+			return "", fmt.Errorf("%w: %s", errInvalidSymlinkTarget, target)
 		}
 	}
 

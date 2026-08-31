@@ -127,3 +127,24 @@ func TestResolveResource_ResolvesBuilderByID(t *testing.T) {
 	assert.Equal(t, "bld_123", resolver.receivedName,
 		"Builder resolver was not invoked with the path ID")
 }
+
+func TestResolveResource_SkipsImagePosts(t *testing.T) {
+	resolver := &mockResolver{}
+
+	middleware := ResolveResource(Resolvers{Image: resolver}, func(w http.ResponseWriter, err error, lookup string) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+
+	r := chi.NewRouter()
+	r.With(middleware).Post("/images/{name}/tag", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/images/docker.io%2Flibrary%2Falpine:latest/tag", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	assert.Empty(t, resolver.receivedName,
+		"image POSTs must not be intercepted by the resolver")
+}
