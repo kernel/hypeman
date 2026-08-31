@@ -12,12 +12,11 @@ func TestTryWithTestFileLock(t *testing.T) {
 	lockPath := filepath.Join(t.TempDir(), "test.lock")
 
 	called := false
-	acquired, err := tryWithTestFileLock(lockPath, func() error {
+	err := tryWithTestFileLock(lockPath, func() error {
 		called = true
 		return nil
 	})
 	require.NoError(t, err)
-	require.True(t, acquired)
 	require.True(t, called)
 
 	heldLock, err := openTestLockFile(lockPath)
@@ -27,12 +26,11 @@ func TestTryWithTestFileLock(t *testing.T) {
 	defer syscall.Flock(int(heldLock.Fd()), syscall.LOCK_UN)
 
 	called = false
-	acquired, err = tryWithTestFileLock(lockPath, func() error {
+	err = tryWithTestFileLock(lockPath, func() error {
 		called = true
 		return nil
 	})
 	require.NoError(t, err)
-	require.False(t, acquired)
 	require.False(t, called)
 }
 

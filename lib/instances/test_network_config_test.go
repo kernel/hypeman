@@ -192,13 +192,10 @@ func allocateTestNetworkLease(testName string, seq uint32) (*testNetworkLease, e
 				_ = withTestSubnetLock(func() error {
 					leases, err := loadSubnetLeases()
 					if err != nil {
-						return nil
+						return err
 					}
 					delete(leases, allocatedSubnet)
-					if err := saveSubnetLeases(leases); err != nil {
-						return nil
-					}
-					return nil
+					return saveSubnetLeases(leases)
 				})
 			})
 		},
@@ -208,7 +205,7 @@ func allocateTestNetworkLease(testName string, seq uint32) (*testNetworkLease, e
 func cleanupStaleTestNetworks(routes []hostRoute) {
 	testNetworkGuardCleanupOnce.Do(func() {
 		lockPath := filepath.Join(os.TempDir(), "hypeman-test-network-cleanup.lock")
-		_, err := tryWithTestFileLock(lockPath, func() error {
+		err := tryWithTestFileLock(lockPath, func() error {
 			cleanupStaleLinkDownRoutes(routes)
 			// Sweep iptables rules for test bridges that no longer exist. Once a
 			// bridge is fully deleted its route is gone too, so linkdown cleanup
@@ -236,22 +233,22 @@ func withTestSubnetLock(fn func() error) error {
 	return fn()
 }
 
-func tryWithTestFileLock(lockPath string, fn func() error) (bool, error) {
+func tryWithTestFileLock(lockPath string, fn func() error) error {
 	lockFile, err := openTestLockFile(lockPath)
 	if err != nil {
-		return false, fmt.Errorf("open lock file: %w", err)
+		return fmt.Errorf("open lock file: %w", err)
 	}
 	defer lockFile.Close()
 
 	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		if errors.Is(err, syscall.EWOULDBLOCK) {
-			return false, nil
+			return nil
 		}
-		return false, fmt.Errorf("acquire lock: %w", err)
+		return fmt.Errorf("acquire lock: %w", err)
 	}
 	defer syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN)
 
-	return true, fn()
+	return fn()
 }
 
 func openTestLockFile(lockPath string) (*os.File, error) {
