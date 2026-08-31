@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 
@@ -92,13 +93,19 @@ func TestWindowsConfigIntegration(t *testing.T) {
 	}
 
 	starter := NewStarter()
-	boot := func() {
+	processRecordPath := filepath.Join(dir, "logs", "swtpm.pid")
+	start := func() (hypervisor.Hypervisor, swtpmProcessRecord) {
 		pid, vm, err := starter.StartVM(context.Background(), paths.New(dir), "", socketPath, config)
 		require.NoError(t, err)
 		require.Positive(t, pid)
 		info, err := vm.GetVMInfo(context.Background())
 		require.NoError(t, err)
 		require.Equal(t, hypervisor.StateRunning, info.State)
+		record, err := readSWTPMProcessRecord(processRecordPath)
+		require.NoError(t, err)
+		return vm, record
+	}
+	shutdown := func(vm hypervisor.Hypervisor) {
 		require.NoError(t, vm.Shutdown(context.Background()))
 		require.Eventually(t, func() bool {
 			_, err := os.Stat(socketPath)
@@ -106,7 +113,7 @@ func TestWindowsConfigIntegration(t *testing.T) {
 		}, 5*time.Second, 20*time.Millisecond)
 	}
 
-	boot()
+	firstVM, firstTPM := start()
 	info, err := os.Stat(diskPath)
 	require.NoError(t, err)
 	require.Positive(t, info.Size(), "qcow2 overlay must contain metadata")
@@ -121,6 +128,31 @@ func TestWindowsConfigIntegration(t *testing.T) {
 	require.Positive(t, stateFiles, "swtpm must persist TPM 2.0 state")
 	require.FileExists(t, varsPath)
 
-	boot()
+	require.NoError(t, syscall.Kill(firstTPM.pid, syscall.SIGSTOP))
+	t.Cleanup(func() {
+		identity, alive, _ := swtpmProcessIdentity(firstTPM.pid)
+		if alive && identity == firstTPM.identity {
+			_ = syscall.Kill(firstTPM.pid, syscall.SIGCONT)
+		}
+	})
+	resumeResult := make(chan error, 1)
+	go func() {
+		time.Sleep(2 * time.Second)
+		resumeResult <- syscall.Kill(firstTPM.pid, syscall.SIGCONT)
+	}()
+	require.NoError(t, firstVM.Shutdown(context.Background()))
+	identity, alive, err := swtpmProcessIdentity(firstTPM.pid)
+	require.NoError(t, err)
+	require.True(t, alive && identity == firstTPM.identity, "previous swtpm must still be exiting when restart begins")
+
+	restartStarted := time.Now()
+	secondVM, secondTPM := start()
+	require.NoError(t, <-resumeResult)
+	require.GreaterOrEqual(t, time.Since(restartStarted), time.Second, "restart must wait for the previous swtpm")
+	identity, alive, err = swtpmProcessIdentity(firstTPM.pid)
+	require.NoError(t, err)
+	require.False(t, alive && identity == firstTPM.identity, "replacement started before the previous swtpm exited")
+	require.NotEqual(t, firstTPM, secondTPM)
+	shutdown(secondVM)
 	require.FileExists(t, varsPath)
 }
