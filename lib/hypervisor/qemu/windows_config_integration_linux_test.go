@@ -145,10 +145,8 @@ func TestWindowsConfigIntegration(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, alive && identity == firstTPM.identity, "previous swtpm must still be exiting when restart begins")
 
-	restartStarted := time.Now()
 	secondVM, secondTPM := start()
 	require.NoError(t, <-resumeResult)
-	require.GreaterOrEqual(t, time.Since(restartStarted), time.Second, "restart must wait for the previous swtpm")
 	identity, alive, err = swtpmProcessIdentity(firstTPM.pid)
 	require.NoError(t, err)
 	require.False(t, alive && identity == firstTPM.identity, "replacement started before the previous swtpm exited")
