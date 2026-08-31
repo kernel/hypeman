@@ -90,6 +90,10 @@ func (m *mockInstanceManager) CreateSnapshot(ctx context.Context, id string, req
 }
 
 func (m *mockInstanceManager) DeleteInstance(ctx context.Context, id string) error {
+	return m.DeleteInstanceWithOptions(ctx, id, instances.DeleteInstanceOptions{})
+}
+
+func (m *mockInstanceManager) DeleteInstanceWithOptions(ctx context.Context, id string, _ instances.DeleteInstanceOptions) error {
 	m.deleteCallCount++
 	if m.deleteFunc != nil {
 		return m.deleteFunc(ctx, id)
