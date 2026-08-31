@@ -31,5 +31,4 @@ jobs:
             --ref main \
             --field env=staging \
             --field ref="$HYPEMAN_REF" \
-            --field cli-version=latest \
-            --field triggered_by="${{ github.actor }}"
+            --field cli-version=latest

@@ -81,19 +81,6 @@ func TestQEMUCapabilitiesAdvertiseFork(t *testing.T) {
 	assert.True(t, (MicroVMProfile{}).capabilities().SupportsFork)
 }
 
-func TestMicroVMValidateConfigRejectsVFIODevices(t *testing.T) {
-	t.Parallel()
-	err := (MicroVMProfile{}).validateConfig(hypervisor.VMConfig{
-		PCIDevices: []string{"0000:82:00.4"},
-	})
-	require.ErrorContains(t, err, "microvm does not support PCI devices")
-
-	err = (MicroVMProfile{}).validateConfig(hypervisor.VMConfig{
-		VGPUDevicePath: "/sys/bus/mdev/devices/aa618089-8b16-4d01-a136-25a0f3c73123",
-	})
-	require.ErrorContains(t, err, "microvm does not support PCI devices")
-}
-
 func TestValidateConfigMicroVM(t *testing.T) {
 	t.Parallel()
 	if _, err := microVMMachineType(); err != nil {

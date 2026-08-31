@@ -134,8 +134,8 @@ func TestCloudHypervisorVersionUpgradeRestore(t *testing.T) {
 
 	// Cleanup
 	t.Log("Cleaning up...")
-	deleteInstanceEventually(t, ctx, mgr, inst.Id)
-	deleteInstanceEventually(t, ctx, mgr, inst2.Id)
+	require.NoError(t, mgr.DeleteInstance(ctx, inst.Id))
+	require.NoError(t, mgr.DeleteInstance(ctx, inst2.Id))
 
 	t.Log("Version upgrade restore test complete!")
 }

@@ -152,49 +152,6 @@ func TestBuildArgs_Vsock(t *testing.T) {
 	assert.Contains(t, args, "vhost-vsock-pci,guest-cid=123")
 }
 
-func TestBuildArgs_VGPU(t *testing.T) {
-	t.Parallel()
-
-	for _, path := range []string{
-		"/sys/bus/mdev/devices/aa618089-8b16-4d01-a136-25a0f3c73123",
-		"/sys/bus/pci/devices/0000:82:00.4",
-	} {
-		path := path
-		t.Run(path, func(t *testing.T) {
-			t.Parallel()
-			args := BuildArgs(hypervisor.VMConfig{
-				VCPUs:          1,
-				MemoryBytes:    512 * 1024 * 1024,
-				VGPUDevicePath: path,
-			})
-			assert.Contains(t, args, "vfio-pci,sysfsdev="+path)
-		})
-	}
-}
-
-func TestBuildArgs_VGPUAfterPCIDevices(t *testing.T) {
-	args := BuildArgs(hypervisor.VMConfig{
-		VCPUs:          1,
-		MemoryBytes:    512 * 1024 * 1024,
-		PCIDevices:     []string{"0000:01:00.0"},
-		VGPUDevicePath: "/sys/bus/mdev/devices/aa618089-8b16-4d01-a136-25a0f3c73123",
-	})
-
-	pciDeviceIndex := -1
-	vgpuDeviceIndex := -1
-	for i, arg := range args {
-		switch arg {
-		case "vfio-pci,host=0000:01:00.0":
-			pciDeviceIndex = i
-		case "vfio-pci,sysfsdev=/sys/bus/mdev/devices/aa618089-8b16-4d01-a136-25a0f3c73123":
-			vgpuDeviceIndex = i
-		}
-	}
-
-	assert.Greater(t, pciDeviceIndex, -1)
-	assert.Greater(t, vgpuDeviceIndex, pciDeviceIndex)
-}
-
 func TestBuildArgs_PCIPassthrough(t *testing.T) {
 	cfg := hypervisor.VMConfig{
 		VCPUs:       1,

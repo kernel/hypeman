@@ -46,12 +46,9 @@ func TestRecoverInterruptedBuildsCapturedFixtureMarksBuildFailed(t *testing.T) {
 	client, err := newOCIClient(p.SystemOCICache())
 	require.NoError(t, err)
 
-	m := &manager{
-		paths:            p,
-		ociClient:        client,
-		queue:            queue.New(1),
-		readySubscribers: make(map[string][]chan StatusEvent),
-	}
+	m := newTestManager(p)
+	m.ociClient = client
+	m.queue = queue.New(1)
 
 	m.RecoverInterruptedBuilds()
 

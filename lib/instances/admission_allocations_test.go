@@ -20,11 +20,11 @@ func TestRollbackAdmissionAllocationActiveClearsVisibleAllocation(t *testing.T) 
 	}
 	pid := 1234
 	stored := &StoredMetadata{
-		Id:                        "inst-1",
-		Name:                      "test-instance",
-		Vcpus:                     2,
-		Size:                      1024,
-		HypervisorProcessIdentity: HypervisorProcessIdentity{HypervisorPID: &pid},
+		Id:            "inst-1",
+		Name:          "test-instance",
+		Vcpus:         2,
+		Size:          1024,
+		HypervisorPID: &pid,
 	}
 
 	m.setAdmissionAllocationActive(stored, true)
@@ -52,12 +52,12 @@ func TestReconcileAdmissionAllocationsMarksMissingSocketInactive(t *testing.T) {
 
 	pid := 4321
 	stored := StoredMetadata{
-		Id:                        "inst-2",
-		Name:                      "test-instance",
-		Vcpus:                     2,
-		Size:                      1024,
-		HypervisorProcessIdentity: HypervisorProcessIdentity{HypervisorPID: &pid},
-		SocketPath:                socketPath,
+		Id:            "inst-2",
+		Name:          "test-instance",
+		Vcpus:         2,
+		Size:          1024,
+		HypervisorPID: &pid,
+		SocketPath:    socketPath,
 	}
 
 	m := &manager{

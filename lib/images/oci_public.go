@@ -47,7 +47,10 @@ func (c *OCIClient) InspectManifestForLinux(ctx context.Context, imageRef string
 // PullAndUnpack pulls an OCI image and unpacks it to a directory (public for system manager).
 // Always targets Linux platform since hypeman VMs are Linux guests.
 func (c *OCIClient) PullAndUnpack(ctx context.Context, imageRef, digest, exportDir string) error {
-	_, err := c.client.pullAndExport(ctx, imageRef, digest, exportDir)
+	result, err := c.client.pullAndExport(ctx, imageRef, digest, exportDir)
+	if result != nil {
+		defer result.cleanup()
+	}
 	if err != nil {
 		return fmt.Errorf("pull and unpack: %w", err)
 	}

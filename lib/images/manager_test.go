@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,6 +17,19 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// newTestManager returns a manager with the maps NewManager initializes, so
+// tests can construct one directly without nil-map guards in the manager.
+func newTestManager(p *paths.Paths) *manager {
+	return &manager{
+		paths:             p,
+		tagGenerations:    make(map[string]uint64),
+		layerDigestLocks:  make(map[string]*sync.Mutex),
+		inflightLayerRefs: make(map[string]int),
+		inflightPulls:     make(map[string]*inflightImagePull),
+		readySubscribers:  make(map[string][]chan StatusEvent),
+	}
+}
 
 func TestConversionFailedErr(t *testing.T) {
 	t.Run("without detail", func(t *testing.T) {
@@ -734,9 +748,9 @@ func TestDeleteAndRecreateDuringBuildTail(t *testing.T) {
 	require.NoError(t, err)
 	staleRef := NewResolvedRef(normalized, digestStr)
 	m.updateStatusByDigest(staleRef, StatusFailed, errors.New("stale build"), firstMeta.BuildID)
-	staleBundle, err := m.ociClient.extractOCIImageBundle(digestHex)
+	staleResult, _, _, err := m.ociClient.extractOCIImageDetails(digestHex)
 	require.NoError(t, err)
-	require.ErrorIs(t, m.finalizeImage(staleRef, &pullResult{Metadata: staleBundle.Meta}, 1, firstMeta.BuildID, ""), errStaleBuild)
+	require.ErrorIs(t, m.finalizeImage(staleRef, &pullResult{Metadata: staleResult}, 1, firstMeta.BuildID, ""), errStaleBuild)
 	currentMeta, err = readMetadata(p, repo, digestHex)
 	require.NoError(t, err)
 	require.Equal(t, StatusPending, currentMeta.Status)

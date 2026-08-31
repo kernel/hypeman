@@ -150,7 +150,7 @@ func discoverMdevVFsWith(busPath, pciPath string, listMdevs func() ([]MdevDevice
 		vfs = append(vfs, VirtualFunction{
 			PCIAddress: vfAddr,
 			ParentGPU:  parentGPU,
-			Allocated:  hasMdev,
+			HasMdev:    hasMdev,
 		})
 	}
 	if len(vfErrs) > 0 {
@@ -276,7 +276,7 @@ func countAvailableVFsForProfilesParallel(vfs []VirtualFunction, profiles []prof
 	// Group free VFs by parent GPU (done once, shared by all goroutines)
 	freeVFsByParent := make(map[string][]VirtualFunction)
 	for _, vf := range vfs {
-		if vf.Allocated {
+		if vf.HasMdev {
 			continue
 		}
 		freeVFsByParent[vf.ParentGPU] = append(freeVFsByParent[vf.ParentGPU], vf)
@@ -476,7 +476,7 @@ func selectLeastLoadedVF(ctx context.Context, vfs []VirtualFunction, profileType
 	allGPUs := make(map[string]bool)
 	for _, vf := range vfs {
 		allGPUs[vf.ParentGPU] = true
-		if !vf.Allocated {
+		if !vf.HasMdev {
 			freeVFsByGPU[vf.ParentGPU] = append(freeVFsByGPU[vf.ParentGPU], vf)
 		}
 	}

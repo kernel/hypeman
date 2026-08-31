@@ -189,6 +189,11 @@ func (p *Paths) ImageLayerDir(layerHex string) string {
 	return filepath.Join(p.ImageLayersDir(), layerHex)
 }
 
+// ImageLayerArtifact returns the path to the default materialized layer artifact.
+func (p *Paths) ImageLayerArtifact(layerHex string) string {
+	return p.ImageLayerArtifactForFormat(layerHex, "erofs")
+}
+
 // ImageLayerArtifactForFormat returns the path to a materialized layer artifact.
 func (p *Paths) ImageLayerArtifactForFormat(layerHex, format string) string {
 	return filepath.Join(p.ImageLayerDir(layerHex), "layer."+format)

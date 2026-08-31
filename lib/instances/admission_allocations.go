@@ -107,7 +107,7 @@ func (m *manager) rollbackAdmissionAllocationActive(stored *StoredMetadata) {
 	// Failed post-boot/restore steps should not leave the cached visible
 	// allocation marked active. Clear the in-memory PID first so any later sync
 	// from this metadata view also treats the instance as inactive.
-	stored.HypervisorProcessIdentity.Clear()
+	stored.HypervisorPID = nil
 	m.setAdmissionAllocationActive(stored, false)
 }
 

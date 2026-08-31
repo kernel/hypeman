@@ -2,12 +2,14 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/kernel/hypeman/lib/images"
-	"github.com/kernel/hypeman/lib/images/testutil"
 	"github.com/kernel/hypeman/lib/oapi"
 	"github.com/kernel/hypeman/lib/paths"
 	"github.com/stretchr/testify/assert"
@@ -513,36 +515,58 @@ func seedReadyDigestOnlyImage(t *testing.T, svc *ApiService, imageRef string, im
 	require.NoError(t, err)
 	require.True(t, ref.IsDigest(), "test helper expects a digest reference")
 
-	testutil.SeedReadyImage(t, paths.New(svc.Config.DataDir), testutil.Seed{
-		Repository: ref.Repository(),
-		DigestHex:  ref.DigestHex(),
-		Name:       imageRef,
-		Tags:       imageTags,
-	})
+	p := paths.New(svc.Config.DataDir)
+	digestDir := p.ImageDigestDir(ref.Repository(), ref.DigestHex())
+	require.NoError(t, os.MkdirAll(digestDir, 0o755))
+	require.NoError(t, os.WriteFile(p.ImageDigestPath(ref.Repository(), ref.DigestHex()), []byte("rootfs"), 0o644))
+
+	meta := struct {
+		Name      string            `json:"name"`
+		Digest    string            `json:"digest"`
+		Status    string            `json:"status"`
+		SizeBytes int64             `json:"size_bytes"`
+		Tags      map[string]string `json:"tags,omitempty"`
+		CreatedAt time.Time         `json:"created_at"`
+	}{
+		Name:      imageRef,
+		Digest:    "sha256:" + ref.DigestHex(),
+		Status:    "ready",
+		SizeBytes: int64(len("rootfs")),
+		Tags:      imageTags,
+		CreatedAt: time.Now().UTC(),
+	}
+
+	data, err := json.Marshal(meta)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(p.ImageMetadata(ref.Repository(), ref.DigestHex()), data, 0o644))
 }
 
 func TestTagImage_ErrorStatusMapping(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		name string
-		err  error
-		want oapi.TagImageResponseObject
+		name     string
+		err      error
+		wantType any
+		wantCode string
 	}{
 		{
-			name: "invalid name -> 400",
-			err:  fmt.Errorf("tag: %w", images.ErrInvalidName),
-			want: oapi.TagImage400JSONResponse{Code: "invalid_name", Message: "tag: invalid image name"},
+			name:     "invalid name -> 400",
+			err:      fmt.Errorf("tag: %w", images.ErrInvalidName),
+			wantType: oapi.TagImage400JSONResponse{},
+			wantCode: "invalid_name",
 		},
 		{
-			name: "not found -> 404",
-			err:  fmt.Errorf("tag: %w", images.ErrNotFound),
-			want: oapi.TagImage404JSONResponse{Code: "not_found", Message: "source image not found"},
+			name:     "not found -> 404",
+			err:      fmt.Errorf("tag: %w", images.ErrNotFound),
+			wantType: oapi.TagImage404JSONResponse{},
+			wantCode: "not_found",
 		},
 		{
-			name: "not ready -> 409",
-			err:  fmt.Errorf("tag: %w", images.ErrImageNotReady),
-			want: oapi.TagImage409JSONResponse{Code: "image_not_ready", Message: "tag: image is not ready"},
+			name:     "not ready -> 409",
+			err:      fmt.Errorf("tag: %w", images.ErrImageNotReady),
+			wantType: oapi.TagImage409JSONResponse{},
+			wantCode: "image_not_ready",
 		},
 	}
 
@@ -554,7 +578,8 @@ func TestTagImage_ErrorStatusMapping(t *testing.T) {
 				Body: &oapi.TagImageRequest{Target: "docker.io/library/alpine:stable"},
 			})
 			require.NoError(t, err)
-			require.Equal(t, tc.want, resp)
+			require.IsType(t, tc.wantType, resp)
+			require.Equal(t, tc.wantCode, tagImageErrorCode(resp))
 		})
 	}
 }
@@ -570,16 +595,53 @@ func TestTagImage_MissingBody(t *testing.T) {
 	require.IsType(t, oapi.TagImage400JSONResponse{}, resp)
 }
 
+func tagImageErrorCode(resp oapi.TagImageResponseObject) string {
+	switch r := resp.(type) {
+	case oapi.TagImage400JSONResponse:
+		return r.Code
+	case oapi.TagImage404JSONResponse:
+		return r.Code
+	case oapi.TagImage409JSONResponse:
+		return r.Code
+	case oapi.TagImage500JSONResponse:
+		return r.Code
+	default:
+		return ""
+	}
+}
+
 // seedReadyContentImage writes a ready image into the shared content layout
 // plus a repository tag reference, without pulling from a registry.
 func seedReadyContentImage(t *testing.T, svc *ApiService, repository, tag, digestHex string) {
 	t.Helper()
-	testutil.SeedReadyImage(t, paths.New(svc.Config.DataDir), testutil.Seed{
-		Repository: repository,
-		Tag:        tag,
-		DigestHex:  digestHex,
-		Content:    true,
-	})
+
+	p := paths.New(svc.Config.DataDir)
+	contentDir := p.ImageContentDir(digestHex)
+	require.NoError(t, os.MkdirAll(contentDir, 0o755))
+	require.NoError(t, os.WriteFile(p.ImageContentPath(digestHex), []byte("rootfs"), 0o644))
+
+	meta := struct {
+		Name      string    `json:"name"`
+		Digest    string    `json:"digest"`
+		Status    string    `json:"status"`
+		SizeBytes int64     `json:"size_bytes"`
+		CreatedAt time.Time `json:"created_at"`
+	}{
+		Name:      repository + ":" + tag,
+		Digest:    "sha256:" + digestHex,
+		Status:    "ready",
+		SizeBytes: int64(len("rootfs")),
+		CreatedAt: time.Now().UTC(),
+	}
+	data, err := json.Marshal(meta)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(p.ImageContentMetadata(digestHex), data, 0o644))
+
+	linkPath := p.ImageRepositoryTagSymlink(repository, tag)
+	target, err := filepath.Rel(filepath.Dir(linkPath), contentDir)
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Dir(linkPath), 0o755))
+	require.NoError(t, os.Symlink(target, linkPath))
 }
 
 func TestTagImage_Success(t *testing.T) {

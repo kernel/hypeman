@@ -55,7 +55,7 @@ func (MicroVMProfile) validateConfig(cfg hypervisor.VMConfig) error {
 	if cfg.HotplugBytes > 0 {
 		return fmt.Errorf("microvm does not support hotplug memory")
 	}
-	if len(cfg.PCIDevices) > 0 || cfg.VGPUDevicePath != "" {
+	if len(cfg.PCIDevices) > 0 {
 		return fmt.Errorf("microvm does not support PCI devices")
 	}
 

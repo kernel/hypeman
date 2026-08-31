@@ -6,10 +6,7 @@ import (
 	"github.com/kernel/hypeman/lib/hypervisor"
 )
 
-const (
-	baseInstanceDiskCount = 3 // rootfs, writable overlay, and config disk
-	plannedVGPUDevicePath = "planned-vgpu-device"
-)
+const baseInstanceDiskCount = 3 // rootfs, writable overlay, and config disk
 
 func instanceDiskCount(volumes []VolumeAttachment) int {
 	count := baseInstanceDiskCount
@@ -25,13 +22,15 @@ func instanceDiskCount(volumes []VolumeAttachment) int {
 // validateCreateVMConfig performs side-effect-free backend validation against
 // the complete device plan before image, PCI, network, or filesystem work.
 func (m *manager) validateCreateVMConfig(starter hypervisor.VMStarter, req CreateInstanceRequest, hvType hypervisor.Type) error {
-	hasVGPU := req.GPU != nil && req.GPU.Profile != ""
+	pciDeviceCount := len(req.Devices)
+	if req.GPU != nil && req.GPU.Profile != "" {
+		pciDeviceCount++
+	}
 	return validatePlannedVMConfig(starter, hvType, m.plannedVMConfig(
 		req.HotplugSize,
 		req.Volumes,
 		req.NetworkEnabled,
-		len(req.Devices),
-		hasVGPU,
+		pciDeviceCount,
 	))
 }
 
@@ -42,13 +41,15 @@ func (m *manager) validateStoredVMConfig(starter hypervisor.VMStarter, snapshotK
 }
 
 func (m *manager) plannedStoredVMConfig(snapshotKind SnapshotKind, meta StoredMetadata) hypervisor.VMConfig {
-	hasVGPU := storedVGPUDevicePath(&meta) != "" || meta.GPUProfile != ""
+	pciDeviceCount := len(meta.Devices)
+	if meta.GPUMdevUUID != "" || meta.GPUProfile != "" {
+		pciDeviceCount++
+	}
 	config := m.plannedVMConfig(
 		meta.HotplugSize,
 		meta.Volumes,
 		meta.NetworkEnabled,
-		len(meta.Devices),
-		hasVGPU,
+		pciDeviceCount,
 	)
 	if snapshotKind == SnapshotKindStandby {
 		// Standby restore/fork reuses the frozen snapshot device model, so live
@@ -63,7 +64,6 @@ func (m *manager) plannedVMConfig(
 	volumes []VolumeAttachment,
 	networkEnabled bool,
 	pciDeviceCount int,
-	hasVGPU bool,
 ) hypervisor.VMConfig {
 	diskCount := instanceDiskCount(volumes)
 
@@ -76,9 +76,6 @@ func (m *manager) plannedVMConfig(
 	}
 	if networkEnabled {
 		config.Networks = []hypervisor.NetworkConfig{{}}
-	}
-	if hasVGPU {
-		config.VGPUDevicePath = plannedVGPUDevicePath
 	}
 	return config
 }

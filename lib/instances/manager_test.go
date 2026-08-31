@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
-	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -163,26 +162,6 @@ func waitForInstanceState(ctx context.Context, mgr Manager, instanceID string, e
 		return nil, fmt.Errorf("instance %s did not reach %s within %v (last error: %w)", instanceID, expected, timeout, lastErr)
 	}
 	return nil, fmt.Errorf("instance %s did not reach %s within %v (last state: %s)", instanceID, expected, timeout, lastState)
-}
-
-// deleteInstanceEventually deletes an instance, retrying while the hypervisor
-// finishes dying. Delete fails closed when the VMM has not exited within its
-// short post-SIGKILL wait; on loaded CI hosts kernel-side teardown can outlast
-// that wait, and the contract is that a retried delete converges.
-func deleteInstanceEventually(t *testing.T, ctx context.Context, mgr Manager, instanceID string) {
-	t.Helper()
-	deadline := time.Now().Add(integrationTestTimeout(30 * time.Second))
-	for {
-		err := mgr.DeleteInstance(ctx, instanceID)
-		if err == nil || errors.Is(err, ErrNotFound) {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("delete instance %s did not converge: %v", instanceID, err)
-		}
-		t.Logf("delete instance %s not yet converged, retrying: %v", instanceID, err)
-		time.Sleep(time.Second)
-	}
 }
 
 func integrationTestTimeout(timeout time.Duration) time.Duration {
@@ -1666,7 +1645,8 @@ func TestStandbyAndRestore(t *testing.T) {
 
 	// Cleanup (no sleep needed - DeleteInstance handles process cleanup)
 	t.Log("Cleaning up...")
-	deleteInstanceEventually(t, ctx, manager, inst.Id)
+	err = manager.DeleteInstance(ctx, inst.Id)
+	require.NoError(t, err)
 
 	t.Log("Standby/restore test complete!")
 }

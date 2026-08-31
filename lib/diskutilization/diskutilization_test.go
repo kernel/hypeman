@@ -98,6 +98,22 @@ func TestCollect_UsesAllocatedBytesAndClassifiesSnapshots(t *testing.T) {
 	require.Equal(t, otherTotal, utilization.SnapshotOther)
 }
 
+func TestCollect_DeduplicatesHardLinkedImagesAndCountsLayers(t *testing.T) {
+	p := paths.New(t.TempDir())
+	imagePath := filepath.Join(p.ImagesDir(), "repo", "digest", "rootfs.erofs")
+	require.NoError(t, createSparseTestFile(imagePath, 8192, []sparseWrite{{offset: 0, data: []byte("image")}}))
+	aliasPath := filepath.Join(p.ImagesDir(), "content", "digest", "rootfs.erofs")
+	require.NoError(t, os.MkdirAll(filepath.Dir(aliasPath), 0755))
+	require.NoError(t, os.Link(imagePath, aliasPath))
+
+	layerPath := filepath.Join(p.ImageLayersDir(), "layer-digest", "layer.erofs")
+	require.NoError(t, createSparseTestFile(layerPath, 8192, []sparseWrite{{offset: 0, data: []byte("layer")}}))
+
+	utilization, err := Collect(p)
+	require.NoError(t, err)
+	require.Equal(t, allocatedBytesForPath(imagePath)+allocatedBytesForPath(layerPath), utilization.Images)
+}
+
 func createSparseTestFile(path string, size int64, writes []sparseWrite) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err

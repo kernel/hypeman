@@ -49,7 +49,7 @@ func getVGPUStatus(ctx context.Context, framework devices.VGPUFramework, vfs []d
 	usedSlots := 0
 	// Count used VFs (those with a vGPU assigned)
 	for _, vf := range vfs {
-		if vf.Allocated {
+		if vf.HasMdev {
 			usedSlots++
 		}
 	}
