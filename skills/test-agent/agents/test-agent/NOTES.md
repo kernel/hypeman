@@ -474,3 +474,35 @@
   - pass on `deft-kernel-dev`, confirmed v49.0 and v51.1 x86_64 binaries report as x86-64 ELF.
 - `go test -count=10 -v -run "^TestMultipleVersions$" -timeout=10m ./lib/vmm`
   - pass on `deft-kernel-dev`, package time `0.741s`
+
+## 2026-08-31 - Shared test-network lock convoy
+
+### Flake signature
+- Main Test workflow run `33411612595`, attempt 1, timed out in `lib/instances` after 20 minutes.
+- The timeout dump showed many integration tests blocked in cleanup at `withTestSubnetLock`.
+- Attempt 2 passed in just under the 20-minute package timeout.
+
+### Root cause
+- Six Linux test suites were running concurrently on the shared host and contending on `/ci/hypeman-test-network.lock`.
+- The lock protected both the subnet lease file and slow host cleanup. Its holder was deleting stale bridges and iptables rules while every other suite waited to allocate or release a lease.
+- The host had roughly 8,500 accumulated hypeman iptables rules, making each line-number-based list/delete cleanup increasingly expensive.
+
+### Fix
+- Restricted the blocking subnet lock to route/lease selection and lease-file updates.
+- Moved stale host cleanup behind a separate non-blocking lock so another suite already performing the sweep never stalls allocation.
+- Changed iptables cleanup from mutable line numbers to exact rule specifications, allowing per-test host cleanup to run outside the subnet lease lock safely.
+- Reused the orphan sweep's existing `iptables -S` output instead of listing the full chain again for every orphan comment.
+
+### Validation
+- Baseline full no-cache runs on `deft-kernel-dev`:
+  - Run 1: `226s` (failed on an unrelated `TestCreateInstanceWithNetwork` tc assertion)
+  - Run 2: `530s` (pass)
+- Targeted lock/parser loop:
+  - `go test -count=20 -run '^(TestTryWithTestFileLock|TestParseIPTablesAppendRule)$' ./lib/instances`
+  - pass locally and on `deft-kernel-dev`
+- One initial post-fix full run failed on the unrelated `TestBuilderPersistentCacheReuse` integration test.
+- Required three consecutive full no-cache runs then passed:
+  - Run 1: `285s`
+  - Run 2: `443s`
+  - Run 3: `369s`
+- Full command used `go test -count=1 -tags containers_image_openpgp -timeout=20m ./...` with the CI prewarm directory, registry mirror, reflink strict mode, and `/ci` scratch path.
