@@ -9,6 +9,8 @@ import (
 )
 
 func TestTotalReadyImageBytesFromMetadata_UsesRootfsFallbackForMalformedMetadata(t *testing.T) {
+	t.Parallel()
+
 	imagesDir := t.TempDir()
 	digestDir := filepath.Join(imagesDir, "docker.io", "library", "alpine", "sha256deadbeef")
 	require.NoError(t, os.MkdirAll(digestDir, 0o755))
@@ -21,6 +23,8 @@ func TestTotalReadyImageBytesFromMetadata_UsesRootfsFallbackForMalformedMetadata
 }
 
 func TestTotalReadyImageBytesFromMetadata_DeduplicatesHardLinkedAliases(t *testing.T) {
+	t.Parallel()
+
 	imagesDir := t.TempDir()
 	sourceDir := filepath.Join(imagesDir, "source", "digest")
 	targetDir := filepath.Join(imagesDir, "target", "digest")
@@ -41,6 +45,8 @@ func TestTotalReadyImageBytesFromMetadata_DeduplicatesHardLinkedAliases(t *testi
 }
 
 func TestTotalReadyImageBytesFromMetadata_DeduplicatesMalformedAliases(t *testing.T) {
+	t.Parallel()
+
 	imagesDir := t.TempDir()
 	malformedDir := filepath.Join(imagesDir, "a-malformed", "digest")
 	validDir := filepath.Join(imagesDir, "b-valid", "digest")
@@ -59,6 +65,8 @@ func TestTotalReadyImageBytesFromMetadata_DeduplicatesMalformedAliases(t *testin
 }
 
 func TestTotalReadyImageBytesFromMetadata_UsesRootfsFallbackForReadyImageWithoutSize(t *testing.T) {
+	t.Parallel()
+
 	imagesDir := t.TempDir()
 	digestDir := filepath.Join(imagesDir, "docker.io", "library", "alpine", "sha256deadbeef")
 	require.NoError(t, os.MkdirAll(digestDir, 0o755))

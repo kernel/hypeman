@@ -14,53 +14,29 @@ import (
 )
 
 type imageMetadata struct {
-	Name              string               `json:"name"`   // Normalized ref (tag or digest)
-	Digest            string               `json:"digest"` // Always present: sha256:...
-	Platform          string               `json:"platform,omitempty"`
-	Status            string               `json:"status"`
-	Error             *string              `json:"error,omitempty"`
-	Request           *CreateImageRequest  `json:"request,omitempty"`
-	SizeBytes         int64                `json:"size_bytes"`
-	Entrypoint        []string             `json:"entrypoint,omitempty"`
-	Cmd               []string             `json:"cmd,omitempty"`
-	Env               map[string]string    `json:"env,omitempty"`
-	Labels            map[string]string    `json:"labels,omitempty"`
-	Tags              tags.Tags            `json:"tags,omitempty"`
-	WorkingDir        string               `json:"working_dir,omitempty"`
-	CreatedAt         time.Time            `json:"created_at"`
-	BorrowedAuth      bool                 `json:"borrowed_auth,omitempty"`
-	BuildID           string               `json:"build_id,omitempty"`
-	RequestedTag      string               `json:"requested_tag,omitempty"`
-	PreviousTagDigest string               `json:"previous_tag_digest,omitempty"`
-	TagGeneration     uint64               `json:"tag_generation,omitempty"`
-	References        map[string]tags.Tags `json:"references,omitempty"`
-	TagClaims         []imageTagClaim      `json:"tag_claims,omitempty"`
-}
-
-type imageTagClaim struct {
-	Repository        string `json:"repository"`
-	Tag               string `json:"tag"`
-	PreviousTagDigest string `json:"previous_tag_digest,omitempty"`
-	TagGeneration     uint64 `json:"tag_generation,omitempty"`
-}
-
-func referenceTags(meta *imageMetadata, reference string) (tags.Tags, bool) {
-	resourceTags, ok := meta.References[reference]
-	return tags.Clone(resourceTags), ok
-}
-
-func setReferenceTags(meta *imageMetadata, reference string, resourceTags tags.Tags) {
-	if meta.References == nil {
-		meta.References = make(map[string]tags.Tags)
-	}
-	meta.References[reference] = tags.Clone(resourceTags)
+	Name              string              `json:"name"`   // Normalized ref (tag or digest)
+	Digest            string              `json:"digest"` // Always present: sha256:...
+	Platform          string              `json:"platform,omitempty"`
+	Status            string              `json:"status"`
+	Error             *string             `json:"error,omitempty"`
+	Request           *CreateImageRequest `json:"request,omitempty"`
+	SizeBytes         int64               `json:"size_bytes"`
+	Entrypoint        []string            `json:"entrypoint,omitempty"`
+	Cmd               []string            `json:"cmd,omitempty"`
+	Env               map[string]string   `json:"env,omitempty"`
+	Labels            map[string]string   `json:"labels,omitempty"`
+	Tags              tags.Tags           `json:"tags,omitempty"`
+	WorkingDir        string              `json:"working_dir,omitempty"`
+	CreatedAt         time.Time           `json:"created_at"`
+	BorrowedAuth      bool                `json:"borrowed_auth,omitempty"`
+	BuildID           string              `json:"build_id,omitempty"`
+	RequestedTag      string              `json:"requested_tag,omitempty"`
+	PreviousTagDigest string              `json:"previous_tag_digest,omitempty"`
+	TagGeneration     uint64              `json:"tag_generation,omitempty"`
 }
 
 func (m *imageMetadata) toImageFor(reference string) *Image {
 	img := m.toImage()
-	if resourceTags, ok := referenceTags(m, reference); ok {
-		img.Tags = resourceTags
-	}
 	img.Name = reference
 	return img
 }
@@ -216,24 +192,11 @@ func writeMetadata(p *paths.Paths, repository, digestHex string, meta *imageMeta
 }
 
 func writeMetadataFile(path string, meta *imageMetadata) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		return fmt.Errorf("create metadata directory: %w", err)
-	}
-
 	data, err := json.MarshalIndent(meta, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal metadata: %w", err)
 	}
-
-	tempPath := path + ".tmp"
-	if err := os.WriteFile(tempPath, data, 0644); err != nil {
-		return fmt.Errorf("write temp metadata: %w", err)
-	}
-	if err := os.Rename(tempPath, path); err != nil {
-		_ = os.Remove(tempPath)
-		return fmt.Errorf("rename metadata: %w", err)
-	}
-	return nil
+	return writeJSONAtomic(path, data)
 }
 
 func readMetadata(p *paths.Paths, repository, digestHex string) (*imageMetadata, error) {

@@ -47,12 +47,13 @@ func listTags(p *paths.Paths, repository string) ([]string, error) {
 	return tags, nil
 }
 
-func promoteLegacyImages(p *paths.Paths) {
+type legacyRef struct {
+	repository string
+	digestHex  string
+}
+
+func collectLegacyImages(p *paths.Paths) ([]legacyRef, error) {
 	imagesDir := p.ImagesDir()
-	type legacyRef struct {
-		repository string
-		digestHex  string
-	}
 	refs := make([]legacyRef, 0)
 	err := filepath.Walk(imagesDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() || info.Name() != "metadata.json" {
@@ -73,10 +74,12 @@ func promoteLegacyImages(p *paths.Paths) {
 		return nil
 	})
 	if err != nil && !os.IsNotExist(err) {
-		fmt.Fprintf(os.Stderr, "Warning: failed to scan legacy images for promotion: %v\n", err)
-		return
+		return nil, err
 	}
+	return refs, nil
+}
 
+func promoteLegacyImages(p *paths.Paths, refs []legacyRef) {
 	for _, ref := range refs {
 		layout := resolveImageLayout(p, ref.repository, ref.digestHex)
 		meta, readErr := readMetadataAt(layout)

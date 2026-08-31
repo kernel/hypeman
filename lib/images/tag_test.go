@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/paths"
-	"github.com/kernel/hypeman/lib/tags"
 	"github.com/stretchr/testify/require"
 )
 
@@ -89,32 +88,6 @@ func TestTagImageAliasesReadyImage(t *testing.T) {
 	}
 }
 
-func TestTagImagePersistsTargetReference(t *testing.T) {
-	p, m, repository := newTagTestCase(t)
-	digest := "f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1"
-	seedContent(t, p, repository, "latest", digest)
-
-	meta, err := readContentMetadata(p, digest)
-	require.NoError(t, err)
-	meta.Tags = tags.Tags{"source": "tag"}
-	meta.References = map[string]tags.Tags{
-		repository + ":latest": {"source": "tag"},
-	}
-	require.NoError(t, writeMetadataFile(p.ImageContentMetadata(digest), meta))
-
-	target := repository + ":stable"
-	tagImage(t, m, repository+":latest", target, digest)
-
-	image, err := m.GetImage(context.Background(), target)
-	require.NoError(t, err)
-	require.Empty(t, image.Tags)
-
-	meta, err = readContentMetadata(p, digest)
-	require.NoError(t, err)
-	_, ok := meta.References[target]
-	require.True(t, ok, "tagging must persist an explicit target reference")
-}
-
 func TestTagImageSameRepositoryDeletesContent(t *testing.T) {
 	p, m, repository := newTagTestCase(t)
 	digest := "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
@@ -180,7 +153,8 @@ func TestStaleTagClaimCollectsContent(t *testing.T) {
 	meta.RequestedTag = "latest"
 	meta.TagGeneration = 1
 
-	m.claimImageTags(ref, meta)
+	require.False(t, m.claimRequestedTag(ref, meta))
+	m.cleanupUnclaimedImage(ref)
 
 	_, err = os.Stat(p.ImageContentDir(digest))
 	require.ErrorIs(t, err, os.ErrNotExist)
