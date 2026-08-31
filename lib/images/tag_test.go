@@ -8,17 +8,45 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/paths"
+	"github.com/kernel/hypeman/lib/tags"
 	"github.com/stretchr/testify/require"
 )
 
 func seedContent(t *testing.T, p *paths.Paths, repository, tag, digestHex string) {
 	t.Helper()
-	require.NoError(t, SeedTestImage(p, TestSeed{Repository: repository, Tag: tag, DigestHex: digestHex, Content: true}))
+	seedImage(t, p, repository, tag, digestHex, true)
 }
 
 func seedLegacy(t *testing.T, p *paths.Paths, repository, tag, digestHex string) {
 	t.Helper()
-	require.NoError(t, SeedTestImage(p, TestSeed{Repository: repository, Tag: tag, DigestHex: digestHex}))
+	seedImage(t, p, repository, tag, digestHex, false)
+}
+
+func seedImage(t *testing.T, p *paths.Paths, repository, tag, digestHex string, content bool) {
+	t.Helper()
+	dir := p.ImageDigestDir(repository, digestHex)
+	disk := p.ImageDigestPath(repository, digestHex)
+	metadata := p.ImageMetadata(repository, digestHex)
+	linkPath := p.ImageTagSymlink(repository, tag)
+	target := digestHex
+	if content {
+		dir = p.ImageContentDir(digestHex)
+		disk = p.ImageContentPath(digestHex)
+		metadata = p.ImageContentMetadata(digestHex)
+		linkPath = p.ImageRepositoryTagSymlink(repository, tag)
+		rel, err := filepath.Rel(filepath.Dir(linkPath), p.ImageContentDir(digestHex))
+		require.NoError(t, err)
+		target = rel
+	}
+
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	require.NoError(t, os.WriteFile(disk, []byte("rootfs!"), 0o644))
+	require.NoError(t, writeMetadataFile(metadata, &imageMetadata{
+		Name: repository + ":" + tag, Digest: "sha256:" + digestHex,
+		Status: StatusReady, SizeBytes: int64(len("rootfs!")), CreatedAt: time.Now().UTC(),
+	}))
+	require.NoError(t, os.MkdirAll(filepath.Dir(linkPath), 0o755))
+	require.NoError(t, os.Symlink(target, linkPath))
 }
 
 func newTagTestCase(t *testing.T) (*paths.Paths, *manager, string) {
@@ -59,6 +87,32 @@ func TestTagImageAliasesReadyImage(t *testing.T) {
 			requireTagResolvesTo(t, p, targetRef.Repository(), targetRef.Tag(), tc.digest)
 		})
 	}
+}
+
+func TestTagImagePersistsTargetReference(t *testing.T) {
+	p, m, repository := newTagTestCase(t)
+	digest := "f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1"
+	seedContent(t, p, repository, "latest", digest)
+
+	meta, err := readContentMetadata(p, digest)
+	require.NoError(t, err)
+	meta.Tags = tags.Tags{"source": "tag"}
+	meta.References = map[string]tags.Tags{
+		repository + ":latest": {"source": "tag"},
+	}
+	require.NoError(t, writeMetadataFile(p.ImageContentMetadata(digest), meta))
+
+	target := repository + ":stable"
+	tagImage(t, m, repository+":latest", target, digest)
+
+	image, err := m.GetImage(context.Background(), target)
+	require.NoError(t, err)
+	require.Empty(t, image.Tags)
+
+	meta, err = readContentMetadata(p, digest)
+	require.NoError(t, err)
+	_, ok := meta.References[target]
+	require.True(t, ok, "tagging must persist an explicit target reference")
 }
 
 func TestTagImageSameRepositoryDeletesContent(t *testing.T) {
@@ -107,6 +161,29 @@ func TestTagImageCrossRepository(t *testing.T) {
 	require.NoError(t, m.DeleteImage(context.Background(), targetRepo+":v1"))
 	_, err = os.Stat(p.ImageContentDir(digest))
 	require.True(t, os.IsNotExist(err), "content must be removed once unreferenced")
+}
+
+func TestStaleTagClaimCollectsContent(t *testing.T) {
+	p, m, repository := newTagTestCase(t)
+	digest := "f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2"
+	seedContent(t, p, repository, "latest", digest)
+	linkPath := p.ImageRepositoryTagSymlink(repository, "latest")
+	require.NoError(t, os.Remove(linkPath))
+	require.NoError(t, os.Symlink("replaced", linkPath))
+
+	normalized, err := ParseNormalizedRef(repository + ":latest")
+	require.NoError(t, err)
+	m.tagGenerations[repository+":latest"] = 2
+	ref := NewResolvedRef(normalized, "sha256:"+digest)
+	meta, err := readContentMetadata(p, digest)
+	require.NoError(t, err)
+	meta.RequestedTag = "latest"
+	meta.TagGeneration = 1
+
+	m.claimImageTags(ref, meta)
+
+	_, err = os.Stat(p.ImageContentDir(digest))
+	require.ErrorIs(t, err, os.ErrNotExist)
 }
 
 func TestTagImageRejectsNotReady(t *testing.T) {

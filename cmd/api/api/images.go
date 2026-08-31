@@ -95,7 +95,7 @@ func (s *ApiService) CreateImage(ctx context.Context, request oapi.CreateImageRe
 }
 
 // TagImage handles POST /images/{name}/tag.
-// Note: ResolveResource skips POSTs under /images/{name}, so the source is
+// Note: ResolveResource skips POST /images/{name}/tag, so the source is
 // resolved by ImageManager.TagImage and a missing source gets the specific
 // 404 body below.
 func (s *ApiService) TagImage(ctx context.Context, request oapi.TagImageRequestObject) (oapi.TagImageResponseObject, error) {

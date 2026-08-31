@@ -83,10 +83,10 @@ func ResolveResource(resolvers Resolvers, errResponder ErrorResponder) func(http
 				resourceType = "ingress"
 				paramName = "id"
 			case strings.HasPrefix(path, "/images/"):
-				// POSTs under /images/{name} (currently only /tag) resolve the
-				// source in the handler, which returns a specific 404 body for
-				// a missing source; don't intercept with the generic one.
-				if r.Method == http.MethodPost {
+				// The tag route resolves the source in the handler, which returns a
+				// specific 404 body for a missing source; don't intercept it with
+				// the generic one.
+				if r.Method == http.MethodPost && strings.HasSuffix(path, "/tag") {
 					next.ServeHTTP(w, r)
 					return
 				}

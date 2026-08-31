@@ -638,27 +638,34 @@ func (m *manager) claimImageTags(ref *ResolvedRef, meta *imageMetadata) {
 	if requestedTag == "" {
 		requestedTag = ref.Tag()
 	}
-	m.claimTag(ref.Repository(), ref.DigestHex(), requestedTag, meta.PreviousTagDigest, meta.TagGeneration, meta.RequestedTag == "")
+	claimed := m.claimTag(ref.Repository(), ref.DigestHex(), requestedTag, meta.PreviousTagDigest, meta.TagGeneration, meta.RequestedTag == "")
 	for _, claim := range meta.TagClaims {
-		m.claimTag(claim.Repository, ref.DigestHex(), claim.Tag, claim.PreviousTagDigest, claim.TagGeneration, false)
+		claimed = m.claimTag(claim.Repository, ref.DigestHex(), claim.Tag, claim.PreviousTagDigest, claim.TagGeneration, false) || claimed
+	}
+	if !claimed {
+		if err := removeDigestIfUnreferenced(m.paths, ref.Repository(), ref.DigestHex(), true); err != nil {
+			slog.Warn("failed to collect stale image", "repository", ref.Repository(), "digest", ref.DigestHex(), "error", err)
+		}
 	}
 }
 
-func (m *manager) claimTag(repository, digestHex, tag, previous string, generation uint64, allowMissing bool) {
+func (m *manager) claimTag(repository, digestHex, tag, previous string, generation uint64, allowMissing bool) bool {
 	if tag == "" || m.tagGenerations[tagGenerationKey(repository, tag)] != generation {
-		return
+		return false
 	}
 	current, err := resolveTag(m.paths, repository, tag)
 	if err != nil {
 		if !allowMissing || !errors.Is(err, ErrNotFound) {
-			return
+			return false
 		}
 	} else if current != digestHex && current != previous {
-		return
+		return false
 	}
 	if err := createTagSymlink(m.paths, repository, tag, digestHex); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: failed to create tag symlink: %v\n", err)
+		return false
 	}
+	return true
 }
 
 func phaseStatus(err error) string {

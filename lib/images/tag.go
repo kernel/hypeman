@@ -49,6 +49,10 @@ func (m *manager) TagImage(ctx context.Context, source, target string) (*Image, 
 	if err := createTagSymlink(m.paths, targetRef.Repository(), targetRef.Tag(), digestHex); err != nil {
 		return nil, fmt.Errorf("create image tag: %w", err)
 	}
+	setReferenceTags(meta, targetRef.String(), nil)
+	if err := writeMetadata(m.paths, targetRef.Repository(), digestHex, meta); err != nil {
+		return nil, fmt.Errorf("write tagged image metadata: %w", err)
+	}
 	// Unlike updateExistingReference, which bumps the generation before
 	// installing the symlink, the bump happens after the install here so a
 	// failed tag call cannot invalidate a pending pull's claim on the target
