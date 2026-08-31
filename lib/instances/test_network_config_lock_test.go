@@ -1,6 +1,7 @@
 package instances
 
 import (
+	"os"
 	"path/filepath"
 	"syscall"
 	"testing"
@@ -32,6 +33,40 @@ func TestTryWithTestFileLock(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.False(t, called)
+}
+
+func TestReleaseRemovesLeaseBeforeNetworkArtifacts(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("TMPDIR", tmpDir)
+
+	const subnet = "10.200.1.0/24"
+	require.NoError(t, saveSubnetLeases(map[string]subnetLease{subnet: {SubnetCIDR: subnet}}))
+
+	binDir := filepath.Join(tmpDir, "bin")
+	require.NoError(t, os.Mkdir(binDir, 0o755))
+	markerPath := filepath.Join(tmpDir, "lease-present-during-cleanup")
+	t.Setenv("HYPEMAN_TEST_RELEASE_MARKER", markerPath)
+	t.Setenv("HYPEMAN_TEST_RELEASE_LEASES", testSubnetLeaseFilePath())
+	t.Setenv("HYPEMAN_TEST_RELEASE_SUBNET", subnet)
+
+	ipScript := `#!/bin/sh
+if [ "$1" = "-4" ] && [ "$2" = "route" ] && [ "$3" = "del" ]; then
+	if grep -Fq "$HYPEMAN_TEST_RELEASE_SUBNET" "$HYPEMAN_TEST_RELEASE_LEASES"; then
+		touch "$HYPEMAN_TEST_RELEASE_MARKER"
+	fi
+fi
+exit 0
+`
+	require.NoError(t, os.WriteFile(filepath.Join(binDir, "ip"), []byte(ipScript), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(binDir, "iptables"), []byte("#!/bin/sh\nexit 0\n"), 0o755))
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	releaseTestNetworkLease("hm1234", subnet)
+
+	require.NoFileExists(t, markerPath)
+	leases, err := loadSubnetLeases()
+	require.NoError(t, err)
+	require.NotContains(t, leases, subnet)
 }
 
 func TestParseIPTablesAppendRule(t *testing.T) {

@@ -187,19 +187,24 @@ func allocateTestNetworkLease(testName string, seq uint32) (*testNetworkLease, e
 		cfg: cfg,
 		release: func() {
 			releaseOnce.Do(func() {
-				cleanupTestNetworkArtifacts(bridgeName, allocatedSubnet)
-
-				_ = withTestSubnetLock(func() error {
-					leases, err := loadSubnetLeases()
-					if err != nil {
-						return err
-					}
-					delete(leases, allocatedSubnet)
-					return saveSubnetLeases(leases)
-				})
+				releaseTestNetworkLease(bridgeName, allocatedSubnet)
 			})
 		},
 	}, nil
+}
+
+func releaseTestNetworkLease(bridgeName, allocatedSubnet string) {
+	err := withTestSubnetLock(func() error {
+		leases, err := loadSubnetLeases()
+		if err != nil {
+			return err
+		}
+		delete(leases, allocatedSubnet)
+		return saveSubnetLeases(leases)
+	})
+	logTestNetworkErr("release subnet lease", err)
+
+	cleanupTestNetworkArtifacts(bridgeName, allocatedSubnet)
 }
 
 func cleanupStaleTestNetworks(routes []hostRoute) {
