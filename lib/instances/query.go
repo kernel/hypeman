@@ -7,11 +7,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/kernel/hypeman/lib/guest"
@@ -569,59 +567,6 @@ func (m *manager) toInstanceWithStateDerivation(ctx context.Context, meta *metad
 	}
 
 	return inst
-}
-
-func refreshHypervisorPID(stored *StoredMetadata, state State) {
-	if !state.RequiresVMM() && state != StateUnknown {
-		return
-	}
-	if stored.HypervisorPID != nil && processExists(*stored.HypervisorPID) {
-		return
-	}
-	if stored.SocketPath == "" {
-		return
-	}
-	if pid, err := hypervisor.ResolveProcessPID(stored.SocketPath); err == nil {
-		stored.HypervisorPID = &pid
-		return
-	}
-}
-
-func processExists(pid int) bool {
-	if pid <= 0 {
-		return false
-	}
-	err := syscall.Kill(pid, 0)
-	if err != nil && err != syscall.EPERM {
-		return false
-	}
-	if runtime.GOOS != "linux" {
-		return true
-	}
-	state, err := readLinuxProcessState(pid)
-	if err != nil {
-		return true
-	}
-	return state != "Z"
-}
-
-func readLinuxProcessState(pid int) (string, error) {
-	statusPath := filepath.Join("/proc", strconv.Itoa(pid), "status")
-	data, err := os.ReadFile(statusPath)
-	if err != nil {
-		return "", err
-	}
-	for _, line := range strings.Split(string(data), "\n") {
-		if !strings.HasPrefix(line, "State:") {
-			continue
-		}
-		fields := strings.Fields(line)
-		if len(fields) < 2 {
-			return "", fmt.Errorf("malformed process state in %s", statusPath)
-		}
-		return fields[1], nil
-	}
-	return "", fmt.Errorf("process state missing from %s", statusPath)
 }
 
 // parseExitSentinel reads the last lines of the serial console log to find the

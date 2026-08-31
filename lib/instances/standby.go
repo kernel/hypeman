@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"syscall"
 	"time"
 
 	"github.com/kernel/hypeman/lib/guest"
@@ -185,11 +184,15 @@ func (m *manager) standbyInstance(
 	)
 	if err := m.shutdownHypervisor(shutdownCtx, &inst); err != nil {
 		shutdownSpanEnd(err)
-		// Log but continue - snapshot was created successfully
-		log.WarnContext(ctx, "failed to shutdown hypervisor gracefully, snapshot still valid", "instance_id", id, "error", err)
-	} else {
-		shutdownSpanEnd(nil)
+		// The hypervisor may still be running: releasing its TAP or clearing
+		// its identity now would orphan a live VMM. The snapshot on disk is
+		// harmless and a retried standby redoes it.
+		if resumeErr := hv.Resume(ctx); resumeErr != nil {
+			log.ErrorContext(ctx, "failed to resume VM after shutdown error", "instance_id", id, "error", resumeErr)
+		}
+		return nil, fmt.Errorf("shutdown hypervisor: %w", err)
 	}
+	shutdownSpanEnd(nil)
 
 	// Firecracker vsock sockets can persist across standby/restore if the process
 	// exits ungracefully. Remove stale sockets before restore attempts.
@@ -229,7 +232,7 @@ func (m *manager) standbyInstance(
 	// 10. Update timestamp and clear PID (hypervisor no longer running)
 	now := time.Now().UTC()
 	stored.StoppedAt = &now
-	stored.HypervisorPID = nil
+	stored.HypervisorProcessIdentity.Clear()
 	stored.PendingStandbyCompression = nil
 	clearFirecrackerUFFDRestoreState(stored)
 	if err := m.refreshFirecrackerSnapshotCacheKey(stored, snapshotDir); err != nil {
@@ -355,16 +358,31 @@ func restoreRetainedSnapshotBase(snapshotDir string, retainedBaseDir string) err
 // shutdownHypervisor gracefully shuts down the hypervisor process via API
 func (m *manager) shutdownHypervisor(ctx context.Context, inst *Instance) error {
 	log := logger.FromContext(ctx)
-	defer func() {
-		// Clean stale sockets even if graceful shutdown fails.
-		_ = os.Remove(inst.SocketPath)
-	}()
+
+	// Resolve the live owner before any teardown: the stored PID may be stale
+	// or recycled, and signaling it raw would bypass the ownership checks the
+	// kill paths enforce. Failing closed here also keeps the control socket in
+	// place as evidence for a later hardened kill.
+	pid, err := resolveLiveHypervisorPID(inst.HypervisorProcessIdentity, inst.SocketPath)
+	if err != nil {
+		return fmt.Errorf("confirm hypervisor ownership before shutdown: %w", err)
+	}
 
 	// Try to connect to hypervisor
 	hv, err := m.getHypervisor(inst.SocketPath, inst.HypervisorType)
 	if err != nil {
-		// Can't connect - hypervisor might already be stopped
-		log.DebugContext(ctx, "could not connect to hypervisor, may already be stopped", "instance_id", inst.Id)
+		if pid > 0 {
+			// The control client cannot be built but the resolved owner is
+			// alive; teardown is committed, so kill it rather than report a
+			// completed shutdown for a VMM that is still running.
+			log.WarnContext(ctx, "could not connect to hypervisor, force killing resolved owner", "instance_id", inst.Id, "pid", pid, "error", err)
+			if err := killProcessAndWait(pid); err != nil {
+				return err
+			}
+		}
+		// The hypervisor is confirmed gone (killed above or no live owner);
+		// remove its stale socket.
+		_ = os.Remove(inst.SocketPath)
 		return nil
 	}
 
@@ -379,54 +397,37 @@ func (m *manager) shutdownHypervisor(ctx context.Context, inst *Instance) error 
 		shutdownErr = hv.Shutdown(ctx)
 	}
 
-	// Teardown is committed; prevent new control-socket clients while the
-	// hypervisor exits. The deferred remove remains as a fallback for early
-	// returns above.
-	_ = os.Remove(inst.SocketPath)
-
 	// Wait for process to exit
-	if inst.HypervisorPID != nil {
-		pid := *inst.HypervisorPID
+	if pid > 0 {
 		shouldWaitForGracefulExit := caps.SupportsGracefulVMMShutdown && shutdownErr != hypervisor.ErrNotSupported
 		if shouldWaitForGracefulExit {
 			if WaitForProcessExit(pid, 2*time.Second) {
 				log.DebugContext(ctx, "hypervisor shutdown gracefully", "instance_id", inst.Id, "pid", pid)
 			} else {
 				log.WarnContext(ctx, "hypervisor did not exit gracefully in time, force killing process", "instance_id", inst.Id, "pid", pid)
-				if err := forceKillHypervisorPID(pid); err != nil {
+				if err := killProcessAndWait(pid); err != nil {
 					return err
 				}
 			}
 		} else {
 			log.DebugContext(ctx, "skipping graceful exit wait; force killing hypervisor process", "instance_id", inst.Id, "pid", pid)
-			if err := forceKillHypervisorPID(pid); err != nil {
+			if err := killProcessAndWait(pid); err != nil {
 				return err
 			}
 		}
 	}
 
+	// The hypervisor is confirmed gone (graceful exit, force kill, or no live
+	// owner), so its socket is stale now. Removing it any earlier would unlink
+	// the control socket of a VMM that survives the kill and gets resumed,
+	// leaving that VM unreachable for a later graceful standby or stop.
+	_ = os.Remove(inst.SocketPath)
+
+	// A graceful-API error at this point is not a failure: an error from this
+	// function means the hypervisor may still be running.
 	if shutdownErr != nil && shutdownErr != hypervisor.ErrNotSupported {
-		return fmt.Errorf("graceful hypervisor shutdown failed: %w", shutdownErr)
+		log.WarnContext(ctx, "graceful hypervisor shutdown failed, process force killed", "instance_id", inst.Id, "error", shutdownErr)
 	}
 
-	return nil
-}
-
-func forceKillHypervisorPID(pid int) error {
-	if err := syscall.Kill(pid, syscall.SIGKILL); err != nil {
-		if err == syscall.ESRCH {
-			return nil
-		}
-		return fmt.Errorf("force kill hypervisor pid %d: %w", pid, err)
-	}
-	if WaitForProcessExit(pid, 2*time.Second) {
-		return nil
-	}
-
-	// The process may have spawned children in its own process group.
-	_ = syscall.Kill(-pid, syscall.SIGKILL)
-	if !WaitForProcessExit(pid, 2*time.Second) {
-		return fmt.Errorf("hypervisor pid %d did not exit after SIGKILL", pid)
-	}
 	return nil
 }

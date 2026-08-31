@@ -830,10 +830,8 @@ func (m *manager) startAndBootVM(
 	if err != nil {
 		return fmt.Errorf("start vm: %w", err)
 	}
-	pid = resolveRuntimeHypervisorPID(log, stored.SocketPath, pid)
-
-	// Store the PID for later cleanup
-	stored.HypervisorPID = &pid
+	// Store the PID identity for later cleanup.
+	pid = resolveRuntimeHypervisorPID(log, stored, pid)
 	log.DebugContext(ctx, "VM started", "instance_id", stored.Id, "pid", pid)
 
 	// Optional: Expand memory to max if hotplug configured
@@ -849,15 +847,26 @@ func (m *manager) startAndBootVM(
 	return nil
 }
 
-func resolveRuntimeHypervisorPID(log *slog.Logger, socketPath string, fallbackPID int) int {
-	if processExists(fallbackPID) {
+// resolveRuntimeHypervisorPID resolves the runtime PID of the hypervisor
+// serving the instance socket and records its process identity. The
+// boot-scoped identity token is minted only for a trustworthy PID — the
+// direct child we spawned or the confirmed socket owner.
+func resolveRuntimeHypervisorPID(log *slog.Logger, stored *StoredMetadata, fallbackPID int) int {
+	if ProcessExists(fallbackPID) {
+		stored.HypervisorProcessIdentity.Set(fallbackPID)
 		return fallbackPID
 	}
-	pid, err := hypervisor.ResolveProcessPID(socketPath)
+	pid, err := hypervisor.ResolveProcessPID(stored.SocketPath)
 	if err != nil {
-		log.Debug("using fallback hypervisor pid", "socket_path", socketPath, "pid", fallbackPID, "error", err)
+		// The fallback PID was just proven dead, so it gets no identity
+		// token: minting one would stamp the current boot ID (and, if the
+		// PID is recycled mid-call, a live start time) onto a process that
+		// is not the hypervisor.
+		log.Debug("using fallback hypervisor pid", "socket_path", stored.SocketPath, "pid", fallbackPID, "error", err)
+		stored.HypervisorProcessIdentity.SetUnconfirmed(fallbackPID)
 		return fallbackPID
 	}
+	stored.HypervisorProcessIdentity.Set(pid)
 	return pid
 }
 

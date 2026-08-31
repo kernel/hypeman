@@ -130,7 +130,8 @@ type StoredMetadata struct {
 	// Hypervisor configuration
 	HypervisorType    hypervisor.Type // Hypervisor type (e.g., "cloud-hypervisor")
 	HypervisorVersion string          // Hypervisor version (e.g., "v51.1")
-	HypervisorPID     *int            // Hypervisor process ID (may be stale after host restart)
+	// Embedded so its fields keep their flat JSON keys in persisted metadata.
+	HypervisorProcessIdentity
 
 	// Firecracker UFFD snapshot restore metadata.
 	FirecrackerSnapshotCacheKey     string

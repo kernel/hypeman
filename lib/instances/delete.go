@@ -133,9 +133,11 @@ func (m *manager) deleteInstanceWithOptions(
 		err := m.killHypervisor(killCtx, &inst)
 		killSpanEnd(err)
 		if err != nil {
-			// Log error but continue with cleanup
-			// Best effort to clean up even if hypervisor is unresponsive
-			log.WarnContext(ctx, "failed to kill hypervisor, continuing with cleanup", "instance_id", id, "error", err)
+			// The hypervisor may still be running, so tearing down its vGPU,
+			// network, and devices is unsafe. The restart policy is already
+			// blocked and the metadata is retained, so a retried delete is safe.
+			log.ErrorContext(ctx, "failed to kill hypervisor; retaining instance metadata", "instance_id", id, "error", err)
+			return fmt.Errorf("kill hypervisor: %w", err)
 		}
 	}
 	m.closeFirecrackerUFFDSession(ctx, stored)
@@ -221,46 +223,31 @@ func (m *manager) deleteInstanceWithOptions(
 	return nil
 }
 
-// killHypervisor force kills the hypervisor process without graceful shutdown
-// Used only for delete operations where we're removing all data anyway.
-// For operations that need graceful shutdown (like standby), use the hypervisor API directly.
+// killHypervisor force kills the hypervisor process without graceful shutdown.
+// Used by delete and as stop's final fallback after graceful shutdown fails.
+// It returns an error when the hypervisor may still be running: neither process
+// identity nor socket ownership can be confirmed, SIGKILL fails with an error
+// other than ESRCH, or the process does not exit after SIGKILL. Callers must not
+// tear down instance resources in that case.
 func (m *manager) killHypervisor(ctx context.Context, inst *Instance) error {
 	log := logger.FromContext(ctx)
 
-	// If we have a PID, kill the process immediately
-	if inst.HypervisorPID != nil {
-		pid := *inst.HypervisorPID
-
-		// Check if process exists
-		if err := syscall.Kill(pid, 0); err == nil {
-			// Process exists - kill it immediately with SIGKILL
-			// No graceful shutdown needed since we're deleting all data
-			log.DebugContext(ctx, "killing hypervisor process", "instance_id", inst.Id, "pid", pid)
-			if err := syscall.Kill(pid, syscall.SIGKILL); err != nil {
-				log.WarnContext(ctx, "failed to kill hypervisor process", "instance_id", inst.Id, "pid", pid, "error", err)
-			}
-
-			// Wait for process to die and reap it to prevent zombies
-			// SIGKILL should be instant, but give it a moment
-			for i := 0; i < 50; i++ { // 50 * 100ms = 5 seconds
-				var wstatus syscall.WaitStatus
-				wpid, err := syscall.Wait4(pid, &wstatus, syscall.WNOHANG, nil)
-				if err != nil || wpid == pid {
-					// Process reaped successfully or error (likely ECHILD if already reaped)
-					log.DebugContext(ctx, "hypervisor process killed and reaped", "instance_id", inst.Id, "pid", pid)
-					break
-				}
-				if i == 49 {
-					log.WarnContext(ctx, "hypervisor process did not exit in time", "instance_id", inst.Id, "pid", pid)
-				}
-				time.Sleep(100 * time.Millisecond)
-			}
-		} else {
-			log.DebugContext(ctx, "hypervisor process not running", "instance_id", inst.Id, "pid", pid)
+	pid, err := resolveLiveHypervisorPID(inst.HypervisorProcessIdentity, inst.SocketPath)
+	if err != nil {
+		return err
+	}
+	if pid > 0 {
+		if inst.HypervisorPID != nil && pid != *inst.HypervisorPID {
+			log.WarnContext(ctx, "stored hypervisor PID does not own the instance socket, killing the socket owner",
+				"instance_id", inst.Id, "stored_pid", *inst.HypervisorPID, "owner_pid", pid)
+		}
+		log.DebugContext(ctx, "killing hypervisor process", "instance_id", inst.Id, "pid", pid)
+		if err := killProcessAndWait(pid); err != nil {
+			return err
 		}
 	}
 
-	// Clean up socket if it still exists
+	// The hypervisor is confirmed gone; remove its stale socket.
 	os.Remove(inst.SocketPath)
 
 	return nil
@@ -286,12 +273,12 @@ func WaitForProcessExit(pid int, timeout time.Duration) bool {
 			// Process still running (or wait status not yet available).
 		case waitErr == syscall.ECHILD:
 			// Not our child (or already reaped elsewhere). Fall back to existence check.
-			if err := syscall.Kill(pid, 0); err != nil {
+			if !ProcessExists(pid) {
 				return true
 			}
 		default:
 			// Best effort fallback on transient/unexpected wait errors.
-			if err := syscall.Kill(pid, 0); err != nil {
+			if !ProcessExists(pid) {
 				return true
 			}
 		}
