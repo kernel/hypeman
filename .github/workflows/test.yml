@@ -13,6 +13,17 @@ on:
         required: false
         type: string
 
+# Every branch push triggers a full run and superseded runs used to keep
+# running, holding self-hosted slots that every repo on the shared pool
+# queues behind. Group by ref so a newer push cancels the older run for
+# that branch. main and workflow_dispatch runs get run_id, a unique group
+# each, because sharing a group is unsafe even with cancellation off:
+# GitHub cancels an existing pending run when a newer one enters the
+# group, which would drop a commit's only test signal.
+concurrency:
+  group: test-${{ (github.event_name == 'push' && github.ref != 'refs/heads/main') && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'push' && github.ref != 'refs/heads/main' }}
+
 # A slash-command dispatch supplies a fork repository and immutable commit SHA.
 # Normal push runs use the upstream repository and pushed ref.
 env:

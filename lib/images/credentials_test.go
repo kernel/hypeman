@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -203,7 +202,7 @@ func TestRecoverInterruptedCredentialedPullFailsForFreshRetry(t *testing.T) {
 	assert.Equal(t, ErrBorrowedCredentialsExpired.Error(), *stored.Error)
 	assert.Zero(t, m.queue.QueueLength())
 
-	data, err := os.ReadFile(filepath.Join(p.ImageDigestDir(repository, strings.TrimPrefix(digest, "sha256:")), "metadata.json"))
+	data, err := os.ReadFile(p.ImageContentMetadata(strings.TrimPrefix(digest, "sha256:")))
 	require.NoError(t, err)
 	assert.NotContains(t, string(data), "password")
 }

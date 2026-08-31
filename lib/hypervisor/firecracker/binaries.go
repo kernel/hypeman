@@ -18,12 +18,14 @@ type Version string
 
 const (
 	V1_14_2 Version = "v1.14.2"
+	V1_16_1 Version = "v1.16.1"
 )
 
-const defaultVersion = V1_14_2
+const defaultVersion = V1_16_1
 
 var supportedVersions = []Version{
 	V1_14_2,
+	V1_16_1,
 }
 
 //go:embed binaries
@@ -82,19 +84,23 @@ func resolveBinaryPath(p *paths.Paths, version string) (string, error) {
 		return "", fmt.Errorf("paths are required when using embedded firecracker binaries")
 	}
 
-	return extractBinary(p, parseVersion(version))
+	parsedVersion, err := parseVersion(version)
+	if err != nil {
+		return "", err
+	}
+	return extractBinary(p, parsedVersion)
 }
 
-func parseVersion(version string) Version {
+func parseVersion(version string) (Version, error) {
 	if version == "" {
-		return defaultVersion
+		return defaultVersion, nil
 	}
 	for _, supported := range supportedVersions {
 		if version == string(supported) {
-			return supported
+			return supported, nil
 		}
 	}
-	return defaultVersion
+	return "", fmt.Errorf("unsupported firecracker version %q", version)
 }
 
 func extractBinary(p *paths.Paths, version Version) (string, error) {

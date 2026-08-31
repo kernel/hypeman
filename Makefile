@@ -53,22 +53,23 @@ download-ch-binaries:
 	@chmod +x lib/vmm/binaries/cloud-hypervisor/v*/*/cloud-hypervisor
 	@echo "Binaries downloaded successfully"
 
-# Firecracker version to embed
-FIRECRACKER_VERSION := v1.14.2
+# Firecracker versions to embed for backwards-compatible snapshot restores
+FIRECRACKER_VERSIONS := v1.14.2 v1.16.1
 
 # Download Firecracker binaries
 download-firecracker-binaries:
 	@echo "Downloading Firecracker binaries..."
-	@mkdir -p lib/hypervisor/firecracker/binaries/firecracker/$(FIRECRACKER_VERSION)/{x86_64,aarch64}
-	@echo "Downloading $(FIRECRACKER_VERSION) for x86_64..."
-	@curl -L "https://github.com/firecracker-microvm/firecracker/releases/download/$(FIRECRACKER_VERSION)/firecracker-$(FIRECRACKER_VERSION)-x86_64.tgz" \
-		| tar -xzO "release-$(FIRECRACKER_VERSION)-x86_64/firecracker-$(FIRECRACKER_VERSION)-x86_64" \
-		> lib/hypervisor/firecracker/binaries/firecracker/$(FIRECRACKER_VERSION)/x86_64/firecracker
-	@echo "Downloading $(FIRECRACKER_VERSION) for aarch64..."
-	@curl -L "https://github.com/firecracker-microvm/firecracker/releases/download/$(FIRECRACKER_VERSION)/firecracker-$(FIRECRACKER_VERSION)-aarch64.tgz" \
-		| tar -xzO "release-$(FIRECRACKER_VERSION)-aarch64/firecracker-$(FIRECRACKER_VERSION)-aarch64" \
-		> lib/hypervisor/firecracker/binaries/firecracker/$(FIRECRACKER_VERSION)/aarch64/firecracker
-	@chmod +x lib/hypervisor/firecracker/binaries/firecracker/$(FIRECRACKER_VERSION)/*/firecracker
+	@set -euo pipefail; \
+	for version in $(FIRECRACKER_VERSIONS); do \
+		mkdir -p lib/hypervisor/firecracker/binaries/firecracker/$$version/{x86_64,aarch64}; \
+		for arch in x86_64 aarch64; do \
+			echo "Downloading $$version for $$arch..."; \
+			curl -fL "https://github.com/firecracker-microvm/firecracker/releases/download/$$version/firecracker-$$version-$$arch.tgz" \
+				| tar -xzO "release-$$version-$$arch/firecracker-$$version-$$arch" \
+				> lib/hypervisor/firecracker/binaries/firecracker/$$version/$$arch/firecracker; \
+		done; \
+	done
+	@chmod +x lib/hypervisor/firecracker/binaries/firecracker/v*/*/firecracker
 	@echo "Firecracker binaries downloaded successfully"
 
 # Caddy version and modules
@@ -208,10 +209,13 @@ ensure-firecracker-binaries:
 	else \
 		echo "Unsupported architecture: $$ARCH"; exit 1; \
 	fi; \
-	if [ ! -f lib/hypervisor/firecracker/binaries/firecracker/$(FIRECRACKER_VERSION)/$$FC_ARCH/firecracker ]; then \
-		echo "Firecracker binaries not found, downloading..."; \
-		$(MAKE) download-firecracker-binaries; \
-	fi
+	for version in $(FIRECRACKER_VERSIONS); do \
+		if [ ! -f lib/hypervisor/firecracker/binaries/firecracker/$$version/$$FC_ARCH/firecracker ]; then \
+			echo "Firecracker binaries not found, downloading..."; \
+			$(MAKE) download-firecracker-binaries; \
+			break; \
+		fi; \
+	done
 
 # Check if Caddy binaries exist, build if missing
 .PHONY: ensure-caddy-binaries
