@@ -7,7 +7,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/guest"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/logger"
@@ -171,12 +170,12 @@ func (m *manager) deleteInstanceWithOptions(
 		}
 	}
 
-	// 7c. Destroy vGPU mdev device if present
-	if inst.GPUMdevUUID != "" {
-		log.InfoContext(ctx, "destroying vGPU mdev", "instance_id", id, "uuid", inst.GPUMdevUUID)
-		if err := devices.DestroyMdev(ctx, inst.GPUMdevUUID); err != nil {
+	// 7c. Release the vGPU assignment if present.
+	if path := storedVGPUDevicePath(stored); path != "" {
+		log.InfoContext(ctx, "destroying vGPU", "instance_id", id, "device_path", path)
+		if err := releaseStoredVGPU(ctx, stored); err != nil {
 			// Log error but continue with cleanup
-			log.WarnContext(ctx, "failed to destroy mdev, continuing with cleanup", "instance_id", id, "uuid", inst.GPUMdevUUID, "error", err)
+			log.WarnContext(ctx, "failed to destroy vGPU, continuing with cleanup", "instance_id", id, "device_path", path, "error", err)
 		}
 	}
 

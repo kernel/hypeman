@@ -52,7 +52,7 @@ var systemDirectories = []string{
 	"/var",
 }
 
-func wrapCreateMdevErr(profile string, err error) error {
+func wrapCreateVGPUErr(profile string, err error) error {
 	if errors.Is(err, devices.ErrVGPUNotSupportedOnMacOS) {
 		return fmt.Errorf("%w: %w", ErrInvalidRequest, err)
 	}
@@ -272,7 +272,10 @@ func (m *manager) createInstance(
 	// whatever devices have been attached when cleanup runs.
 	var attachedDeviceIDs []string
 	var resolvedDeviceIDs []string
+	var gpuDevice *devices.VGPUDevice
 	var gpuProfile string
+	var gpuFramework devices.VGPUFramework
+	var gpuDevicePath string
 	var gpuMdevUUID string
 
 	// Setup cleanup stack early so device attachment errors trigger cleanup
@@ -292,23 +295,30 @@ func (m *manager) createInstance(
 		})
 	}
 
-	// Handle vGPU profile request - create mdev device
+	// Handle vGPU profile request
 	if req.GPU != nil && req.GPU.Profile != "" {
-		log.InfoContext(ctx, "creating vGPU mdev", "instance_id", id, "profile", req.GPU.Profile)
-		mdev, err := devices.CreateMdev(ctx, req.GPU.Profile, id)
+		log.InfoContext(ctx, "creating vGPU", "instance_id", id, "profile", req.GPU.Profile)
+		gpuDevice, err = devices.CreateVGPU(ctx, req.GPU.Profile, id)
 		if err != nil {
-			log.ErrorContext(ctx, "failed to create mdev", "profile", req.GPU.Profile, "error", err)
-			return nil, wrapCreateMdevErr(req.GPU.Profile, err)
+			log.ErrorContext(ctx, "failed to create vGPU", "profile", req.GPU.Profile, "error", err)
+			return nil, wrapCreateVGPUErr(req.GPU.Profile, err)
 		}
-		gpuProfile = req.GPU.Profile
-		gpuMdevUUID = mdev.UUID
-		log.InfoContext(ctx, "created vGPU mdev", "instance_id", id, "profile", gpuProfile, "uuid", gpuMdevUUID)
+		gpuProfile = gpuDevice.ProfileName
+		gpuFramework = gpuDevice.Framework
+		gpuDevicePath = gpuDevice.SysfsPath
+		gpuMdevUUID = gpuDevice.MdevUUID
+		log.InfoContext(ctx, "created vGPU", "instance_id", id, "profile", gpuProfile, "uuid", gpuMdevUUID)
 
-		// Add mdev cleanup to stack
+		// Add vGPU cleanup to stack
 		cu.Add(func() {
-			log.DebugContext(ctx, "destroying mdev on cleanup", "instance_id", id, "uuid", gpuMdevUUID)
-			if err := devices.DestroyMdev(ctx, gpuMdevUUID); err != nil {
-				log.WarnContext(ctx, "failed to destroy mdev on cleanup", "instance_id", id, "uuid", gpuMdevUUID, "error", err)
+			log.DebugContext(ctx, "destroying vGPU on cleanup", "instance_id", id, "uuid", gpuDevice.MdevUUID)
+			assignment := devices.VGPUAssignment{
+				Framework:  gpuDevice.Framework,
+				DevicePath: gpuDevice.SysfsPath,
+				MdevUUID:   gpuDevice.MdevUUID,
+			}
+			if err := devices.DestroyVGPU(ctx, assignment); err != nil {
+				log.WarnContext(ctx, "failed to destroy vGPU on cleanup", "instance_id", id, "uuid", gpuDevice.MdevUUID, "error", err)
 			}
 		})
 	}
@@ -382,6 +392,8 @@ func (m *manager) createInstance(
 		VsockSocket:              vsockSocket,
 		Devices:                  resolvedDeviceIDs,
 		GPUProfile:               gpuProfile,
+		GPUFramework:             gpuFramework,
+		GPUDevicePath:            gpuDevicePath,
 		GPUMdevUUID:              gpuMdevUUID,
 		Entrypoint:               req.Entrypoint,
 		Cmd:                      req.Cmd,
@@ -943,12 +955,6 @@ func (m *manager) buildHypervisorConfig(ctx context.Context, inst *Instance, ima
 		}
 	}
 
-	// Add vGPU mdev device if configured
-	if inst.GPUMdevUUID != "" {
-		mdevPath := filepath.Join("/sys/bus/mdev/devices", inst.GPUMdevUUID)
-		pciDevices = append(pciDevices, mdevPath)
-	}
-
 	// Build topology if available
 	var topology *hypervisor.CPUTopology
 	if hostTopo := calculateGuestTopology(inst.Vcpus, m.hostTopology); hostTopo != nil {
@@ -968,21 +974,22 @@ func (m *manager) buildHypervisorConfig(ctx context.Context, inst *Instance, ima
 	}
 
 	return hypervisor.VMConfig{
-		VCPUs:         inst.Vcpus,
-		MemoryBytes:   inst.Size,
-		HotplugBytes:  inst.HotplugSize,
-		Topology:      topology,
-		GuestMemory:   m.guestMemoryConfig(),
-		Disks:         disks,
-		Networks:      networks,
-		SerialLogPath: m.paths.InstanceAppLog(inst.Id),
-		VsockCID:      inst.VsockCID,
-		VsockSocket:   inst.VsockSocket,
-		PCIDevices:    pciDevices,
-		KernelPath:    kernelPath,
-		InitrdPath:    initrdPath,
-		KernelArgs:    m.kernelArgs(inst.HypervisorType),
-		EnableRosetta: inst.EnableRosetta,
+		VCPUs:          inst.Vcpus,
+		MemoryBytes:    inst.Size,
+		HotplugBytes:   inst.HotplugSize,
+		Topology:       topology,
+		GuestMemory:    m.guestMemoryConfig(),
+		Disks:          disks,
+		Networks:       networks,
+		SerialLogPath:  m.paths.InstanceAppLog(inst.Id),
+		VsockCID:       inst.VsockCID,
+		VsockSocket:    inst.VsockSocket,
+		PCIDevices:     pciDevices,
+		VGPUDevicePath: storedVGPUDevicePath(&inst.StoredMetadata),
+		KernelPath:     kernelPath,
+		InitrdPath:     initrdPath,
+		KernelArgs:     m.kernelArgs(inst.HypervisorType),
+		EnableRosetta:  inst.EnableRosetta,
 	}, nil
 }
 
