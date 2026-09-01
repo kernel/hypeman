@@ -75,6 +75,23 @@ func (m *manager) claimVGPU(ctx context.Context, meta *metadata, profileName str
 			return nil, err
 		}
 	}
+	// A dirty VF carries the previous assignment's device instance and
+	// possibly its open VFIO handles, even when the leftover type matches
+	// the requested profile. Reset it (in-use gated inside destroy) before
+	// claiming; the allocation lock keeps it unclaimed until then.
+	for _, vf := range vfs {
+		if vf.PCIAddress != vfAddress || !vf.Allocated {
+			continue
+		}
+		assignment := devices.VGPUAssignment{
+			Framework:  devices.VGPUFrameworkVendorVFIO,
+			DevicePath: filepath.Clean(devices.GetDeviceSysfsPath(vf.PCIAddress)),
+		}
+		if err := m.destroyVGPUAssignment(ctx, assignment); err != nil {
+			return nil, fmt.Errorf("repair dirty VF %s before claim: %w", vf.PCIAddress, err)
+		}
+		logger.FromContext(ctx).InfoContext(ctx, "reset dirty vGPU VF before claim", "vf", vf.PCIAddress)
+	}
 	device := &devices.VGPUDevice{
 		Framework:   devices.VGPUFrameworkVendorVFIO,
 		VFAddress:   vfAddress,

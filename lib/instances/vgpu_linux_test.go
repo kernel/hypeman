@@ -4,6 +4,7 @@ package instances
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 
@@ -89,16 +90,44 @@ func TestVGPUClaimUsesLeastLoadedGPU(t *testing.T) {
 	assert.Equal(t, "0000:e3:00.4", device.VFAddress)
 }
 
-func TestVGPUClaimCanSelectDirtyUnclaimedVF(t *testing.T) {
+func TestVGPUClaimResetsDirtySameTypeVFBeforeClaim(t *testing.T) {
+	// The leftover type matches the requested profile, so configure would
+	// no-op; the reset must happen at claim time, before the claim exists.
 	vfs := []devices.VirtualFunction{{
 		PCIAddress: "0000:82:00.4", ParentGPU: "0000:82:00.0", Allocated: true, ProfileType: testVFProfileType,
 	}}
 	m := newVGPUAllocationManager(t, vfs)
+	var resets []string
+	m.destroyVGPU = func(_ context.Context, assignment devices.VGPUAssignment) error {
+		onDisk, err := m.loadMetadata("new")
+		require.NoError(t, err)
+		assert.Empty(t, onDisk.GPUDevicePath, "reset must run before the claim is persisted")
+		resets = append(resets, assignment.DevicePath)
+		return nil
+	}
 	meta := saveTestVGPUInstance(t, m, "new")
 
 	device, err := m.claimVGPU(context.Background(), meta, testVGPUProfile)
 	require.NoError(t, err)
 	assert.Equal(t, "0000:82:00.4", device.VFAddress)
+	assert.Equal(t, []string{testVFDevicePath}, resets)
+}
+
+func TestVGPUClaimFailsWhenDirtyVFStillInUse(t *testing.T) {
+	vfs := []devices.VirtualFunction{{
+		PCIAddress: "0000:82:00.4", ParentGPU: "0000:82:00.0", Allocated: true, ProfileType: testVFProfileType,
+	}}
+	m := newVGPUAllocationManager(t, vfs)
+	m.destroyVGPU = func(context.Context, devices.VGPUAssignment) error {
+		return errors.New("vendor VFIO vGPU on VF 0000:82:00.4 is still in use")
+	}
+	meta := saveTestVGPUInstance(t, m, "new")
+
+	_, err := m.claimVGPU(context.Background(), meta, testVGPUProfile)
+	require.ErrorContains(t, err, "repair dirty VF 0000:82:00.4 before claim")
+	stored, loadErr := m.loadMetadata("new")
+	require.NoError(t, loadErr)
+	assert.Empty(t, stored.GPUDevicePath, "a failed repair must not leave a claim")
 }
 
 func TestVGPUClaimRepairsDirtyVFWhenProfileNotAdvertised(t *testing.T) {
