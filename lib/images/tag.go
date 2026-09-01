@@ -8,13 +8,12 @@ import (
 )
 
 // TagImage creates a ready-image tag without pulling or converting content.
-// Cross-repository tags promote legacy content into the shared layout. A
-// failed call leaves no side effects: the target tag's generation is only
-// bumped after the new tag is on disk, so pending pulls that claimed the
-// target tag keep their claim. When the target previously pointed at
-// different content, that digest is collected after the new tag is live;
-// cleanup failures are logged and do not fail the call, since the tag is
-// already installed at that point.
+// Cross-repository tags promote legacy content into the shared layout. The
+// target tag's generation is only committed after the new tag and metadata are
+// on disk, so pending pulls that claimed the target tag keep their claim. When
+// the target previously pointed at different content, that digest is collected
+// after the new tag is live; cleanup failures are logged and do not fail the
+// call, since the tag is already installed at that point.
 //
 // Promotion deliberately runs before the symlink install, so a symlink
 // failure after a cross-repo promotion leaves the content promoted with no
@@ -46,18 +45,26 @@ func (m *manager) TagImage(ctx context.Context, source, target string) (*Image, 
 			return nil, fmt.Errorf("promote image to content: %w", err)
 		}
 	}
-	if err := createTagSymlink(m.paths, targetRef.Repository(), targetRef.Tag(), digestHex); err != nil {
+
+	targetKey := tagGenerationKey(targetRef.Repository(), targetRef.Tag())
+	targetGeneration := m.tagGenerations[targetKey] + 1
+	setReferenceTags(meta, targetRef.String(), nil)
+	setReferenceGeneration(meta, targetRef.String(), targetGeneration)
+
+	installed, err := installTagSymlink(m.paths, targetRef.Repository(), targetRef.Tag(), digestHex)
+	if err != nil {
 		return nil, fmt.Errorf("create image tag: %w", err)
 	}
-	setReferenceTags(meta, targetRef.String(), nil)
 	if err := writeMetadata(m.paths, targetRef.Repository(), digestHex, meta); err != nil {
+		if restoreErr := restoreTagSymlink(&installed); restoreErr != nil {
+			return nil, errors.Join(
+				fmt.Errorf("write tagged image metadata: %w", err),
+				fmt.Errorf("restore image tag: %w", restoreErr),
+			)
+		}
 		return nil, fmt.Errorf("write tagged image metadata: %w", err)
 	}
-	// Unlike updateExistingReference, which bumps the generation before
-	// installing the symlink, the bump happens after the install here so a
-	// failed tag call cannot invalidate a pending pull's claim on the target
-	// tag (pinned by TestTagImageFailureLeavesNoSideEffects).
-	m.nextTagGeneration(targetRef.Repository(), targetRef.Tag())
+	m.tagGenerations[targetKey] = targetGeneration
 	m.cleanupReplacedTag(targetRef, previousDigest, digestHex)
 
 	return meta.toImageFor(targetRef.String()), nil

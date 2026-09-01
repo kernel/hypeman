@@ -14,27 +14,28 @@ import (
 )
 
 type imageMetadata struct {
-	Name              string               `json:"name"`   // Normalized ref (tag or digest)
-	Digest            string               `json:"digest"` // Always present: sha256:...
-	Platform          string               `json:"platform,omitempty"`
-	Status            string               `json:"status"`
-	Error             *string              `json:"error,omitempty"`
-	Request           *CreateImageRequest  `json:"request,omitempty"`
-	SizeBytes         int64                `json:"size_bytes"`
-	Entrypoint        []string             `json:"entrypoint,omitempty"`
-	Cmd               []string             `json:"cmd,omitempty"`
-	Env               map[string]string    `json:"env,omitempty"`
-	Labels            map[string]string    `json:"labels,omitempty"`
-	Tags              tags.Tags            `json:"tags,omitempty"`
-	WorkingDir        string               `json:"working_dir,omitempty"`
-	CreatedAt         time.Time            `json:"created_at"`
-	BorrowedAuth      bool                 `json:"borrowed_auth,omitempty"`
-	BuildID           string               `json:"build_id,omitempty"`
-	RequestedTag      string               `json:"requested_tag,omitempty"`
-	PreviousTagDigest string               `json:"previous_tag_digest,omitempty"`
-	TagGeneration     uint64               `json:"tag_generation,omitempty"`
-	References        map[string]tags.Tags `json:"references,omitempty"`
-	TagClaims         []imageTagClaim      `json:"tag_claims,omitempty"`
+	Name                 string               `json:"name"`   // Normalized ref (tag or digest)
+	Digest               string               `json:"digest"` // Always present: sha256:...
+	Platform             string               `json:"platform,omitempty"`
+	Status               string               `json:"status"`
+	Error                *string              `json:"error,omitempty"`
+	Request              *CreateImageRequest  `json:"request,omitempty"`
+	SizeBytes            int64                `json:"size_bytes"`
+	Entrypoint           []string             `json:"entrypoint,omitempty"`
+	Cmd                  []string             `json:"cmd,omitempty"`
+	Env                  map[string]string    `json:"env,omitempty"`
+	Labels               map[string]string    `json:"labels,omitempty"`
+	Tags                 tags.Tags            `json:"tags,omitempty"`
+	WorkingDir           string               `json:"working_dir,omitempty"`
+	CreatedAt            time.Time            `json:"created_at"`
+	BorrowedAuth         bool                 `json:"borrowed_auth,omitempty"`
+	BuildID              string               `json:"build_id,omitempty"`
+	RequestedTag         string               `json:"requested_tag,omitempty"`
+	PreviousTagDigest    string               `json:"previous_tag_digest,omitempty"`
+	TagGeneration        uint64               `json:"tag_generation,omitempty"`
+	References           map[string]tags.Tags `json:"references,omitempty"`
+	ReferenceGenerations map[string]uint64    `json:"reference_generations,omitempty"`
+	TagClaims            []imageTagClaim      `json:"tag_claims,omitempty"`
 }
 
 type imageTagClaim struct {
@@ -54,6 +55,13 @@ func setReferenceTags(meta *imageMetadata, reference string, resourceTags tags.T
 		meta.References = make(map[string]tags.Tags)
 	}
 	meta.References[reference] = tags.Clone(resourceTags)
+}
+
+func setReferenceGeneration(meta *imageMetadata, reference string, generation uint64) {
+	if meta.ReferenceGenerations == nil {
+		meta.ReferenceGenerations = make(map[string]uint64)
+	}
+	meta.ReferenceGenerations[reference] = generation
 }
 
 func (m *imageMetadata) toImageFor(reference string) *Image {
@@ -292,7 +300,12 @@ func readMetadataAt(layout imageLayout) (*imageMetadata, error) {
 func promoteImageToContent(p *paths.Paths, sourceRepository, digestHex string, sourceMeta *imageMetadata) error {
 	contentReady := false
 	if contentMeta, err := readContentMetadata(p, digestHex); err == nil {
-		contentReady = contentMeta.Status == StatusReady
+		switch contentMeta.Status {
+		case StatusReady:
+			contentReady = true
+		case StatusPending, StatusPulling, StatusConverting:
+			return fmt.Errorf("%w: shared image content is being prepared", ErrImageNotReady)
+		}
 	}
 	if !contentReady {
 		sourceLayout := resolveImageLayout(p, sourceRepository, digestHex)
@@ -385,12 +398,14 @@ type symlinkState struct {
 }
 
 type stagedTagSymlink struct {
-	repository string
-	tag        string
-	linkPath   string
-	tempDir    string
-	tempPath   string
-	previous   symlinkState
+	repository    string
+	tag           string
+	linkPath      string
+	tempDir       string
+	tempPath      string
+	previous      symlinkState
+	stalePath     string
+	previousStale symlinkState
 }
 
 func stageTagSymlink(p *paths.Paths, repository, tag, digestHex string) (stagedTagSymlink, error) {
@@ -409,6 +424,14 @@ func stageTagSymlink(p *paths.Paths, repository, tag, digestHex string) (stagedT
 	if err != nil {
 		return stagedTagSymlink{}, err
 	}
+	stalePath := p.ImageTagSymlink(repository, tag)
+	if stalePath == linkPath {
+		stalePath = p.ImageRepositoryTagSymlink(repository, tag)
+	}
+	previousStale, err := readSymlinkState(stalePath)
+	if err != nil {
+		return stagedTagSymlink{}, err
+	}
 	if err := os.MkdirAll(filepath.Dir(linkPath), 0755); err != nil {
 		return stagedTagSymlink{}, fmt.Errorf("create parent directory: %w", err)
 	}
@@ -422,12 +445,14 @@ func stageTagSymlink(p *paths.Paths, repository, tag, digestHex string) (stagedT
 		return stagedTagSymlink{}, fmt.Errorf("create temporary tag symlink: %w", err)
 	}
 	return stagedTagSymlink{
-		repository: repository,
-		tag:        tag,
-		linkPath:   linkPath,
-		tempDir:    tempDir,
-		tempPath:   tempPath,
-		previous:   previous,
+		repository:    repository,
+		tag:           tag,
+		linkPath:      linkPath,
+		tempDir:       tempDir,
+		tempPath:      tempPath,
+		previous:      previous,
+		stalePath:     stalePath,
+		previousStale: previousStale,
 	}, nil
 }
 
@@ -478,20 +503,32 @@ func removeStaleTagSymlink(p *paths.Paths, ref *stagedTagSymlink) error {
 	return nil
 }
 
-func createTagSymlink(p *paths.Paths, repository, tag, digestHex string) error {
+func installTagSymlink(p *paths.Paths, repository, tag, digestHex string) (stagedTagSymlink, error) {
 	ref, err := stageTagSymlink(p, repository, tag, digestHex)
 	if err != nil {
-		return fmt.Errorf("stage tag symlink: %w", err)
+		return stagedTagSymlink{}, fmt.Errorf("stage tag symlink: %w", err)
 	}
 	if err := os.Rename(ref.tempPath, ref.linkPath); err != nil {
 		_ = os.RemoveAll(ref.tempDir)
-		return fmt.Errorf("install tag symlink: %w", err)
+		return stagedTagSymlink{}, fmt.Errorf("install tag symlink: %w", err)
 	}
 	if err := removeStaleTagSymlink(p, &ref); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: failed to remove stale tag symlink %s: %v\n", tag, err)
 	}
 	_ = os.RemoveAll(ref.tempDir)
-	return nil
+	return ref, nil
+}
+
+func createTagSymlink(p *paths.Paths, repository, tag, digestHex string) error {
+	_, err := installTagSymlink(p, repository, tag, digestHex)
+	return err
+}
+
+func restoreTagSymlink(ref *stagedTagSymlink) error {
+	if err := restoreSymlinkState(ref.linkPath, ref.previous); err != nil {
+		return err
+	}
+	return restoreSymlinkState(ref.stalePath, ref.previousStale)
 }
 
 // errInvalidSymlinkTarget marks a tag symlink that does not resolve to a

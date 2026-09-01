@@ -142,6 +142,9 @@ func TestResolveResource_SkipsOnlyImageTagPosts(t *testing.T) {
 	r.With(middleware).Post("/images/{name}", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
+	r.With(middleware).Post("/images/{name}/metadata/tag", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
 
 	t.Run("tag route bypasses resolver", func(t *testing.T) {
 		resolver.receivedName = ""
@@ -163,5 +166,16 @@ func TestResolveResource_SkipsOnlyImageTagPosts(t *testing.T) {
 		require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 		assert.Equal(t, "alpine:latest", resolver.receivedName,
 			"only the tag route should bypass image resolution")
+	})
+
+	t.Run("other tag-suffixed route resolves", func(t *testing.T) {
+		resolver.receivedName = ""
+		req := httptest.NewRequest(http.MethodPost, "/images/alpine:latest/metadata/tag", nil)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+		assert.Equal(t, "alpine:latest", resolver.receivedName,
+			"only the exact image tag route should bypass resolution")
 	})
 }

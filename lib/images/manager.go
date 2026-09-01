@@ -338,6 +338,13 @@ func (m *manager) restoreTagGenerations(metas []*imageMetadata) {
 		for _, claim := range meta.TagClaims {
 			m.restoreTagGeneration(claim.Repository, claim.Tag, claim.TagGeneration)
 		}
+		for reference, generation := range meta.ReferenceGenerations {
+			ref, err := ParseNormalizedRef(reference)
+			if err != nil || ref.IsDigest() {
+				continue
+			}
+			m.restoreTagGeneration(ref.Repository(), ref.Tag(), generation)
+		}
 	}
 }
 

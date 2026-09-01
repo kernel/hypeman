@@ -113,6 +113,11 @@ func TestTagImagePersistsTargetReference(t *testing.T) {
 	require.NoError(t, err)
 	_, ok := meta.References[target]
 	require.True(t, ok, "tagging must persist an explicit target reference")
+	require.Equal(t, uint64(1), meta.ReferenceGenerations[target])
+
+	restarted := &manager{paths: p, tagGenerations: make(map[string]uint64)}
+	restarted.restoreTagGenerations([]*imageMetadata{meta})
+	require.Equal(t, uint64(1), restarted.tagGenerations[tagGenerationKey(repository, "stable")])
 }
 
 func TestTagImageSameRepositoryDeletesContent(t *testing.T) {
@@ -207,6 +212,49 @@ func TestTagImageSourceNotFound(t *testing.T) {
 	_, m, repository := newTagTestCase(t)
 	_, err := m.TagImage(context.Background(), repository+":missing", repository+":stable")
 	require.ErrorIs(t, err, ErrNotFound)
+}
+
+func TestTagImageRejectsActiveContentBuild(t *testing.T) {
+	p, m, repository := newTagTestCase(t)
+	digest := "b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8"
+	seedLegacy(t, p, repository, "latest", digest)
+
+	targetRepository := "registry.example/apps/alpine"
+	active := &imageMetadata{
+		Name: repository + ":pending", Digest: "sha256:" + digest,
+		Status: StatusConverting, BuildID: "active-build",
+	}
+	require.NoError(t, os.MkdirAll(p.ImageContentDir(digest), 0o755))
+	require.NoError(t, writeMetadataFile(p.ImageContentMetadata(digest), active))
+
+	_, err := m.TagImage(context.Background(), repository+":latest", targetRepository+":stable")
+	require.ErrorIs(t, err, ErrImageNotReady)
+
+	contentMeta, err := readContentMetadata(p, digest)
+	require.NoError(t, err)
+	require.Equal(t, "active-build", contentMeta.BuildID)
+	_, err = resolveTag(p, targetRepository, "stable")
+	require.ErrorIs(t, err, ErrNotFound)
+}
+
+func TestTagImageRollsBackSymlinkOnMetadataFailure(t *testing.T) {
+	p, m, repository := newTagTestCase(t)
+	digest := "c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9"
+	seedContent(t, p, repository, "latest", digest)
+
+	// Force writeMetadata to fail after the target symlink has been installed.
+	tmpMetadata := p.ImageContentMetadata(digest) + ".tmp"
+	require.NoError(t, os.Mkdir(tmpMetadata, 0o755))
+
+	_, err := m.TagImage(context.Background(), repository+":latest", repository+":stable")
+	require.Error(t, err)
+	_, err = resolveTag(p, repository, "stable")
+	require.ErrorIs(t, err, ErrNotFound)
+
+	meta, err := readContentMetadata(p, digest)
+	require.NoError(t, err)
+	_, ok := meta.References[repository+":stable"]
+	require.False(t, ok)
 }
 
 func TestTagImageFailureLeavesNoSideEffects(t *testing.T) {
