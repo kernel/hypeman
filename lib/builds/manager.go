@@ -5,6 +5,7 @@ import (
 	"context"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -1148,20 +1149,40 @@ func (m *manager) updateBuildComplete(id string, status string, digest *string, 
 	m.notifyStatusChange(id, status)
 }
 
+// imageImportRetryInterval is the delay between retries when the build's
+// image has not yet been imported by the registry. Var so tests can shorten it.
+var imageImportRetryInterval = time.Second
+
 // waitForImageReady blocks until the build's image reaches a terminal state.
 // imageRef should be the short repo name (e.g., "builds/abc123" or "myapp")
 // matching what triggerConversion stores in the image manager.
 // This ensures that when a build reports "ready", the image is actually usable
 // for instance creation (fixes KERNEL-863 race condition).
+//
+// The registry imports pushed images asynchronously, and under concurrent
+// build bursts the import (OCI layout copy) can outlast the image manager's
+// internal existence deadline. By the time this is called the builder has
+// already pushed the image, so "not found" means "import still in flight",
+// not "push failed" — keep retrying until the build context expires.
 func (m *manager) waitForImageReady(ctx context.Context, imageRef string) error {
 	m.logger.Debug("waiting for image to be ready", "image_ref", imageRef)
 
-	if err := m.imageManager.WaitForReady(ctx, imageRef); err != nil {
-		return err
+	for {
+		err := m.imageManager.WaitForReady(ctx, imageRef)
+		if err == nil {
+			m.logger.Debug("image is ready", "image_ref", imageRef)
+			return nil
+		}
+		if !errors.Is(err, images.ErrNotFound) {
+			return err
+		}
+		m.logger.Info("build image not yet imported by registry, retrying", "image_ref", imageRef)
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(imageImportRetryInterval):
+		}
 	}
-
-	m.logger.Debug("image is ready", "image_ref", imageRef)
-	return nil
 }
 
 // subscribeToStatus adds a subscriber channel for status updates on a build
