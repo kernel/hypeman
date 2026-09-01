@@ -2,32 +2,13 @@ package instances
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"path/filepath"
-	"time"
+	"sort"
 
 	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/logger"
 )
-
-// VGPUCleanupPendingError reports a failed rollback that left a vGPU assigned.
-type VGPUCleanupPendingError struct {
-	InstanceID string
-	Retained   bool
-	Err        error
-}
-
-func (e *VGPUCleanupPendingError) Error() string {
-	if e.Retained {
-		return fmt.Sprintf("%v; vGPU release failed during rollback, instance %s retains the assignment", e.Err, e.InstanceID)
-	}
-	return fmt.Sprintf("%v; vGPU release failed during rollback and the retention record for instance %s could not be saved; the periodic vGPU reconcile retries the release", e.Err, e.InstanceID)
-}
-
-func (e *VGPUCleanupPendingError) Unwrap() error { return e.Err }
-
-var errVGPURetentionStub = fmt.Errorf("%w: instance retains a vGPU assignment from a failed create and has no boot configuration; delete it to release the assignment", ErrInvalidState)
 
 func (m *manager) createVGPUDevice(ctx context.Context, profileName, instanceID string) (*devices.VGPUDevice, error) {
 	create := m.createVGPU
@@ -37,17 +18,158 @@ func (m *manager) createVGPUDevice(ctx context.Context, profileName, instanceID 
 	return create(ctx, profileName, instanceID)
 }
 
-func vgpuDevicePendingCleanup(err error) (*devices.VGPUDevice, bool) {
-	var pending *devices.VGPUCreateCleanupPendingError
-	if !errors.As(err, &pending) {
-		return nil, false
+func (m *manager) discoverVGPUDevices() (devices.VGPUFramework, []devices.VirtualFunction, error) {
+	discover := m.discoverVGPU
+	if discover == nil {
+		discover = devices.DiscoverVGPU
 	}
-	return &pending.Device, true
+	return discover()
 }
 
-func vgpuAssignmentMayBeLive(stored *StoredMetadata, now time.Time, hypervisorLive bool) bool {
-	return hypervisorLive ||
-		stored.GPUAssignedAt != nil && now.Sub(*stored.GPUAssignedAt) < devices.VGPUAssignmentGracePeriod
+func (m *manager) claimVGPU(ctx context.Context, meta *metadata, profileName string) (*devices.VGPUDevice, error) {
+	framework, _, err := m.discoverVGPUDevices()
+	if err != nil {
+		return nil, err
+	}
+	if framework != devices.VGPUFrameworkVendorVFIO {
+		return m.createVGPUDevice(ctx, profileName, meta.Id)
+	}
+
+	m.vgpuAllocationMu.Lock()
+	defer m.vgpuAllocationMu.Unlock()
+
+	allMetadata, err := m.listMetadataForReconcile()
+	if err != nil {
+		return nil, fmt.Errorf("list instances for vGPU allocation: %w", err)
+	}
+	framework, vfs, err := m.discoverVGPUDevices()
+	if err != nil {
+		return nil, err
+	}
+	if framework != devices.VGPUFrameworkVendorVFIO {
+		return nil, fmt.Errorf("vendor VFIO vGPU framework not available")
+	}
+	listProfiles := m.vendorVFIOProfiles
+	if listProfiles == nil {
+		listProfiles = devices.ListVendorVFIOProfileTypes
+	}
+	profilesByVF, err := listProfiles(vfs)
+	if err != nil {
+		return nil, err
+	}
+	vfAddress, profileType, err := selectVendorVFIOVF(vfs, profilesByVF, allMetadata, profileName)
+	if err != nil {
+		return nil, err
+	}
+	device := &devices.VGPUDevice{
+		Framework:   devices.VGPUFrameworkVendorVFIO,
+		VFAddress:   vfAddress,
+		ProfileType: profileType,
+		ProfileName: profileName,
+		SysfsPath:   filepath.Clean(devices.GetDeviceSysfsPath(vfAddress)),
+	}
+	setStoredVGPUDevice(&meta.StoredMetadata, device)
+	if err := m.saveMetadata(meta); err != nil {
+		clearStoredVGPUDevice(&meta.StoredMetadata)
+		return nil, fmt.Errorf("save vGPU claim: %w", err)
+	}
+	return device, nil
+}
+
+func selectVendorVFIOVF(vfs []devices.VirtualFunction, profilesByVF map[string][]devices.VGPUProfileType, allMetadata []StoredMetadata, profileName string) (string, string, error) {
+	profilesByName := make(map[string]devices.VGPUProfileType)
+	advertises := make(map[string]map[string]struct{}, len(profilesByVF))
+	for vfAddress, profiles := range profilesByVF {
+		advertises[vfAddress] = make(map[string]struct{}, len(profiles))
+		for _, profile := range profiles {
+			profilesByName[profile.Name] = profile
+			advertises[vfAddress][profile.TypeName] = struct{}{}
+		}
+	}
+	requested, found := profilesByName[profileName]
+	if !found {
+		if len(profilesByName) == 0 && len(vfs) > 0 {
+			return "", "", fmt.Errorf("no creatable vGPU profiles on any VF, GPUs may be at capacity: profile %q", profileName)
+		}
+		return "", "", fmt.Errorf("profile %q is not creatable on any VF (unknown profile or insufficient capacity)", profileName)
+	}
+
+	vfByAddress := make(map[string]devices.VirtualFunction, len(vfs))
+	for _, vf := range vfs {
+		vfByAddress[vf.PCIAddress] = vf
+	}
+	claimed := make(map[string]struct{})
+	usageByGPU := make(map[string]int)
+	unknownUsageByGPU := make(map[string]bool)
+	for i := range allMetadata {
+		stored := &allMetadata[i]
+		if stored.GPUDevicePath == "" {
+			continue
+		}
+		vfAddress := filepath.Base(stored.GPUDevicePath)
+		claimed[vfAddress] = struct{}{}
+		vf, ok := vfByAddress[vfAddress]
+		if !ok {
+			continue
+		}
+		profile, ok := profilesByName[stored.GPUProfile]
+		if !ok {
+			unknownUsageByGPU[vf.ParentGPU] = true
+			continue
+		}
+		usageByGPU[vf.ParentGPU] += profile.FramebufferMB
+	}
+
+	parentAdvertises := make(map[string]bool)
+	for _, vf := range vfs {
+		if _, ok := advertises[vf.PCIAddress][requested.TypeName]; ok {
+			parentAdvertises[vf.ParentGPU] = true
+		}
+	}
+	freeByGPU := make(map[string][]devices.VirtualFunction)
+	for _, vf := range vfs {
+		if _, ok := claimed[vf.PCIAddress]; ok {
+			continue
+		}
+		_, directlyCreatable := advertises[vf.PCIAddress][requested.TypeName]
+		repairable := vf.Allocated && (vf.ProfileType == requested.TypeName || parentAdvertises[vf.ParentGPU])
+		if directlyCreatable || repairable {
+			freeByGPU[vf.ParentGPU] = append(freeByGPU[vf.ParentGPU], vf)
+		}
+	}
+	for gpu := range freeByGPU {
+		sort.Slice(freeByGPU[gpu], func(i, j int) bool {
+			return freeByGPU[gpu][i].PCIAddress < freeByGPU[gpu][j].PCIAddress
+		})
+	}
+	gpus := make([]string, 0, len(freeByGPU))
+	for gpu := range freeByGPU {
+		gpus = append(gpus, gpu)
+	}
+	sort.Slice(gpus, func(i, j int) bool {
+		if unknownUsageByGPU[gpus[i]] != unknownUsageByGPU[gpus[j]] {
+			return !unknownUsageByGPU[gpus[i]]
+		}
+		if usageByGPU[gpus[i]] == usageByGPU[gpus[j]] {
+			return gpus[i] < gpus[j]
+		}
+		return usageByGPU[gpus[i]] < usageByGPU[gpus[j]]
+	})
+	if len(gpus) == 0 {
+		return "", "", fmt.Errorf("no available VF for profile %q", profileName)
+	}
+	return freeByGPU[gpus[0]][0].PCIAddress, requested.TypeName, nil
+}
+
+func (m *manager) configureClaimedVGPU(ctx context.Context, device *devices.VGPUDevice) error {
+	if device.Framework != devices.VGPUFrameworkVendorVFIO {
+		return nil
+	}
+	configure := m.configureVGPU
+	if configure == nil {
+		configure = devices.ConfigureVGPU
+	}
+	return configure(ctx, device.VFAddress, device.ProfileType)
 }
 
 func (m *manager) destroyVGPUAssignment(ctx context.Context, assignment devices.VGPUAssignment) error {
@@ -58,112 +180,102 @@ func (m *manager) destroyVGPUAssignment(ctx context.Context, assignment devices.
 	return destroy(ctx, assignment)
 }
 
-func setStoredVGPUDevice(stored *StoredMetadata, device *devices.VGPUDevice, assignedAt time.Time) {
+func setStoredVGPUDevice(stored *StoredMetadata, device *devices.VGPUDevice) {
 	stored.GPUFramework = device.Framework
 	stored.GPUDevicePath = device.SysfsPath
 	stored.GPUMdevUUID = device.MdevUUID
-	stored.GPUAssignedAt = &assignedAt
 }
 
 func clearStoredVGPUDevice(stored *StoredMetadata) {
 	stored.GPUFramework = devices.VGPUFrameworkNone
 	stored.GPUDevicePath = ""
 	stored.GPUMdevUUID = ""
-	stored.GPUAssignedAt = nil
 }
 
-func (m *manager) cleanupStartVGPU(ctx context.Context, instanceID string, device *devices.VGPUDevice, assignedAt time.Time, rollbackMeta metadata) (retained, persisted bool) {
-	logger.FromContext(ctx).DebugContext(ctx, "destroying vGPU on cleanup", "instance_id", instanceID, "uuid", device.MdevUUID)
-	releaseErr := m.destroyVGPUAssignment(ctx, devices.VGPUAssignment{
-		Framework:  device.Framework,
-		DevicePath: device.SysfsPath,
-		MdevUUID:   device.MdevUUID,
-		InstanceID: instanceID,
-	})
-	if releaseErr != nil {
-		logger.FromContext(ctx).WarnContext(ctx, "failed to destroy vGPU on cleanup", "instance_id", instanceID, "uuid", device.MdevUUID, "error", releaseErr)
-		setStoredVGPUDevice(&rollbackMeta.StoredMetadata, device, assignedAt)
-		retained = true
+func (m *manager) cleanupCreateVGPU(ctx context.Context, stored *StoredMetadata) bool {
+	path := storedVGPUDevicePath(stored)
+	if path == "" {
+		return true
 	}
-	if err := m.saveMetadata(&rollbackMeta); err != nil {
-		message := "failed to save metadata after vGPU cleanup"
-		if retained {
-			message = "failed to retain vGPU assignment metadata after cleanup failure"
-		}
-		logger.FromContext(ctx).ErrorContext(ctx, message, "instance_id", instanceID, "error", err)
-		if !retained {
-			return false, false
-		}
-		// The pre-cleanup assignment save may already hold this claim on disk, in
-		// which case the retention is durable despite the failed rollback save.
-		if onDisk, loadErr := m.loadMetadata(instanceID); loadErr == nil &&
-			onDisk.GPUDevicePath == device.SysfsPath &&
-			onDisk.GPUAssignedAt != nil && onDisk.GPUAssignedAt.Equal(assignedAt) {
-			return true, true
-		}
-		return true, false
+	pid, err := resolveLiveHypervisorPID(stored.HypervisorProcessIdentity, stored.SocketPath)
+	if err != nil {
+		logger.FromContext(ctx).WarnContext(ctx, "cannot confirm hypervisor stopped during vGPU cleanup", "instance_id", stored.Id, "error", err)
+		return false
 	}
-	return retained, retained
+	if pid > 0 {
+		logger.FromContext(ctx).WarnContext(ctx, "preserving vGPU claim for live hypervisor", "instance_id", stored.Id, "pid", pid)
+		return false
+	}
+	if stored.GPUFramework == devices.VGPUFrameworkVendorVFIO {
+		onDisk, err := m.loadMetadata(stored.Id)
+		if err != nil || onDisk.GPUDevicePath != stored.GPUDevicePath {
+			logger.FromContext(ctx).WarnContext(ctx, "skipping vGPU cleanup without matching claim", "instance_id", stored.Id, "device_path", path, "error", err)
+			return false
+		}
+	}
+	if err := m.destroyVGPUAssignment(ctx, vgpuAssignment(stored)); err != nil {
+		logger.FromContext(ctx).WarnContext(ctx, "failed to reset vGPU during create cleanup", "instance_id", stored.Id, "device_path", path, "error", err)
+	}
+	return true
+}
+
+func (m *manager) cleanupStartVGPU(ctx context.Context, current *StoredMetadata, rollback metadata) {
+	path := storedVGPUDevicePath(current)
+	if path == "" {
+		return
+	}
+	pid, err := resolveLiveHypervisorPID(current.HypervisorProcessIdentity, current.SocketPath)
+	if err != nil || pid > 0 {
+		logger.FromContext(ctx).WarnContext(ctx, "preserving vGPU claim because hypervisor liveness is not clear", "instance_id", current.Id, "device_path", path, "pid", pid, "error", err)
+		return
+	}
+	if current.GPUFramework == devices.VGPUFrameworkVendorVFIO {
+		onDisk, err := m.loadMetadata(current.Id)
+		if err != nil || onDisk.GPUDevicePath != current.GPUDevicePath {
+			logger.FromContext(ctx).WarnContext(ctx, "skipping vGPU cleanup without matching claim", "instance_id", current.Id, "device_path", path, "error", err)
+			return
+		}
+	}
+	if err := m.destroyVGPUAssignment(ctx, vgpuAssignment(current)); err != nil {
+		logger.FromContext(ctx).WarnContext(ctx, "failed to reset vGPU during start cleanup", "instance_id", current.Id, "device_path", path, "error", err)
+	}
+	m.vgpuAllocationMu.Lock()
+	defer m.vgpuAllocationMu.Unlock()
+	onDisk, err := m.loadMetadata(current.Id)
+	if err != nil || storedVGPUDevicePath(&onDisk.StoredMetadata) != path {
+		return
+	}
+	if err := m.saveMetadata(&rollback); err != nil {
+		logger.FromContext(ctx).ErrorContext(ctx, "failed to restore metadata after vGPU cleanup", "instance_id", current.Id, "error", err)
+	}
 }
 
 func (m *manager) releaseStoredVGPU(ctx context.Context, stored *StoredMetadata) error {
-	path := storedVGPUDevicePath(stored)
-	if path != "" {
-		// Vendor VFIO VFs are reusable, so release fails closed on an incomplete inventory.
-		claimed := false
-		if stored.GPUFramework == devices.VGPUFrameworkVendorVFIO {
-			var err error
-			claimed, err = m.vgpuAssignmentClaimedByLiveInstance(stored.Id, path)
-			if err != nil {
-				return err
-			}
-		}
-		if claimed {
-			logger.FromContext(ctx).WarnContext(ctx, "dropping stale vGPU assignment claimed by another live instance",
-				"instance_id", stored.Id, "device_path", path)
-		} else {
-			assignment := devices.VGPUAssignment{
-				Framework:  stored.GPUFramework,
-				DevicePath: path,
-				MdevUUID:   stored.GPUMdevUUID,
-				InstanceID: stored.Id,
-			}
-			if err := m.destroyVGPUAssignment(ctx, assignment); err != nil {
-				return err
-			}
+	if storedVGPUDevicePath(stored) != "" {
+		if err := m.destroyVGPUAssignment(ctx, vgpuAssignment(stored)); err != nil {
+			return err
 		}
 	}
 	clearStoredVGPUDevice(stored)
 	return nil
 }
 
-func (m *manager) vgpuAssignmentClaimedByLiveInstance(excludeID, devicePath string) (bool, error) {
-	// Each vendor VFIO release lists and loads every instance's metadata. This is
-	// acceptable at GPU-host scale (tens of VFs and instances); revisit at hundreds.
-	allMetadata, err := m.listMetadataForReconcile()
-	if err != nil {
-		return false, fmt.Errorf("list instances for vGPU release check: %w", err)
+func (m *manager) releaseStoredVGPUPersisted(ctx context.Context, meta *metadata) error {
+	if err := m.releaseStoredVGPU(ctx, &meta.StoredMetadata); err != nil {
+		return err
 	}
-	for i := range allMetadata {
-		stored := &allMetadata[i]
-		if stored.Id == excludeID || storedVGPUDevicePath(stored) != devicePath {
-			continue
-		}
-		pid, err := resolveLiveHypervisorPID(stored.HypervisorProcessIdentity, stored.SocketPath)
-		if err != nil {
-			return false, fmt.Errorf("cannot confirm liveness of vGPU claimant %s on %s: %w", stored.Id, devicePath, err)
-		}
-		if pid > 0 {
-			return true, nil
-		}
-		if vgpuAssignmentMayBeLive(stored, m.nowUTC(), false) {
-			if stored.HypervisorPID == nil {
-				return false, fmt.Errorf("cannot confirm liveness of recent vGPU claimant %s on %s: no persisted hypervisor PID", stored.Id, devicePath)
-			}
-			return false, fmt.Errorf("cannot confirm liveness of recent vGPU claimant %s on %s: recorded hypervisor is not running", stored.Id, devicePath)
-		}
+	m.vgpuAllocationMu.Lock()
+	defer m.vgpuAllocationMu.Unlock()
+	return m.saveMetadata(meta)
+}
+
+func vgpuAssignment(stored *StoredMetadata) devices.VGPUAssignment {
+	return devices.VGPUAssignment{
+		Framework:  stored.GPUFramework,
+		DevicePath: storedVGPUDevicePath(stored),
+		MdevUUID:   stored.GPUMdevUUID,
+		InstanceID: stored.Id,
 	}
-	return false, nil
 }
 
 func storedVGPUDevicePath(stored *StoredMetadata) string {

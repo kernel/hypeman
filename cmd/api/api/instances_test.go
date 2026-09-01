@@ -17,7 +17,6 @@ import (
 	"github.com/kernel/hypeman/lib/instances"
 	"github.com/kernel/hypeman/lib/instances/phasetracking"
 	mw "github.com/kernel/hypeman/lib/middleware"
-	"github.com/kernel/hypeman/lib/network"
 	"github.com/kernel/hypeman/lib/oapi"
 	"github.com/kernel/hypeman/lib/paths"
 	restartpolicy "github.com/kernel/hypeman/lib/restart-policy"
@@ -46,39 +45,6 @@ func TestGetInstance_NotFound(t *testing.T) {
 	// For this test, we call the manager directly to verify the error type.
 	_, err := svc.InstanceManager.GetInstance(ctx(), "non-existent")
 	require.Error(t, err)
-}
-
-func TestVGPUCleanupPendingDetail(t *testing.T) {
-	t.Parallel()
-	for _, tt := range []struct {
-		name     string
-		retained bool
-		code     string
-		guidance string
-		exclude  string
-	}{
-		{name: "retained", retained: true, code: "vgpu_retained_instance", guidance: "delete it to retry"},
-		{name: "unretained", code: "vgpu_unretained_instance", guidance: "periodic vGPU reconcile", exclude: "delete"},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			message, inner := vgpuCleanupPendingDetail(&instances.VGPUCleanupPendingError{
-				InstanceID: "inst-1",
-				Retained:   tt.retained,
-				Err:        network.ErrNameExists,
-			}, "create", "delete it to retry")
-			assert.Contains(t, message, "inst-1")
-			assert.Contains(t, message, network.ErrNameExists.Error())
-			assert.Contains(t, message, tt.guidance)
-			if tt.exclude != "" {
-				assert.NotContains(t, message, tt.exclude)
-			}
-			require.NotNil(t, inner.Code)
-			assert.Equal(t, tt.code, *inner.Code)
-			require.NotNil(t, inner.Message)
-			assert.Equal(t, "inst-1", *inner.Message)
-		})
-	}
 }
 
 func TestCreateInstance_AutoPullImage(t *testing.T) {
@@ -925,16 +891,6 @@ func TestCreateInstance_ErrorStatusMapping(t *testing.T) {
 		wantMessage string
 	}{
 		{
-			name: "vGPU cleanup pending beats wrapped name conflict -> 500",
-			err: &instances.VGPUCleanupPendingError{
-				InstanceID: "inst-1",
-				Retained:   true,
-				Err:        network.ErrNameExists,
-			},
-			wantType: oapi.CreateInstance500JSONResponse{},
-			wantCode: "vgpu_cleanup_pending",
-		},
-		{
 			name:     "platform not available -> 404",
 			err:      fmt.Errorf("resolve image: %w", images.ErrPlatformNotAvailable),
 			wantType: oapi.CreateInstance404JSONResponse{},
@@ -1056,27 +1012,6 @@ func TestRestoreInstance_ErrorMapping(t *testing.T) {
 			require.Equal(t, tt.wantResponse, resp)
 		})
 	}
-}
-
-func TestStartInstance_VGPUCleanupPendingBeatsWrappedErrorMapping(t *testing.T) {
-	t.Parallel()
-	svc := newTestService(t)
-	resolved := &instances.Instance{
-		StoredMetadata: instances.StoredMetadata{Id: "inst-1", Name: "inst-1"},
-		State:          instances.StateStopped,
-	}
-	svc.InstanceManager = &errActionInstanceManager{Manager: svc.InstanceManager, err: &instances.VGPUCleanupPendingError{
-		InstanceID: resolved.Id,
-		Retained:   true,
-		Err:        fmt.Errorf("create vGPU for profile p: %w", instances.ErrInsufficientResources),
-	}}
-
-	resp, err := svc.StartInstance(mw.WithResolvedInstance(ctx(), resolved.Id, resolved), oapi.StartInstanceRequestObject{Id: resolved.Id})
-	require.NoError(t, err)
-	pending, ok := resp.(oapi.StartInstance500JSONResponse)
-	require.True(t, ok, "expected 500 vgpu_cleanup_pending, got %T", resp)
-	assert.EqualValues(t, "vgpu_cleanup_pending", pending.Code)
-	assert.Contains(t, pending.Message, "delete it or retry start")
 }
 
 func TestInstanceActions_ImageNotFoundMapsTo404(t *testing.T) {

@@ -590,15 +590,9 @@ func TestVGPUReconcileFailureMetric_RecordStages(t *testing.T) {
 	failuresMetric := findMetric(t, rm, "hypeman_instances_vgpu_reconcile_failures_total")
 	failures, ok := failuresMetric.Data.(metricdata.Sum[int64])
 	require.True(t, ok)
-	require.Len(t, failures.DataPoints, 2)
-	for _, point := range failures.DataPoints {
-		switch metricLabel(t, point.Attributes, "stage") {
-		case "list_instances", "reconcile_devices":
-			assert.Equal(t, int64(1), point.Value)
-		default:
-			t.Fatalf("unexpected reconcile failure stage datapoint: %s", metricLabel(t, point.Attributes, "stage"))
-		}
-	}
+	require.Len(t, failures.DataPoints, 1)
+	assert.Equal(t, "list_instances", metricLabel(t, failures.DataPoints[0].Attributes, "stage"))
+	assert.Equal(t, int64(1), failures.DataPoints[0].Value)
 }
 
 func assertMetricNames(t *testing.T, rm metricdata.ResourceMetrics, expected []string) {

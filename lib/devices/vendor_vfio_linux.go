@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"maps"
 	"os"
 	"path/filepath"
 	"sort"
@@ -15,7 +14,6 @@ import (
 	"strings"
 	"sync"
 	"syscall"
-	"time"
 
 	"github.com/kernel/hypeman/lib/logger"
 )
@@ -25,27 +23,18 @@ const (
 	vfioDevicesPath = "/dev/vfio/devices"
 )
 
-type vendorVFIOOwner struct {
-	instanceID string
-	assignedAt time.Time
-}
-
 type vendorVFIOSysfs struct {
 	pciDevicesPath    string
 	procPath          string
 	vfioDevicesPath   string
-	owners            map[string]vendorVFIOOwner
-	framebufferByType map[string]int
 	openVFIOPathsFunc func() (map[string]struct{}, error)
 }
 
 var (
 	hostVendorVFIO = vendorVFIOSysfs{
-		pciDevicesPath:    pciDevicesPath,
-		procPath:          procPath,
-		vfioDevicesPath:   vfioDevicesPath,
-		owners:            make(map[string]vendorVFIOOwner),
-		framebufferByType: make(map[string]int),
+		pciDevicesPath:  pciDevicesPath,
+		procPath:        procPath,
+		vfioDevicesPath: vfioDevicesPath,
 	}
 	vendorVFIOMu sync.Mutex
 )
@@ -110,18 +99,14 @@ func (s vendorVFIOSysfs) discoverVFs() ([]VirtualFunction, error) {
 // available_instances. This is a best-effort snapshot because creating on one
 // VF may revoke the type from siblings that share its GPU framebuffer.
 func (s vendorVFIOSysfs) listProfiles(vfs []VirtualFunction) ([]GPUProfile, error) {
-	profilesByType := make(map[string]profileMetadata)
+	profilesByType := make(map[string]VGPUProfileType)
 	creatableVFs := make(map[string]int)
+	profilesByVF, err := s.profileTypes(vfs)
+	if err != nil {
+		return nil, err
+	}
 	for _, vf := range vfs {
-		creatable, err := s.readCreatableProfiles(vf.PCIAddress)
-		if err != nil {
-			// Mirror discoverVFs: one unreadable VF must not blank the host's
-			// advertised capacity. Skipping only underreports availability,
-			// the safe direction for status and admission.
-			slog.Default().Warn("skipping unreadable creatable vGPU types", "vf", vf.PCIAddress, "error", err)
-			continue
-		}
-		for _, profile := range creatable {
+		for _, profile := range profilesByVF[vf.PCIAddress] {
 			profilesByType[profile.TypeName] = profile
 			if !vf.Allocated {
 				creatableVFs[profile.TypeName]++
@@ -129,7 +114,7 @@ func (s vendorVFIOSysfs) listProfiles(vfs []VirtualFunction) ([]GPUProfile, erro
 		}
 	}
 
-	metadata := make([]profileMetadata, 0, len(profilesByType))
+	metadata := make([]VGPUProfileType, 0, len(profilesByType))
 	for _, profile := range profilesByType {
 		metadata = append(metadata, profile)
 	}
@@ -146,71 +131,77 @@ func (s vendorVFIOSysfs) listProfiles(vfs []VirtualFunction) ([]GPUProfile, erro
 	return profiles, nil
 }
 
-func (s vendorVFIOSysfs) create(ctx context.Context, profileName, instanceID string) (*VGPUDevice, error) {
+func (s vendorVFIOSysfs) profileTypes(vfs []VirtualFunction) (map[string][]VGPUProfileType, error) {
+	profilesByVF := make(map[string][]VGPUProfileType, len(vfs))
+	for _, vf := range vfs {
+		profiles, err := s.readCreatableProfiles(vf.PCIAddress)
+		if err != nil {
+			slog.Default().Warn("skipping unreadable creatable vGPU types", "vf", vf.PCIAddress, "error", err)
+			continue
+		}
+		converted := make([]VGPUProfileType, 0, len(profiles))
+		for _, profile := range profiles {
+			converted = append(converted, VGPUProfileType{
+				TypeName:      profile.TypeName,
+				Name:          profile.Name,
+				FramebufferMB: profile.FramebufferMB,
+			})
+		}
+		profilesByVF[vf.PCIAddress] = converted
+	}
+	return profilesByVF, nil
+}
+
+func (s vendorVFIOSysfs) configure(ctx context.Context, vfAddress, profileType string) error {
 	vendorVFIOMu.Lock()
 	defer vendorVFIOMu.Unlock()
 
-	vfs, err := s.discoverVFs()
-	if err != nil {
-		return nil, err
+	if profileType == "" || profileType == "0" {
+		return fmt.Errorf("invalid vendor VFIO vGPU profile type %q", profileType)
 	}
-	metadata, err := s.profileMetadata(vfs)
-	if err != nil {
-		return nil, err
-	}
-
-	var requested profileMetadata
-	found := false
-	for _, profile := range metadata {
-		if profile.Name == profileName {
-			requested = profile
-			found = true
-			break
-		}
-	}
-	if !found {
-		if len(metadata) == 0 && len(vfs) > 0 {
-			return nil, fmt.Errorf("no creatable vGPU profiles on any VF, GPUs may be at capacity: profile %q", profileName)
-		}
-		return nil, fmt.Errorf("profile %q is not creatable on any VF (unknown profile or insufficient capacity)", profileName)
-	}
-
-	targetVF, err := s.selectLeastLoadedVF(vfs, requested.TypeName)
-	if err != nil {
-		return nil, err
-	}
-	if targetVF == "" {
-		return nil, fmt.Errorf("no available VF for profile %q", profileName)
-	}
-
-	currentTypePath := filepath.Join(s.pciDevicesPath, targetVF, "nvidia", "current_vgpu_type")
-	if err := os.WriteFile(currentTypePath, []byte(requested.TypeName), 0200); err != nil {
-		return nil, fmt.Errorf("create vGPU on VF %s: %w", targetVF, err)
-	}
-	device := VGPUDevice{
-		Framework:   VGPUFrameworkVendorVFIO,
-		VFAddress:   targetVF,
-		ProfileType: requested.TypeName,
-		ProfileName: profileName,
-		SysfsPath:   filepath.Join(s.pciDevicesPath, targetVF),
-	}
+	currentTypePath := filepath.Join(s.pciDevicesPath, vfAddress, "nvidia", "current_vgpu_type")
 	currentType, err := readCurrentVGPUType(currentTypePath)
 	if err != nil {
-		verifyErr := fmt.Errorf("verify vGPU on VF %s: %w", targetVF, err)
-		return nil, s.rollbackCreate(currentTypePath, targetVF, instanceID, device, verifyErr)
+		return fmt.Errorf("read current vGPU type for VF %s: %w", vfAddress, err)
 	}
-	if currentType != requested.TypeName {
-		verifyErr := fmt.Errorf("verify vGPU on VF %s: type is %s, want %s", targetVF, currentType, requested.TypeName)
-		return nil, s.rollbackCreate(currentTypePath, targetVF, instanceID, device, verifyErr)
+	if currentType == profileType {
+		return nil
 	}
-	s.owners[targetVF] = vendorVFIOOwner{instanceID: instanceID, assignedAt: time.Now()}
-
-	logger.FromContext(ctx).InfoContext(ctx, "created vendor VFIO vGPU",
-		"profile", profileName,
-		"vf", targetVF,
-		"instance_id", instanceID,
-	)
-	return &device, nil
+	if currentType != "0" {
+		openPaths, err := s.openVFIOPaths()
+		if err != nil {
+			return fmt.Errorf("scan open VFIO handles: %w", err)
+		}
+		inUse, err := s.vfioDeviceInUse(vfAddress, openPaths)
+		if err != nil {
+			return fmt.Errorf("check vendor VFIO vGPU usage for VF %s: %w", vfAddress, err)
+		}
+		if inUse {
+			return fmt.Errorf("vendor VFIO vGPU on VF %s is still in use", vfAddress)
+		}
+		if err := os.WriteFile(currentTypePath, []byte("0"), 0200); err != nil {
+			return fmt.Errorf("reset vGPU on VF %s: %w", vfAddress, err)
+		}
+		currentType, err = readCurrentVGPUType(currentTypePath)
+		if err != nil {
+			return fmt.Errorf("verify reset vGPU on VF %s: %w", vfAddress, err)
+		}
+		if currentType != "0" {
+			return fmt.Errorf("verify reset vGPU on VF %s: type is %s, want 0", vfAddress, currentType)
+		}
+	}
+	if err := os.WriteFile(currentTypePath, []byte(profileType), 0200); err != nil {
+		return fmt.Errorf("configure vGPU on VF %s: %w", vfAddress, err)
+	}
+	currentType, err = readCurrentVGPUType(currentTypePath)
+	if err != nil {
+		return fmt.Errorf("verify vGPU on VF %s: %w", vfAddress, err)
+	}
+	if currentType != profileType {
+		return fmt.Errorf("verify vGPU on VF %s: type is %s, want %s", vfAddress, currentType, profileType)
+	}
+	logger.FromContext(ctx).InfoContext(ctx, "configured vendor VFIO vGPU", "profile_type", profileType, "vf", vfAddress)
+	return nil
 }
 
 func (s vendorVFIOSysfs) destroy(ctx context.Context, vfAddress, instanceID string) error {
@@ -222,28 +213,12 @@ func (s vendorVFIOSysfs) destroy(ctx context.Context, vfAddress, instanceID stri
 	currentType, err := readCurrentVGPUType(currentTypePath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			delete(s.owners, vfAddress)
 			return nil
 		}
 		return fmt.Errorf("read current vGPU type for VF %s: %w", vfAddress, err)
 	}
 	if currentType == "0" {
-		delete(s.owners, vfAddress)
 		return nil
-	}
-
-	if owner, ok := s.owners[vfAddress]; ok {
-		if instanceID == "" {
-			return fmt.Errorf("cannot release vendor VFIO vGPU on VF %s without instance ID", vfAddress)
-		}
-		if owner.instanceID != instanceID {
-			log.WarnContext(ctx, "skipping vendor VFIO vGPU release owned by another instance",
-				"vf", vfAddress,
-				"owner_instance_id", owner.instanceID,
-				"requesting_instance_id", instanceID,
-			)
-			return nil
-		}
 	}
 
 	openPaths, err := s.openVFIOPaths()
@@ -261,132 +236,8 @@ func (s vendorVFIOSysfs) destroy(ctx context.Context, vfAddress, instanceID stri
 	if err := os.WriteFile(currentTypePath, []byte("0"), 0200); err != nil {
 		return fmt.Errorf("destroy vGPU on VF %s: %w", vfAddress, err)
 	}
-	delete(s.owners, vfAddress)
-	log.InfoContext(ctx, "destroyed vendor VFIO vGPU", "vf", vfAddress)
+	log.InfoContext(ctx, "destroyed vendor VFIO vGPU", "vf", vfAddress, "instance_id", instanceID)
 	return nil
-}
-
-func (s vendorVFIOSysfs) reconcile(ctx context.Context, protectedDevicePaths map[string]struct{}) error {
-	vfs, err := s.discoverVFs()
-	if err != nil {
-		return err
-	}
-	vendorVFIOMu.Lock()
-	owners := maps.Clone(s.owners)
-	vendorVFIOMu.Unlock()
-	log := logger.FromContext(ctx)
-	protectedVFs := make(map[string]struct{}, len(protectedDevicePaths))
-	for path := range protectedDevicePaths {
-		protectedVFs[filepath.Base(path)] = struct{}{}
-	}
-	var openPaths map[string]struct{}
-	for _, vf := range vfs {
-		if !vf.Allocated {
-			continue
-		}
-		if _, ok := protectedVFs[vf.PCIAddress]; ok {
-			log.DebugContext(ctx, "skipping vendor VFIO vGPU held by a live instance", "vf", vf.PCIAddress)
-			continue
-		}
-		owner := owners[vf.PCIAddress]
-		if !owner.assignedAt.IsZero() && time.Since(owner.assignedAt) < VGPUAssignmentGracePeriod {
-			log.DebugContext(ctx, "skipping recently assigned vendor VFIO vGPU during grace period", "vf", vf.PCIAddress)
-			continue
-		}
-		if openPaths == nil {
-			if openPaths, err = s.openVFIOPaths(); err != nil {
-				return fmt.Errorf("scan open VFIO handles: %w", err)
-			}
-		}
-		inUse, err := s.vfioDeviceInUse(vf.PCIAddress, openPaths)
-		if err != nil {
-			log.WarnContext(ctx, "failed to check vendor VFIO vGPU usage", "vf", vf.PCIAddress, "error", err)
-			continue
-		}
-		if inUse {
-			log.WarnContext(ctx, "preserving vendor VFIO vGPU held open without a live instance claim", "vf", vf.PCIAddress)
-			continue
-		}
-		if err := s.destroy(ctx, vf.PCIAddress, owner.instanceID); err != nil {
-			log.WarnContext(ctx, "failed to destroy orphaned vendor VFIO vGPU", "vf", vf.PCIAddress, "error", err)
-		}
-	}
-	return nil
-}
-
-func (s vendorVFIOSysfs) selectLeastLoadedVF(vfs []VirtualFunction, profileType string) (string, error) {
-	usageByGPU := make(map[string]int)
-	unknownUsageByGPU := make(map[string]bool)
-	freeByGPU := make(map[string][]VirtualFunction)
-	for _, vf := range vfs {
-		if vf.Allocated {
-			// framebufferByType only covers currently creatable profiles, so
-			// after a restart an allocated type can be missing when its
-			// capacity is exhausted. Prefer GPUs whose load is fully known
-			// instead of rejecting placement outright; the kernel driver
-			// still enforces real capacity through creatable_vgpu_types.
-			framebuffer, ok := s.framebufferByType[vf.ProfileType]
-			if !ok {
-				unknownUsageByGPU[vf.ParentGPU] = true
-				continue
-			}
-			usageByGPU[vf.ParentGPU] += framebuffer
-			continue
-		}
-		profiles, err := s.readCreatableProfiles(vf.PCIAddress)
-		if err != nil {
-			// An unreadable free VF is just not a placement candidate.
-			slog.Default().Warn("skipping unreadable creatable vGPU types", "vf", vf.PCIAddress, "error", err)
-			continue
-		}
-		for _, profile := range profiles {
-			if profile.TypeName == profileType {
-				freeByGPU[vf.ParentGPU] = append(freeByGPU[vf.ParentGPU], vf)
-				break
-			}
-		}
-	}
-
-	gpus := make([]string, 0, len(freeByGPU))
-	for gpu := range freeByGPU {
-		gpus = append(gpus, gpu)
-	}
-	sort.Slice(gpus, func(i, j int) bool {
-		if unknownUsageByGPU[gpus[i]] != unknownUsageByGPU[gpus[j]] {
-			return !unknownUsageByGPU[gpus[i]]
-		}
-		if usageByGPU[gpus[i]] == usageByGPU[gpus[j]] {
-			return gpus[i] < gpus[j]
-		}
-		return usageByGPU[gpus[i]] < usageByGPU[gpus[j]]
-	})
-	if len(gpus) == 0 {
-		return "", nil
-	}
-	return freeByGPU[gpus[0]][0].PCIAddress, nil
-}
-
-func (s vendorVFIOSysfs) profileMetadata(vfs []VirtualFunction) ([]profileMetadata, error) {
-	profilesByType := make(map[string]profileMetadata)
-	for _, vf := range vfs {
-		profiles, err := s.readCreatableProfiles(vf.PCIAddress)
-		if err != nil {
-			// Mirror listProfiles: an unreadable VF must not fail placement
-			// while /resources still advertises the remaining capacity.
-			slog.Default().Warn("skipping unreadable creatable vGPU types", "vf", vf.PCIAddress, "error", err)
-			continue
-		}
-		for _, profile := range profiles {
-			profilesByType[profile.TypeName] = profile
-			s.framebufferByType[profile.TypeName] = profile.FramebufferMB
-		}
-	}
-	profiles := make([]profileMetadata, 0, len(profilesByType))
-	for _, profile := range profilesByType {
-		profiles = append(profiles, profile)
-	}
-	sort.Slice(profiles, func(i, j int) bool { return profiles[i].Name < profiles[j].Name })
-	return profiles, nil
 }
 
 func (s vendorVFIOSysfs) readCreatableProfiles(vfAddress string) ([]profileMetadata, error) {
@@ -525,17 +376,6 @@ func framebufferFromProfileName(name string) int {
 		return 0
 	}
 	return gb * 1024
-}
-
-func (s vendorVFIOSysfs) rollbackCreate(currentTypePath, vfAddress, instanceID string, device VGPUDevice, verifyErr error) error {
-	if err := os.WriteFile(currentTypePath, []byte("0"), 0200); err != nil {
-		s.owners[vfAddress] = vendorVFIOOwner{instanceID: instanceID, assignedAt: time.Now()}
-		return &VGPUCreateCleanupPendingError{
-			Device: device,
-			Err:    errors.Join(verifyErr, fmt.Errorf("roll back vGPU on VF %s: %w", vfAddress, err)),
-		}
-	}
-	return verifyErr
 }
 
 func readCurrentVGPUType(path string) (string, error) {

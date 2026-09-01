@@ -3,7 +3,6 @@ package instances
 import (
 	"context"
 	"errors"
-	"net"
 	"os"
 	"path/filepath"
 	"sync"
@@ -178,87 +177,6 @@ func TestDeletePersistsVGPUReleaseBeforeTeardown(t *testing.T) {
 	assert.Equal(t, restartpolicy.BlockedReasonManualStop, persisted.RestartStatus.BlockedReason)
 }
 
-func TestDeleteReleasesRetainedCreateStub(t *testing.T) {
-	p := paths.New(t.TempDir())
-	var destroyed []devices.VGPUAssignment
-	m := &manager{
-		paths:           p,
-		instanceLocks:   sync.Map{},
-		bootMarkerScans: sync.Map{},
-		now:             time.Now,
-		lifecycleEvents: newLifecycleSubscribers(),
-		destroyVGPU: func(_ context.Context, assignment devices.VGPUAssignment) error {
-			destroyed = append(destroyed, assignment)
-			return nil
-		},
-	}
-	const id = "retained-stub"
-	require.NoError(t, m.ensureDirectories(id))
-	assignedAt := time.Now().UTC()
-	require.NoError(t, m.saveMetadata(&metadata{StoredMetadata: StoredMetadata{
-		Id:                    id,
-		GPUFramework:          devices.VGPUFrameworkVendorVFIO,
-		GPUDevicePath:         "/sys/bus/pci/devices/0000:82:00.4",
-		GPUAssignedAt:         &assignedAt,
-		GPURetainedForCleanup: true,
-	}}))
-
-	require.NoError(t, m.DeleteInstance(context.Background(), id))
-
-	require.Len(t, destroyed, 1)
-	assert.Equal(t, "/sys/bus/pci/devices/0000:82:00.4", destroyed[0].DevicePath)
-	assert.Equal(t, id, destroyed[0].InstanceID)
-	_, err := m.loadMetadata(id)
-	require.Error(t, err, "retained stub must be fully deleted")
-}
-
-func TestDeleteDropsStaleVGPUClaimedByLiveInstance(t *testing.T) {
-	now := time.Now().UTC()
-	m, id := newLifecycleNoopManagerWithInstance(t, StateStopped, now)
-	meta, err := m.loadMetadata(id)
-	require.NoError(t, err)
-	meta.GPUProfile = "NVIDIA L40S-2Q"
-	meta.GPUFramework = devices.VGPUFrameworkVendorVFIO
-	meta.GPUDevicePath = "/sys/bus/pci/devices/0000:82:00.4"
-	require.NoError(t, m.saveMetadata(meta))
-
-	claimantID := "inst-live-claimant"
-	require.NoError(t, m.ensureDirectories(claimantID))
-	pid := os.Getpid()
-	// Bind under /tmp: a t.TempDir()-derived path exceeds the macOS AF_UNIX
-	// path limit.
-	socketDir, err := os.MkdirTemp("/tmp", "hypeman-claimant-socket-")
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		_ = os.RemoveAll(socketDir)
-	})
-	socketPath := filepath.Join(socketDir, "noop.sock")
-	listener, err := net.Listen("unix", socketPath)
-	require.NoError(t, err)
-	defer listener.Close()
-	require.NoError(t, m.saveMetadata(&metadata{StoredMetadata: StoredMetadata{
-		Id:                        claimantID,
-		Name:                      claimantID,
-		Image:                     "test-image",
-		CreatedAt:                 now,
-		HypervisorType:            lifecycleNoopHypervisorType,
-		HypervisorProcessIdentity: HypervisorProcessIdentity{HypervisorPID: &pid},
-		SocketPath:                socketPath,
-		DataDir:                   m.paths.InstanceDir(claimantID),
-		GPUProfile:                "NVIDIA L40S-2Q",
-		GPUFramework:              devices.VGPUFrameworkVendorVFIO,
-		GPUDevicePath:             "/sys/bus/pci/devices/0000:82:00.4",
-	}}))
-
-	require.NoError(t, m.DeleteInstance(context.Background(), id))
-
-	_, err = m.loadMetadata(id)
-	require.Error(t, err, "deleted instance metadata should be gone")
-	claimant, err := m.loadMetadata(claimantID)
-	require.NoError(t, err)
-	assert.Equal(t, "/sys/bus/pci/devices/0000:82:00.4", claimant.GPUDevicePath, "live claimant keeps its assignment")
-}
-
 func TestDeleteContinuesTeardownAfterFailedVGPURelease(t *testing.T) {
 	m, id := newLifecycleNoopManagerWithInstance(t, StateStopped, time.Now().UTC())
 	deviceManager := &recordingDeviceManager{}
@@ -301,25 +219,6 @@ func TestStartPersistsStaleVGPUReleaseImmediately(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, stored.GPUDevicePath, "released assignment should be persisted despite the failed start")
 	assert.Equal(t, "NVIDIA L40S-2Q", stored.GPUProfile, "profile is kept for the next start")
-}
-
-func TestStartRejectsVGPURetentionRecord(t *testing.T) {
-	m, id := newLifecycleNoopManagerWithInstance(t, StateStopped, time.Now().UTC())
-	meta, err := m.loadMetadata(id)
-	require.NoError(t, err)
-	meta.GPUProfile = "NVIDIA L40S-2Q"
-	meta.GPUFramework = devices.VGPUFrameworkNone
-	meta.GPUDevicePath = "/sys/bus/pci/devices/0000:82:00.4"
-	meta.GPURetainedForCleanup = true
-	require.NoError(t, m.saveMetadata(meta))
-
-	_, err = m.StartInstance(context.Background(), id, StartInstanceRequest{})
-	require.ErrorIs(t, err, ErrInvalidState)
-	require.ErrorContains(t, err, "delete it to release the assignment")
-
-	stored, err := m.loadMetadata(id)
-	require.NoError(t, err)
-	assert.Equal(t, "/sys/bus/pci/devices/0000:82:00.4", stored.GPUDevicePath)
 }
 
 func TestStopStoppedInstanceLeavesVGPUForReconcile(t *testing.T) {

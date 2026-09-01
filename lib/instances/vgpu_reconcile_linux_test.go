@@ -7,7 +7,6 @@ import (
 	"net"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/paths"
@@ -16,8 +15,6 @@ import (
 )
 
 func TestReconcileVGPUsProtectsSocketOwnerWithoutPersistedPID(t *testing.T) {
-	t.Parallel()
-
 	socketPath := filepath.Join(t.TempDir(), "test.sock")
 	listener, err := net.Listen("unix", socketPath)
 	require.NoError(t, err)
@@ -37,7 +34,6 @@ func TestReconcileVGPUsProtectsSocketOwnerWithoutPersistedPID(t *testing.T) {
 		},
 	}
 	const id = "pid-save-failed"
-	stale := time.Now().UTC().Add(-devices.VGPUAssignmentGracePeriod - time.Minute)
 	require.NoError(t, m.ensureDirectories(id))
 	require.NoError(t, m.saveMetadata(&metadata{StoredMetadata: StoredMetadata{
 		Id:            id,
@@ -45,12 +41,11 @@ func TestReconcileVGPUsProtectsSocketOwnerWithoutPersistedPID(t *testing.T) {
 		GPUFramework:  devices.VGPUFrameworkMdev,
 		GPUDevicePath: "/sys/bus/mdev/devices/test-mdev",
 		GPUMdevUUID:   "test-mdev",
-		GPUAssignedAt: &stale,
 	}}))
 
 	m.ReconcileVGPUs(t.Context())
 
-	assert.Empty(t, destroyed, "a live socket owner must block the release even with a nil persisted PID")
+	assert.Empty(t, destroyed)
 	assert.Contains(t, protected, "/sys/bus/mdev/devices/test-mdev")
 	stored, err := m.loadMetadata(id)
 	require.NoError(t, err)

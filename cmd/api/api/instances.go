@@ -362,16 +362,7 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 
 	inst, err := s.InstanceManager.CreateInstance(ctx, domainReq)
 	if err != nil {
-		var vgpuPending *instances.VGPUCleanupPendingError
 		switch {
-		case errors.As(err, &vgpuPending):
-			log.ErrorContext(ctx, "failed to create instance", "error", err, "image", request.Body.Image)
-			message, inner := vgpuCleanupPendingDetail(vgpuPending, "create", "delete it to retry")
-			return oapi.CreateInstance500JSONResponse{
-				Code:       "vgpu_cleanup_pending",
-				Message:    message,
-				InnerError: inner,
-			}, nil
 		case errors.Is(err, instances.ErrImageNotReady):
 			return oapi.CreateInstance400JSONResponse{
 				Code:    "image_not_ready",
@@ -431,19 +422,6 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 		}
 	}
 	return oapi.CreateInstance201JSONResponse(instanceToOAPI(*inst)), nil
-}
-
-func vgpuCleanupPendingDetail(pending *instances.VGPUCleanupPendingError, action, retainedGuidance string) (string, *oapi.ErrorDetail) {
-	message := fmt.Sprintf("failed to %s instance: %v", action, pending)
-	innerCode := "vgpu_unretained_instance"
-	if pending.Retained {
-		message += "; " + retainedGuidance
-		innerCode = "vgpu_retained_instance"
-	}
-	return message, &oapi.ErrorDetail{
-		Code:    lo.ToPtr(innerCode),
-		Message: lo.ToPtr(pending.InstanceID),
-	}
 }
 
 // GetInstance gets instance details
@@ -856,16 +834,7 @@ func (s *ApiService) StartInstance(ctx context.Context, request oapi.StartInstan
 
 	result, err := s.InstanceManager.StartInstance(ctx, inst.Id, startReq)
 	if err != nil {
-		var vgpuPending *instances.VGPUCleanupPendingError
 		switch {
-		case errors.As(err, &vgpuPending):
-			log.ErrorContext(ctx, "failed to start instance", "error", err)
-			message, inner := vgpuCleanupPendingDetail(vgpuPending, "start", "delete it or retry start to release it")
-			return oapi.StartInstance500JSONResponse{
-				Code:       "vgpu_cleanup_pending",
-				Message:    message,
-				InnerError: inner,
-			}, nil
 		case errors.Is(err, instances.ErrInvalidState):
 			return oapi.StartInstance409JSONResponse{
 				Code:    "invalid_state",

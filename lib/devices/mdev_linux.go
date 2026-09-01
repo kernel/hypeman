@@ -23,9 +23,10 @@ import (
 )
 
 const (
-	mdevBusPath = "/sys/class/mdev_bus"
-	mdevDevices = "/sys/bus/mdev/devices"
-	procPath    = "/proc"
+	mdevBusPath               = "/sys/class/mdev_bus"
+	mdevDevices               = "/sys/bus/mdev/devices"
+	procPath                  = "/proc"
+	mdevAssignmentGracePeriod = 5 * time.Minute
 )
 
 // mdevMu protects mdev creation/destruction to prevent race conditions
@@ -756,7 +757,7 @@ func ReconcileMdevs(ctx context.Context, instanceInfos []MdevReconcileInfo) erro
 	log.InfoContext(ctx, "reconciling mdev devices",
 		"total_mdevs", len(mdevs),
 		"managed_vfs", len(managedVFs),
-		"grace_period", VGPUAssignmentGracePeriod.String(),
+		"grace_period", mdevAssignmentGracePeriod.String(),
 	)
 
 	groupInUseCache := make(map[int]bool)
@@ -796,7 +797,7 @@ func ReconcileMdevs(ctx context.Context, instanceInfos []MdevReconcileInfo) erro
 			continue
 		}
 
-		pastGracePeriod, age, err := mdevPastGracePeriod(mdev.UUID, VGPUAssignmentGracePeriod)
+		pastGracePeriod, age, err := mdevPastGracePeriod(mdev.UUID, mdevAssignmentGracePeriod)
 		if err != nil {
 			log.WarnContext(ctx, "failed to determine mdev age, skipping cleanup", "uuid", mdev.UUID, "error", err)
 			skippedProbeError++
@@ -806,7 +807,7 @@ func ReconcileMdevs(ctx context.Context, instanceInfos []MdevReconcileInfo) erro
 			log.DebugContext(ctx, "skipping recently created mdev during grace period",
 				"uuid", mdev.UUID,
 				"age", age.String(),
-				"grace_period", VGPUAssignmentGracePeriod.String(),
+				"grace_period", mdevAssignmentGracePeriod.String(),
 			)
 			skippedGrace++
 			continue

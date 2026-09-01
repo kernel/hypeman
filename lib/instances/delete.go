@@ -145,12 +145,8 @@ func (m *manager) deleteInstanceWithOptions(
 	if hadVGPUAssignment {
 		log.InfoContext(ctx, "destroying vGPU", "instance_id", id, "uuid", stored.GPUMdevUUID)
 	}
-	if err := m.releaseStoredVGPU(ctx, stored); err != nil {
-		log.WarnContext(ctx, "failed to destroy vGPU, continuing with cleanup; the periodic vGPU reconcile releases it once free", "instance_id", id, "uuid", stored.GPUMdevUUID, "error", err)
-	} else if hadVGPUAssignment {
-		if err := m.saveMetadata(meta); err != nil {
-			log.WarnContext(ctx, "failed to save metadata after vGPU release", "instance_id", id, "error", err)
-		}
+	if err := m.releaseStoredVGPUPersisted(ctx, meta); err != nil {
+		log.WarnContext(ctx, "failed to destroy vGPU, continuing with cleanup; the next allocation repairs the VF before reuse", "instance_id", id, "uuid", stored.GPUMdevUUID, "error", err)
 	}
 
 	// 6. Release network allocation

@@ -52,63 +52,6 @@ func TestForkSnapshotClearsVGPUAssignment(t *testing.T) {
 	assert.Equal(t, "/sys/bus/pci/devices/0000:82:00.4", source.GPUDevicePath)
 }
 
-func TestCreateSnapshotRejectsVGPURetentionRecord(t *testing.T) {
-	mgr, _ := setupTestManager(t)
-	ctx := context.Background()
-
-	sourceID := "snapshot-vgpu-retention"
-	createStoppedSnapshotSourceFixture(t, mgr, sourceID, sourceID, mgr.defaultHypervisor)
-
-	meta, err := mgr.loadMetadata(sourceID)
-	require.NoError(t, err)
-	meta.GPUProfile = "NVIDIA L40S-2Q"
-	meta.GPUFramework = devices.VGPUFramework("future-framework")
-	meta.GPUDevicePath = "/sys/bus/pci/devices/0000:82:00.4"
-	meta.GPURetainedForCleanup = true
-	require.NoError(t, mgr.saveMetadata(meta))
-
-	_, err = mgr.CreateSnapshot(ctx, sourceID, CreateSnapshotRequest{
-		Kind: SnapshotKindStopped,
-		Name: "snapshot-vgpu-retention",
-	})
-	require.ErrorIs(t, err, ErrInvalidState)
-	require.ErrorContains(t, err, "delete it to release the assignment")
-}
-
-func TestRestoreSnapshotRejectsVGPURetentionRecord(t *testing.T) {
-	mgr, _ := setupTestManager(t)
-	ctx := context.Background()
-
-	sourceID := "snapshot-vgpu-restore-retention"
-	createStoppedSnapshotSourceFixture(t, mgr, sourceID, sourceID, mgr.defaultHypervisor)
-
-	snapshot, err := mgr.CreateSnapshot(ctx, sourceID, CreateSnapshotRequest{
-		Kind: SnapshotKindStopped,
-		Name: "snapshot-vgpu-restore-retention",
-	})
-	require.NoError(t, err)
-
-	meta, err := mgr.loadMetadata(sourceID)
-	require.NoError(t, err)
-	meta.GPUProfile = "NVIDIA L40S-2Q"
-	meta.GPUFramework = devices.VGPUFramework("future-framework")
-	meta.GPUDevicePath = "/sys/bus/pci/devices/0000:82:00.4"
-	meta.GPURetainedForCleanup = true
-	require.NoError(t, mgr.saveMetadata(meta))
-
-	_, err = mgr.RestoreSnapshot(ctx, sourceID, snapshot.Id, RestoreSnapshotRequest{
-		TargetState:      StateStopped,
-		TargetHypervisor: mgr.defaultHypervisor,
-	})
-	require.ErrorIs(t, err, ErrInvalidState)
-	require.ErrorContains(t, err, "delete it to release the assignment")
-
-	stored, err := mgr.loadMetadata(sourceID)
-	require.NoError(t, err)
-	assert.True(t, stored.GPURetainedForCleanup)
-	assert.Equal(t, "/sys/bus/pci/devices/0000:82:00.4", stored.GPUDevicePath)
-}
-
 func TestRestoreSnapshotDoesNotResurrectStaleVGPUAssignment(t *testing.T) {
 	mgr, _ := setupTestManager(t)
 	ctx := context.Background()
@@ -170,8 +113,6 @@ func TestRestoreSnapshotKeepsCurrentVGPUAssignment(t *testing.T) {
 	meta.GPUFramework = devices.VGPUFramework("future-framework")
 	meta.GPUDevicePath = "/sys/bus/pci/devices/0000:82:00.4"
 	meta.GPUMdevUUID = "retained-uuid"
-	assignedAt := time.Now().UTC().Truncate(time.Second)
-	meta.GPUAssignedAt = &assignedAt
 	require.NoError(t, mgr.saveMetadata(meta))
 
 	_, err = mgr.RestoreSnapshot(ctx, sourceID, snapshot.Id, RestoreSnapshotRequest{
@@ -185,8 +126,6 @@ func TestRestoreSnapshotKeepsCurrentVGPUAssignment(t *testing.T) {
 	assert.Equal(t, devices.VGPUFramework("future-framework"), restored.GPUFramework)
 	assert.Equal(t, "/sys/bus/pci/devices/0000:82:00.4", restored.GPUDevicePath)
 	assert.Equal(t, "retained-uuid", restored.GPUMdevUUID)
-	require.NotNil(t, restored.GPUAssignedAt)
-	assert.True(t, assignedAt.Equal(*restored.GPUAssignedAt))
 }
 
 func TestStoppedSnapshotLifecycleAndForkAfterSourceDeletion(t *testing.T) {

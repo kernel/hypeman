@@ -151,12 +151,10 @@ type StoredMetadata struct {
 	Devices []string // Device IDs attached to this instance
 
 	// GPU configuration (vGPU mode)
-	GPUProfile            string // vGPU profile name (e.g., "L40S-1Q")
-	GPUFramework          devices.VGPUFramework
-	GPUDevicePath         string
-	GPUMdevUUID           string     // populated for mdev-backed vGPUs
-	GPUAssignedAt         *time.Time // set before hypervisor startup to bound crash recovery protection
-	GPURetainedForCleanup bool       // delete-only stub holding a vGPU assignment
+	GPUProfile    string // vGPU profile name (e.g., "L40S-1Q")
+	GPUFramework  devices.VGPUFramework
+	GPUDevicePath string
+	GPUMdevUUID   string // populated for mdev-backed vGPUs
 
 	// Command overrides (like docker run <image> <command>)
 	Entrypoint []string // Override image entrypoint (nil = use image default)

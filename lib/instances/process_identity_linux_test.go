@@ -17,9 +17,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/hypervisor"
-	"github.com/kernel/hypeman/lib/paths"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -508,47 +506,6 @@ func TestRefreshHypervisorPIDResolvesSocketOwnerWhenStoredPIDIsDead(t *testing.T
 	assert.Equal(t, os.Getpid(), *stored.HypervisorPID)
 	assert.NotZero(t, stored.HypervisorStartTime, "confirmed socket owner mints the identity token")
 	assert.Equal(t, hostBootID(), stored.HypervisorBootID)
-}
-
-func TestVGPUAssignmentClaimedByLiveInstanceProtectsReusedPIDClaim(t *testing.T) {
-	socketPath := filepath.Join(t.TempDir(), "test.sock")
-	owner := exec.Command(os.Args[0], "-test.run=^TestSocketListenerHelper$")
-	owner.Env = append(os.Environ(), "HYPERVISOR_SOCKET_HELPER=1", "HYPERVISOR_SOCKET_PATH="+socketPath)
-	stdin, err := owner.StdinPipe()
-	require.NoError(t, err)
-	stdout, err := owner.StdoutPipe()
-	require.NoError(t, err)
-	require.NoError(t, owner.Start())
-	t.Cleanup(func() {
-		_ = stdin.Close()
-		_ = owner.Process.Kill()
-		_ = owner.Wait()
-	})
-	_, err = bufio.NewReader(stdout).ReadString('\n')
-	require.NoError(t, err)
-
-	stale := exec.Command("sleep", "30")
-	require.NoError(t, stale.Start())
-	t.Cleanup(func() {
-		_ = stale.Process.Kill()
-		_ = stale.Wait()
-	})
-
-	m := &manager{paths: paths.New(t.TempDir())}
-	const devicePath = "/sys/bus/pci/devices/0000:82:00.4"
-	stalePID := stale.Process.Pid
-	require.NoError(t, m.ensureDirectories("live-claimant"))
-	require.NoError(t, m.saveMetadata(&metadata{StoredMetadata: StoredMetadata{
-		Id:                        "live-claimant",
-		GPUFramework:              devices.VGPUFrameworkVendorVFIO,
-		GPUDevicePath:             devicePath,
-		HypervisorProcessIdentity: HypervisorProcessIdentity{HypervisorPID: &stalePID},
-		SocketPath:                socketPath,
-	}}))
-
-	claimed, err := m.vgpuAssignmentClaimedByLiveInstance("other-instance", devicePath)
-	require.NoError(t, err)
-	assert.True(t, claimed)
 }
 
 func TestKillHypervisorSurvivesConcurrentReaper(t *testing.T) {

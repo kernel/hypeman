@@ -66,9 +66,6 @@ func (m *manager) createSnapshot(ctx context.Context, id string, req CreateSnaps
 	inst := m.toInstance(ctx, meta)
 	stored := &meta.StoredMetadata
 
-	if stored.GPURetainedForCleanup {
-		return nil, errVGPURetentionStub
-	}
 	if err := validateForkVolumeSafety(stored.Volumes); err != nil {
 		return nil, fmt.Errorf("%w: snapshot requires readonly volume attachments: %v", ErrNotSupported, err)
 	}
@@ -266,10 +263,6 @@ func (m *manager) restoreSnapshot(ctx context.Context, id string, snapshotID str
 	if sourceInst.State == StateRunning {
 		return nil, fmt.Errorf("%w: cannot restore snapshot while source is %s", ErrInvalidState, sourceInst.State)
 	}
-	if sourceMeta.GPURetainedForCleanup {
-		return nil, errVGPURetentionStub
-	}
-
 	targetState, err := resolveSnapshotTargetState(rec.Snapshot.Kind, req.TargetState)
 	if err != nil {
 		return nil, err
@@ -318,7 +311,6 @@ func (m *manager) restoreSnapshot(ctx context.Context, id string, snapshotID str
 	restored.GPUFramework = sourceMeta.GPUFramework
 	restored.GPUDevicePath = sourceMeta.GPUDevicePath
 	restored.GPUMdevUUID = sourceMeta.GPUMdevUUID
-	restored.GPUAssignedAt = sourceMeta.GPUAssignedAt
 	restored.HypervisorType = targetHypervisor
 	restored.HypervisorVersion = targetHypervisorVersion
 	restored.SocketPath = m.paths.InstanceSocket(id, starter.SocketName())

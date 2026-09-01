@@ -90,14 +90,14 @@ On an mdev host, the response also includes the assigned mdev UUID:
 
 ### Ephemeral vGPU Lifecycle
 
-vGPU assignments are created on instance start and released on stop or delete. Hypeman creates/removes an mdev on mdev hosts and writes the profile ID/`0` to `current_vgpu_type` on vendor VFIO hosts.
+vGPU assignments are created on instance start and released on stop or delete. Hypeman creates/removes an mdev on mdev hosts. On vendor VFIO hosts, it first reserves a VF by persisting its path in instance metadata, then writes the profile ID to `current_vgpu_type`. Metadata is the authoritative VF claim.
 
 ```
-Instance Create → Assign profile to VF → Attach VF to VM → Instance Running
-Instance Stop/Delete → Release profile → VF available again
+Instance Create → Persist VF claim → Configure profile → Attach VF to VM → Instance Running
+Instance Stop/Delete → Reset profile → Remove VF claim → VF available again
 ```
 
-Hypeman reconciles orphaned assignments with a periodic fail-closed pass: once at startup and every minute afterward (skipped entirely on hosts without GPUs). Each pass releases assignments whose owning instance is no longer live and clears their metadata, then sweeps device-level leftovers with no live metadata claim. Devices held open by a running VMM and assignments younger than five minutes are preserved, so a release that fails during stop or delete (typically because a GPU-busy VMM's kernel-side VFIO teardown outlives the force-kill wait) is simply retried on later passes until the device is free.
+Hypeman reconciles metadata claims once at startup and every minute afterward, skipping hosts without GPUs. A claim whose VMM is confirmed dead is reset before the claim is removed. mdev hosts also sweep orphaned device-level assignments. Vendor VFIO hosts repair an unclaimed dirty VF when the allocator next selects it; repair checks for open VFIO handles before resetting `current_vgpu_type`.
 
 ### Hypervisor Support
 

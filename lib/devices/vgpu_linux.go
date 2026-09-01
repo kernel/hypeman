@@ -58,25 +58,34 @@ func CreateVGPU(ctx context.Context, profileName, instanceID string) (*VGPUDevic
 	if err != nil {
 		return nil, err
 	}
-	switch framework {
-	case VGPUFrameworkMdev:
-		mdev, err := CreateMdev(ctx, profileName, instanceID)
-		if err != nil {
-			return nil, err
-		}
-		return &VGPUDevice{
-			Framework:   VGPUFrameworkMdev,
-			VFAddress:   mdev.VFAddress,
-			ProfileType: mdev.ProfileType,
-			ProfileName: mdev.ProfileName,
-			SysfsPath:   mdev.SysfsPath,
-			MdevUUID:    mdev.UUID,
-		}, nil
-	case VGPUFrameworkVendorVFIO:
-		return hostVendorVFIO.create(ctx, profileName, instanceID)
-	default:
+	if framework == VGPUFrameworkVendorVFIO {
+		return nil, fmt.Errorf("vendor VFIO vGPU requires a metadata claim")
+	}
+	if framework != VGPUFrameworkMdev {
 		return nil, fmt.Errorf("vGPU framework not available")
 	}
+	mdev, err := CreateMdev(ctx, profileName, instanceID)
+	if err != nil {
+		return nil, err
+	}
+	return &VGPUDevice{
+		Framework:   VGPUFrameworkMdev,
+		VFAddress:   mdev.VFAddress,
+		ProfileType: mdev.ProfileType,
+		ProfileName: mdev.ProfileName,
+		SysfsPath:   mdev.SysfsPath,
+		MdevUUID:    mdev.UUID,
+	}, nil
+}
+
+// ListVendorVFIOProfileTypes returns the profiles advertised by each VF.
+func ListVendorVFIOProfileTypes(vfs []VirtualFunction) (map[string][]VGPUProfileType, error) {
+	return hostVendorVFIO.profileTypes(vfs)
+}
+
+// ConfigureVGPU idempotently configures a claimed vendor VFIO VF.
+func ConfigureVGPU(ctx context.Context, vfAddress, profileType string) error {
+	return hostVendorVFIO.configure(ctx, vfAddress, profileType)
 }
 
 func DestroyVGPU(ctx context.Context, assignment VGPUAssignment) error {
@@ -129,7 +138,7 @@ func ReconcileVGPUs(ctx context.Context, protectedDevicePaths map[string]struct{
 	case VGPUFrameworkMdev:
 		return ReconcileMdevs(ctx, mdevReconcileInfos(protectedDevicePaths))
 	case VGPUFrameworkVendorVFIO:
-		return hostVendorVFIO.reconcile(ctx, protectedDevicePaths)
+		return nil
 	}
 	return nil
 }

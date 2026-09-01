@@ -36,6 +36,14 @@ func CreateVGPU(ctx context.Context, profileName, instanceID string) (*VGPUDevic
 	return nil, ErrVGPUNotSupportedOnMacOS
 }
 
+func ListVendorVFIOProfileTypes(vfs []VirtualFunction) (map[string][]VGPUProfileType, error) {
+	return nil, ErrVGPUNotSupportedOnMacOS
+}
+
+func ConfigureVGPU(ctx context.Context, vfAddress, profileType string) error {
+	return ErrVGPUNotSupportedOnMacOS
+}
+
 // CreateMdev returns an error on macOS as mdev is not supported.
 func CreateMdev(ctx context.Context, profileName, instanceID string) (*MdevDevice, error) {
 	return nil, ErrVGPUNotSupportedOnMacOS

@@ -47,23 +47,14 @@ func (m *manager) startInstance(
 		log.ErrorContext(ctx, "invalid state for start", "instance_id", id, "state", inst.State)
 		return nil, fmt.Errorf("%w: cannot start from state %s, must be Stopped", ErrInvalidState, inst.State)
 	}
-	if stored.GPURetainedForCleanup {
-		log.ErrorContext(ctx, "refusing to start vGPU retention record", "instance_id", id)
-		return nil, errVGPURetentionStub
-	}
-
 	// Release any assignment retained by an earlier failed release and
 	// persist the cleared fields immediately, so a failure later in start
 	// cannot leave on-disk metadata pointing at a device that is already
 	// gone.
 	if storedVGPUDevicePath(stored) != "" {
-		if err := m.releaseStoredVGPU(ctx, stored); err != nil {
+		if err := m.releaseStoredVGPUPersisted(ctx, meta); err != nil {
 			log.ErrorContext(ctx, "failed to release stale vGPU before start", "instance_id", id, "error", err)
 			return nil, fmt.Errorf("release stale vGPU before start: %w", err)
-		}
-		if err := m.saveMetadata(meta); err != nil {
-			log.ErrorContext(ctx, "failed to save metadata after stale vGPU release", "instance_id", id, "error", err)
-			return nil, fmt.Errorf("save metadata after stale vGPU release: %w", err)
 		}
 	}
 
@@ -120,9 +111,6 @@ func (m *manager) startInstance(
 	}
 
 	// Setup cleanup stack for automatic rollback on errors
-	retention := vgpuRetention{instanceID: id}
-	// Deferred before cu.Clean so rollback records retention before this wraps the error.
-	defer func() { retErr = retention.wrapPending(retErr) }()
 	cu := cleanup.Make(func() {})
 	defer cu.Clean()
 
@@ -174,39 +162,24 @@ func (m *manager) startInstance(
 	// 4b. Recreate the vGPU if this instance had a GPU profile
 	// Note: GPU availability was already validated in step 2b
 	if stored.GPUProfile != "" {
-		log.InfoContext(ctx, "creating vGPU for start", "instance_id", id, "profile", stored.GPUProfile)
-		device, err := m.createVGPUDevice(ctx, stored.GPUProfile, id)
+		log.InfoContext(ctx, "claiming vGPU for start", "instance_id", id, "profile", stored.GPUProfile)
+		device, err := m.claimVGPU(ctx, meta, stored.GPUProfile)
 		if err != nil {
-			log.ErrorContext(ctx, "failed to create vGPU", "instance_id", id, "profile", stored.GPUProfile, "error", err)
-			wrapped := fmt.Errorf("create vGPU for profile %s: %w", stored.GPUProfile, err)
-			if pendingDevice, ok := vgpuDevicePendingCleanup(err); ok {
-				retentionMeta := rollbackMeta
-				setStoredVGPUDevice(&retentionMeta.StoredMetadata, pendingDevice, m.nowUTC())
-				persisted := true
-				if saveErr := m.saveMetadata(&retentionMeta); saveErr != nil {
-					log.ErrorContext(ctx, "failed to retain vGPU assignment after create rollback failure", "instance_id", id, "error", saveErr)
-					wrapped = fmt.Errorf("%w; retain assignment: %v", wrapped, saveErr)
-					persisted = false
-				}
-				retention.markRetained(persisted)
-				m.recordVGPURetainedAssignment(ctx, vgpuRetentionOperationStart, persisted)
-			}
-			return nil, wrapped
+			log.ErrorContext(ctx, "failed to claim vGPU", "instance_id", id, "profile", stored.GPUProfile, "error", err)
+			return nil, fmt.Errorf("claim vGPU for profile %s: %w", stored.GPUProfile, err)
 		}
-		assignedAt := m.nowUTC()
-		setStoredVGPUDevice(stored, device, assignedAt)
-		log.InfoContext(ctx, "created vGPU", "instance_id", id, "profile", stored.GPUProfile, "uuid", device.MdevUUID)
-		// Add vGPU cleanup to stack
+		setStoredVGPUDevice(stored, device)
 		cu.Add(func() {
-			retained, persisted := m.cleanupStartVGPU(ctx, id, device, assignedAt, rollbackMeta)
-			if retained {
-				retention.markRetained(persisted)
-				m.recordVGPURetainedAssignment(ctx, vgpuRetentionOperationStart, persisted)
-			}
+			m.cleanupStartVGPU(ctx, stored, rollbackMeta)
 		})
+		if err := m.configureClaimedVGPU(ctx, device); err != nil {
+			log.ErrorContext(ctx, "failed to configure vGPU", "instance_id", id, "profile", stored.GPUProfile, "error", err)
+			return nil, fmt.Errorf("configure vGPU for profile %s: %w", stored.GPUProfile, err)
+		}
+		log.InfoContext(ctx, "configured vGPU", "instance_id", id, "profile", stored.GPUProfile, "uuid", device.MdevUUID)
 		if err := m.saveMetadata(meta); err != nil {
-			log.ErrorContext(ctx, "failed to save metadata after vGPU creation", "instance_id", id, "error", err)
-			return nil, fmt.Errorf("save metadata after vGPU creation: %w", err)
+			log.ErrorContext(ctx, "failed to save metadata after vGPU configuration", "instance_id", id, "error", err)
+			return nil, fmt.Errorf("save metadata after vGPU configuration: %w", err)
 		}
 	}
 

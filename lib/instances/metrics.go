@@ -80,13 +80,6 @@ const (
 	vgpuReconcileStageReconcileDevices vgpuReconcileStage = "reconcile_devices"
 )
 
-type vgpuRetentionOperation string
-
-const (
-	vgpuRetentionOperationCreate vgpuRetentionOperation = "create"
-	vgpuRetentionOperationStart  vgpuRetentionOperation = "start"
-)
-
 // Metrics holds the metrics instruments for instance operations.
 type Metrics struct {
 	createDuration                       metric.Float64Histogram
@@ -110,7 +103,6 @@ type Metrics struct {
 	ttlReaperDeletionsTotal              metric.Int64Counter
 	vgpuReconcileFailuresTotal           metric.Int64Counter
 	vgpuStaleReleaseFailuresTotal        metric.Int64Counter
-	vgpuAssignmentsRetainedTotal         metric.Int64Counter
 	tracer                               trace.Tracer
 }
 
@@ -298,14 +290,6 @@ func newInstanceMetrics(meter metric.Meter, tracer trace.Tracer, m *manager) (*M
 	vgpuStaleReleaseFailuresTotal, err := meter.Int64Counter(
 		"hypeman_instances_vgpu_stale_release_failures_total",
 		metric.WithDescription("Total number of stale vGPU assignment releases that failed, keeping the VF allocated until a later reconcile pass succeeds"),
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	vgpuAssignmentsRetainedTotal, err := meter.Int64Counter(
-		"hypeman_instances_vgpu_assignments_retained_total",
-		metric.WithDescription("Total number of failed rollbacks that left a vGPU assignment behind, by whether the retention record the periodic reconcile needs was persisted"),
 	)
 	if err != nil {
 		return nil, err
@@ -507,7 +491,6 @@ func newInstanceMetrics(meter metric.Meter, tracer trace.Tracer, m *manager) (*M
 		ttlReaperDeletionsTotal:              ttlReaperDeletionsTotal,
 		vgpuReconcileFailuresTotal:           vgpuReconcileFailuresTotal,
 		vgpuStaleReleaseFailuresTotal:        vgpuStaleReleaseFailuresTotal,
-		vgpuAssignmentsRetainedTotal:         vgpuAssignmentsRetainedTotal,
 		tracer:                               tracer,
 	}, nil
 }
@@ -621,16 +604,6 @@ func (m *manager) recordVGPUStaleReleaseFailure(ctx context.Context) {
 		return
 	}
 	m.metrics.vgpuStaleReleaseFailuresTotal.Add(ctx, 1)
-}
-
-func (m *manager) recordVGPURetainedAssignment(ctx context.Context, operation vgpuRetentionOperation, persisted bool) {
-	if m.metrics == nil {
-		return
-	}
-	m.metrics.vgpuAssignmentsRetainedTotal.Add(ctx, 1, metric.WithAttributes(
-		attribute.String("operation", string(operation)),
-		attribute.String("persisted", strconv.FormatBool(persisted)),
-	))
 }
 
 // recordStateTransition records a state transition with hypervisor label.
