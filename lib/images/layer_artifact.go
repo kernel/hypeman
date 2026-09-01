@@ -31,7 +31,11 @@ const (
 	opaqueWhiteout = ".wh..wh..opq"
 )
 
-const layerRecordSchemaVersion = 1
+const (
+	layerRecordSchemaVersion = 1
+	maxLayerEntries          = 1_000_000
+	maxLayerUnpackedBytes    = 100 << 30
+)
 
 // layerArtifact is the persisted record for one materialized layer artifact.
 // The key is the compressed layer blob digest plus the artifact format, so the
@@ -95,7 +99,7 @@ func layerArtifactFormat() string {
 	case FormatExt4:
 		return layerFormatExt4
 	default:
-		return layerFormatErofs
+		return ""
 	}
 }
 
@@ -131,6 +135,12 @@ func readLayerRecord(p *paths.Paths, layerHex string) (*layerArtifact, error) {
 // only temp files that the next attempt replaces. No production caller yet:
 // pull integration and composition land in later changes.
 func (m *manager) materializeLayerArtifact(desc layerDescriptor) (*layerArtifact, error) {
+	unlock := m.layerLocks.lock(desc.Digest)
+	defer unlock()
+
+	if layerArtifactFormat() == "" {
+		return nil, fmt.Errorf("unsupported layer artifact format: %s", DefaultImageFormat)
+	}
 	layerHex := strings.TrimPrefix(desc.Digest, "sha256:")
 	if err := paths.ValidatePathComponent(layerHex); err != nil {
 		return nil, fmt.Errorf("invalid layer digest: %s", desc.Digest)
@@ -222,6 +232,9 @@ type unpackStats struct {
 // unpackLayerBlob extracts one compressed layer blob into dest, preserving
 // whiteout marker files and recording them. Paths are confined to dest.
 func unpackLayerBlob(blobPath, mediaType, dest string) (*unpackStats, error) {
+	if err := os.MkdirAll(dest, 0755); err != nil {
+		return nil, fmt.Errorf("create extraction root: %w", err)
+	}
 	blob, err := os.Open(blobPath)
 	if err != nil {
 		return nil, fmt.Errorf("open blob: %w", err)
@@ -239,7 +252,9 @@ func unpackLayerBlob(blobPath, mediaType, dest string) (*unpackStats, error) {
 	// Directory metadata is re-applied after extraction, once children
 	// exist, so tar directory mtimes are not overwritten by later writes.
 	var pendingDirs []pendingDir
-	hashedReader := io.TeeReader(reader, hash)
+	var pendingHardlinks []pendingHardlink
+	limitedReader := &io.LimitedReader{R: reader, N: maxLayerUnpackedBytes + 1}
+	hashedReader := io.TeeReader(limitedReader, hash)
 	tr := tar.NewReader(hashedReader)
 	for {
 		header, err := tr.Next()
@@ -253,6 +268,12 @@ func unpackLayerBlob(blobPath, mediaType, dest string) (*unpackStats, error) {
 		target, err := safeJoin(dest, header.Name)
 		if err != nil {
 			return nil, err
+		}
+		if stats.entries >= maxLayerEntries {
+			return nil, fmt.Errorf("layer exceeds maximum entry count of %d", maxLayerEntries)
+		}
+		if header.Size > maxLayerUnpackedBytes-stats.unpackedBytes {
+			return nil, fmt.Errorf("layer exceeds maximum unpacked size of %d bytes", maxLayerUnpackedBytes)
 		}
 		stats.entries++
 
@@ -273,15 +294,23 @@ func unpackLayerBlob(blobPath, mediaType, dest string) (*unpackStats, error) {
 		if header.Typeflag == tar.TypeDir {
 			pendingDirs = append(pendingDirs, pendingDir{target: target, header: header})
 		}
-		if err := extractTarEntry(tr, header, dest, target); err != nil {
+		if header.Typeflag == tar.TypeLink {
+			pendingHardlinks = append(pendingHardlinks, pendingHardlink{target: target, linkname: header.Linkname})
+		} else if err := extractTarEntry(tr, header, dest, target); err != nil {
 			return nil, fmt.Errorf("extract %s: %w", header.Name, err)
 		}
-		if header.Typeflag == tar.TypeReg {
+		if header.Typeflag == tar.TypeReg || header.Typeflag == tar.TypeGNUSparse {
 			stats.unpackedBytes += header.Size
 		}
 	}
 	if _, err := io.Copy(io.Discard, hashedReader); err != nil {
 		return nil, fmt.Errorf("drain layer: %w", err)
+	}
+	if limitedReader.N == 0 {
+		return nil, fmt.Errorf("layer exceeds maximum unpacked size of %d bytes", maxLayerUnpackedBytes)
+	}
+	if err := resolveHardlinks(dest, pendingHardlinks); err != nil {
+		return nil, err
 	}
 	for _, dir := range pendingDirs {
 		if err := applyTarMetadata(dir.target, dir.header); err != nil {
@@ -295,6 +324,43 @@ func unpackLayerBlob(blobPath, mediaType, dest string) (*unpackStats, error) {
 type pendingDir struct {
 	target string
 	header *tar.Header
+}
+
+type pendingHardlink struct {
+	target   string
+	linkname string
+}
+
+func resolveHardlinks(root string, pending []pendingHardlink) error {
+	for len(pending) > 0 {
+		resolved := 0
+		remaining := make([]pendingHardlink, 0, len(pending))
+		for _, link := range pending {
+			linkTarget, err := safeJoin(root, link.linkname)
+			if err != nil {
+				return err
+			}
+			if _, err := os.Lstat(linkTarget); err != nil {
+				if os.IsNotExist(err) {
+					remaining = append(remaining, link)
+					continue
+				}
+				return err
+			}
+			if err := prepareTarTarget(link.target); err != nil {
+				return err
+			}
+			if err := os.Link(linkTarget, link.target); err != nil {
+				return fmt.Errorf("create hardlink %s: %w", link.target, err)
+			}
+			resolved++
+		}
+		if resolved == 0 {
+			return fmt.Errorf("hardlink target not found")
+		}
+		pending = remaining
+	}
+	return nil
 }
 
 // decompressLayer wraps the blob in the reader for its layer media type. Both
@@ -338,6 +404,13 @@ func (c multiCloser) Close() error {
 // do not exist yet, so their targets are checked by resolve in
 // validateSymlinkTarget instead.
 func safeJoin(root, name string) (string, error) {
+	rootInfo, err := os.Lstat(root)
+	if err != nil {
+		return "", fmt.Errorf("inspect extraction root: %w", err)
+	}
+	if !rootInfo.IsDir() || rootInfo.Mode()&os.ModeSymlink != 0 {
+		return "", fmt.Errorf("extraction root is not a directory: %s", root)
+	}
 	if filepath.IsAbs(name) {
 		return "", fmt.Errorf("tar entry escapes root: %s", name)
 	}
@@ -390,7 +463,7 @@ func extractTarEntry(tr *tar.Reader, header *tar.Header, root, target string) er
 	switch header.Typeflag {
 	case tar.TypeDir:
 		return extractTarDir(target)
-	case tar.TypeReg:
+	case tar.TypeReg, tar.TypeGNUSparse:
 		return extractTarFile(tr, target, header)
 	case tar.TypeSymlink:
 		return extractTarSymlink(root, target, header)
@@ -540,13 +613,23 @@ func removePath(path string) error {
 // whiteout files are interpreted here rather than passed through, because
 // overlayfs does not understand them. No production caller yet; composition
 // lands in a later change.
-func applyLayerTree(layerDir, targetDir string) error {
+func applyLayerTree(layerDir, targetDir string) (err error) {
 	if err := os.MkdirAll(targetDir, 0755); err != nil {
 		return fmt.Errorf("create target directory: %w", err)
 	}
+	originalModes := make(map[string]fs.FileMode)
+	defer func() {
+		if restoreErr := restoreDirectoryModes(originalModes); restoreErr != nil {
+			if err == nil {
+				err = fmt.Errorf("restore directory modes: %w", restoreErr)
+			} else {
+				err = errors.Join(err, fmt.Errorf("restore directory modes: %w", restoreErr))
+			}
+		}
+	}()
 
 	// Phase 1: apply whiteouts against what is already in the target.
-	err := filepath.WalkDir(layerDir, func(path string, entry fs.DirEntry, err error) error {
+	err = filepath.WalkDir(layerDir, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -560,6 +643,9 @@ func applyLayerTree(layerDir, targetDir string) error {
 		}
 		targetParent, err := safeJoin(targetDir, filepath.Dir(rel))
 		if err != nil {
+			return err
+		}
+		if err := makePathWritable(targetDir, targetParent, originalModes); err != nil {
 			return err
 		}
 		if base == opaqueWhiteout {
@@ -602,6 +688,9 @@ func applyLayerTree(layerDir, targetDir string) error {
 		if err != nil {
 			return err
 		}
+		if err := makePathWritable(targetDir, filepath.Dir(target), originalModes); err != nil {
+			return err
+		}
 		if entry.IsDir() {
 			info, err := entry.Info()
 			if err != nil {
@@ -609,7 +698,13 @@ func applyLayerTree(layerDir, targetDir string) error {
 			}
 			pendingDirs = append(pendingDirs, dirMeta{src: path, dst: target, info: info})
 		}
-		return copyEntryInto(path, target, hardlinks)
+		if err := copyEntryInto(path, target, hardlinks); err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return makePathWritable(targetDir, target, originalModes)
+		}
+		return nil
 	})
 	if err != nil {
 		return fmt.Errorf("copy layer tree: %w", err)
@@ -620,6 +715,49 @@ func applyLayerTree(layerDir, targetDir string) error {
 		}
 	}
 	return nil
+}
+
+func makePathWritable(root, path string, originalModes map[string]fs.FileMode) error {
+	root = filepath.Clean(root)
+	path = filepath.Clean(path)
+	if path != root && !strings.HasPrefix(path, root+string(filepath.Separator)) {
+		return fmt.Errorf("path is outside target root: %s", path)
+	}
+	for current := path; ; current = filepath.Dir(current) {
+		info, err := os.Lstat(current)
+		if err == nil {
+			if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+				return fmt.Errorf("target parent is not a directory: %s", current)
+			}
+			if _, recorded := originalModes[current]; !recorded {
+				originalModes[current] = info.Mode()
+				if err := os.Chmod(current, info.Mode().Perm()|0700); err != nil {
+					return err
+				}
+			}
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+		if current == root {
+			return nil
+		}
+	}
+}
+
+func restoreDirectoryModes(originalModes map[string]fs.FileMode) error {
+	var restoreErr error
+	for path, mode := range originalModes {
+		if _, err := os.Lstat(path); os.IsNotExist(err) {
+			continue
+		} else if err != nil {
+			restoreErr = errors.Join(restoreErr, err)
+			continue
+		}
+		if err := os.Chmod(path, mode.Perm()|mode&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky)); err != nil {
+			restoreErr = errors.Join(restoreErr, err)
+		}
+	}
+	return restoreErr
 }
 
 type dirMeta struct {
@@ -717,7 +855,11 @@ func copySymlinkEntry(src, dst string) error {
 	if err := os.Symlink(linkTarget, dst); err != nil {
 		return err
 	}
-	return nil
+	info, err := os.Lstat(src)
+	if err != nil {
+		return err
+	}
+	return copyEntryMetadata(src, dst, info)
 }
 
 func copySpecialEntry(src, dst string, info os.FileInfo) error {

@@ -75,6 +75,7 @@ type manager struct {
 	ociClient                  *ociClient
 	queue                      *queue.Queue
 	createMu                   sync.Mutex
+	layerLocks                 keyedMutex
 	diskUsageMu                sync.RWMutex
 	tagGenerations             map[string]uint64
 	requestedTags              map[string]string // newest pull's digest per requested tag
