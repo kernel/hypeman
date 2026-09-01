@@ -69,6 +69,15 @@ func (m *manager) inflightLayerRefSnapshot() map[string]struct{} {
 // reconcileLayerStore evicts unreferenced layer artifacts and refreshes the
 // cached disk usage totals so accounting reflects the removals.
 func (m *manager) reconcileLayerStore() {
+	m.createMu.Lock()
+	defer m.createMu.Unlock()
+	m.reconcileLayerStoreLocked()
+}
+
+// reconcileLayerStoreLocked is used by lifecycle operations that already hold
+// createMu. Serializing reconciliation with manifest finalization prevents an
+// eviction scan from racing a newly committed layer reference.
+func (m *manager) reconcileLayerStoreLocked() {
 	m.evictUnreferencedLayerArtifacts()
 	m.refreshDiskUsageTotals()
 }
