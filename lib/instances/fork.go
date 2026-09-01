@@ -611,7 +611,7 @@ func cloneStoredMetadata(src StoredMetadata) StoredMetadata {
 	}
 	if src.HypervisorPID != nil {
 		pid := *src.HypervisorPID
-		dst.HypervisorProcessIdentity.Set(pid)
+		dst.HypervisorPID = &pid
 	}
 	if src.ExpiresAt != nil {
 		expiresAt := *src.ExpiresAt
