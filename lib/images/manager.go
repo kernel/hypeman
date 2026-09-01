@@ -254,27 +254,9 @@ func (m *manager) ImportLocalImage(ctx context.Context, repo, reference, digest 
 	m.createMu.Lock()
 	defer m.createMu.Unlock()
 
-	// Check if we already have this digest (deduplication)
-	if meta, err := readMetadata(m.paths, ref.Repository(), ref.DigestHex()); err == nil {
-		// Don't cache failed builds - allow retry by falling through to
-		// re-queue the build.
-		if meta.Status == StatusFailed {
-			if err := removeDigestIfUnreferenced(m.paths, ref.Repository(), ref.DigestHex(), false); err != nil {
-				return nil, fmt.Errorf("remove failed image: %w", err)
-			}
-		} else {
-			if err := m.claimTagForStatus(meta, ref); err != nil {
-				return nil, fmt.Errorf("create image tag: %w", err)
-			}
-			img := meta.toImageFor(ref.String())
-			if meta.Status == StatusPending {
-				img.QueuePosition = m.queue.GetPosition(meta.Digest)
-			}
-			return img, nil
-		}
+	if img, found, err := m.reuseExistingImage(ref, nil); found || err != nil {
+		return img, err
 	}
-
-	// Don't have this digest yet, queue the build
 	return m.createAndQueueImage(ref, CreateImageRequest{Name: imageRef}, hostPlatform())
 }
 

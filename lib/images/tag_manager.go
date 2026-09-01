@@ -7,27 +7,30 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+
+	"github.com/kernel/hypeman/lib/paths"
 )
 
 func tagGenerationKey(repository, tag string) string {
 	return repository + ":" + tag
 }
 
-// nextTagGeneration bumps the mutation generation for a tag and returns the
-// new value. Pulls record the value with their metadata and only repoint the
-// tag on completion when no later operation mutated it.
-func (m *manager) nextTagGeneration(repository, tag string) uint64 {
+func (m *manager) ensureTagState() {
 	if m.tagGenerations == nil {
 		m.tagGenerations = make(map[string]uint64)
 	}
+	if m.requestedTags == nil {
+		m.requestedTags = make(map[string]string)
+	}
+}
+
+func (m *manager) nextTagGeneration(repository, tag string) uint64 {
+	m.ensureTagState()
 	key := tagGenerationKey(repository, tag)
 	m.tagGenerations[key]++
 	return m.tagGenerations[key]
 }
 
-// revertTagGeneration undoes a nextTagGeneration bump for an operation that
-// failed before mutating the tag, so an in-flight pull of the tag is not
-// permanently blocked from repointing it.
 func (m *manager) revertTagGeneration(repository, tag string) {
 	key := tagGenerationKey(repository, tag)
 	if m.tagGenerations[key] <= 1 {
@@ -37,22 +40,14 @@ func (m *manager) revertTagGeneration(repository, tag string) {
 	m.tagGenerations[key]--
 }
 
-// releaseTagGeneration drops a failed pull's claim on its tag so an older
-// in-flight pull of the same tag can still repoint it.
 func (m *manager) releaseTagGeneration(repository, tag string, generation uint64) {
 	if m.tagGenerations[tagGenerationKey(repository, tag)] == generation {
 		m.revertTagGeneration(repository, tag)
 	}
 }
 
-// pruneTagGenerations drops entries for tags that no longer resolve, keeping
-// the map bounded over the process lifetime. Deleting a tag still suppresses
-// an in-flight pull's repoint: the pull's recorded generation can no longer
-// match the missing entry.
 func (m *manager) pruneTagGenerations() {
 	for key := range m.tagGenerations {
-		// tagGenerationKey is repo+":"+tag and tags never contain ":", but
-		// repositories may (host:port), so split on the last colon.
 		colon := strings.LastIndexByte(key, ':')
 		if colon < 0 {
 			continue
@@ -63,15 +58,8 @@ func (m *manager) pruneTagGenerations() {
 	}
 }
 
-// restoreTagState re-seeds the tag indexes from recovered metadata. metas must
-// be sorted oldest first so the newest requested pull wins.
 func (m *manager) restoreTagState(metas []*imageMetadata) {
-	if m.tagGenerations == nil {
-		m.tagGenerations = make(map[string]uint64)
-	}
-	if m.requestedTags == nil {
-		m.requestedTags = make(map[string]string)
-	}
+	m.ensureTagState()
 	for _, meta := range metas {
 		if meta.RequestedTag == "" || meta.Digest == "" {
 			continue
@@ -88,9 +76,6 @@ func (m *manager) restoreTagState(metas []*imageMetadata) {
 	}
 }
 
-// claimTagForStatus repoints ref's tag at the digest when the image is ready,
-// or records a pending tag when the build is still in flight. It is a no-op
-// for digest-only references.
 func (m *manager) claimTagForStatus(meta *imageMetadata, ref *ResolvedRef) error {
 	if ref.Tag() == "" {
 		return nil
@@ -101,7 +86,6 @@ func (m *manager) claimTagForStatus(meta *imageMetadata, ref *ResolvedRef) error
 	return ensurePendingTag(m.paths, ref.Repository(), ref.Tag(), ref.DigestHex())
 }
 
-// claimReadyTag repoints an existing tag at a ready digest, last pull wins.
 func (m *manager) claimReadyTag(repository, tag, digestHex string) error {
 	m.nextTagGeneration(repository, tag)
 	if err := createTagSymlink(m.paths, repository, tag, digestHex); err != nil {
@@ -111,18 +95,11 @@ func (m *manager) claimReadyTag(repository, tag, digestHex string) error {
 	return nil
 }
 
-// trackRequestedTag records the digest of the newest pull requested for a tag
-// so readiness waits can find it without walking the metadata tree.
 func (m *manager) trackRequestedTag(repository, tag, digestHex string) {
-	if m.requestedTags == nil {
-		m.requestedTags = make(map[string]string)
-	}
+	m.ensureTagState()
 	m.requestedTags[tagGenerationKey(repository, tag)] = digestHex
 }
 
-// requestedTagImage returns the newest image requested for a tag, so a
-// readiness wait tracks the latest pull rather than the digest the tag
-// currently points at.
 func (m *manager) requestedTagImage(ref *NormalizedRef) *Image {
 	m.createMu.Lock()
 	digestHex, ok := m.requestedTags[tagGenerationKey(ref.Repository(), ref.Tag())]
@@ -137,51 +114,35 @@ func (m *manager) requestedTagImage(ref *NormalizedRef) *Image {
 	return meta.toImageFor(ref.String())
 }
 
-// claimRequestedTag repoints the pull's requested tag at the finished digest.
-// The tag is only repointed when its generation still matches the pull's
-// recorded claim, so a later mutation of the tag wins over the in-flight
-// pull. A recovered build whose metadata predates requested-tag tracking has
-// no recorded tag: fall back to the reference's own tag and recreate a
-// missing symlink, matching the pre-tracking behavior. Otherwise an
-// already-missing tag stays missing so a concurrent delete wins.
 func (m *manager) claimRequestedTag(ref *ResolvedRef, meta *imageMetadata) bool {
-	requestedTag := meta.RequestedTag
-	allowMissing := requestedTag == ""
-	if requestedTag == "" {
-		requestedTag = ref.Tag()
+	tag := meta.RequestedTag
+	allowMissing := tag == ""
+	if allowMissing {
+		tag = ref.Tag()
 	}
-	if requestedTag == "" || m.tagGenerations[tagGenerationKey(ref.Repository(), requestedTag)] != meta.TagGeneration {
+	if !m.tagClaimIsCurrent(ref.Repository(), tag, ref.DigestHex(), meta, allowMissing) {
 		return false
 	}
-	current, err := resolveTag(m.paths, ref.Repository(), requestedTag)
-	if err != nil {
-		if !allowMissing || !errors.Is(err, ErrNotFound) {
-			return false
-		}
-	} else if current != ref.DigestHex() && current != meta.PreviousTagDigest {
-		return false
-	}
-	if err := createTagSymlink(m.paths, ref.Repository(), requestedTag, ref.DigestHex()); err != nil {
+	if err := createTagSymlink(m.paths, ref.Repository(), tag, ref.DigestHex()); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: failed to create tag symlink: %v\n", err)
 		return false
 	}
 	return true
 }
 
+func (m *manager) tagClaimIsCurrent(repository, tag, digest string, meta *imageMetadata, allowMissing bool) bool {
+	if tag == "" || m.tagGenerations[tagGenerationKey(repository, tag)] != meta.TagGeneration {
+		return false
+	}
+	current, err := resolveTag(m.paths, repository, tag)
+	if err == nil {
+		return current == digest || current == meta.PreviousTagDigest
+	}
+	return allowMissing && errors.Is(err, ErrNotFound)
+}
+
 // TagImage creates a ready-image tag without pulling or converting content.
-// Cross-repository tags promote legacy content into the shared layout. A
-// failed call leaves no side effects: the target tag's generation is only
-// bumped after the new tag is on disk, so pending pulls that claimed the
-// target tag keep their claim. When the target previously pointed at
-// different content, that digest is collected after the new tag is live;
-// cleanup failures are logged and do not fail the call, since the tag is
-// already installed at that point.
-//
-// Promotion deliberately runs before the symlink install, so a symlink
-// failure after a cross-repo promotion leaves the content promoted with no
-// target tag. That state is gc-consistent (unreferenced content is
-// collected) and retry is idempotent (promoteImageToContent short-circuits
-// on ready content), which beats rolling back a completed promotion.
+// Cross-repository tags promote content into the shared layout.
 func (m *manager) TagImage(ctx context.Context, source, target string) (*Image, error) {
 	sourceRef, targetRef, err := parseTagReferences(source, target)
 	if err != nil {
@@ -191,36 +152,44 @@ func (m *manager) TagImage(ctx context.Context, source, target string) (*Image, 
 	m.createMu.Lock()
 	defer m.createMu.Unlock()
 
-	// A dangling or malformed target symlink is treated like a missing tag so
-	// the retag self-heals; createTagSymlink replaces the link either way.
-	previousDigest, err := resolveTag(m.paths, targetRef.Repository(), targetRef.Tag())
-	if err != nil && !errors.Is(err, ErrNotFound) && !errors.Is(err, errInvalidSymlinkTarget) {
-		return nil, fmt.Errorf("resolve existing target tag: %w", err)
+	previousDigest, err := existingTagDigest(m.paths, targetRef)
+	if err != nil {
+		return nil, err
 	}
-
 	digestHex, meta, err := m.readyTagImage(sourceRef)
 	if err != nil {
 		return nil, err
 	}
-	if sourceRef.Repository() != targetRef.Repository() {
-		if err := promoteImageToContent(m.paths, sourceRef.Repository(), digestHex, meta); err != nil {
-			return nil, fmt.Errorf("promote image to content: %w", err)
-		}
+	if err := m.installTag(sourceRef, targetRef, digestHex, meta); err != nil {
+		return nil, err
 	}
-	if err := createTagSymlink(m.paths, targetRef.Repository(), targetRef.Tag(), digestHex); err != nil {
-		return nil, fmt.Errorf("create image tag: %w", err)
-	}
-	if err := writeMetadata(m.paths, targetRef.Repository(), digestHex, meta); err != nil {
-		return nil, fmt.Errorf("write tagged image metadata: %w", err)
-	}
-	// Unlike updateExistingReference, which bumps the generation before
-	// installing the symlink, the bump happens after the install here so a
-	// failed tag call cannot invalidate a pending pull's claim on the target
-	// tag (pinned by TestTagImageFailureLeavesNoSideEffects).
 	m.nextTagGeneration(targetRef.Repository(), targetRef.Tag())
 	m.cleanupReplacedTag(targetRef, previousDigest, digestHex)
 
 	return meta.toImageFor(targetRef.String()), nil
+}
+
+func existingTagDigest(p *paths.Paths, ref *NormalizedRef) (string, error) {
+	digest, err := resolveTag(p, ref.Repository(), ref.Tag())
+	if err == nil || errors.Is(err, ErrNotFound) || errors.Is(err, errInvalidSymlinkTarget) {
+		return digest, nil
+	}
+	return "", fmt.Errorf("resolve existing target tag: %w", err)
+}
+
+func (m *manager) installTag(source, target *NormalizedRef, digest string, meta *imageMetadata) error {
+	if source.Repository() != target.Repository() {
+		if err := promoteImageToContent(m.paths, source.Repository(), digest, meta); err != nil {
+			return fmt.Errorf("promote image to content: %w", err)
+		}
+	}
+	if err := createTagSymlink(m.paths, target.Repository(), target.Tag(), digest); err != nil {
+		return fmt.Errorf("create image tag: %w", err)
+	}
+	if err := writeMetadata(m.paths, target.Repository(), digest, meta); err != nil {
+		return fmt.Errorf("write tagged image metadata: %w", err)
+	}
+	return nil
 }
 
 func (m *manager) cleanupUnclaimedImage(ref *ResolvedRef) {
@@ -230,19 +199,21 @@ func (m *manager) cleanupUnclaimedImage(ref *ResolvedRef) {
 }
 
 func (m *manager) cleanupReplacedTag(ref *NormalizedRef, previousDigest, digestHex string) {
-	if previousDigest != "" && previousDigest != digestHex {
-		// Sibling tags in this repository may still reference the previous
-		// digest; only collect when this was the last reference.
-		count, err := countTagsForDigest(m.paths, ref.Repository(), previousDigest)
-		if err != nil {
-			slog.Warn("failed to count tags for replaced image", "repository", ref.Repository(), "digest", previousDigest, "error", err)
-		} else if count == 0 {
-			if err := removeDigestIfUnreferenced(m.paths, ref.Repository(), previousDigest, true); err != nil {
-				slog.Warn("failed to collect replaced image content", "repository", ref.Repository(), "digest", previousDigest, "error", err)
-			}
-			m.refreshDiskUsageTotals()
-		}
+	if previousDigest == "" || previousDigest == digestHex {
+		return
 	}
+	count, err := countTagsForDigest(m.paths, ref.Repository(), previousDigest)
+	if err != nil {
+		slog.Warn("failed to count tags for replaced image", "repository", ref.Repository(), "digest", previousDigest, "error", err)
+		return
+	}
+	if count > 0 {
+		return
+	}
+	if err := removeDigestIfUnreferenced(m.paths, ref.Repository(), previousDigest, true); err != nil {
+		slog.Warn("failed to collect replaced image content", "repository", ref.Repository(), "digest", previousDigest, "error", err)
+	}
+	m.refreshDiskUsageTotals()
 }
 
 func parseTagReferences(source, target string) (*NormalizedRef, *NormalizedRef, error) {

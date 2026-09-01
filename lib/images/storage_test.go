@@ -247,7 +247,9 @@ func TestPromoteLegacyImagesMovesContentAndTags(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Dir(tagPath), 0o755))
 	require.NoError(t, os.Symlink(digest, tagPath))
 
-	promoteLegacyImages(p)
+	refs, err := collectLegacyImages(p)
+	require.NoError(t, err)
+	promoteLegacyImages(p, refs)
 
 	// Content exists with the same bytes and is ready.
 	contentMeta, err := readContentMetadata(p, digest)
@@ -279,9 +281,11 @@ func TestPromoteLegacyImagesSkipsNonReady(t *testing.T) {
 		CreatedAt: time.Now().UTC(),
 	}))
 
-	promoteLegacyImages(p)
+	refs, err := collectLegacyImages(p)
+	require.NoError(t, err)
+	promoteLegacyImages(p, refs)
 
-	_, err := os.Stat(p.ImageContentMetadata(digest))
+	_, err = os.Stat(p.ImageContentMetadata(digest))
 	require.True(t, os.IsNotExist(err), "non-ready legacy image must not be promoted")
 	_, err = os.Stat(legacyDir)
 	require.NoError(t, err, "non-ready legacy tree must be preserved")
