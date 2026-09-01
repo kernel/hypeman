@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -287,6 +288,12 @@ func TestUnpackLayerBlobRejectsSymlinkTraversal(t *testing.T) {
 	require.ErrorContains(t, err, "symlink")
 }
 
+func TestValidateSymlinkTargetAllowsAbsoluteTargets(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "link")
+	require.NoError(t, validateSymlinkTarget(root, target, "/etc/resolv.conf"))
+}
+
 func TestApplyLayerTreeSymlinksAndHardlinks(t *testing.T) {
 	root := t.TempDir()
 	targetDir := filepath.Join(root, "target")
@@ -370,6 +377,32 @@ func TestUnpackLayerBlobPreservesDirMtime(t *testing.T) {
 	info, err := os.Stat(filepath.Join(dest, "d"))
 	require.NoError(t, err)
 	require.True(t, info.ModTime().Equal(dirTime), "dir mtime must come from the tar header")
+}
+
+func TestCopyEntryMetadataPreservesAccessTime(t *testing.T) {
+	root := t.TempDir()
+	src := filepath.Join(root, "src")
+	dst := filepath.Join(root, "dst")
+	require.NoError(t, os.WriteFile(src, []byte("payload"), 0644))
+	require.NoError(t, os.WriteFile(dst, nil, 0644))
+
+	atime := time.Now().Add(-2 * time.Hour).Truncate(time.Second)
+	mtime := time.Now().Add(-time.Hour).Truncate(time.Second)
+	require.NoError(t, os.Chtimes(src, atime, mtime))
+	info, err := os.Lstat(src)
+	require.NoError(t, err)
+	require.NoError(t, copyEntryMetadata(src, dst, info))
+
+	var stat unix.Stat_t
+	require.NoError(t, unix.Lstat(dst, &stat))
+	require.True(t, time.Unix(stat.Atim.Sec, stat.Atim.Nsec).Equal(atime), "atime must be preserved")
+	require.True(t, time.Unix(stat.Mtim.Sec, stat.Mtim.Nsec).Equal(mtime), "mtime must be preserved")
+}
+
+func TestSpecialFileModeSupportsSockets(t *testing.T) {
+	mode, err := specialFileMode(fs.ModeSocket)
+	require.NoError(t, err)
+	require.Equal(t, uint32(syscall.S_IFSOCK), mode)
 }
 
 func TestApplyLayerTreePreservesDirMtime(t *testing.T) {

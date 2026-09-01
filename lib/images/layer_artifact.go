@@ -251,8 +251,8 @@ func unpackLayerBlob(blobPath, mediaType, dest string) (*unpackStats, error) {
 	stats := &unpackStats{whiteouts: make([]whiteoutRecord, 0)}
 	// Directory metadata is re-applied after extraction, once children
 	// exist, so tar directory mtimes are not overwritten by later writes.
-	var pendingDirs []pendingDir
-	var pendingHardlinks []pendingHardlink
+	pendingDirs := make([]pendingDir, 0)
+	pendingHardlinks := make([]pendingHardlink, 0)
 	limitedReader := &io.LimitedReader{R: reader, N: maxLayerUnpackedBytes + 1}
 	hashedReader := io.TeeReader(limitedReader, hash)
 	tr := tar.NewReader(hashedReader)
@@ -295,6 +295,8 @@ func unpackLayerBlob(blobPath, mediaType, dest string) (*unpackStats, error) {
 			pendingDirs = append(pendingDirs, pendingDir{target: target, header: header})
 		}
 		if header.Typeflag == tar.TypeLink {
+			// Hardlinks may reference entries that appear later in the tar, so
+			// resolve them after extracting all non-link entries.
 			pendingHardlinks = append(pendingHardlinks, pendingHardlink{target: target, linkname: header.Linkname})
 		} else if err := extractTarEntry(tr, header, dest, target); err != nil {
 			return nil, fmt.Errorf("extract %s: %w", header.Name, err)
@@ -401,7 +403,7 @@ func (c multiCloser) Close() error {
 // parents: extraction must never create an entry through a symlink an earlier
 // tar entry planted, so existing parents are Lstat-walked and rejected rather
 // than resolved. Symlink entries themselves may legitimately name paths that
-// do not exist yet, so their targets are checked by resolve in
+// do not exist yet, so their targets are checked by
 // validateSymlinkTarget instead.
 func safeJoin(root, name string) (string, error) {
 	rootInfo, err := os.Lstat(root)
@@ -447,6 +449,10 @@ func safeJoin(root, name string) (string, error) {
 	return target, nil
 }
 
+// validateSymlinkTarget permits absolute targets because OCI images may use
+// them and the image filesystem must preserve their link text. Extraction
+// still rejects symlink traversal for later entries, while composition copies
+// symlink text without following it.
 func validateSymlinkTarget(root, target, linkname string) error {
 	if filepath.IsAbs(linkname) {
 		return nil
@@ -467,8 +473,6 @@ func extractTarEntry(tr *tar.Reader, header *tar.Header, root, target string) er
 		return extractTarFile(tr, target, header)
 	case tar.TypeSymlink:
 		return extractTarSymlink(root, target, header)
-	case tar.TypeLink:
-		return extractTarHardlink(root, target, header)
 	case tar.TypeChar, tar.TypeBlock:
 		return extractTarDevice(target, header)
 	case tar.TypeFifo:
@@ -523,17 +527,6 @@ func extractTarSymlink(root, target string, header *tar.Header) error {
 		return err
 	}
 	return applyTarMetadata(target, header)
-}
-
-func extractTarHardlink(root, target string, header *tar.Header) error {
-	linkTarget, err := safeJoin(root, header.Linkname)
-	if err != nil {
-		return err
-	}
-	if err := prepareTarTarget(target); err != nil {
-		return err
-	}
-	return os.Link(linkTarget, target)
 }
 
 func extractTarDevice(target string, header *tar.Header) error {
@@ -665,7 +658,7 @@ func applyLayerTree(layerDir, targetDir string) (err error) {
 	// Phase 2: copy the layer's own entries, skipping whiteout markers.
 	// Directory metadata is deferred until all children are copied, so tar
 	// directory mtimes survive the merge.
-	var pendingDirs []dirMeta
+	pendingDirs := make([]dirMeta, 0)
 	hardlinks := make(map[hardlinkIdentity]string)
 	err = filepath.WalkDir(layerDir, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
@@ -897,6 +890,8 @@ func specialFileMode(mode fs.FileMode) (uint32, error) {
 		return syscall.S_IFBLK, nil
 	case fs.ModeNamedPipe:
 		return syscall.S_IFIFO, nil
+	case fs.ModeSocket:
+		return syscall.S_IFSOCK, nil
 	default:
 		return 0, fmt.Errorf("unsupported file mode")
 	}
@@ -913,7 +908,11 @@ func copyEntryMetadata(src, dst string, info os.FileInfo) error {
 		if err := os.Chmod(dst, mode); err != nil {
 			return err
 		}
-		if err := os.Chtimes(dst, info.ModTime(), info.ModTime()); err != nil {
+		atime := info.ModTime()
+		if stat, ok := info.Sys().(*syscall.Stat_t); ok {
+			atime = time.Unix(stat.Atim.Sec, stat.Atim.Nsec)
+		}
+		if err := os.Chtimes(dst, atime, info.ModTime()); err != nil {
 			return err
 		}
 		if err := copyXattrs(src, dst); err != nil {
