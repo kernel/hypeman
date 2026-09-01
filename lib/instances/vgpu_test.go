@@ -124,7 +124,7 @@ func TestVGPUCrashAfterClaimIsReconciled(t *testing.T) {
 		destroyed = append(destroyed, assignment)
 		return nil
 	}
-	m.reconcileVGPUDevices = func(context.Context, map[string]struct{}, bool) error { return nil }
+	m.reconcileVGPUDevices = func(context.Context, map[string]struct{}) error { return nil }
 	m.ReconcileVGPUs(context.Background())
 
 	require.Equal(t, []devices.VGPUAssignment{{

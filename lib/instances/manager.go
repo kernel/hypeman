@@ -187,7 +187,7 @@ type manager struct {
 	configureVGPU             func(context.Context, string, string) error
 	vendorVFIOProfiles        func([]devices.VirtualFunction) (map[string][]devices.VGPUProfileType, error)
 	destroyVGPU               func(context.Context, devices.VGPUAssignment) error
-	reconcileVGPUDevices      func(context.Context, map[string]struct{}, bool) error
+	reconcileVGPUDevices      func(context.Context, map[string]struct{}) error
 	vgpuAllocationMu          sync.Mutex
 	deleteSnapshotFn          func(context.Context, string) error
 	ttlReaperDeleteTimeout    time.Duration

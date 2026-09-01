@@ -197,13 +197,8 @@ func (m *manager) cleanupCreateVGPU(ctx context.Context, stored *StoredMetadata)
 	if path == "" {
 		return true
 	}
-	pid, err := resolveLiveHypervisorPID(stored.HypervisorProcessIdentity, stored.SocketPath)
-	if err != nil {
-		logger.FromContext(ctx).WarnContext(ctx, "cannot confirm hypervisor stopped during vGPU cleanup", "instance_id", stored.Id, "error", err)
-		return false
-	}
-	if pid > 0 {
-		logger.FromContext(ctx).WarnContext(ctx, "preserving vGPU claim for live hypervisor", "instance_id", stored.Id, "pid", pid)
+	if hypervisorMayBeAlive(stored.HypervisorProcessIdentity, stored.SocketPath) {
+		logger.FromContext(ctx).WarnContext(ctx, "preserving vGPU claim because hypervisor liveness is not clear", "instance_id", stored.Id)
 		return false
 	}
 	if stored.GPUFramework == devices.VGPUFrameworkVendorVFIO {
@@ -224,9 +219,8 @@ func (m *manager) cleanupStartVGPU(ctx context.Context, current *StoredMetadata,
 	if path == "" {
 		return
 	}
-	pid, err := resolveLiveHypervisorPID(current.HypervisorProcessIdentity, current.SocketPath)
-	if err != nil || pid > 0 {
-		logger.FromContext(ctx).WarnContext(ctx, "preserving vGPU claim because hypervisor liveness is not clear", "instance_id", current.Id, "device_path", path, "pid", pid, "error", err)
+	if hypervisorMayBeAlive(current.HypervisorProcessIdentity, current.SocketPath) {
+		logger.FromContext(ctx).WarnContext(ctx, "preserving vGPU claim because hypervisor liveness is not clear", "instance_id", current.Id, "device_path", path)
 		return
 	}
 	if current.GPUFramework == devices.VGPUFrameworkVendorVFIO {

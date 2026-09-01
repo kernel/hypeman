@@ -23,7 +23,7 @@ func TestReconcileVGPUsReleasesOnlyDeadClaims(t *testing.T) {
 			destroyed = append(destroyed, assignment)
 			return nil
 		},
-		reconcileVGPUDevices: func(context.Context, map[string]struct{}, bool) error { return nil },
+		reconcileVGPUDevices: func(context.Context, map[string]struct{}) error { return nil },
 	}
 	liveIdentity := HypervisorProcessIdentity{}
 	liveIdentity.Set(os.Getpid())
@@ -59,7 +59,7 @@ func TestReconcileVGPUsKeepsAssignmentWhenReleaseFails(t *testing.T) {
 			}
 			return nil
 		},
-		reconcileVGPUDevices: func(context.Context, map[string]struct{}, bool) error { return nil },
+		reconcileVGPUDevices: func(context.Context, map[string]struct{}) error { return nil },
 	}
 	meta := saveTestVGPUInstance(t, m, "wedged")
 	meta.GPUFramework = devices.VGPUFrameworkVendorVFIO
@@ -85,7 +85,7 @@ func TestReconcileVGPUsSkipsDevicePassWhenListingFails(t *testing.T) {
 	var passes atomic.Int32
 	m := &manager{
 		paths: paths.New(t.TempDir()),
-		reconcileVGPUDevices: func(context.Context, map[string]struct{}, bool) error {
+		reconcileVGPUDevices: func(context.Context, map[string]struct{}) error {
 			passes.Add(1)
 			return nil
 		},
@@ -106,7 +106,7 @@ func TestStartVGPUReconcilerSkipsHostsWithoutGPUs(t *testing.T) {
 		discoverVGPU: func() (devices.VGPUFramework, []devices.VirtualFunction, error) {
 			return devices.VGPUFrameworkNone, nil, nil
 		},
-		reconcileVGPUDevices: func(context.Context, map[string]struct{}, bool) error {
+		reconcileVGPUDevices: func(context.Context, map[string]struct{}) error {
 			passes.Add(1)
 			return nil
 		},
@@ -125,7 +125,7 @@ func TestStartVGPUReconcilerRunsPeriodically(t *testing.T) {
 		discoverVGPU: func() (devices.VGPUFramework, []devices.VirtualFunction, error) {
 			return devices.VGPUFrameworkVendorVFIO, nil, nil
 		},
-		reconcileVGPUDevices: func(context.Context, map[string]struct{}, bool) error {
+		reconcileVGPUDevices: func(context.Context, map[string]struct{}) error {
 			passes.Add(1)
 			return nil
 		},

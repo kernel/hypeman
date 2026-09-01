@@ -58,7 +58,7 @@ func (m *manager) ReconcileVGPUs(ctx context.Context) {
 	if reconcileDevices == nil {
 		reconcileDevices = devices.ReconcileVGPUs
 	}
-	if err := reconcileDevices(ctx, protected, true); err != nil {
+	if err := reconcileDevices(ctx, protected); err != nil {
 		m.recordVGPUReconcileFailure(ctx, vgpuReconcileStageReconcileDevices)
 		log.WarnContext(ctx, "failed to reconcile mdev devices", "error", err)
 	}
@@ -76,8 +76,7 @@ func (m *manager) reconcileVGPUAssignments(ctx context.Context) (map[string]stru
 		if devicePath == "" {
 			continue
 		}
-		pid, err := resolveLiveHypervisorPID(stored.HypervisorProcessIdentity, stored.SocketPath)
-		if err != nil || pid > 0 {
+		if hypervisorMayBeAlive(stored.HypervisorProcessIdentity, stored.SocketPath) {
 			protected[devicePath] = struct{}{}
 			continue
 		}
@@ -106,8 +105,7 @@ func (m *manager) releaseStaleVGPUAssignment(ctx context.Context, id string) {
 	if path == "" {
 		return
 	}
-	pid, err := resolveLiveHypervisorPID(stored.HypervisorProcessIdentity, stored.SocketPath)
-	if err != nil || pid > 0 {
+	if hypervisorMayBeAlive(stored.HypervisorProcessIdentity, stored.SocketPath) {
 		return
 	}
 	if err := m.releaseStoredVGPUPersisted(ctx, meta); err != nil {

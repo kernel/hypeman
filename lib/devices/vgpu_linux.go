@@ -125,13 +125,10 @@ func mdevReconcileInfos(protectedDevicePaths map[string]struct{}) []MdevReconcil
 }
 
 // ReconcileVGPUs releases orphaned vGPU assignments.
-func ReconcileVGPUs(ctx context.Context, protectedDevicePaths map[string]struct{}, sweepDevices bool) error {
+func ReconcileVGPUs(ctx context.Context, protectedDevicePaths map[string]struct{}) error {
 	framework, _, err := DiscoverVGPU()
 	if err != nil {
 		return err
-	}
-	if !sweepDevices {
-		return nil
 	}
 
 	switch framework {

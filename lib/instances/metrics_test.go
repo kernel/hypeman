@@ -567,7 +567,7 @@ func TestVGPUReconcileFailureMetric_RecordStages(t *testing.T) {
 
 	m := &manager{
 		paths: paths.New(t.TempDir()),
-		reconcileVGPUDevices: func(context.Context, map[string]struct{}, bool) error {
+		reconcileVGPUDevices: func(context.Context, map[string]struct{}) error {
 			return errors.New("sweep failed")
 		},
 	}

@@ -28,7 +28,7 @@ func TestReconcileVGPUsProtectsSocketOwnerWithoutPersistedPID(t *testing.T) {
 			destroyed = append(destroyed, assignment)
 			return nil
 		},
-		reconcileVGPUDevices: func(_ context.Context, p map[string]struct{}, _ bool) error {
+		reconcileVGPUDevices: func(_ context.Context, p map[string]struct{}) error {
 			protected = p
 			return nil
 		},
