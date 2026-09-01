@@ -175,6 +175,23 @@ func (m *manager) claimRequestedTags(ref *ResolvedRef, meta *imageMetadata) bool
 		delete(m.requestedTags, key)
 		claimed = true
 	}
+
+	// Older metadata did not persist RequestedTag or a requestedTags entry. Keep
+	// those recovered builds addressable by falling back to the build reference.
+	primaryTag := meta.RequestedTag
+	if primaryTag == "" {
+		primaryTag = ref.Tag()
+	}
+	primaryKey := tagGenerationKey(ref.Repository(), primaryTag)
+	if primaryTag != "" {
+		if _, hasRequest := m.requestedTags[primaryKey]; !hasRequest && m.tagClaimIsCurrent(ref.Repository(), primaryTag, digestHex, meta, meta.RequestedTag == "") {
+			if err := createTagSymlink(m.paths, ref.Repository(), primaryTag, digestHex); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: failed to create tag symlink: %v\n", err)
+			} else {
+				claimed = true
+			}
+		}
+	}
 	if claimed {
 		return true
 	}
