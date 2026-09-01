@@ -59,7 +59,21 @@ func (m *manager) claimVGPU(ctx context.Context, meta *metadata, profileName str
 	}
 	vfAddress, profileType, err := selectVendorVFIOVF(vfs, profilesByVF, allMetadata, profileName)
 	if err != nil {
-		return nil, err
+		// A dirty unclaimed VF consumes framebuffer, which can make the
+		// requested profile vanish from every creatable list before the
+		// selector's repair path can resolve it. Reset such VFs and retry.
+		if !m.resetDirtyUnclaimedVFs(ctx, vfs, allMetadata) {
+			return nil, err
+		}
+		if _, vfs, err = m.discoverVGPUDevices(); err != nil {
+			return nil, err
+		}
+		if profilesByVF, err = listProfiles(vfs); err != nil {
+			return nil, err
+		}
+		if vfAddress, profileType, err = selectVendorVFIOVF(vfs, profilesByVF, allMetadata, profileName); err != nil {
+			return nil, err
+		}
 	}
 	device := &devices.VGPUDevice{
 		Framework:   devices.VGPUFrameworkVendorVFIO,
@@ -74,6 +88,40 @@ func (m *manager) claimVGPU(ctx context.Context, meta *metadata, profileName str
 		return nil, fmt.Errorf("save vGPU claim: %w", err)
 	}
 	return device, nil
+}
+
+// resetDirtyUnclaimedVFs resets allocated VFs that no instance claims,
+// restoring the framebuffer their leftover type consumes. The reset is
+// gated on the open-VFIO-handle in-use check inside destroy. Reports
+// whether any VF was reset. Callers must hold vgpuAllocationMu.
+func (m *manager) resetDirtyUnclaimedVFs(ctx context.Context, vfs []devices.VirtualFunction, allMetadata []StoredMetadata) bool {
+	claimed := make(map[string]struct{}, len(allMetadata))
+	for i := range allMetadata {
+		if path := allMetadata[i].GPUDevicePath; path != "" {
+			claimed[filepath.Base(path)] = struct{}{}
+		}
+	}
+	log := logger.FromContext(ctx)
+	reset := false
+	for _, vf := range vfs {
+		if !vf.Allocated {
+			continue
+		}
+		if _, ok := claimed[vf.PCIAddress]; ok {
+			continue
+		}
+		assignment := devices.VGPUAssignment{
+			Framework:  devices.VGPUFrameworkVendorVFIO,
+			DevicePath: filepath.Clean(devices.GetDeviceSysfsPath(vf.PCIAddress)),
+		}
+		if err := m.destroyVGPUAssignment(ctx, assignment); err != nil {
+			log.WarnContext(ctx, "failed to reset dirty vGPU VF", "vf", vf.PCIAddress, "error", err)
+			continue
+		}
+		log.InfoContext(ctx, "reset dirty vGPU VF during allocation", "vf", vf.PCIAddress)
+		reset = true
+	}
+	return reset
 }
 
 func selectVendorVFIOVF(vfs []devices.VirtualFunction, profilesByVF map[string][]devices.VGPUProfileType, allMetadata []StoredMetadata, profileName string) (string, string, error) {
