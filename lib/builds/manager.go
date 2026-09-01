@@ -5,7 +5,9 @@ import (
 	"context"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"os"
@@ -825,13 +827,8 @@ func (m *manager) executeBuild(ctx context.Context, id string, req CreateBuildRe
 	defer sourceFile.Close()
 
 	// Create volume with source (using the volume manager's archive import)
-	_, err = m.volumeManager.CreateVolumeFromArchive(ctx, volumes.CreateVolumeFromArchiveRequest{
-		Id:     &sourceVolID,
-		Name:   sourceVolID,
-		SizeGb: 10, // 10GB should be enough for most source bundles
-	}, sourceFile)
-	if err != nil {
-		return nil, fmt.Errorf("create source volume: %w", err)
+	if err := m.createBuildSourceVolume(ctx, id, sourceVolID, sourceFile); err != nil {
+		return nil, err
 	}
 	defer m.volumeManager.DeleteVolume(context.Background(), sourceVolID)
 
@@ -844,25 +841,8 @@ func (m *manager) executeBuild(ctx context.Context, id string, req CreateBuildRe
 	defer os.Remove(configVolPath) // Clean up the config disk file
 
 	// Register the config volume with the volume manager
-	_, err = m.volumeManager.CreateVolume(ctx, volumes.CreateVolumeRequest{
-		Id:     &configVolID,
-		Name:   configVolID,
-		SizeGb: 1,
-	})
-	if err != nil {
-		// If volume creation fails, try to use the disk file directly
-		// by copying it to the expected location
-		volPath := m.paths.VolumeData(configVolID)
-		if copyErr := copyFile(configVolPath, volPath); copyErr != nil {
-			return nil, fmt.Errorf("setup config volume: %w", copyErr)
-		}
-	} else {
-		// Copy our config disk over the empty volume
-		volPath := m.paths.VolumeData(configVolID)
-		if err := copyFile(configVolPath, volPath); err != nil {
-			m.volumeManager.DeleteVolume(context.Background(), configVolID)
-			return nil, fmt.Errorf("write config to volume: %w", err)
-		}
+	if err := m.registerBuildConfigVolume(ctx, id, configVolID, configVolPath); err != nil {
+		return nil, err
 	}
 	defer m.volumeManager.DeleteVolume(context.Background(), configVolID)
 
@@ -955,6 +935,96 @@ func (m *manager) executeBuild(ctx context.Context, id string, req CreateBuildRe
 	}
 
 	return result, nil
+}
+
+// createBuildSourceVolume creates the source volume for a build. Build volume
+// names are deterministic (build-source-<id>), so a re-run of the same build
+// after a crash (e.g. via RecoverPendingBuilds) can hit a leftover volume from
+// the interrupted attempt. Tolerate that case: remove the leftover and retry
+// the create once.
+func (m *manager) createBuildSourceVolume(ctx context.Context, buildID, volID string, source io.Reader) error {
+	req := volumes.CreateVolumeFromArchiveRequest{
+		Id:     &volID,
+		Name:   volID,
+		SizeGb: 10, // 10GB should be enough for most source bundles
+	}
+	_, err := m.volumeManager.CreateVolumeFromArchive(ctx, req, source)
+	if errors.Is(err, volumes.ErrAlreadyExists) {
+		m.logger.Info("removing leftover source volume from crashed build attempt", "build_id", buildID, "volume", volID)
+		if delErr := m.deleteLeftoverBuildVolume(ctx, buildID, volID); delErr != nil {
+			return fmt.Errorf("remove leftover source volume: %w", delErr)
+		}
+		_, err = m.volumeManager.CreateVolumeFromArchive(ctx, req, source)
+	}
+	if err != nil {
+		return fmt.Errorf("create source volume: %w", err)
+	}
+	return nil
+}
+
+// registerBuildConfigVolume registers the config disk as a volume and copies
+// the config data onto it. Like the source volume, the config volume has a
+// deterministic name (build-config-<id>), so a re-run of the same build after
+// a crash can hit a leftover from the interrupted attempt; remove it and retry
+// the create once rather than silently copying over the stale volume.
+func (m *manager) registerBuildConfigVolume(ctx context.Context, buildID, volID, configDiskPath string) error {
+	req := volumes.CreateVolumeRequest{
+		Id:     &volID,
+		Name:   volID,
+		SizeGb: 1,
+	}
+	_, err := m.volumeManager.CreateVolume(ctx, req)
+	if errors.Is(err, volumes.ErrAlreadyExists) {
+		m.logger.Info("removing leftover config volume from crashed build attempt", "build_id", buildID, "volume", volID)
+		if delErr := m.deleteLeftoverBuildVolume(ctx, buildID, volID); delErr != nil {
+			return fmt.Errorf("remove leftover config volume: %w", delErr)
+		}
+		_, err = m.volumeManager.CreateVolume(ctx, req)
+	}
+	if err != nil {
+		// If volume creation fails, try to use the disk file directly
+		// by copying it to the expected location
+		volPath := m.paths.VolumeData(volID)
+		if copyErr := copyFile(configDiskPath, volPath); copyErr != nil {
+			return fmt.Errorf("setup config volume: %w", copyErr)
+		}
+		return nil
+	}
+	// Copy our config disk over the empty volume
+	volPath := m.paths.VolumeData(volID)
+	if err := copyFile(configDiskPath, volPath); err != nil {
+		m.volumeManager.DeleteVolume(context.Background(), volID)
+		return fmt.Errorf("write config to volume: %w", err)
+	}
+	return nil
+}
+
+// deleteLeftoverBuildVolume removes a build volume left behind by a crashed
+// prior attempt of the same build. If the volume is still attached, it is
+// almost certainly attached to the crashed attempt's stale builder instance
+// (builder-<id>); delete that instance (which detaches all of its volumes) and
+// retry the volume delete. A volume attached to an unknown instance is never
+// force-deleted; an error is returned instead.
+func (m *manager) deleteLeftoverBuildVolume(ctx context.Context, buildID, volID string) error {
+	err := m.volumeManager.DeleteVolume(ctx, volID)
+	if !errors.Is(err, volumes.ErrInUse) {
+		return err
+	}
+
+	builderName := fmt.Sprintf("builder-%s", buildID)
+	inst, getErr := m.instanceManager.GetInstance(ctx, builderName)
+	if getErr != nil {
+		if errors.Is(getErr, instances.ErrNotFound) {
+			return fmt.Errorf("volume %s is in use but stale builder instance %q was not found; refusing to force-delete a volume attached to an unknown instance", volID, builderName)
+		}
+		return fmt.Errorf("look up stale builder instance %q: %w", builderName, getErr)
+	}
+
+	m.logger.Info("deleting stale builder instance from crashed build attempt", "build_id", buildID, "instance", inst.Id, "volume", volID)
+	if delErr := m.instanceManager.DeleteInstance(ctx, inst.Id); delErr != nil {
+		return fmt.Errorf("delete stale builder instance %s: %w", inst.Id, delErr)
+	}
+	return m.volumeManager.DeleteVolume(ctx, volID)
 }
 
 // waitForResult waits for the build result from the builder agent via vsock
