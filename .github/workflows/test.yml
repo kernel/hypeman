@@ -13,6 +13,11 @@ on:
         required: false
         type: string
 
+# Superseded branch pushes should release self-hosted test capacity.
+concurrency:
+  group: test-${{ (github.event_name == 'push' && github.ref != 'refs/heads/main') && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'push' && github.ref != 'refs/heads/main' }}
+
 # A slash-command dispatch supplies a fork repository and immutable commit SHA.
 # Normal push runs use the upstream repository and pushed ref.
 env:

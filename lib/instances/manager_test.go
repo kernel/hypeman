@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -162,6 +163,23 @@ func waitForInstanceState(ctx context.Context, mgr Manager, instanceID string, e
 		return nil, fmt.Errorf("instance %s did not reach %s within %v (last error: %w)", instanceID, expected, timeout, lastErr)
 	}
 	return nil, fmt.Errorf("instance %s did not reach %s within %v (last state: %s)", instanceID, expected, timeout, lastState)
+}
+
+// deleteInstanceEventually retries deletion while a hypervisor finishes dying.
+func deleteInstanceEventually(t *testing.T, ctx context.Context, mgr Manager, instanceID string) {
+	t.Helper()
+	deadline := time.Now().Add(integrationTestTimeout(30 * time.Second))
+	for {
+		err := mgr.DeleteInstance(ctx, instanceID)
+		if err == nil || errors.Is(err, ErrNotFound) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("delete instance %s did not converge: %v", instanceID, err)
+		}
+		t.Logf("delete instance %s not yet converged, retrying: %v", instanceID, err)
+		time.Sleep(time.Second)
+	}
 }
 
 func integrationTestTimeout(timeout time.Duration) time.Duration {

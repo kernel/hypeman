@@ -308,8 +308,8 @@ func (m *manager) restoreInstance(
 		return nil, err
 	}
 
-	// Store the PID for later cleanup
-	stored.HypervisorPID = &pid
+	// Store the process identity for later cleanup.
+	stored.HypervisorProcessIdentity.Set(pid)
 
 	// 6. Transition: Paused → Running (resume)
 	resumeCtx, resumeSpanEnd := m.startLifecycleStep(ctx, "resume_vm",
@@ -448,7 +448,7 @@ func (m *manager) restoreFromSnapshot(
 	if err != nil {
 		return 0, nil, fmt.Errorf("restore vm: %w", err)
 	}
-	pid = resolveRuntimeHypervisorPID(log, stored.SocketPath, pid)
+	pid = resolveRuntimeHypervisorPID(log, stored, pid)
 
 	log.DebugContext(ctx, "VM restored from snapshot successfully", "instance_id", stored.Id, "pid", pid)
 	return pid, hv, nil
