@@ -27,7 +27,7 @@ func (m *manager) discoverVGPUDevices() (devices.VGPUFramework, []devices.Virtua
 }
 
 func (m *manager) claimVGPU(ctx context.Context, meta *metadata, profileName string) (*devices.VGPUDevice, error) {
-	framework, vfs, err := m.discoverVGPUDevices()
+	framework, _, err := m.discoverVGPUDevices()
 	if err != nil {
 		return nil, err
 	}
@@ -42,7 +42,10 @@ func (m *manager) claimVGPU(ctx context.Context, meta *metadata, profileName str
 	if err != nil {
 		return nil, fmt.Errorf("list instances for vGPU allocation: %w", err)
 	}
-	if _, vfs, err = m.discoverVGPUDevices(); err != nil {
+	// VF state is read under the lock so Allocated reflects resets made by
+	// the claim that held it before us.
+	_, vfs, err := m.discoverVGPUDevices()
+	if err != nil {
 		return nil, err
 	}
 	listProfiles := m.vendorVFIOProfiles
@@ -74,16 +77,29 @@ func (m *manager) claimVGPU(ctx context.Context, meta *metadata, profileName str
 	// A dirty VF carries the previous assignment's device instance and
 	// possibly its open VFIO handles, even when the leftover type matches
 	// the requested profile. Reset it (in-use gated inside destroy) before
-	// claiming; the allocation lock keeps it unclaimed until then.
-	if vf, ok := vfByAddress(vfs, vfAddress); ok && vf.Allocated {
+	// claiming; the allocation lock keeps it unclaimed until then. A VF that
+	// refuses its reset is dropped from the candidates so it cannot block
+	// clean siblings.
+	log := logger.FromContext(ctx)
+	for {
+		vf, ok := vfByAddress(vfs, vfAddress)
+		if !ok || !vf.Allocated {
+			break
+		}
 		assignment := devices.VGPUAssignment{
 			Framework:  devices.VGPUFrameworkVendorVFIO,
 			DevicePath: filepath.Clean(devices.GetDeviceSysfsPath(vf.PCIAddress)),
 		}
-		if err := m.destroyVGPUAssignment(ctx, assignment); err != nil {
-			return nil, fmt.Errorf("repair dirty VF %s before claim: %w", vf.PCIAddress, err)
+		repairErr := m.destroyVGPUAssignment(ctx, assignment)
+		if repairErr == nil {
+			log.InfoContext(ctx, "reset dirty vGPU VF before claim", "vf", vf.PCIAddress)
+			break
 		}
-		logger.FromContext(ctx).InfoContext(ctx, "reset dirty vGPU VF before claim", "vf", vf.PCIAddress)
+		log.WarnContext(ctx, "dirty vGPU VF refused reset; trying another VF", "vf", vf.PCIAddress, "error", repairErr)
+		vfs = withoutVF(vfs, vf.PCIAddress)
+		if vfAddress, profileType, err = selectVendorVFIOVF(vfs, profilesByVF, allMetadata, profileName); err != nil {
+			return nil, fmt.Errorf("repair dirty VF %s before claim: %w", vf.PCIAddress, repairErr)
+		}
 	}
 	device := &devices.VGPUDevice{
 		Framework:   devices.VGPUFrameworkVendorVFIO,
@@ -152,9 +168,9 @@ func selectVendorVFIOVF(vfs []devices.VirtualFunction, profilesByVF map[string][
 		return "", "", fmt.Errorf("profile %q is not creatable on any VF (unknown profile or insufficient capacity)", profileName)
 	}
 
-	vfByAddress := make(map[string]devices.VirtualFunction, len(vfs))
+	vfsByAddress := make(map[string]devices.VirtualFunction, len(vfs))
 	for _, vf := range vfs {
-		vfByAddress[vf.PCIAddress] = vf
+		vfsByAddress[vf.PCIAddress] = vf
 	}
 	claimed := make(map[string]struct{})
 	usageByGPU := make(map[string]int)
@@ -166,7 +182,7 @@ func selectVendorVFIOVF(vfs []devices.VirtualFunction, profilesByVF map[string][
 		}
 		vfAddress := filepath.Base(stored.GPUDevicePath)
 		claimed[vfAddress] = struct{}{}
-		vf, ok := vfByAddress[vfAddress]
+		vf, ok := vfsByAddress[vfAddress]
 		if !ok {
 			continue
 		}
@@ -195,9 +211,15 @@ func selectVendorVFIOVF(vfs []devices.VirtualFunction, profilesByVF map[string][
 			freeByGPU[vf.ParentGPU] = append(freeByGPU[vf.ParentGPU], vf)
 		}
 	}
+	// Clean VFs first: a dirty VF needs a hardware reset before it can be
+	// claimed, and that reset can be refused while a stale handle is open.
 	for gpu := range freeByGPU {
 		sort.Slice(freeByGPU[gpu], func(i, j int) bool {
-			return freeByGPU[gpu][i].PCIAddress < freeByGPU[gpu][j].PCIAddress
+			a, b := freeByGPU[gpu][i], freeByGPU[gpu][j]
+			if a.Allocated != b.Allocated {
+				return !a.Allocated
+			}
+			return a.PCIAddress < b.PCIAddress
 		})
 	}
 	gpus := make([]string, 0, len(freeByGPU))
@@ -343,6 +365,16 @@ func vfByAddress(vfs []devices.VirtualFunction, address string) (devices.Virtual
 		}
 	}
 	return devices.VirtualFunction{}, false
+}
+
+func withoutVF(vfs []devices.VirtualFunction, address string) []devices.VirtualFunction {
+	remaining := make([]devices.VirtualFunction, 0, len(vfs))
+	for _, vf := range vfs {
+		if vf.PCIAddress != address {
+			remaining = append(remaining, vf)
+		}
+	}
+	return remaining
 }
 
 func storedVGPUDevicePath(stored *StoredMetadata) string {

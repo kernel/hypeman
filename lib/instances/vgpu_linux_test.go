@@ -220,3 +220,42 @@ func TestVGPUCrashAfterClaimIsReconciled(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, stored.GPUDevicePath)
 }
+
+func TestVGPUClaimPrefersCleanVFOnSameGPU(t *testing.T) {
+	vfs := []devices.VirtualFunction{
+		{PCIAddress: "0000:82:00.4", ParentGPU: "0000:82:00.0", Allocated: true, ProfileType: testVFProfileType},
+		{PCIAddress: "0000:82:00.5", ParentGPU: "0000:82:00.0"},
+	}
+	m := newVGPUAllocationManager(t, vfs)
+	m.destroyVGPU = func(context.Context, devices.VGPUAssignment) error {
+		t.Fatal("a clean VF must be claimed without resetting a dirty sibling")
+		return nil
+	}
+	meta := saveTestVGPUInstance(t, m, "new")
+
+	device, err := m.claimVGPU(context.Background(), meta, testVGPUProfile)
+	require.NoError(t, err)
+	assert.Equal(t, "0000:82:00.5", device.VFAddress)
+}
+
+func TestVGPUClaimFallsBackWhenDirtyVFRefusesReset(t *testing.T) {
+	vfs := []devices.VirtualFunction{
+		{PCIAddress: "0000:82:00.4", ParentGPU: "0000:82:00.0", Allocated: true, ProfileType: testVFProfileType},
+		{PCIAddress: "0000:82:00.5", ParentGPU: "0000:82:00.0", Allocated: true, ProfileType: testVFProfileType},
+	}
+	m := newVGPUAllocationManager(t, vfs)
+	var resets []string
+	m.destroyVGPU = func(_ context.Context, assignment devices.VGPUAssignment) error {
+		resets = append(resets, assignment.DevicePath)
+		if assignment.DevicePath == testVFDevicePath {
+			return errors.New("vendor VFIO vGPU on VF 0000:82:00.4 is still in use")
+		}
+		return nil
+	}
+	meta := saveTestVGPUInstance(t, m, "new")
+
+	device, err := m.claimVGPU(context.Background(), meta, testVGPUProfile)
+	require.NoError(t, err)
+	assert.Equal(t, "0000:82:00.5", device.VFAddress)
+	assert.Equal(t, []string{testVFDevicePath, "/sys/bus/pci/devices/0000:82:00.5"}, resets)
+}

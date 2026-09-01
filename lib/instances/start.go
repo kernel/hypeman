@@ -58,9 +58,7 @@ func (m *manager) startInstance(
 		}
 	}
 
-	stored.HypervisorPID = nil
-	stored.HypervisorStartTime = 0
-	stored.HypervisorBootID = ""
+	stored.HypervisorProcessIdentity.Clear()
 	rollbackMeta := *meta
 	rollbackMeta.Phases = meta.Phases.Clone()
 

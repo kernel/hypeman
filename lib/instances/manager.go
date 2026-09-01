@@ -183,6 +183,7 @@ type manager struct {
 	now                       func() time.Time
 	writeFile                 func(string, []byte, os.FileMode) error
 	deleteInstanceFn          func(context.Context, string) error
+	discoverVGPU              func() (devices.VGPUFramework, []devices.VirtualFunction, error)
 	createVGPU                func(context.Context, string, string) (*devices.VGPUDevice, error)
 	configureVGPU             func(context.Context, string, string) error
 	vendorVFIOProfiles        func([]devices.VirtualFunction) (map[string][]devices.VGPUProfileType, error)
@@ -220,7 +221,6 @@ type manager struct {
 	// Periodic vGPU reconciler.
 	vgpuReconcileOnce     sync.Once
 	vgpuReconcileInterval time.Duration
-	discoverVGPU          func() (devices.VGPUFramework, []devices.VirtualFunction, error)
 
 	vfioTermGrace time.Duration
 

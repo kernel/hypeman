@@ -97,7 +97,7 @@ Instance Create → Persist VF claim → Configure profile → Attach VF to VM �
 Instance Stop/Delete → Reset profile → Remove VF claim → VF available again
 ```
 
-Hypeman reconciles metadata claims once at startup and every minute afterward, skipping hosts without GPUs. A claim whose VMM is confirmed dead is reset before the claim is removed. mdev hosts also sweep orphaned device-level assignments. Vendor VFIO hosts repair an unclaimed dirty VF when the allocator next selects it; repair checks for open VFIO handles before resetting `current_vgpu_type`.
+Hypeman reconciles metadata claims once at startup and every minute afterward, skipping hosts without GPUs. A claim whose VMM is confirmed dead is reset before the claim is removed. mdev hosts also sweep orphaned device-level assignments. Vendor VFIO hosts repair an unclaimed dirty VF when the allocator next selects it; repair checks for open VFIO handles before resetting `current_vgpu_type`. The allocator prefers VFs that are already clean, and a dirty VF that refuses its reset is skipped in favor of another candidate.
 
 ### Hypervisor Support
 

@@ -399,6 +399,8 @@ func (m *manager) createInstance(
 		cu.Add(func() {
 			if !m.cleanupCreateVGPU(ctx, stored) {
 				cleanupInstanceData = false
+				log.ErrorContext(ctx, "retaining instance data for failed create because its vGPU claim could not be released; delete the instance to retry",
+					"instance_id", id, "device_path", storedVGPUDevicePath(stored))
 			}
 		})
 		if err := m.configureClaimedVGPU(ctx, gpuDevice); err != nil {

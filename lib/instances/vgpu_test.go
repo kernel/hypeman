@@ -125,3 +125,34 @@ func TestSelectVendorVFIOVFFailsClosedOnClaimedVF(t *testing.T) {
 	}}, testVGPUProfile)
 	require.ErrorContains(t, err, "no available VF")
 }
+
+func TestSelectVendorVFIOVFPrefersGPUWithKnownLoad(t *testing.T) {
+	// GPU 82 carries a claim whose profile is no longer creatable anywhere,
+	// so its load is unknown; GPU e3 has a known 2 GB claim. Known load wins
+	// even though it is non-zero.
+	vfs := []devices.VirtualFunction{
+		{PCIAddress: "0000:82:00.4", ParentGPU: "0000:82:00.0", Allocated: true, ProfileType: "999"},
+		{PCIAddress: "0000:82:00.5", ParentGPU: "0000:82:00.0"},
+		{PCIAddress: "0000:e3:00.4", ParentGPU: "0000:e3:00.0", Allocated: true, ProfileType: testVFProfileType},
+		{PCIAddress: "0000:e3:00.5", ParentGPU: "0000:e3:00.0"},
+	}
+	profile := devices.VGPUProfileType{TypeName: testVFProfileType, Name: testVGPUProfile, FramebufferMB: 2048}
+	profiles := map[string][]devices.VGPUProfileType{
+		"0000:82:00.5": {profile},
+		"0000:e3:00.5": {profile},
+	}
+	claims := []StoredMetadata{
+		{GPUProfile: "NVIDIA L40S-48Q", GPUDevicePath: testVFDevicePath},
+		{GPUProfile: testVGPUProfile, GPUDevicePath: "/sys/bus/pci/devices/0000:e3:00.4"},
+	}
+
+	vf, profileType, err := selectVendorVFIOVF(vfs, profiles, claims, testVGPUProfile)
+	require.NoError(t, err)
+	assert.Equal(t, "0000:e3:00.5", vf)
+	assert.Equal(t, testVFProfileType, profileType)
+
+	// With no alternative, the GPU with unknown load is still used.
+	vf, _, err = selectVendorVFIOVF(vfs[:2], profiles, claims[:1], testVGPUProfile)
+	require.NoError(t, err)
+	assert.Equal(t, "0000:82:00.5", vf)
+}
