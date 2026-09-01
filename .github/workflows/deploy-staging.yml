@@ -1,0 +1,35 @@
+name: Deploy Staging
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Mint token for infra
+        id: infra-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.ADMIN_APP_ID }}
+          private-key: ${{ secrets.ADMIN_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: infra
+          permission-actions: write
+
+      - name: Deploy commit to staging
+        env:
+          GH_TOKEN: ${{ steps.infra-token.outputs.token }}
+          HYPEMAN_REF: ${{ github.sha }}
+        run: |
+          gh workflow run ansible-deploy-hypeman.yml \
+            --repo kernel/infra \
+            --ref main \
+            --field env=staging \
+            --field ref="$HYPEMAN_REF" \
+            --field cli-version=latest \
+            --field triggered_by="${{ github.actor }}"

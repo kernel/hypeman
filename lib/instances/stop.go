@@ -6,10 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"syscall"
 	"time"
 
-	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/guest"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/instances/phasetracking"
@@ -52,10 +50,27 @@ func (m *manager) tryGracefulGuestShutdown(ctx context.Context, inst *Instance, 
 		return false
 	}
 
+	// Capture the socket owner before shutdown can close its listener. Legacy
+	// metadata has no process identity token, so the PID cannot be recovered
+	// safely from the stored value once the listener disappears.
+	pid, err := resolveLiveHypervisorPID(inst.HypervisorProcessIdentity, inst.SocketPath)
+	if err != nil {
+		log.WarnContext(ctx, "could not confirm hypervisor ownership before graceful shutdown", "instance_id", inst.Id, "error", err)
+		return false
+	}
+	if pid == 0 {
+		return true
+	}
+	inst.HypervisorProcessIdentity.Set(pid)
+
+	shutdownGuest := guest.ShutdownInstance
+	if m.shutdownGuestFn != nil {
+		shutdownGuest = m.shutdownGuestFn
+	}
 	sendShutdown := func() error {
 		shutdownCtx, cancel := context.WithTimeout(ctx, shutdownRPCDeadline)
 		defer cancel()
-		return guest.ShutdownInstance(shutdownCtx, dialer, 0)
+		return shutdownGuest(shutdownCtx, dialer, 0)
 	}
 
 	shutdownSent := false
@@ -71,69 +86,19 @@ func (m *manager) tryGracefulGuestShutdown(ctx context.Context, inst *Instance, 
 		shutdownSent = true
 	}
 
-	// Wait for the hypervisor process to exit (init calls reboot(POWER_OFF))
-	if inst.HypervisorPID != nil {
-		waitTimeout := time.Duration(stopTimeout) * time.Second
-		if !shutdownSent && waitTimeout > shutdownFailureFallbackWait {
-			// If we couldn't signal the guest, don't burn the full graceful timeout.
-			waitTimeout = shutdownFailureFallbackWait
-		}
-
-		if WaitForProcessExit(*inst.HypervisorPID, waitTimeout) {
-			log.DebugContext(ctx, "VM shut down gracefully", "instance_id", inst.Id)
-			return true
-		}
-
-		log.WarnContext(ctx, "graceful shutdown timed out, falling back to hypervisor shutdown", "instance_id", inst.Id)
-		return false
+	waitTimeout := time.Duration(stopTimeout) * time.Second
+	if !shutdownSent && waitTimeout > shutdownFailureFallbackWait {
+		// If we couldn't signal the guest, don't burn the full graceful timeout.
+		waitTimeout = shutdownFailureFallbackWait
 	}
 
+	if WaitForProcessExit(pid, waitTimeout) {
+		log.DebugContext(ctx, "VM shut down gracefully", "instance_id", inst.Id)
+		return true
+	}
+
+	log.WarnContext(ctx, "graceful shutdown timed out, falling back to hypervisor shutdown", "instance_id", inst.Id)
 	return false
-}
-
-// forceKillHypervisorProcess sends SIGKILL to the hypervisor process if it's still running
-// and waits briefly for it to exit.
-func (m *manager) forceKillHypervisorProcess(ctx context.Context, inst *Instance) error {
-	log := logger.FromContext(ctx)
-
-	if inst.HypervisorPID == nil {
-		return nil
-	}
-
-	pid := *inst.HypervisorPID
-	if err := syscall.Kill(pid, 0); err != nil {
-		// Process is already gone (likely ESRCH).
-		return nil
-	}
-
-	log.WarnContext(ctx, "hypervisor still running after shutdown fallback, sending SIGKILL", "instance_id", inst.Id, "pid", pid)
-	if err := syscall.Kill(pid, syscall.SIGKILL); err != nil {
-		return fmt.Errorf("sigkill hypervisor pid %d: %w", pid, err)
-	}
-
-	// Wait for process to die and reap it to avoid zombie false positives.
-	reaped := false
-	for i := 0; i < 50; i++ { // 50 * 100ms = 5s
-		var wstatus syscall.WaitStatus
-		wpid, err := syscall.Wait4(pid, &wstatus, syscall.WNOHANG, nil)
-		if err != nil || wpid == pid {
-			// Process reaped, or not our child (ECHILD) and no longer trackable here.
-			reaped = true
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-
-	if !reaped {
-		// Timed out waiting for reap; if process still exists, treat as failure.
-		if err := syscall.Kill(pid, 0); err == nil {
-			return fmt.Errorf("hypervisor pid %d still alive after SIGKILL", pid)
-		}
-		log.WarnContext(ctx, "timeout waiting to reap hypervisor process after SIGKILL", "instance_id", inst.Id, "pid", pid)
-	}
-
-	log.DebugContext(ctx, "hypervisor process force-killed", "instance_id", inst.Id, "pid", pid)
-	return nil
 }
 
 // stopInstance gracefully stops an active instance.
@@ -208,24 +173,25 @@ func (m *manager) stopInstance(
 		)
 		if err := m.shutdownHypervisor(shutdownCtx, &inst); err != nil {
 			shutdownSpanEnd(err)
-			// Continue to final SIGKILL fallback if graceful shutdown API fails.
 			log.WarnContext(ctx, "failed to shutdown hypervisor", "instance_id", id, "error", err)
+
+			// Final fallback: force-kill the process. A nil return from
+			// shutdownHypervisor already confirmed the hypervisor is gone, so
+			// this only runs when shutdown could not.
+			killCtx, killSpanEnd := m.startLifecycleStep(ctx, "force_kill_hypervisor",
+				attribute.String("instance_id", id),
+				attribute.String("hypervisor", string(stored.HypervisorType)),
+				attribute.String("operation", "force_kill_hypervisor"),
+			)
+			if err := m.killHypervisor(killCtx, &inst); err != nil {
+				killSpanEnd(err)
+				log.ErrorContext(ctx, "failed to force-kill hypervisor process", "instance_id", id, "error", err)
+				return nil, err
+			}
+			killSpanEnd(nil)
 		} else {
 			shutdownSpanEnd(nil)
 		}
-
-		// Final fallback: force-kill the process if it's still alive.
-		killCtx, killSpanEnd := m.startLifecycleStep(ctx, "force_kill_hypervisor",
-			attribute.String("instance_id", id),
-			attribute.String("hypervisor", string(stored.HypervisorType)),
-			attribute.String("operation", "force_kill_hypervisor"),
-		)
-		if err := m.forceKillHypervisorProcess(killCtx, &inst); err != nil {
-			killSpanEnd(err)
-			log.ErrorContext(ctx, "failed to force-kill hypervisor process", "instance_id", id, "error", err)
-			return nil, err
-		}
-		killSpanEnd(nil)
 	}
 
 	// 6. Release network allocation (delete TAP device)
@@ -263,12 +229,11 @@ func (m *manager) stopInstance(
 		}
 	}
 
-	// 7. Destroy vGPU mdev device if present (frees vGPU slot for other VMs)
-	if inst.GPUMdevUUID != "" {
-		log.InfoContext(ctx, "destroying vGPU mdev on stop", "instance_id", id, "uuid", inst.GPUMdevUUID)
-		if err := devices.DestroyMdev(ctx, inst.GPUMdevUUID); err != nil {
-			// Log error but continue - mdev cleanup is best-effort
-			log.WarnContext(ctx, "failed to destroy mdev on stop", "instance_id", id, "uuid", inst.GPUMdevUUID, "error", err)
+	// 7. Release the vGPU assignment if present (frees the vGPU slot for other VMs).
+	if path := storedVGPUDevicePath(stored); path != "" {
+		log.InfoContext(ctx, "destroying vGPU on stop", "instance_id", id, "device_path", path)
+		if err := releaseStoredVGPU(ctx, stored); err != nil {
+			log.WarnContext(ctx, "failed to destroy vGPU on stop; retaining assignment metadata", "instance_id", id, "device_path", path, "error", err)
 		}
 	}
 
@@ -298,11 +263,10 @@ func (m *manager) stopInstance(
 		}
 	}
 
-	// 10. Update metadata (clear PID, mdev UUID, set StoppedAt)
+	// 10. Update metadata (clear PID, set StoppedAt)
 	now := time.Now().UTC()
 	stored.StoppedAt = &now
-	stored.HypervisorPID = nil
-	stored.GPUMdevUUID = "" // Clear mdev UUID since we destroyed it
+	stored.HypervisorProcessIdentity.Clear()
 	// Boot markers are per-boot-run and must not carry across stop/restore/start.
 	stored.ProgramStartedAt = nil
 	stored.GuestAgentReadyAt = nil

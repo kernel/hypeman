@@ -134,6 +134,24 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 		resourceTags = toMapTags(request.Body.Tags)
 	}
 
+	if request.Body.Ttl != nil && request.Body.ExpiresAt != nil {
+		return oapi.CreateInstance400JSONResponse{
+			Code:    "invalid_request",
+			Message: "ttl and expires_at are mutually exclusive",
+		}, nil
+	}
+	var ttl *time.Duration
+	if request.Body.Ttl != nil {
+		parsedTTL, err := parseTTL(*request.Body.Ttl)
+		if err != nil {
+			return oapi.CreateInstance400JSONResponse{
+				Code:    "invalid_ttl",
+				Message: err.Error(),
+			}, nil
+		}
+		ttl = &parsedTTL
+	}
+
 	// Parse network enabled (default: true)
 	networkEnabled := true
 	if request.Body.Network != nil && request.Body.Network.Enabled != nil {
@@ -314,6 +332,8 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 		NetworkBandwidthUpload:   networkBandwidthUpload,
 		Env:                      env,
 		Tags:                     resourceTags,
+		TTL:                      ttl,
+		ExpiresAt:                request.Body.ExpiresAt,
 		NetworkEnabled:           networkEnabled,
 		NetworkEgress:            networkEgress,
 		Credentials:              credentials,
@@ -361,6 +381,11 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 		case errors.Is(err, instances.ErrInsufficientResources):
 			return oapi.CreateInstance409JSONResponse{
 				Code:    "insufficient_resources",
+				Message: err.Error(),
+			}, nil
+		case errors.Is(err, instances.ErrInvalidExpiresAt):
+			return oapi.CreateInstance400JSONResponse{
+				Code:    "invalid_expires_at",
 				Message: err.Error(),
 			}, nil
 		case errors.Is(err, instances.ErrInvalidRequest):
@@ -545,7 +570,12 @@ func (s *ApiService) DeleteInstance(ctx context.Context, request oapi.DeleteInst
 	}
 	log := logger.FromContext(ctx)
 
-	err := s.InstanceManager.DeleteInstance(ctx, inst.Id)
+	options := instances.DeleteInstanceOptions{}
+	if request.Params.GracefulShutdown != nil {
+		options.SkipGracefulShutdown = !*request.Params.GracefulShutdown
+	}
+
+	err := s.InstanceManager.DeleteInstanceWithOptions(ctx, inst.Id, options)
 	if err != nil {
 		log.ErrorContext(ctx, "failed to delete instance", "error", err)
 		return oapi.DeleteInstance500JSONResponse{
@@ -631,6 +661,12 @@ func (s *ApiService) RestoreInstance(ctx context.Context, request oapi.RestoreIn
 	result, err := s.InstanceManager.RestoreInstance(ctx, inst.Id)
 	if err != nil {
 		switch {
+		case errors.Is(err, context.Canceled):
+			log.DebugContext(ctx, "restore request canceled")
+			return oapi.RestoreInstance499JSONResponse{
+				Code:    "client_closed_request",
+				Message: "request canceled",
+			}, nil
 		case errors.Is(err, instances.ErrNotFound):
 			return oapi.RestoreInstance404JSONResponse{
 				Code:    "not_found",
@@ -988,9 +1024,8 @@ func (s *ApiService) StatInstancePath(ctx context.Context, request oapi.StatInst
 	return response, nil
 }
 
-// UpdateInstance updates mutable properties of a running instance.
-// Currently supports updating env vars referenced by credential policies for key rotation.
-// Note: Resolution is handled by ResolveResource middleware
+// UpdateInstance updates mutable instance properties.
+// Note: Resolution is handled by ResolveResource middleware.
 func (s *ApiService) UpdateInstance(ctx context.Context, request oapi.UpdateInstanceRequestObject) (oapi.UpdateInstanceResponseObject, error) {
 	inst := mw.GetResolvedInstance[instances.Instance](ctx)
 	if inst == nil {
@@ -1033,6 +1068,23 @@ func (s *ApiService) UpdateInstance(ctx context.Context, request oapi.UpdateInst
 			Message: err.Error(),
 		}, nil
 	}
+	if request.Body.Ttl != nil && request.Body.ExpiresAt != nil {
+		return oapi.UpdateInstance400JSONResponse{
+			Code:    "invalid_request",
+			Message: "ttl and expires_at are mutually exclusive",
+		}, nil
+	}
+	var ttl *time.Duration
+	if request.Body.Ttl != nil {
+		parsedTTL, err := parseTTL(*request.Body.Ttl)
+		if err != nil {
+			return oapi.UpdateInstance400JSONResponse{
+				Code:    "invalid_ttl",
+				Message: err.Error(),
+			}, nil
+		}
+		ttl = &parsedTTL
+	}
 
 	result, err := s.InstanceManager.UpdateInstance(ctx, inst.Id, instances.UpdateInstanceRequest{
 		Env:              env,
@@ -1040,6 +1092,8 @@ func (s *ApiService) UpdateInstance(ctx context.Context, request oapi.UpdateInst
 		HealthCheck:      healthCheck,
 		RestartPolicy:    restartPolicy,
 		RestartPolicySet: request.Body.RestartPolicy != nil,
+		TTL:              ttl,
+		ExpiresAt:        request.Body.ExpiresAt,
 	})
 	if err != nil {
 		switch {
@@ -1051,6 +1105,16 @@ func (s *ApiService) UpdateInstance(ctx context.Context, request oapi.UpdateInst
 		case errors.Is(err, instances.ErrInvalidState):
 			return oapi.UpdateInstance409JSONResponse{
 				Code:    "invalid_state",
+				Message: err.Error(),
+			}, nil
+		case errors.Is(err, instances.ErrInstanceExpired):
+			return oapi.UpdateInstance409JSONResponse{
+				Code:    "instance_expired",
+				Message: err.Error(),
+			}, nil
+		case errors.Is(err, instances.ErrInvalidExpiresAt):
+			return oapi.UpdateInstance400JSONResponse{
+				Code:    "invalid_expires_at",
 				Message: err.Error(),
 			}, nil
 		case errors.Is(err, instances.ErrInvalidRequest):
@@ -1144,6 +1208,7 @@ func instanceToOAPI(inst instances.Instance) oapi.Instance {
 		DiskIoBps:   diskIoBpsStr,
 		Network:     nil,
 		CreatedAt:   inst.CreatedAt,
+		ExpiresAt:   inst.ExpiresAt,
 		StartedAt:   inst.StartedAt,
 		StoppedAt:   inst.StoppedAt,
 		ExitCode:    inst.ExitCode,
@@ -1157,7 +1222,6 @@ func instanceToOAPI(inst instances.Instance) oapi.Instance {
 	if inst.Platform != "" {
 		oapiInst.Platform = lo.ToPtr(inst.Platform)
 	}
-
 	if inst.ExitMessage != "" {
 		oapiInst.ExitMessage = lo.ToPtr(inst.ExitMessage)
 	}
@@ -1308,6 +1372,17 @@ func toOAPISnapshotPolicy(policy instances.SnapshotPolicy) oapi.SnapshotPolicy {
 		out.StandbyCompressionDelay = &delay
 	}
 	return out
+}
+
+func parseTTL(value string) (time.Duration, error) {
+	ttl, err := time.ParseDuration(value)
+	if err != nil {
+		return 0, fmt.Errorf("ttl must be a valid duration: %w", err)
+	}
+	if ttl < 0 {
+		return 0, fmt.Errorf("ttl cannot be negative")
+	}
+	return ttl, nil
 }
 
 func parseOptionalDuration(value string, field string) (*time.Duration, error) {

@@ -12,6 +12,12 @@ var (
 	// ErrInvalidRequest is returned when request validation fails
 	ErrInvalidRequest = errors.New("invalid request")
 
+	// ErrInstanceExpired is returned when an expiration update loses the expiry race.
+	ErrInstanceExpired = errors.New("instance expired")
+
+	// ErrInvalidExpiresAt is returned when an absolute expiration is not in the future.
+	ErrInvalidExpiresAt = errors.New("invalid expires_at")
+
 	// ErrAlreadyExists is returned when creating an instance that already exists
 	ErrAlreadyExists = errors.New("instance already exists")
 

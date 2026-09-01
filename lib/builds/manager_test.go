@@ -90,6 +90,10 @@ func (m *mockInstanceManager) CreateSnapshot(ctx context.Context, id string, req
 }
 
 func (m *mockInstanceManager) DeleteInstance(ctx context.Context, id string) error {
+	return m.DeleteInstanceWithOptions(ctx, id, instances.DeleteInstanceOptions{})
+}
+
+func (m *mockInstanceManager) DeleteInstanceWithOptions(ctx context.Context, id string, _ instances.DeleteInstanceOptions) error {
 	m.deleteCallCount++
 	if m.deleteFunc != nil {
 		return m.deleteFunc(ctx, id)
@@ -367,6 +371,19 @@ func (m *mockImageManager) GetImage(ctx context.Context, name string) (*images.I
 func (m *mockImageManager) DeleteImage(ctx context.Context, name string) error {
 	delete(m.images, name)
 	return nil
+}
+
+func (m *mockImageManager) TagImage(ctx context.Context, source, target string) (*images.Image, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	img, ok := m.images[source]
+	if !ok {
+		return nil, images.ErrNotFound
+	}
+	tagged := *img
+	tagged.Name = target
+	m.images[target] = &tagged
+	return &tagged, nil
 }
 
 func (m *mockImageManager) RecoverInterruptedBuilds() {}

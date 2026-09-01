@@ -17,6 +17,7 @@ var (
 	ErrNotFound        = errors.New("image not found")
 	ErrInvalidName     = errors.New("invalid image name")
 	ErrInvalidPlatform = errors.New("invalid platform")
+	ErrImageNotReady   = errors.New("image is not ready")
 	// ErrPlatformNotAvailable means the requested platform is well-formed but the
 	// image's manifest index does not publish a matching variant. Unlike
 	// ErrInvalidPlatform (bad user syntax), the platform itself is valid; the

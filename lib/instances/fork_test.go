@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/autostandby"
+	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/guest"
 	"github.com/kernel/hypeman/lib/healthcheck"
 	"github.com/kernel/hypeman/lib/hypervisor"
@@ -28,6 +29,39 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestForkInstanceClearsVGPUAssignment(t *testing.T) {
+	manager, _ := setupTestManager(t)
+	ctx := context.Background()
+	hvType := hypervisor.Type("fork-vgpu-test")
+	hypervisor.RegisterCapabilities(hvType, hypervisor.Capabilities{SupportsConcurrentForkPrepare: true})
+	manager.vmStarters[hvType] = concurrentForkPrepareTestStarter{}
+
+	sourceID := "fork-vgpu-source"
+	createStoppedSnapshotSourceFixture(t, manager, sourceID, sourceID, hvType)
+
+	// A retained assignment (release failed during stop) must stay with the
+	// source; the fork keeps only the profile and acquires its own vGPU on
+	// start.
+	meta, err := manager.loadMetadata(sourceID)
+	require.NoError(t, err)
+	meta.GPUProfile = "NVIDIA L40S-2Q"
+	meta.GPUFramework = devices.VGPUFramework("future-framework")
+	meta.GPUDevicePath = "/sys/bus/pci/devices/0000:82:00.4"
+	meta.GPUMdevUUID = "retained-uuid"
+	require.NoError(t, manager.saveMetadata(meta))
+
+	forked, err := manager.ForkInstance(ctx, sourceID, ForkInstanceRequest{Name: "fork-vgpu-copy"})
+	require.NoError(t, err)
+	assert.Equal(t, "NVIDIA L40S-2Q", forked.GPUProfile)
+	assert.Equal(t, devices.VGPUFrameworkNone, forked.GPUFramework)
+	assert.Empty(t, forked.GPUDevicePath)
+	assert.Empty(t, forked.GPUMdevUUID)
+
+	source, err := manager.loadMetadata(sourceID)
+	require.NoError(t, err)
+	assert.Equal(t, "/sys/bus/pci/devices/0000:82:00.4", source.GPUDevicePath)
+}
 
 func TestForkInstance_VZStoppedSourceSupported(t *testing.T) {
 	t.Parallel()
@@ -577,6 +611,11 @@ func TestForkInstanceFromStandbyCancelsCompressionJobAndCopiesRawMemory(t *testi
 
 	sourceID := "fork-standby-compressed-src"
 	createStandbySnapshotSourceFixture(t, manager, sourceID, sourceID, manager.defaultHypervisor)
+	expiresAt := time.Now().Add(time.Hour)
+	sourceMeta, err := manager.loadMetadata(sourceID)
+	require.NoError(t, err)
+	sourceMeta.ExpiresAt = &expiresAt
+	require.NoError(t, manager.saveMetadata(sourceMeta))
 
 	rawPath := filepath.Join(manager.paths.InstanceSnapshotLatest(sourceID), "memory-ranges")
 	require.NoError(t, os.WriteFile(rawPath, []byte("some guest memory"), 0o644))
@@ -584,7 +623,7 @@ func TestForkInstanceFromStandbyCancelsCompressionJobAndCopiesRawMemory(t *testi
 	require.NoError(t, os.MkdirAll(filepath.Dir(snapshotConfigPath), 0o755))
 	require.NoError(t, os.WriteFile(snapshotConfigPath, []byte(`{}`), 0o644))
 
-	_, _, err := compressSnapshotMemoryFile(ctx, rawPath, snapshotstore.SnapshotCompressionConfig{
+	_, _, err = compressSnapshotMemoryFile(ctx, rawPath, snapshotstore.SnapshotCompressionConfig{
 		Enabled:   true,
 		Algorithm: snapshotstore.SnapshotCompressionAlgorithmZstd,
 		Level:     intPtr(1),
@@ -619,6 +658,7 @@ func TestForkInstanceFromStandbyCancelsCompressionJobAndCopiesRawMemory(t *testi
 	}, true)
 	require.NoError(t, err)
 	require.NotNil(t, forked)
+	assert.Nil(t, forked.ExpiresAt)
 
 	assert.True(t, canceled.Load(), "standby compression job should be canceled before copying the source guest directory")
 
@@ -671,6 +711,7 @@ func TestCloneStoredMetadataForFork_DeepCopiesReferenceFields(t *testing.T) {
 	t.Parallel()
 	startedAt := time.Now().Add(-2 * time.Minute)
 	stoppedAt := time.Now().Add(-1 * time.Minute)
+	expiresAt := time.Now().Add(time.Hour)
 	notBefore := time.Now().Add(5 * time.Minute)
 	pid := 1234
 	exitCode := 17
@@ -678,19 +719,20 @@ func TestCloneStoredMetadataForFork_DeepCopiesReferenceFields(t *testing.T) {
 	pendingLevel := 3
 
 	src := StoredMetadata{
-		Image:         "docker.io/library/alpine:3.19",
-		ResolvedImage: "docker.io/library/alpine@sha256:amd64digest",
-		Platform:      "linux/amd64",
-		Env:           map[string]string{"A": "1"},
-		Tags:          map[string]string{"m": "x"},
-		Volumes:       []VolumeAttachment{{VolumeID: "vol-1", MountPath: "/data"}},
-		Devices:       []string{"0000:01:00.0"},
-		Entrypoint:    []string{"/bin/sh", "-c"},
-		Cmd:           []string{"echo", "hello"},
-		StartedAt:     &startedAt,
-		StoppedAt:     &stoppedAt,
-		HypervisorPID: &pid,
-		ExitCode:      &exitCode,
+		Image:                     "docker.io/library/alpine:3.19",
+		ResolvedImage:             "docker.io/library/alpine@sha256:amd64digest",
+		Platform:                  "linux/amd64",
+		Env:                       map[string]string{"A": "1"},
+		Tags:                      map[string]string{"m": "x"},
+		Volumes:                   []VolumeAttachment{{VolumeID: "vol-1", MountPath: "/data"}},
+		Devices:                   []string{"0000:01:00.0"},
+		Entrypoint:                []string{"/bin/sh", "-c"},
+		Cmd:                       []string{"echo", "hello"},
+		ExpiresAt:                 &expiresAt,
+		StartedAt:                 &startedAt,
+		StoppedAt:                 &stoppedAt,
+		HypervisorProcessIdentity: HypervisorProcessIdentity{HypervisorPID: &pid},
+		ExitCode:                  &exitCode,
 		AutoStandby: &autostandby.Policy{
 			Enabled:                true,
 			IdleTimeout:            "5m",
@@ -741,6 +783,7 @@ func TestCloneStoredMetadataForFork_DeepCopiesReferenceFields(t *testing.T) {
 	now := time.Now()
 	*cloned.PendingStandbyCompression.Policy.Level = 1
 	cloned.PendingStandbyCompression.NotBefore = now
+	*cloned.ExpiresAt = now
 	*cloned.StartedAt = now
 	*cloned.StoppedAt = now
 
@@ -760,6 +803,7 @@ func TestCloneStoredMetadataForFork_DeepCopiesReferenceFields(t *testing.T) {
 	require.NotNil(t, src.PendingStandbyCompression.Policy.Level)
 	require.Equal(t, 3, *src.PendingStandbyCompression.Policy.Level)
 	require.Equal(t, notBefore, src.PendingStandbyCompression.NotBefore)
+	require.Equal(t, expiresAt, *src.ExpiresAt)
 	require.Equal(t, startedAt, *src.StartedAt)
 	require.Equal(t, stoppedAt, *src.StoppedAt)
 }

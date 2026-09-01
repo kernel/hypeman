@@ -49,6 +49,21 @@ func (m *manager) startInstance(
 		return nil, fmt.Errorf("%w: cannot start from state %s, must be Stopped", ErrInvalidState, inst.State)
 	}
 
+	// Release any assignment retained by an earlier failed release and
+	// persist the cleared fields immediately, so a failure later in start
+	// cannot leave on-disk metadata pointing at a device that is already
+	// gone (matching releaseRetainedVGPULocked).
+	if storedVGPUDevicePath(stored) != "" {
+		if err := releaseStoredVGPU(ctx, stored); err != nil {
+			log.ErrorContext(ctx, "failed to release stale vGPU before start", "instance_id", id, "error", err)
+			return nil, fmt.Errorf("release stale vGPU before start: %w", err)
+		}
+		if err := m.saveMetadata(meta); err != nil {
+			log.ErrorContext(ctx, "failed to save metadata after stale vGPU release", "instance_id", id, "error", err)
+			return nil, fmt.Errorf("save metadata after stale vGPU release: %w", err)
+		}
+	}
+
 	// 2a. Clear stale exit info from previous run and apply command overrides
 	stored.ExitCode = nil
 	stored.ExitMessage = ""
@@ -144,22 +159,27 @@ func (m *manager) startInstance(
 		}
 	}
 
-	// 4b. Recreate vGPU mdev if this instance had a GPU profile
+	// 4b. Recreate the vGPU if this instance had a GPU profile
 	// Note: GPU availability was already validated in step 2b
 	if stored.GPUProfile != "" {
 		log.InfoContext(ctx, "creating vGPU mdev for start", "instance_id", id, "profile", stored.GPUProfile)
-		mdev, err := devices.CreateMdev(ctx, stored.GPUProfile, id)
+		device, err := devices.CreateVGPU(ctx, stored.GPUProfile, id)
 		if err != nil {
-			log.ErrorContext(ctx, "failed to create mdev", "instance_id", id, "profile", stored.GPUProfile, "error", err)
+			log.ErrorContext(ctx, "failed to create vGPU", "instance_id", id, "profile", stored.GPUProfile, "error", err)
 			return nil, fmt.Errorf("create vGPU mdev for profile %s: %w", stored.GPUProfile, err)
 		}
-		stored.GPUMdevUUID = mdev.UUID
-		log.InfoContext(ctx, "created vGPU mdev", "instance_id", id, "profile", stored.GPUProfile, "uuid", mdev.UUID)
-		// Add mdev cleanup to stack
+		setStoredVGPUDevice(stored, device)
+		log.InfoContext(ctx, "created vGPU", "instance_id", id, "profile", stored.GPUProfile, "uuid", device.MdevUUID)
+		// Add vGPU cleanup to stack
 		cu.Add(func() {
-			log.DebugContext(ctx, "destroying mdev on cleanup", "instance_id", id, "uuid", mdev.UUID)
-			if err := devices.DestroyMdev(ctx, mdev.UUID); err != nil {
-				log.WarnContext(ctx, "failed to destroy mdev on cleanup", "instance_id", id, "uuid", mdev.UUID, "error", err)
+			log.DebugContext(ctx, "destroying vGPU on cleanup", "instance_id", id, "uuid", device.MdevUUID)
+			assignment := devices.VGPUAssignment{
+				Framework:  device.Framework,
+				DevicePath: device.SysfsPath,
+				MdevUUID:   device.MdevUUID,
+			}
+			if err := devices.DestroyVGPU(ctx, assignment); err != nil {
+				log.WarnContext(ctx, "failed to destroy vGPU on cleanup", "instance_id", id, "uuid", device.MdevUUID, "error", err)
 			}
 		})
 	}

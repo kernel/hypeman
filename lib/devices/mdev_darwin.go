@@ -2,7 +2,10 @@
 
 package devices
 
-import "context"
+import (
+	"context"
+	"fmt"
+)
 
 // SetGPUProfileCacheTTL is a no-op on macOS.
 func SetGPUProfileCacheTTL(ttl string) {
@@ -30,6 +33,10 @@ func ListMdevDevices() ([]MdevDevice, error) {
 	return []MdevDevice{}, nil
 }
 
+func CreateVGPU(ctx context.Context, profileName, instanceID string) (*VGPUDevice, error) {
+	return nil, ErrVGPUNotSupportedOnMacOS
+}
+
 // CreateMdev returns an error on macOS as mdev is not supported.
 func CreateMdev(ctx context.Context, profileName, instanceID string) (*MdevDevice, error) {
 	return nil, ErrVGPUNotSupportedOnMacOS
@@ -43,6 +50,13 @@ func DestroyMdev(ctx context.Context, mdevUUID string) error {
 // IsMdevInUse returns false on macOS.
 func IsMdevInUse(mdevUUID string) bool {
 	return false
+}
+
+func DestroyVGPU(ctx context.Context, assignment VGPUAssignment) error {
+	if assignment.Framework != VGPUFrameworkNone && assignment.Framework != VGPUFrameworkMdev {
+		return fmt.Errorf("unknown vGPU framework %q", assignment.Framework)
+	}
+	return nil
 }
 
 // ReconcileMdevs is a no-op on macOS.

@@ -52,7 +52,7 @@ var systemDirectories = []string{
 	"/var",
 }
 
-func wrapCreateMdevErr(profile string, err error) error {
+func wrapCreateVGPUErr(profile string, err error) error {
 	if errors.Is(err, devices.ErrVGPUNotSupportedOnMacOS) {
 		return fmt.Errorf("%w: %w", ErrInvalidRequest, err)
 	}
@@ -94,6 +94,9 @@ func (m *manager) createInstance(
 	// 1. Validate request
 	if err := validateCreateRequest(&req); err != nil {
 		log.ErrorContext(ctx, "invalid create request", "error", err)
+		return nil, err
+	}
+	if err := validateExpiresAt(req.ExpiresAt, m.nowUTC()); err != nil {
 		return nil, err
 	}
 	if req.GPU != nil && req.GPU.Profile != "" && !devices.Capabilities().SupportsVGPU {
@@ -172,6 +175,17 @@ func (m *manager) createInstance(
 	ctx = enrichInstancesTrace(ctx, attribute.String("instance_id", id))
 	log.DebugContext(ctx, "generated instance ID", "instance_id", id)
 
+	// Keep the reaper from deleting metadata while creation is still in flight.
+	instanceLock, ownsInstanceLock := m.loadOrStoreInstanceLock(id)
+	removeInstanceLockOnFailure := ownsInstanceLock
+	instanceLock.Lock()
+	defer func() {
+		if retErr != nil && removeInstanceLockOnFailure {
+			m.instanceLocks.CompareAndDelete(id, instanceLock)
+		}
+		instanceLock.Unlock()
+	}()
+
 	// 4. Generate vsock configuration
 	vsockCID := generateVsockCID(id)
 	vsockSocket := m.paths.InstanceSocket(id, hypervisor.VsockSocketNameForType(hvType))
@@ -179,6 +193,7 @@ func (m *manager) createInstance(
 
 	// 5. Check instance doesn't already exist
 	if _, err := m.loadMetadata(id); err == nil {
+		removeInstanceLockOnFailure = false
 		return nil, ErrAlreadyExists
 	}
 
@@ -257,7 +272,10 @@ func (m *manager) createInstance(
 	// whatever devices have been attached when cleanup runs.
 	var attachedDeviceIDs []string
 	var resolvedDeviceIDs []string
+	var gpuDevice *devices.VGPUDevice
 	var gpuProfile string
+	var gpuFramework devices.VGPUFramework
+	var gpuDevicePath string
 	var gpuMdevUUID string
 
 	// Setup cleanup stack early so device attachment errors trigger cleanup
@@ -277,23 +295,30 @@ func (m *manager) createInstance(
 		})
 	}
 
-	// Handle vGPU profile request - create mdev device
+	// Handle vGPU profile request
 	if req.GPU != nil && req.GPU.Profile != "" {
-		log.InfoContext(ctx, "creating vGPU mdev", "instance_id", id, "profile", req.GPU.Profile)
-		mdev, err := devices.CreateMdev(ctx, req.GPU.Profile, id)
+		log.InfoContext(ctx, "creating vGPU", "instance_id", id, "profile", req.GPU.Profile)
+		gpuDevice, err = devices.CreateVGPU(ctx, req.GPU.Profile, id)
 		if err != nil {
-			log.ErrorContext(ctx, "failed to create mdev", "profile", req.GPU.Profile, "error", err)
-			return nil, wrapCreateMdevErr(req.GPU.Profile, err)
+			log.ErrorContext(ctx, "failed to create vGPU", "profile", req.GPU.Profile, "error", err)
+			return nil, wrapCreateVGPUErr(req.GPU.Profile, err)
 		}
-		gpuProfile = req.GPU.Profile
-		gpuMdevUUID = mdev.UUID
-		log.InfoContext(ctx, "created vGPU mdev", "instance_id", id, "profile", gpuProfile, "uuid", gpuMdevUUID)
+		gpuProfile = gpuDevice.ProfileName
+		gpuFramework = gpuDevice.Framework
+		gpuDevicePath = gpuDevice.SysfsPath
+		gpuMdevUUID = gpuDevice.MdevUUID
+		log.InfoContext(ctx, "created vGPU", "instance_id", id, "profile", gpuProfile, "uuid", gpuMdevUUID)
 
-		// Add mdev cleanup to stack
+		// Add vGPU cleanup to stack
 		cu.Add(func() {
-			log.DebugContext(ctx, "destroying mdev on cleanup", "instance_id", id, "uuid", gpuMdevUUID)
-			if err := devices.DestroyMdev(ctx, gpuMdevUUID); err != nil {
-				log.WarnContext(ctx, "failed to destroy mdev on cleanup", "instance_id", id, "uuid", gpuMdevUUID, "error", err)
+			log.DebugContext(ctx, "destroying vGPU on cleanup", "instance_id", id, "uuid", gpuDevice.MdevUUID)
+			assignment := devices.VGPUAssignment{
+				Framework:  gpuDevice.Framework,
+				DevicePath: gpuDevice.SysfsPath,
+				MdevUUID:   gpuDevice.MdevUUID,
+			}
+			if err := devices.DestroyVGPU(ctx, assignment); err != nil {
+				log.WarnContext(ctx, "failed to destroy vGPU on cleanup", "instance_id", id, "uuid", gpuDevice.MdevUUID, "error", err)
 			}
 		})
 	}
@@ -329,6 +354,11 @@ func (m *manager) createInstance(
 	}
 
 	// 11. Create instance metadata
+	createdAt := m.nowUTC()
+	expiresAt, err := resolveCreateExpiration(req, createdAt)
+	if err != nil {
+		return nil, err
+	}
 	stored := &StoredMetadata{
 		Id:                       id,
 		Name:                     req.Name,
@@ -347,7 +377,8 @@ func (m *manager) createInstance(
 		NetworkEnabled:           req.NetworkEnabled,
 		NetworkEgress:            cloneNetworkEgressPolicy(req.NetworkEgress),
 		Credentials:              cloneCredentialPolicies(req.Credentials),
-		CreatedAt:                time.Now(),
+		CreatedAt:                createdAt,
+		ExpiresAt:                expiresAt,
 		StartedAt:                nil,
 		StoppedAt:                nil,
 		ProgramStartedAt:         nil,
@@ -361,6 +392,8 @@ func (m *manager) createInstance(
 		VsockSocket:              vsockSocket,
 		Devices:                  resolvedDeviceIDs,
 		GPUProfile:               gpuProfile,
+		GPUFramework:             gpuFramework,
+		GPUDevicePath:            gpuDevicePath,
 		GPUMdevUUID:              gpuMdevUUID,
 		Entrypoint:               req.Entrypoint,
 		Cmd:                      req.Cmd,
@@ -561,6 +594,21 @@ func (m *manager) createInstance(
 	return &finalInst, nil
 }
 
+func resolveCreateExpiration(req CreateInstanceRequest, now time.Time) (*time.Time, error) {
+	if req.ExpiresAt != nil {
+		if err := validateExpiresAt(req.ExpiresAt, now); err != nil {
+			return nil, err
+		}
+		expiresAt := req.ExpiresAt.UTC()
+		return &expiresAt, nil
+	}
+	if req.TTL == nil || *req.TTL == 0 {
+		return nil, nil
+	}
+	expiresAt := now.Add(*req.TTL)
+	return &expiresAt, nil
+}
+
 // validateCreateRequest validates the create instance request.
 // The request is mutated in-place to persist normalized egress/credential policy fields.
 func validateCreateRequest(req *CreateInstanceRequest) error {
@@ -584,6 +632,12 @@ func validateCreateRequest(req *CreateInstanceRequest) error {
 	}
 	if req.Vcpus < 0 {
 		return fmt.Errorf("vcpus cannot be negative")
+	}
+	if req.TTL != nil && *req.TTL < 0 {
+		return fmt.Errorf("%w: ttl cannot be negative", ErrInvalidRequest)
+	}
+	if req.TTL != nil && req.ExpiresAt != nil {
+		return fmt.Errorf("%w: ttl and expires_at are mutually exclusive", ErrInvalidRequest)
 	}
 	if req.NetworkEgress != nil && req.NetworkEgress.Enabled {
 		if !req.NetworkEnabled {
@@ -776,10 +830,8 @@ func (m *manager) startAndBootVM(
 	if err != nil {
 		return fmt.Errorf("start vm: %w", err)
 	}
-	pid = resolveRuntimeHypervisorPID(log, stored.SocketPath, pid)
-
-	// Store the PID for later cleanup
-	stored.HypervisorPID = &pid
+	// Store the PID identity for later cleanup.
+	pid = resolveRuntimeHypervisorPID(log, stored, pid)
 	log.DebugContext(ctx, "VM started", "instance_id", stored.Id, "pid", pid)
 
 	// Optional: Expand memory to max if hotplug configured
@@ -795,15 +847,26 @@ func (m *manager) startAndBootVM(
 	return nil
 }
 
-func resolveRuntimeHypervisorPID(log *slog.Logger, socketPath string, fallbackPID int) int {
-	if processExists(fallbackPID) {
+// resolveRuntimeHypervisorPID resolves the runtime PID of the hypervisor
+// serving the instance socket and records its process identity. The
+// boot-scoped identity token is minted only for a trustworthy PID — the
+// direct child we spawned or the confirmed socket owner.
+func resolveRuntimeHypervisorPID(log *slog.Logger, stored *StoredMetadata, fallbackPID int) int {
+	if ProcessExists(fallbackPID) {
+		stored.HypervisorProcessIdentity.Set(fallbackPID)
 		return fallbackPID
 	}
-	pid, err := hypervisor.ResolveProcessPID(socketPath)
+	pid, err := hypervisor.ResolveProcessPID(stored.SocketPath)
 	if err != nil {
-		log.Debug("using fallback hypervisor pid", "socket_path", socketPath, "pid", fallbackPID, "error", err)
+		// The fallback PID was just proven dead, so it gets no identity
+		// token: minting one would stamp the current boot ID (and, if the
+		// PID is recycled mid-call, a live start time) onto a process that
+		// is not the hypervisor.
+		log.Debug("using fallback hypervisor pid", "socket_path", stored.SocketPath, "pid", fallbackPID, "error", err)
+		stored.HypervisorProcessIdentity.SetUnconfirmed(fallbackPID)
 		return fallbackPID
 	}
+	stored.HypervisorProcessIdentity.Set(pid)
 	return pid
 }
 
@@ -901,12 +964,6 @@ func (m *manager) buildHypervisorConfig(ctx context.Context, inst *Instance, ima
 		}
 	}
 
-	// Add vGPU mdev device if configured
-	if inst.GPUMdevUUID != "" {
-		mdevPath := filepath.Join("/sys/bus/mdev/devices", inst.GPUMdevUUID)
-		pciDevices = append(pciDevices, mdevPath)
-	}
-
 	// Build topology if available
 	var topology *hypervisor.CPUTopology
 	if hostTopo := calculateGuestTopology(inst.Vcpus, m.hostTopology); hostTopo != nil {
@@ -926,21 +983,22 @@ func (m *manager) buildHypervisorConfig(ctx context.Context, inst *Instance, ima
 	}
 
 	return hypervisor.VMConfig{
-		VCPUs:         inst.Vcpus,
-		MemoryBytes:   inst.Size,
-		HotplugBytes:  inst.HotplugSize,
-		Topology:      topology,
-		GuestMemory:   m.guestMemoryConfig(),
-		Disks:         disks,
-		Networks:      networks,
-		SerialLogPath: m.paths.InstanceAppLog(inst.Id),
-		VsockCID:      inst.VsockCID,
-		VsockSocket:   inst.VsockSocket,
-		PCIDevices:    pciDevices,
-		KernelPath:    kernelPath,
-		InitrdPath:    initrdPath,
-		KernelArgs:    m.kernelArgs(inst.HypervisorType),
-		EnableRosetta: inst.EnableRosetta,
+		VCPUs:          inst.Vcpus,
+		MemoryBytes:    inst.Size,
+		HotplugBytes:   inst.HotplugSize,
+		Topology:       topology,
+		GuestMemory:    m.guestMemoryConfig(),
+		Disks:          disks,
+		Networks:       networks,
+		SerialLogPath:  m.paths.InstanceAppLog(inst.Id),
+		VsockCID:       inst.VsockCID,
+		VsockSocket:    inst.VsockSocket,
+		PCIDevices:     pciDevices,
+		VGPUDevicePath: storedVGPUDevicePath(&inst.StoredMetadata),
+		KernelPath:     kernelPath,
+		InitrdPath:     initrdPath,
+		KernelArgs:     m.kernelArgs(inst.HypervisorType),
+		EnableRosetta:  inst.EnableRosetta,
 	}, nil
 }
 

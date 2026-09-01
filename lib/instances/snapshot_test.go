@@ -8,12 +8,125 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/images"
 	snapshotstore "github.com/kernel/hypeman/lib/snapshot"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestForkSnapshotClearsVGPUAssignment(t *testing.T) {
+	mgr, _ := setupTestManager(t)
+	ctx := context.Background()
+
+	sourceID := "snapshot-vgpu-source"
+	createStoppedSnapshotSourceFixture(t, mgr, sourceID, sourceID, mgr.defaultHypervisor)
+
+	meta, err := mgr.loadMetadata(sourceID)
+	require.NoError(t, err)
+	meta.GPUProfile = "NVIDIA L40S-2Q"
+	meta.GPUFramework = devices.VGPUFramework("future-framework")
+	meta.GPUDevicePath = "/sys/bus/pci/devices/0000:82:00.4"
+	meta.GPUMdevUUID = "retained-uuid"
+	require.NoError(t, mgr.saveMetadata(meta))
+
+	snapshot, err := mgr.CreateSnapshot(ctx, sourceID, CreateSnapshotRequest{
+		Kind: SnapshotKindStopped,
+		Name: "snapshot-vgpu",
+	})
+	require.NoError(t, err)
+
+	forked, err := mgr.ForkSnapshot(ctx, snapshot.Id, ForkSnapshotRequest{
+		Name:        "snapshot-vgpu-fork",
+		TargetState: StateStopped,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "NVIDIA L40S-2Q", forked.GPUProfile)
+	assert.Equal(t, devices.VGPUFrameworkNone, forked.GPUFramework)
+	assert.Empty(t, forked.GPUDevicePath)
+	assert.Empty(t, forked.GPUMdevUUID)
+
+	source, err := mgr.loadMetadata(sourceID)
+	require.NoError(t, err)
+	assert.Equal(t, "/sys/bus/pci/devices/0000:82:00.4", source.GPUDevicePath)
+}
+
+func TestRestoreSnapshotDoesNotResurrectStaleVGPUAssignment(t *testing.T) {
+	mgr, _ := setupTestManager(t)
+	ctx := context.Background()
+
+	sourceID := "snapshot-vgpu-restore-stale"
+	createStoppedSnapshotSourceFixture(t, mgr, sourceID, sourceID, mgr.defaultHypervisor)
+
+	meta, err := mgr.loadMetadata(sourceID)
+	require.NoError(t, err)
+	meta.GPUProfile = "NVIDIA L40S-2Q"
+	meta.GPUFramework = devices.VGPUFramework("future-framework")
+	meta.GPUDevicePath = "/sys/bus/pci/devices/0000:82:00.4"
+	meta.GPUMdevUUID = "retained-uuid"
+	require.NoError(t, mgr.saveMetadata(meta))
+
+	snapshot, err := mgr.CreateSnapshot(ctx, sourceID, CreateSnapshotRequest{
+		Kind: SnapshotKindStopped,
+		Name: "snapshot-vgpu-restore-stale",
+	})
+	require.NoError(t, err)
+
+	// The retained assignment is released successfully after the snapshot
+	// was taken; a restore must not resurrect the snapshot's embedded copy.
+	meta, err = mgr.loadMetadata(sourceID)
+	require.NoError(t, err)
+	clearStoredVGPUDevice(&meta.StoredMetadata)
+	require.NoError(t, mgr.saveMetadata(meta))
+
+	_, err = mgr.RestoreSnapshot(ctx, sourceID, snapshot.Id, RestoreSnapshotRequest{
+		TargetState:      StateStopped,
+		TargetHypervisor: mgr.defaultHypervisor,
+	})
+	require.NoError(t, err)
+
+	restored, err := mgr.loadMetadata(sourceID)
+	require.NoError(t, err)
+	assert.Equal(t, devices.VGPUFrameworkNone, restored.GPUFramework)
+	assert.Empty(t, restored.GPUDevicePath)
+	assert.Empty(t, restored.GPUMdevUUID)
+}
+
+func TestRestoreSnapshotKeepsCurrentVGPUAssignment(t *testing.T) {
+	mgr, _ := setupTestManager(t)
+	ctx := context.Background()
+
+	sourceID := "snapshot-vgpu-restore-retained"
+	createStoppedSnapshotSourceFixture(t, mgr, sourceID, sourceID, mgr.defaultHypervisor)
+
+	snapshot, err := mgr.CreateSnapshot(ctx, sourceID, CreateSnapshotRequest{
+		Kind: SnapshotKindStopped,
+		Name: "snapshot-vgpu-restore-retained",
+	})
+	require.NoError(t, err)
+
+	// An assignment retained after the snapshot was taken (e.g. from a
+	// failed release on stop) must survive the restore for the next retry.
+	meta, err := mgr.loadMetadata(sourceID)
+	require.NoError(t, err)
+	meta.GPUFramework = devices.VGPUFramework("future-framework")
+	meta.GPUDevicePath = "/sys/bus/pci/devices/0000:82:00.4"
+	meta.GPUMdevUUID = "retained-uuid"
+	require.NoError(t, mgr.saveMetadata(meta))
+
+	_, err = mgr.RestoreSnapshot(ctx, sourceID, snapshot.Id, RestoreSnapshotRequest{
+		TargetState:      StateStopped,
+		TargetHypervisor: mgr.defaultHypervisor,
+	})
+	require.NoError(t, err)
+
+	restored, err := mgr.loadMetadata(sourceID)
+	require.NoError(t, err)
+	assert.Equal(t, devices.VGPUFramework("future-framework"), restored.GPUFramework)
+	assert.Equal(t, "/sys/bus/pci/devices/0000:82:00.4", restored.GPUDevicePath)
+	assert.Equal(t, "retained-uuid", restored.GPUMdevUUID)
+}
 
 func TestStoppedSnapshotLifecycleAndForkAfterSourceDeletion(t *testing.T) {
 	t.Parallel()
@@ -23,6 +136,11 @@ func TestStoppedSnapshotLifecycleAndForkAfterSourceDeletion(t *testing.T) {
 	hvType := mgr.defaultHypervisor
 	sourceID := "snapshot-stopped-src"
 	createStoppedSnapshotSourceFixture(t, mgr, sourceID, "snapshot-stopped-src", hvType)
+	expiresAt := time.Now().Add(24 * time.Hour)
+	sourceMeta, err := mgr.loadMetadata(sourceID)
+	require.NoError(t, err)
+	sourceMeta.ExpiresAt = &expiresAt
+	require.NoError(t, mgr.saveMetadata(sourceMeta))
 
 	snap, err := mgr.CreateSnapshot(ctx, sourceID, CreateSnapshotRequest{
 		Kind: SnapshotKindStopped,
@@ -30,6 +148,9 @@ func TestStoppedSnapshotLifecycleAndForkAfterSourceDeletion(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, SnapshotKindStopped, snap.Kind)
+	snapshotMeta, err := mgr.loadSnapshotRecord(snap.Id)
+	require.NoError(t, err)
+	assert.Nil(t, snapshotMeta.StoredMetadata.ExpiresAt)
 
 	restored, err := mgr.RestoreSnapshot(ctx, sourceID, snap.Id, RestoreSnapshotRequest{
 		TargetState:      StateStopped,
@@ -38,6 +159,8 @@ func TestStoppedSnapshotLifecycleAndForkAfterSourceDeletion(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, StateStopped, restored.State)
 	require.Equal(t, hvType, restored.HypervisorType)
+	require.NotNil(t, restored.ExpiresAt)
+	assert.True(t, expiresAt.Equal(*restored.ExpiresAt))
 
 	require.NoError(t, mgr.DeleteInstance(ctx, sourceID))
 
@@ -53,6 +176,7 @@ func TestStoppedSnapshotLifecycleAndForkAfterSourceDeletion(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, StateStopped, forked.State)
 	require.Equal(t, hvType, forked.HypervisorType)
+	assert.Nil(t, forked.ExpiresAt)
 	t.Cleanup(func() { _ = deleteTestInstanceNow(context.Background(), mgr, forked.Id) })
 
 	require.NoError(t, mgr.DeleteSnapshot(ctx, snap.Id))

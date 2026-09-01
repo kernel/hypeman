@@ -142,6 +142,35 @@ func (p *Paths) UFFDSessionsDir(versionKey string) string {
 
 // Image path methods
 
+// ImageContentDir returns the directory for content-addressed image data.
+func (p *Paths) ImageContentDir(digestHex string) string {
+	return filepath.Join(p.dataDir, "images", "content", digestHex)
+}
+
+// ImageContentPath returns the path to a content-addressed rootfs disk file.
+func (p *Paths) ImageContentPath(digestHex string) string {
+	ext := "erofs"
+	if runtime.GOOS == "darwin" {
+		ext = "ext4"
+	}
+	return filepath.Join(p.ImageContentDir(digestHex), "rootfs."+ext)
+}
+
+// ImageContentMetadata returns the path to metadata for content-addressed image data.
+func (p *Paths) ImageContentMetadata(digestHex string) string {
+	return filepath.Join(p.ImageContentDir(digestHex), "metadata.json")
+}
+
+// ImageRepositoriesDir returns the root directory for repository tag references.
+func (p *Paths) ImageRepositoriesDir() string {
+	return filepath.Join(p.dataDir, "images", "repositories")
+}
+
+// ImageRepositoryTagSymlink returns the path to a tag reference in the new layout.
+func (p *Paths) ImageRepositoryTagSymlink(repository, tag string) string {
+	return filepath.Join(p.ImageRepositoriesDir(), repository, tag)
+}
+
 // ImageDigestDir returns the directory for a specific image digest.
 func (p *Paths) ImageDigestDir(repository, digestHex string) string {
 	return filepath.Join(p.dataDir, "images", repository, digestHex)

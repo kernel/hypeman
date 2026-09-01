@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"testing"
@@ -241,8 +242,18 @@ type captureCreateManager struct {
 	captureManager[instances.CreateInstanceRequest]
 }
 
+type captureDeleteManager struct {
+	instances.Manager
+	options instances.DeleteInstanceOptions
+}
+
 func newCaptureCreateManager(manager instances.Manager) *captureCreateManager {
 	return &captureCreateManager{captureManager: newCaptureManager[instances.CreateInstanceRequest](manager)}
+}
+
+func (m *captureDeleteManager) DeleteInstanceWithOptions(_ context.Context, _ string, options instances.DeleteInstanceOptions) error {
+	m.options = options
+	return nil
 }
 
 type captureForkManager struct {
@@ -284,6 +295,11 @@ func (m *captureUpdateManager) UpdateInstance(ctx context.Context, id string, re
 	}
 
 	now := time.Now()
+	expiresAt := req.ExpiresAt
+	if req.TTL != nil && *req.TTL > 0 {
+		resolved := now.Add(*req.TTL)
+		expiresAt = &resolved
+	}
 	return &instances.Instance{
 		StoredMetadata: instances.StoredMetadata{
 			Id:             id,
@@ -294,6 +310,7 @@ func (m *captureUpdateManager) UpdateInstance(ctx context.Context, id string, re
 			HealthCheck:    req.HealthCheck,
 			RestartPolicy:  req.RestartPolicy,
 			CreatedAt:      now,
+			ExpiresAt:      expiresAt,
 			HypervisorType: hypervisor.TypeCloudHypervisor,
 		},
 		State: instances.StateRunning,
@@ -307,6 +324,11 @@ func (m *captureCreateManager) CreateInstance(ctx context.Context, req instances
 	}
 
 	now := time.Now()
+	expiresAt := req.ExpiresAt
+	if req.TTL != nil && *req.TTL > 0 {
+		resolved := now.Add(*req.TTL)
+		expiresAt = &resolved
+	}
 	return &instances.Instance{
 		StoredMetadata: instances.StoredMetadata{
 			Id:             "inst-hotplug-default",
@@ -320,10 +342,180 @@ func (m *captureCreateManager) CreateInstance(ctx context.Context, req instances
 			HealthCheck:    req.HealthCheck,
 			RestartPolicy:  req.RestartPolicy,
 			CreatedAt:      now,
+			ExpiresAt:      expiresAt,
 			HypervisorType: hypervisor.TypeCloudHypervisor,
 		},
 		State: instances.StateRunning,
 	}, nil
+}
+
+func TestDeleteInstance_GracefulShutdown(t *testing.T) {
+	t.Parallel()
+
+	falseValue := false
+	trueValue := true
+	tests := []struct {
+		name                 string
+		gracefulShutdown     *bool
+		skipGracefulShutdown bool
+	}{
+		{name: "default"},
+		{name: "enabled", gracefulShutdown: &trueValue},
+		{name: "disabled", gracefulShutdown: &falseValue, skipGracefulShutdown: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := newTestService(t)
+			manager := &captureDeleteManager{Manager: svc.InstanceManager}
+			svc.InstanceManager = manager
+			inst := &instances.Instance{StoredMetadata: instances.StoredMetadata{Id: "inst-delete"}}
+			requestCtx := mw.WithResolvedInstance(ctx(), inst.Id, inst)
+
+			resp, err := svc.DeleteInstance(requestCtx, oapi.DeleteInstanceRequestObject{
+				Id: inst.Id,
+				Params: oapi.DeleteInstanceParams{
+					GracefulShutdown: tt.gracefulShutdown,
+				},
+			})
+
+			require.NoError(t, err)
+			_, ok := resp.(oapi.DeleteInstance204Response)
+			require.True(t, ok)
+			assert.Equal(t, tt.skipGracefulShutdown, manager.options.SkipGracefulShutdown)
+		})
+	}
+}
+
+func TestCreateInstance_TTL(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+	mockMgr := newCaptureCreateManager(svc.InstanceManager)
+	svc.InstanceManager = mockMgr
+	ttl := "90m"
+
+	resp, err := svc.CreateInstance(ctx(), oapi.CreateInstanceRequestObject{Body: &oapi.CreateInstanceRequest{
+		Name:  "test-ttl",
+		Image: "docker.io/library/alpine:latest",
+		Ttl:   &ttl,
+	}})
+	require.NoError(t, err)
+	created, ok := resp.(oapi.CreateInstance201JSONResponse)
+	require.True(t, ok)
+	require.NotNil(t, mockMgr.lastReq)
+	require.NotNil(t, mockMgr.lastReq.TTL)
+	assert.Equal(t, 90*time.Minute, *mockMgr.lastReq.TTL)
+	require.NotNil(t, created.ExpiresAt)
+	assert.Equal(t, created.CreatedAt.Add(90*time.Minute), *created.ExpiresAt)
+}
+
+func TestCreateInstance_ZeroTTLDisablesExpiration(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+	mockMgr := newCaptureCreateManager(svc.InstanceManager)
+	svc.InstanceManager = mockMgr
+	ttl := "0s"
+
+	resp, err := svc.CreateInstance(ctx(), oapi.CreateInstanceRequestObject{Body: &oapi.CreateInstanceRequest{
+		Name:  "test-no-expiration",
+		Image: "docker.io/library/alpine:latest",
+		Ttl:   &ttl,
+	}})
+	require.NoError(t, err)
+	created, ok := resp.(oapi.CreateInstance201JSONResponse)
+	require.True(t, ok)
+	require.NotNil(t, mockMgr.lastReq.TTL)
+	assert.Zero(t, *mockMgr.lastReq.TTL)
+	assert.Nil(t, created.ExpiresAt)
+}
+
+func TestCreateInstance_ExpiresAt(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+	mockMgr := newCaptureCreateManager(svc.InstanceManager)
+	svc.InstanceManager = mockMgr
+	expiresAt := time.Now().Add(24 * time.Hour).UTC().Truncate(time.Second)
+
+	resp, err := svc.CreateInstance(ctx(), oapi.CreateInstanceRequestObject{Body: &oapi.CreateInstanceRequest{
+		Name:      "test-expires-at",
+		Image:     "docker.io/library/alpine:latest",
+		ExpiresAt: &expiresAt,
+	}})
+	require.NoError(t, err)
+	created, ok := resp.(oapi.CreateInstance201JSONResponse)
+	require.True(t, ok)
+	require.NotNil(t, mockMgr.lastReq.ExpiresAt)
+	assert.Equal(t, expiresAt, *mockMgr.lastReq.ExpiresAt)
+	require.NotNil(t, created.ExpiresAt)
+	assert.Equal(t, expiresAt, *created.ExpiresAt)
+}
+
+func TestCreateInstance_MapsInvalidExpiresAt(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+	mockMgr := newCaptureCreateManager(svc.InstanceManager)
+	mockMgr.err = fmt.Errorf("%w: must be in the future", instances.ErrInvalidExpiresAt)
+	svc.InstanceManager = mockMgr
+	expiresAt := time.Now().Add(-time.Hour)
+
+	resp, err := svc.CreateInstance(ctx(), oapi.CreateInstanceRequestObject{Body: &oapi.CreateInstanceRequest{
+		Name:      "test-expired-deadline",
+		Image:     "docker.io/library/alpine:latest",
+		ExpiresAt: &expiresAt,
+	}})
+	require.NoError(t, err)
+	badRequest, ok := resp.(oapi.CreateInstance400JSONResponse)
+	require.True(t, ok)
+	assert.Equal(t, "invalid_expires_at", badRequest.Code)
+}
+
+func TestInstanceResponseIncludesNullExpiresAt(t *testing.T) {
+	t.Parallel()
+
+	encoded, err := json.Marshal(instanceToOAPI(instances.Instance{}))
+	require.NoError(t, err)
+	assert.Contains(t, string(encoded), `"expires_at":null`)
+}
+
+func TestCreateInstance_RejectsConflictingExpiration(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+	ttl := "1h"
+	expiresAt := time.Now().Add(2 * time.Hour)
+	resp, err := svc.CreateInstance(ctx(), oapi.CreateInstanceRequestObject{Body: &oapi.CreateInstanceRequest{
+		Name:      "test-conflicting-expiration",
+		Image:     "docker.io/library/alpine:latest",
+		Ttl:       &ttl,
+		ExpiresAt: &expiresAt,
+	}})
+	require.NoError(t, err)
+	badRequest, ok := resp.(oapi.CreateInstance400JSONResponse)
+	require.True(t, ok)
+	assert.Equal(t, "invalid_request", badRequest.Code)
+}
+
+func TestCreateInstance_InvalidTTL(t *testing.T) {
+	t.Parallel()
+
+	for _, ttl := range []string{"not-a-duration", "-1h"} {
+		t.Run(ttl, func(t *testing.T) {
+			svc := newTestService(t)
+			resp, err := svc.CreateInstance(ctx(), oapi.CreateInstanceRequestObject{Body: &oapi.CreateInstanceRequest{
+				Name:  "test-invalid-ttl",
+				Image: "docker.io/library/alpine:latest",
+				Ttl:   &ttl,
+			}})
+			require.NoError(t, err)
+			badRequest, ok := resp.(oapi.CreateInstance400JSONResponse)
+			require.True(t, ok)
+			assert.Equal(t, "invalid_ttl", badRequest.Code)
+		})
+	}
 }
 
 func TestCreateInstance_MapsQEMUMicroVMHypervisor(t *testing.T) {
@@ -755,9 +947,7 @@ func TestCreateInstance_ErrorStatusMapping(t *testing.T) {
 }
 
 // errActionInstanceManager is a fake whose lifecycle actions always fail with a
-// preset error, used to assert action handlers map a deleted-image
-// images.ErrNotFound (resolved at action time, e.g. start/restore/fork of a
-// stopped instance whose image was removed) to a 404 instead of a blanket 500.
+// preset error.
 type errActionInstanceManager struct {
 	instances.Manager
 	err error
@@ -777,6 +967,51 @@ func (m *errActionInstanceManager) ForkInstance(context.Context, string, instanc
 
 func (m *errActionInstanceManager) RestoreSnapshot(context.Context, string, string, instances.RestoreSnapshotRequest) (*instances.Instance, error) {
 	return nil, m.err
+}
+
+func TestRestoreInstance_ErrorMapping(t *testing.T) {
+	t.Parallel()
+
+	resolved := &instances.Instance{
+		StoredMetadata: instances.StoredMetadata{Id: "inst-restore-error"},
+	}
+	tests := []struct {
+		name         string
+		err          error
+		wantResponse oapi.RestoreInstanceResponseObject
+	}{
+		{
+			name: "client cancellation -> 499",
+			err:  fmt.Errorf("restore from snapshot: %w", context.Canceled),
+			wantResponse: oapi.RestoreInstance499JSONResponse{
+				Code:    "client_closed_request",
+				Message: "request canceled",
+			},
+		},
+		{
+			name: "internal failure -> 500",
+			err:  fmt.Errorf("restore from snapshot: hypervisor failed"),
+			wantResponse: oapi.RestoreInstance500JSONResponse{
+				Code:    "internal_error",
+				Message: "failed to restore instance",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			svc := newTestService(t)
+			svc.InstanceManager = &errActionInstanceManager{Manager: svc.InstanceManager, err: tt.err}
+
+			resp, err := svc.RestoreInstance(
+				mw.WithResolvedInstance(ctx(), resolved.Id, resolved),
+				oapi.RestoreInstanceRequestObject{Id: resolved.Id},
+			)
+			require.NoError(t, err)
+			require.Equal(t, tt.wantResponse, resp)
+		})
+	}
 }
 
 func TestInstanceActions_ImageNotFoundMapsTo404(t *testing.T) {
@@ -1065,6 +1300,92 @@ func TestUpdateInstance_MapsEnvPatch(t *testing.T) {
 	require.NotNil(t, mockMgr.lastReq)
 	assert.Equal(t, resolved.Id, mockMgr.lastID)
 	assert.Equal(t, "rotated-key-456", mockMgr.lastReq.Env["OUTBOUND_OPENAI_KEY"])
+}
+
+func TestUpdateInstance_MapsTTL(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+	mockMgr := newCaptureUpdateManager(svc.InstanceManager)
+	svc.InstanceManager = mockMgr
+	resolved := &instances.Instance{StoredMetadata: instances.StoredMetadata{Id: "inst-update-ttl"}}
+	ttl := "6h"
+
+	resp, err := svc.UpdateInstance(mw.WithResolvedInstance(ctx(), resolved.Id, resolved), oapi.UpdateInstanceRequestObject{
+		Id:   resolved.Id,
+		Body: &oapi.UpdateInstanceRequest{Ttl: &ttl},
+	})
+	require.NoError(t, err)
+	updated, ok := resp.(oapi.UpdateInstance200JSONResponse)
+	require.True(t, ok)
+	require.NotNil(t, mockMgr.lastReq.TTL)
+	assert.Equal(t, 6*time.Hour, *mockMgr.lastReq.TTL)
+	require.NotNil(t, updated.ExpiresAt)
+	assert.WithinDuration(t, time.Now().Add(6*time.Hour), *updated.ExpiresAt, time.Second)
+}
+
+func TestUpdateInstance_ZeroTTLDisablesExpiration(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+	mockMgr := newCaptureUpdateManager(svc.InstanceManager)
+	svc.InstanceManager = mockMgr
+	resolved := &instances.Instance{StoredMetadata: instances.StoredMetadata{Id: "inst-disable-expiration"}}
+	ttl := "0s"
+
+	resp, err := svc.UpdateInstance(mw.WithResolvedInstance(ctx(), resolved.Id, resolved), oapi.UpdateInstanceRequestObject{
+		Id:   resolved.Id,
+		Body: &oapi.UpdateInstanceRequest{Ttl: &ttl},
+	})
+	require.NoError(t, err)
+	updated, ok := resp.(oapi.UpdateInstance200JSONResponse)
+	require.True(t, ok)
+	require.NotNil(t, mockMgr.lastReq.TTL)
+	assert.Zero(t, *mockMgr.lastReq.TTL)
+	assert.Nil(t, updated.ExpiresAt)
+}
+
+func TestUpdateInstance_MapsExpiresAt(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+	mockMgr := newCaptureUpdateManager(svc.InstanceManager)
+	svc.InstanceManager = mockMgr
+	resolved := &instances.Instance{StoredMetadata: instances.StoredMetadata{Id: "inst-update-expires-at"}}
+	expiresAt := time.Now().Add(24 * time.Hour).UTC().Truncate(time.Second)
+
+	resp, err := svc.UpdateInstance(mw.WithResolvedInstance(ctx(), resolved.Id, resolved), oapi.UpdateInstanceRequestObject{
+		Id:   resolved.Id,
+		Body: &oapi.UpdateInstanceRequest{ExpiresAt: &expiresAt},
+	})
+	require.NoError(t, err)
+	updated, ok := resp.(oapi.UpdateInstance200JSONResponse)
+	require.True(t, ok)
+	require.NotNil(t, mockMgr.lastReq.ExpiresAt)
+	assert.Equal(t, expiresAt, *mockMgr.lastReq.ExpiresAt)
+	require.NotNil(t, updated.ExpiresAt)
+	assert.Equal(t, expiresAt, *updated.ExpiresAt)
+}
+
+func TestUpdateInstance_RejectsConflictingExpiration(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+	resolved := &instances.Instance{StoredMetadata: instances.StoredMetadata{Id: "inst-conflicting-expiration"}}
+	ttl := "1h"
+	expiresAt := time.Now().Add(2 * time.Hour)
+
+	resp, err := svc.UpdateInstance(mw.WithResolvedInstance(ctx(), resolved.Id, resolved), oapi.UpdateInstanceRequestObject{
+		Id: resolved.Id,
+		Body: &oapi.UpdateInstanceRequest{
+			Ttl:       &ttl,
+			ExpiresAt: &expiresAt,
+		},
+	})
+	require.NoError(t, err)
+	badRequest, ok := resp.(oapi.UpdateInstance400JSONResponse)
+	require.True(t, ok)
+	assert.Equal(t, "invalid_request", badRequest.Code)
 }
 
 func TestUpdateInstance_MapsAutoStandbyPatch(t *testing.T) {
@@ -1363,6 +1684,46 @@ func TestUpdateInstance_RequiresBody(t *testing.T) {
 	require.True(t, ok, "expected 400 response")
 	assert.Equal(t, "invalid_request", badReq.Code)
 	assert.Contains(t, badReq.Message, "request body is required")
+}
+
+func TestUpdateInstance_MapsInvalidExpiresAt(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+	mockMgr := newCaptureUpdateManager(svc.InstanceManager)
+	mockMgr.err = fmt.Errorf("%w: must be in the future", instances.ErrInvalidExpiresAt)
+	svc.InstanceManager = mockMgr
+	resolved := &instances.Instance{StoredMetadata: instances.StoredMetadata{Id: "inst-invalid-expires-at"}}
+	expiresAt := time.Now().Add(-time.Hour)
+
+	resp, err := svc.UpdateInstance(mw.WithResolvedInstance(ctx(), resolved.Id, resolved), oapi.UpdateInstanceRequestObject{
+		Id:   resolved.Id,
+		Body: &oapi.UpdateInstanceRequest{ExpiresAt: &expiresAt},
+	})
+	require.NoError(t, err)
+	badRequest, ok := resp.(oapi.UpdateInstance400JSONResponse)
+	require.True(t, ok)
+	assert.Equal(t, "invalid_expires_at", badRequest.Code)
+}
+
+func TestUpdateInstance_MapsExpiredError(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+	mockMgr := newCaptureUpdateManager(svc.InstanceManager)
+	mockMgr.err = fmt.Errorf("%w: expiration deadline has passed", instances.ErrInstanceExpired)
+	svc.InstanceManager = mockMgr
+	resolved := &instances.Instance{StoredMetadata: instances.StoredMetadata{Id: "inst-expired"}}
+	ttl := "1h"
+
+	resp, err := svc.UpdateInstance(mw.WithResolvedInstance(ctx(), resolved.Id, resolved), oapi.UpdateInstanceRequestObject{
+		Id:   resolved.Id,
+		Body: &oapi.UpdateInstanceRequest{Ttl: &ttl},
+	})
+	require.NoError(t, err)
+	conflict, ok := resp.(oapi.UpdateInstance409JSONResponse)
+	require.True(t, ok)
+	assert.Equal(t, "instance_expired", conflict.Code)
 }
 
 func TestUpdateInstance_MapsInvalidRequestError(t *testing.T) {

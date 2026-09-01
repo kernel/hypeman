@@ -36,6 +36,7 @@ type Manager interface {
 	// Returns ErrAmbiguousName if prefix matches multiple instances.
 	GetInstance(ctx context.Context, idOrName string) (*Instance, error)
 	DeleteInstance(ctx context.Context, id string) error
+	DeleteInstanceWithOptions(ctx context.Context, id string, options DeleteInstanceOptions) error
 	DeleteSnapshot(ctx context.Context, snapshotID string) error
 	ForkInstance(ctx context.Context, id string, req ForkInstanceRequest) (*Instance, error)
 	ForkSnapshot(ctx context.Context, snapshotID string, req ForkSnapshotRequest) (*Instance, error)
@@ -179,7 +180,9 @@ type manager struct {
 	tracer                    trace.Tracer
 	now                       func() time.Time
 	writeFile                 func(string, []byte, os.FileMode) error
+	deleteInstanceFn          func(context.Context, string) error
 	deleteSnapshotFn          func(context.Context, string) error
+	ttlReaperDeleteTimeout    time.Duration
 	egressProxy               *egressproxy.Service
 	egressProxyServiceOptions egressproxy.ServiceOptions
 	egressProxyMu             sync.Mutex
@@ -192,6 +195,7 @@ type manager struct {
 	nativeCodecPaths          map[string]string
 	imageUsageRecorder        ImageUsageRecorder
 	guestAgentReadyProbe      func(context.Context, *StoredMetadata) bool
+	shutdownGuestFn           func(context.Context, hypervisor.VsockDialer, int32) error
 
 	// Shared lifecycle event subscriptions for internal consumers.
 	lifecycleEvents *lifecycleSubscribers
@@ -376,8 +380,13 @@ func (m *manager) supportsConcurrentForkPrepare(hvType hypervisor.Type) bool {
 
 // getInstanceLock returns or creates a lock for a specific instance
 func (m *manager) getInstanceLock(id string) *sync.RWMutex {
-	lock, _ := m.instanceLocks.LoadOrStore(id, &sync.RWMutex{})
-	return lock.(*sync.RWMutex)
+	lock, _ := m.loadOrStoreInstanceLock(id)
+	return lock
+}
+
+func (m *manager) loadOrStoreInstanceLock(id string) (*sync.RWMutex, bool) {
+	lock, loaded := m.instanceLocks.LoadOrStore(id, &sync.RWMutex{})
+	return lock.(*sync.RWMutex), !loaded
 }
 
 // maybePersistExitInfo persists exit info to metadata under the instance write lock.
@@ -434,16 +443,34 @@ func (m *manager) CreateInstance(ctx context.Context, req CreateInstanceRequest)
 	return inst, err
 }
 
-// DeleteInstance stops and deletes an instance
+// DeleteInstance stops and deletes an instance.
 func (m *manager) DeleteInstance(ctx context.Context, id string) error {
+	return m.DeleteInstanceWithOptions(ctx, id, DeleteInstanceOptions{})
+}
+
+// DeleteInstanceWithOptions stops and deletes an instance with the supplied options.
+func (m *manager) DeleteInstanceWithOptions(ctx context.Context, id string, options DeleteInstanceOptions) error {
 	lock := m.getInstanceLock(id)
 	lock.Lock()
 	defer lock.Unlock()
 
-	err := m.deleteInstance(ctx, id)
+	return m.deleteInstanceLockedWithOptions(ctx, id, options)
+}
+
+func (m *manager) deleteInstanceLocked(ctx context.Context, id string) error {
+	return m.deleteInstanceLockedWithOptions(ctx, id, DeleteInstanceOptions{})
+}
+
+func (m *manager) deleteInstanceLockedWithOptions(ctx context.Context, id string, options DeleteInstanceOptions) error {
+	deleteInstance := func(ctx context.Context, id string) error {
+		return m.deleteInstanceWithOptions(ctx, id, options)
+	}
+	if m.deleteInstanceFn != nil {
+		deleteInstance = m.deleteInstanceFn
+	}
+	err := deleteInstance(ctx, id)
 	if err == nil {
 		m.notifyLifecycleDelete(ctx, id)
-		// Clean up the lock after successful deletion
 		m.instanceLocks.Delete(id)
 	}
 	return err
@@ -621,6 +648,12 @@ func (m *manager) StopInstance(ctx context.Context, id string) (*Instance, error
 		if err := m.markRestartManualStopLocked(ctx, id); err != nil {
 			return nil, err
 		}
+		// A stopped instance can retain a vGPU assignment when the release
+		// failed during the original stop. Retry it here so the vGPU slot is
+		// not held until the next start, delete, or hypeman restart. A failed
+		// retry only logs, keeping stop's no-op contract for already-stopped
+		// instances.
+		m.releaseRetainedVGPULocked(ctx, id)
 		updated, err := m.currentInstanceWithoutHydration(ctx, id)
 		if err != nil {
 			return nil, err
