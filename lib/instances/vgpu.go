@@ -27,7 +27,7 @@ func (m *manager) discoverVGPUDevices() (devices.VGPUFramework, []devices.Virtua
 }
 
 func (m *manager) claimVGPU(ctx context.Context, meta *metadata, profileName string) (*devices.VGPUDevice, error) {
-	framework, _, err := m.discoverVGPUDevices()
+	framework, vfs, err := m.discoverVGPUDevices()
 	if err != nil {
 		return nil, err
 	}
@@ -42,12 +42,8 @@ func (m *manager) claimVGPU(ctx context.Context, meta *metadata, profileName str
 	if err != nil {
 		return nil, fmt.Errorf("list instances for vGPU allocation: %w", err)
 	}
-	framework, vfs, err := m.discoverVGPUDevices()
-	if err != nil {
+	if _, vfs, err = m.discoverVGPUDevices(); err != nil {
 		return nil, err
-	}
-	if framework != devices.VGPUFrameworkVendorVFIO {
-		return m.createVGPUDevice(ctx, profileName, meta.Id)
 	}
 	listProfiles := m.vendorVFIOProfiles
 	if listProfiles == nil {
@@ -79,10 +75,7 @@ func (m *manager) claimVGPU(ctx context.Context, meta *metadata, profileName str
 	// possibly its open VFIO handles, even when the leftover type matches
 	// the requested profile. Reset it (in-use gated inside destroy) before
 	// claiming; the allocation lock keeps it unclaimed until then.
-	for _, vf := range vfs {
-		if vf.PCIAddress != vfAddress || !vf.Allocated {
-			continue
-		}
+	if vf, ok := vfByAddress(vfs, vfAddress); ok && vf.Allocated {
 		assignment := devices.VGPUAssignment{
 			Framework:  devices.VGPUFrameworkVendorVFIO,
 			DevicePath: filepath.Clean(devices.GetDeviceSysfsPath(vf.PCIAddress)),
@@ -293,6 +286,9 @@ func (m *manager) cleanupCreateVGPU(ctx context.Context, stored *StoredMetadata)
 	return true
 }
 
+// cleanupStartVGPU rolls back a vGPU claim after a failed start. The caller
+// holds the instance lock; this function acquires vgpuAllocationMu, matching
+// the instance-lock-before-allocation-lock ordering used by claimVGPU.
 func (m *manager) cleanupStartVGPU(ctx context.Context, current *StoredMetadata, rollback metadata) {
 	path := m.vgpuCleanupGuard(ctx, current)
 	if path == "" {
@@ -338,6 +334,15 @@ func vgpuAssignment(stored *StoredMetadata) devices.VGPUAssignment {
 		MdevUUID:   stored.GPUMdevUUID,
 		InstanceID: stored.Id,
 	}
+}
+
+func vfByAddress(vfs []devices.VirtualFunction, address string) (devices.VirtualFunction, bool) {
+	for _, vf := range vfs {
+		if vf.PCIAddress == address {
+			return vf, true
+		}
+	}
+	return devices.VirtualFunction{}, false
 }
 
 func storedVGPUDevicePath(stored *StoredMetadata) string {
