@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -682,6 +683,7 @@ func TestKillHypervisorSIGTERMsVGPUHypervisor(t *testing.T) {
 		StoredMetadata: StoredMetadata{
 			Id:                        "kill-test",
 			GPUProfile:                "NVIDIA L40S-1Q",
+			GPUFramework:              devices.VGPUFrameworkVendorVFIO,
 			HypervisorProcessIdentity: identity,
 			SocketPath:                socketPath,
 		},
@@ -703,6 +705,7 @@ func TestKillHypervisorEscalatesToSIGKILLWhenSIGTERMIgnored(t *testing.T) {
 		StoredMetadata: StoredMetadata{
 			Id:                        "kill-test",
 			GPUProfile:                "NVIDIA L40S-1Q",
+			GPUFramework:              devices.VGPUFrameworkVendorVFIO,
 			HypervisorProcessIdentity: identity,
 			SocketPath:                socketPath,
 		},

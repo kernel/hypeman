@@ -391,9 +391,10 @@ func (m *manager) createInstance(
 			log.ErrorContext(ctx, "failed to claim vGPU", "profile", gpuProfile, "error", err)
 			return nil, wrapCreateVGPUErr(gpuProfile, err)
 		}
-		setStoredVGPUDevice(stored, gpuDevice)
 		if gpuDevice.Framework == devices.VGPUFrameworkVendorVFIO {
 			*stored = claimMeta.StoredMetadata
+		} else {
+			setStoredVGPUDevice(stored, gpuDevice)
 		}
 		cu.Add(func() {
 			if !m.cleanupCreateVGPU(ctx, stored) {

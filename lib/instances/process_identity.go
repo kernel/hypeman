@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/logger"
 )
@@ -36,7 +37,7 @@ func (m *manager) vfioTerminationGrace() time.Duration {
 
 // SIGKILL during guest driver init can wedge a VF until the parent GPU is reset.
 func (m *manager) terminateThenKill(ctx context.Context, inst *Instance, pid int) error {
-	if inst.GPUProfile != "" || len(inst.Devices) > 0 {
+	if inst.GPUFramework == devices.VGPUFrameworkVendorVFIO || len(inst.Devices) > 0 {
 		if syscall.Kill(pid, syscall.SIGTERM) == nil && WaitForProcessExit(pid, m.vfioTerminationGrace()) {
 			return nil
 		}

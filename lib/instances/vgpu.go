@@ -47,7 +47,7 @@ func (m *manager) claimVGPU(ctx context.Context, meta *metadata, profileName str
 		return nil, err
 	}
 	if framework != devices.VGPUFrameworkVendorVFIO {
-		return nil, fmt.Errorf("vendor VFIO vGPU framework not available")
+		return m.createVGPUDevice(ctx, profileName, meta.Id)
 	}
 	listProfiles := m.vendorVFIOProfiles
 	if listProfiles == nil {
@@ -154,7 +154,7 @@ func selectVendorVFIOVF(vfs []devices.VirtualFunction, profilesByVF map[string][
 	requested, found := profilesByName[profileName]
 	if !found {
 		if len(profilesByName) == 0 && len(vfs) > 0 {
-			return "", "", fmt.Errorf("no creatable vGPU profiles on any VF, GPUs may be at capacity: profile %q", profileName)
+			return "", "", fmt.Errorf("no creatable vGPU profiles on any VF (GPUs at capacity or dirty VFs consuming framebuffer): profile %q", profileName)
 		}
 		return "", "", fmt.Errorf("profile %q is not creatable on any VF (unknown profile or insufficient capacity)", profileName)
 	}
@@ -257,21 +257,35 @@ func clearStoredVGPUDevice(stored *StoredMetadata) {
 	stored.GPUMdevUUID = ""
 }
 
-func (m *manager) cleanupCreateVGPU(ctx context.Context, stored *StoredMetadata) bool {
+// vgpuCleanupGuard checks whether the VF can be safely released: the VMM
+// must be dead and, for vendor VFIO, the on-disk claim must still match.
+// Returns the device path, or "" when cleanup must be skipped.
+func (m *manager) vgpuCleanupGuard(ctx context.Context, stored *StoredMetadata) string {
 	path := storedVGPUDevicePath(stored)
 	if path == "" {
-		return true
+		return ""
 	}
 	if hypervisorMayBeAlive(stored.HypervisorProcessIdentity, stored.SocketPath) {
-		logger.FromContext(ctx).WarnContext(ctx, "preserving vGPU claim because hypervisor liveness is not clear", "instance_id", stored.Id)
-		return false
+		logger.FromContext(ctx).WarnContext(ctx, "preserving vGPU claim because hypervisor liveness is not clear", "instance_id", stored.Id, "device_path", path)
+		return ""
 	}
 	if stored.GPUFramework == devices.VGPUFrameworkVendorVFIO {
 		onDisk, err := m.loadMetadata(stored.Id)
 		if err != nil || onDisk.GPUDevicePath != stored.GPUDevicePath {
 			logger.FromContext(ctx).WarnContext(ctx, "skipping vGPU cleanup without matching claim", "instance_id", stored.Id, "device_path", path, "error", err)
-			return false
+			return ""
 		}
+	}
+	return path
+}
+
+func (m *manager) cleanupCreateVGPU(ctx context.Context, stored *StoredMetadata) bool {
+	path := m.vgpuCleanupGuard(ctx, stored)
+	if path == "" && storedVGPUDevicePath(stored) != "" {
+		return false
+	}
+	if path == "" {
+		return true
 	}
 	if err := m.destroyVGPUAssignment(ctx, vgpuAssignment(stored)); err != nil {
 		logger.FromContext(ctx).WarnContext(ctx, "failed to reset vGPU during create cleanup", "instance_id", stored.Id, "device_path", path, "error", err)
@@ -280,20 +294,9 @@ func (m *manager) cleanupCreateVGPU(ctx context.Context, stored *StoredMetadata)
 }
 
 func (m *manager) cleanupStartVGPU(ctx context.Context, current *StoredMetadata, rollback metadata) {
-	path := storedVGPUDevicePath(current)
+	path := m.vgpuCleanupGuard(ctx, current)
 	if path == "" {
 		return
-	}
-	if hypervisorMayBeAlive(current.HypervisorProcessIdentity, current.SocketPath) {
-		logger.FromContext(ctx).WarnContext(ctx, "preserving vGPU claim because hypervisor liveness is not clear", "instance_id", current.Id, "device_path", path)
-		return
-	}
-	if current.GPUFramework == devices.VGPUFrameworkVendorVFIO {
-		onDisk, err := m.loadMetadata(current.Id)
-		if err != nil || onDisk.GPUDevicePath != current.GPUDevicePath {
-			logger.FromContext(ctx).WarnContext(ctx, "skipping vGPU cleanup without matching claim", "instance_id", current.Id, "device_path", path, "error", err)
-			return
-		}
 	}
 	if err := m.destroyVGPUAssignment(ctx, vgpuAssignment(current)); err != nil {
 		logger.FromContext(ctx).WarnContext(ctx, "failed to reset vGPU during start cleanup", "instance_id", current.Id, "device_path", path, "error", err)
