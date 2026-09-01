@@ -284,9 +284,8 @@ func (c *ociClient) pullAndExportWithPlatformAuth(ctx context.Context, imageRef,
 	result.CompressedBytes = bundle.CompressedBytes
 
 	// Compose the rootfs from the shared layer blobs in manifest order.
-	// composeRootfs validates the model and rejects zero-layer manifests.
 	if err := result.measure("layer_unpack", func() error {
-		return c.composeRootfs(exportDir, layoutTag, bundle.Model)
+		return c.composeRootfsContext(ctx, exportDir, layoutTag, bundle.Model)
 	}); err != nil {
 		return result, fmt.Errorf("unpack layers: %w", err)
 	}

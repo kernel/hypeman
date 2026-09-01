@@ -123,8 +123,11 @@ func TestComposeRootfsEmptyLayers(t *testing.T) {
 	client, err := newOCIClient(p.SystemOCICache())
 	require.NoError(t, err)
 	model := zeroLayerModel()
-	err = client.composeRootfs(t.TempDir(), model.Digest, model)
-	require.ErrorContains(t, err, "no layers")
+	dest := filepath.Join(t.TempDir(), "rootfs")
+	require.NoError(t, client.composeRootfs(dest, model.Digest, model))
+	entries, err := os.ReadDir(dest)
+	require.NoError(t, err)
+	require.Empty(t, entries)
 }
 
 func TestComposeRootfsInvalidModel(t *testing.T) {

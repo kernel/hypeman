@@ -1,8 +1,10 @@
 package images
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 )
 
 // composeRootfs validates the persisted model and merges its layers into dest
@@ -10,31 +12,44 @@ import (
 // Whiteout and opaque-directory markers are interpreted as each layer is
 // applied.
 func (c *ociClient) composeRootfs(dest, layoutTag string, model *imageManifestModel) error {
+	return c.composeRootfsContext(context.Background(), dest, layoutTag, model)
+}
+
+func (c *ociClient) composeRootfsContext(ctx context.Context, dest, layoutTag string, model *imageManifestModel) error {
 	if err := validateManifestModel(layoutTag, model); err != nil {
 		return fmt.Errorf("validate manifest model: %w", err)
 	}
-	if len(model.Layers) == 0 {
-		return fmt.Errorf("image has no layers")
+	if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
+		return fmt.Errorf("create compose parent: %w", err)
 	}
-	if err := os.MkdirAll(dest, 0755); err != nil {
+	staging, err := os.MkdirTemp(filepath.Dir(dest), ".compose-*")
+	if err != nil {
 		return fmt.Errorf("create compose directory: %w", err)
 	}
+	defer os.RemoveAll(staging)
+
 	for i, desc := range model.Layers {
-		if err := c.applyLayerToDir(dest, desc); err != nil {
+		if err := c.applyLayerToDir(ctx, staging, desc); err != nil {
 			return fmt.Errorf("apply layer %d (%s): %w", i, desc.Digest, err)
 		}
+	}
+	if err := os.RemoveAll(dest); err != nil {
+		return fmt.Errorf("replace compose directory: %w", err)
+	}
+	if err := os.Rename(staging, dest); err != nil {
+		return fmt.Errorf("install compose directory: %w", err)
 	}
 	return nil
 }
 
-func (c *ociClient) applyLayerToDir(dest string, desc layerDescriptor) error {
-	layerDir, err := os.MkdirTemp("", "hypeman-layer-*")
+func (c *ociClient) applyLayerToDir(ctx context.Context, dest string, desc layerDescriptor) error {
+	layerDir, err := os.MkdirTemp(filepath.Dir(dest), ".layer-*")
 	if err != nil {
 		return fmt.Errorf("create layer staging directory: %w", err)
 	}
 	defer os.RemoveAll(layerDir)
 
-	if _, err := unpackCachedLayer(c.cacheDir, desc, layerDir); err != nil {
+	if _, err := unpackCachedLayerContext(ctx, c.cacheDir, desc, layerDir); err != nil {
 		return err
 	}
 	if err := applyLayerTree(layerDir, dest); err != nil {
