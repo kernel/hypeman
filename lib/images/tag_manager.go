@@ -86,7 +86,12 @@ func (m *manager) claimTagForStatus(meta *imageMetadata, ref *ResolvedRef) error
 	if meta.Status == StatusReady {
 		return m.claimReadyTag(ref.Repository(), ref.Tag(), ref.DigestHex())
 	}
-	return ensurePendingTag(m.paths, ref.Repository(), ref.Tag(), ref.DigestHex())
+	// Keep the existing tag visible until the build succeeds, but remember this
+	// digest as the newest request for the tag. Finalization will claim it along
+	// with every other tag waiting for the same digest.
+	m.nextTagGeneration(ref.Repository(), ref.Tag())
+	m.trackRequestedTag(ref.Repository(), ref.Tag(), ref.DigestHex())
+	return nil
 }
 
 func (m *manager) claimReadyTag(repository, tag, digestHex string) error {
@@ -95,6 +100,7 @@ func (m *manager) claimReadyTag(repository, tag, digestHex string) error {
 		m.revertTagGeneration(repository, tag)
 		return err
 	}
+	m.clearRequestedTag(repository, tag, digestHex)
 	return nil
 }
 
@@ -148,6 +154,33 @@ func (m *manager) claimRequestedTag(ref *ResolvedRef, meta *imageMetadata) bool 
 	}
 	m.clearRequestedTag(ref.Repository(), tag, ref.DigestHex())
 	return true
+}
+
+func (m *manager) claimRequestedTags(ref *ResolvedRef, meta *imageMetadata) bool {
+	digestHex := ref.DigestHex()
+	claimed := false
+	for key, requestedDigest := range m.requestedTags {
+		if requestedDigest != digestHex {
+			continue
+		}
+		separator := strings.LastIndexByte(key, ':')
+		if separator <= 0 || separator == len(key)-1 {
+			continue
+		}
+		repository, tag := key[:separator], key[separator+1:]
+		if err := createTagSymlink(m.paths, repository, tag, digestHex); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to create tag symlink: %v\n", err)
+			continue
+		}
+		delete(m.requestedTags, key)
+		claimed = true
+	}
+	if claimed {
+		return true
+	}
+	// Digest-only images have no tag claim but must remain addressable by their
+	// digest after finalization.
+	return meta.RequestedTag == "" && ref.Tag() == ""
 }
 
 func (m *manager) tagClaimIsCurrent(repository, tag, digest string, meta *imageMetadata, allowMissing bool) bool {

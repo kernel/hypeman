@@ -10,17 +10,6 @@ import (
 	"github.com/kernel/hypeman/lib/paths"
 )
 
-func ensurePendingTag(p *paths.Paths, repository, tag, digestHex string) error {
-	_, err := resolveTag(p, repository, tag)
-	if err == nil {
-		return nil
-	}
-	if !errors.Is(err, ErrNotFound) {
-		return err
-	}
-	return createTagSymlink(p, repository, tag, digestHex)
-}
-
 func listTags(p *paths.Paths, repository string) ([]string, error) {
 	dirs := []string{filepath.Join(p.ImageRepositoriesDir(), repository), p.ImageRepositoryDir(repository)}
 	seen := make(map[string]struct{})

@@ -119,17 +119,9 @@ func NewManager(p *paths.Paths, maxConcurrentBuilds int, meter metric.Meter) (Ma
 	}
 
 	m.RecoverInterruptedBuilds()
-	// Promotion hardlinks disks and repoints tags, which can take a while on a
-	// large legacy store; scan before starting the background migration so new
-	// images created after startup are not picked up by the migration.
-	legacyRefs, err := collectLegacyImages(p)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to scan legacy images for promotion: %v\n", err)
-	} else {
-		m.createMu.Lock()
-		promoteLegacyImages(p, legacyRefs)
-		m.createMu.Unlock()
-	}
+	// Legacy images remain in place until a later operation needs to promote
+	// their content. This keeps startup reads available even if migration work
+	// cannot complete.
 	return m, nil
 }
 
@@ -224,7 +216,7 @@ func (m *manager) CreateImage(ctx context.Context, req CreateImageRequest) (*Ima
 	m.createMu.Lock()
 	defer m.createMu.Unlock()
 
-	if img, found, err := m.reuseExistingImage(ref, req.Credentials); found || err != nil {
+	if img, found, err := m.reuseExistingImage(ref, req.Credentials, req.Tags); found || err != nil {
 		return img, err
 	}
 	return m.createAndQueueImage(ref, req, platform)
@@ -256,13 +248,13 @@ func (m *manager) ImportLocalImage(ctx context.Context, repo, reference, digest 
 	m.createMu.Lock()
 	defer m.createMu.Unlock()
 
-	if img, found, err := m.reuseExistingImage(ref, nil); found || err != nil {
+	if img, found, err := m.reuseExistingImage(ref, nil, nil); found || err != nil {
 		return img, err
 	}
 	return m.createAndQueueImage(ref, CreateImageRequest{Name: imageRef}, hostPlatform())
 }
 
-func (m *manager) reuseExistingImage(ref *ResolvedRef, credentials *authn.AuthConfig) (*Image, bool, error) {
+func (m *manager) reuseExistingImage(ref *ResolvedRef, credentials *authn.AuthConfig, resourceTags tags.Tags) (*Image, bool, error) {
 	meta, err := readMetadata(m.paths, ref.Repository(), ref.DigestHex())
 	if err != nil {
 		return nil, false, nil
@@ -273,14 +265,20 @@ func (m *manager) reuseExistingImage(ref *ResolvedRef, credentials *authn.AuthCo
 		}
 		return nil, false, nil
 	}
-	if ref.Tag() != "" {
-		if meta.Status != StatusReady {
-			// A pending pull with different credentials does not get to point
-			// the tag at its digest.
-			if !m.inflightCredentialsMatch(ref.Digest(), credentials) {
-				return nil, true, fmt.Errorf("%w: retry after the current pull completes", ErrCredentialConflict)
-			}
+	if ref.Tag() != "" && meta.Status != StatusReady {
+		// A pending pull with different credentials does not get to point
+		// the tag at its digest or update its labels.
+		if !m.inflightCredentialsMatch(ref.Digest(), credentials) {
+			return nil, true, fmt.Errorf("%w: retry after the current pull completes", ErrCredentialConflict)
 		}
+	}
+	if resourceTags != nil {
+		meta.Tags = tags.Clone(resourceTags)
+		if err := writeMetadata(m.paths, ref.Repository(), ref.DigestHex(), meta); err != nil {
+			return nil, true, fmt.Errorf("update image tags: %w", err)
+		}
+	}
+	if ref.Tag() != "" {
 		if err := m.claimTagForStatus(meta, ref); err != nil {
 			return nil, true, fmt.Errorf("create image tag: %w", err)
 		}
@@ -602,7 +600,7 @@ func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, diskSize i
 	}
 
 	m.notifyReady(ref.DigestHex(), StatusReady, nil)
-	if !m.claimRequestedTag(ref, meta) {
+	if !m.claimRequestedTags(ref, meta) {
 		m.cleanupUnclaimedImage(ref)
 	}
 	m.refreshDiskUsageTotals()
@@ -674,9 +672,11 @@ func (m *manager) updateStatusByDigest(ref *ResolvedRef, status string, err erro
 	}
 	// A failed pull releases its tag claim so an older in-flight pull of the
 	// same tag can still repoint it.
-	if status == StatusFailed && meta.RequestedTag != "" {
-		m.releaseTagGeneration(ref.Repository(), meta.RequestedTag, meta.TagGeneration)
-		m.clearRequestedTag(ref.Repository(), meta.RequestedTag, strings.TrimPrefix(meta.Digest, "sha256:"))
+	if status == StatusFailed {
+		if meta.RequestedTag != "" {
+			m.releaseTagGeneration(ref.Repository(), meta.RequestedTag, meta.TagGeneration)
+		}
+		m.clearRequestedDigest(strings.TrimPrefix(meta.Digest, "sha256:"))
 	}
 }
 

@@ -225,6 +225,32 @@ func TestImageMetadataToImage_EmptyMetadataOmitted(t *testing.T) {
 	require.Nil(t, img.Tags)
 }
 
+func TestNewManagerLeavesLegacyImagesInPlace(t *testing.T) {
+	p := paths.New(t.TempDir())
+	repository := "docker.io/library/alpine"
+	tag := "latest"
+	digest := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	legacyDir := p.ImageDigestDir(repository, digest)
+	require.NoError(t, os.MkdirAll(legacyDir, 0o755))
+	require.NoError(t, writeMetadataFile(p.ImageMetadata(repository, digest), &imageMetadata{
+		Name: repository + ":" + tag, Digest: "sha256:" + digest,
+		Status: StatusReady, SizeBytes: 7, CreatedAt: time.Now().UTC(),
+	}))
+	require.NoError(t, os.WriteFile(p.ImageDigestPath(repository, digest), []byte("rootfs!"), 0o644))
+	tagPath := p.ImageTagSymlink(repository, tag)
+	require.NoError(t, os.MkdirAll(filepath.Dir(tagPath), 0o755))
+	require.NoError(t, os.Symlink(digest, tagPath))
+
+	_, err := NewManager(p, 1, nil)
+	require.NoError(t, err)
+	require.DirExists(t, legacyDir)
+	require.FileExists(t, p.ImageMetadata(repository, digest))
+	require.FileExists(t, p.ImageDigestPath(repository, digest))
+	_, err = os.Stat(p.ImageContentDir(digest))
+	require.ErrorIs(t, err, os.ErrNotExist)
+	requireTagResolvesTo(t, p, repository, tag, digest)
+}
+
 func TestPromoteLegacyImagesMovesContentAndTags(t *testing.T) {
 	p := paths.New(t.TempDir())
 	repository := "docker.io/library/alpine"

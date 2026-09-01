@@ -4,10 +4,13 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/kernel/hypeman/lib/paths"
+	"github.com/kernel/hypeman/lib/queue"
+	"github.com/kernel/hypeman/lib/tags"
 	"github.com/stretchr/testify/require"
 )
 
@@ -158,6 +161,85 @@ func TestStaleTagClaimCollectsContent(t *testing.T) {
 
 	_, err = os.Stat(p.ImageContentDir(digest))
 	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestPendingDigestClaimsAllRequestedTags(t *testing.T) {
+	p, m, repository := newTagTestCase(t)
+	oldDigest := "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+	newDigest := "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+	seedLegacy(t, p, repository, "latest", oldDigest)
+	seedLegacy(t, p, repository, "stable", oldDigest)
+
+	latest, err := ParseNormalizedRef(repository + ":latest")
+	require.NoError(t, err)
+	stable, err := ParseNormalizedRef(repository + ":stable")
+	require.NoError(t, err)
+	latestRef := NewResolvedRef(latest, "sha256:"+newDigest)
+	stableRef := NewResolvedRef(stable, "sha256:"+newDigest)
+	meta := &imageMetadata{RequestedTag: "latest", TagGeneration: 1}
+
+	require.NoError(t, m.claimTagForStatus(meta, latestRef))
+	require.NoError(t, m.claimTagForStatus(meta, stableRef))
+	require.True(t, m.claimRequestedTags(latestRef, meta))
+	requireTagResolvesTo(t, p, repository, "latest", newDigest)
+	requireTagResolvesTo(t, p, repository, "stable", newDigest)
+}
+
+func TestWaitForReadyUsesNewestPendingTag(t *testing.T) {
+	p, m, repository := newTagTestCase(t)
+	m.queue = queue.New(1)
+	m.readySubscribers = make(map[string][]chan StatusEvent)
+	m.requestedTags = make(map[string]string)
+	oldDigest := strings.Repeat("a1", 32)
+	newDigest := strings.Repeat("b2", 32)
+	seedContent(t, p, repository, "latest", oldDigest)
+
+	require.NoError(t, os.MkdirAll(p.ImageContentDir(newDigest), 0o755))
+	pending := &imageMetadata{
+		Name: repository + ":latest", Digest: "sha256:" + newDigest,
+		Status: StatusPending, CreatedAt: time.Now().UTC(),
+	}
+	require.NoError(t, writeMetadataFile(p.ImageContentMetadata(newDigest), pending))
+	m.requestedTags[tagGenerationKey(repository, "latest")] = newDigest
+
+	result := make(chan error, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { result <- m.WaitForReady(ctx, repository+":latest") }()
+	select {
+	case err := <-result:
+		t.Fatalf("wait returned before the pending digest completed: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	pending.Status = StatusReady
+	require.NoError(t, os.WriteFile(p.ImageContentPath(newDigest), []byte("rootfs!"), 0o644))
+	require.NoError(t, writeMetadataFile(p.ImageContentMetadata(newDigest), pending))
+	m.notifyReady(newDigest, StatusReady, nil)
+	select {
+	case err := <-result:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("wait did not observe the newest digest")
+	}
+}
+
+func TestReuseExistingImageUpdatesResourceTags(t *testing.T) {
+	p, m, repository := newTagTestCase(t)
+	digest := strings.Repeat("c3", 32)
+	seedContent(t, p, repository, "latest", digest)
+
+	ref, err := ParseNormalizedRef(repository + "@sha256:" + digest)
+	require.NoError(t, err)
+	resolved := NewResolvedRef(ref, "sha256:"+digest)
+	img, found, err := m.reuseExistingImage(resolved, nil, tags.Tags{"team": "payments"})
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, "payments", img.Tags["team"])
+
+	meta, err := readContentMetadata(p, digest)
+	require.NoError(t, err)
+	require.Equal(t, tags.Tags{"team": "payments"}, meta.Tags)
 }
 
 func TestTagImageRejectsNotReady(t *testing.T) {
