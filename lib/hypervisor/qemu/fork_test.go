@@ -18,10 +18,10 @@ func TestPrepareFork_NoSnapshotPathIsNoOp(t *testing.T) {
 }
 
 func TestPrepareFork_RewritesSnapshotConfig(t *testing.T) {
-	if _, err := microVMMachineType(); err != nil {
-		t.Skipf("microvm is unavailable on this platform: %v", err)
+	if standardMachineType() != MachineTypeQ35 {
+		t.Skip("UEFI snapshot configuration requires q35")
 	}
-	starter := NewMicroVMStarter()
+	starter := NewStarter()
 	snapshotDir := t.TempDir()
 
 	sourceDir := "/src/guest"
@@ -32,8 +32,7 @@ func TestPrepareFork_RewritesSnapshotConfig(t *testing.T) {
 		SerialLogPath: sourceDir + "/logs/app.log",
 		VsockCID:      12345,
 		VsockSocket:   sourceDir + "/vsock/vsock.sock",
-		KernelPath:    sourceDir + "/kernel/vmlinuz",
-		InitrdPath:    sourceDir + "/kernel/initrd",
+		BootMode:      hypervisor.BootModeUEFI,
 		Firmware: &hypervisor.FirmwareConfig{
 			CodePath:   sourceDir + "/OVMF_CODE.fd",
 			VarsPath:   sourceDir + "/OVMF_VARS.fd",
@@ -43,7 +42,6 @@ func TestPrepareFork_RewritesSnapshotConfig(t *testing.T) {
 			SocketPath: sourceDir + "/swtpm.sock",
 			StateDir:   sourceDir + "/tpm",
 		},
-		KernelArgs: "console=ttyS0 root=" + sourceDir + "/rootfs note=keep-" + sourceDir + "-as-substring",
 		Disks: []hypervisor.DiskConfig{
 			{Path: sourceDir + "/overlay.raw"},
 			{Path: "/volumes/volume-data.raw"},
@@ -57,7 +55,7 @@ func TestPrepareFork_RewritesSnapshotConfig(t *testing.T) {
 			},
 		},
 	}
-	require.NoError(t, saveVMConfig(snapshotDir, savedVMConfig{VMConfig: initial, MachineType: MachineTypeMicroVM, QEMUVersion: "8.2.0"}))
+	require.NoError(t, saveVMConfig(snapshotDir, savedVMConfig{VMConfig: initial, MachineType: MachineTypeQ35, QEMUVersion: "8.2.0"}))
 
 	result, err := starter.PrepareFork(context.Background(), hypervisor.ForkPrepareRequest{
 		SnapshotConfigPath: filepath.Join(snapshotDir, "config.json"),
@@ -79,20 +77,17 @@ func TestPrepareFork_RewritesSnapshotConfig(t *testing.T) {
 	updated, err := loadVMConfig(snapshotDir)
 	require.NoError(t, err)
 
-	assert.Equal(t, MachineTypeMicroVM, updated.MachineType)
+	assert.Equal(t, MachineTypeQ35, updated.MachineType)
 	assert.Equal(t, "8.2.0", updated.QEMUVersion)
 	assert.Equal(t, int64(54321), updated.VsockCID)
 	assert.Equal(t, targetDir+"/vsock/fork-vsock.sock", updated.VsockSocket)
 	assert.Equal(t, targetDir+"/logs/fork-app.log", updated.SerialLogPath)
-	assert.Equal(t, targetDir+"/kernel/vmlinuz", updated.KernelPath)
-	assert.Equal(t, targetDir+"/kernel/initrd", updated.InitrdPath)
 	require.NotNil(t, updated.Firmware)
 	assert.Equal(t, targetDir+"/OVMF_CODE.fd", updated.Firmware.CodePath)
 	assert.Equal(t, targetDir+"/OVMF_VARS.fd", updated.Firmware.VarsPath)
 	require.NotNil(t, updated.TPM)
 	assert.Equal(t, targetDir+"/swtpm.sock", updated.TPM.SocketPath)
 	assert.Equal(t, targetDir+"/tpm", updated.TPM.StateDir)
-	assert.Equal(t, initial.KernelArgs, updated.KernelArgs)
 	assert.Equal(t, targetDir+"/overlay.raw", updated.Disks[0].Path)
 	assert.Equal(t, "/volumes/volume-data.raw", updated.Disks[1].Path, "non-instance paths should remain unchanged")
 	require.Len(t, updated.Networks, 1)
@@ -100,4 +95,19 @@ func TestPrepareFork_RewritesSnapshotConfig(t *testing.T) {
 	assert.Equal(t, "10.100.20.20", updated.Networks[0].IP)
 	assert.Equal(t, "02:00:00:dd:ee:ff", updated.Networks[0].MAC)
 	assert.Equal(t, "255.255.0.0", updated.Networks[0].Netmask)
+	require.NoError(t, starter.profile.validateConfig(updated.VMConfig))
+}
+
+func TestRewriteQEMUConfigPathsDirectBoot(t *testing.T) {
+	sourceDir := "/src/guest"
+	targetDir := "/dst/guest"
+	updated := rewriteQEMUConfigPaths(hypervisor.VMConfig{
+		KernelPath: sourceDir + "/kernel/vmlinuz",
+		InitrdPath: sourceDir + "/kernel/initrd",
+		KernelArgs: "console=ttyS0 root=" + sourceDir + "/rootfs",
+	}, sourceDir, targetDir)
+
+	assert.Equal(t, targetDir+"/kernel/vmlinuz", updated.KernelPath)
+	assert.Equal(t, targetDir+"/kernel/initrd", updated.InitrdPath)
+	assert.Equal(t, "console=ttyS0 root="+sourceDir+"/rootfs", updated.KernelArgs)
 }

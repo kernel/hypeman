@@ -97,6 +97,7 @@ func TestWindowsConfigIntegration(t *testing.T) {
 	start := func() (hypervisor.Hypervisor, swtpmProcessRecord) {
 		pid, vm, err := starter.StartVM(context.Background(), paths.New(dir), "", socketPath, config)
 		require.NoError(t, err)
+		t.Cleanup(func() { _ = vm.Shutdown(context.Background()) })
 		require.Positive(t, pid)
 		info, err := vm.GetVMInfo(context.Background())
 		require.NoError(t, err)
@@ -129,6 +130,7 @@ func TestWindowsConfigIntegration(t *testing.T) {
 	require.FileExists(t, varsPath)
 
 	require.NoError(t, syscall.Kill(firstTPM.pid, syscall.SIGSTOP))
+	require.NoError(t, os.Remove(processRecordPath), "simulate restart before the swtpm PID record was published")
 	t.Cleanup(func() {
 		identity, alive, _ := swtpmProcessIdentity(firstTPM.pid)
 		if alive && identity == firstTPM.identity {

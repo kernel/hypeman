@@ -31,7 +31,7 @@ func startSWTPM(config *hypervisor.TPMConfig, instanceDir string) (*startedProce
 		return nil, fmt.Errorf("create swtpm logs directory: %w", err)
 	}
 	processRecordPath := filepath.Join(logsDir, "swtpm.pid")
-	if err := waitForPreviousSWTPM(processRecordPath, deadline); err != nil {
+	if err := waitForPreviousSWTPM(config, processRecordPath, deadline); err != nil {
 		return nil, err
 	}
 
@@ -90,15 +90,32 @@ func startSWTPM(config *hypervisor.TPMConfig, instanceDir string) (*startedProce
 	return proc, nil
 }
 
-func waitForPreviousSWTPM(recordPath string, deadline time.Time) error {
+func waitForPreviousSWTPM(config *hypervisor.TPMConfig, recordPath string, deadline time.Time) error {
 	record, err := readSWTPMProcessRecord(recordPath)
-	if os.IsNotExist(err) {
-		return nil
-	}
-	if err != nil {
+	if err == nil {
+		identity, alive, inspectErr := swtpmProcessIdentity(record.pid)
+		if inspectErr != nil {
+			return fmt.Errorf("inspect previous swtpm process %d: %w", record.pid, inspectErr)
+		}
+		if alive && identity == record.identity {
+			return waitForSWTPMExit(record, recordPath, deadline)
+		}
+		_ = os.Remove(recordPath)
+	} else if !os.IsNotExist(err) {
 		return fmt.Errorf("read previous swtpm process: %w", err)
 	}
 
+	record, found, err := discoverSWTPMProcess(config)
+	if err != nil {
+		return fmt.Errorf("reconcile previous swtpm process: %w", err)
+	}
+	if !found {
+		return nil
+	}
+	return waitForSWTPMExit(record, recordPath, deadline)
+}
+
+func waitForSWTPMExit(record swtpmProcessRecord, recordPath string, deadline time.Time) error {
 	for {
 		identity, alive, err := swtpmProcessIdentity(record.pid)
 		if err != nil {
