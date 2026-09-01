@@ -88,6 +88,26 @@ func (s *stubManager) GetVsockDialer(context.Context, string) (hypervisor.VsockD
 	return nil, nil
 }
 
+type waitForStateResult struct {
+	result *WaitForStateResult
+	err    error
+}
+
+func startWaitForState(t *testing.T, subs *lifecycleSubscribers, mgr Manager, inst *Instance, target State, timeout time.Duration) <-chan waitForStateResult {
+	t.Helper()
+
+	results := make(chan waitForStateResult, 1)
+	go func() {
+		result, err := WaitForState(context.Background(), mgr, inst, target, timeout)
+		results <- waitForStateResult{result: result, err: err}
+	}()
+
+	require.Eventually(t, func() bool {
+		return subs.Stats()[LifecycleEventConsumerWaitForState].Subscribers == 1
+	}, time.Second, time.Millisecond, "WaitForState did not subscribe")
+	return results
+}
+
 func TestWaitForState_SubscriptionDelivers(t *testing.T) {
 	t.Parallel()
 	subs := newLifecycleSubscribers()
@@ -97,18 +117,15 @@ func TestWaitForState_SubscriptionDelivers(t *testing.T) {
 	inst.Id = "test-sub"
 	inst.State = StateInitializing
 
-	// Simulate a state change via subscription after 100ms.
-	go func() {
-		time.Sleep(100 * time.Millisecond)
-		subs.Notify(context.Background(), LifecycleEvent{
-			Action:     LifecycleEventStart,
-			InstanceID: "test-sub",
-			Instance:   &Instance{State: StateRunning},
-		})
-	}()
-
 	start := time.Now()
-	result, err := WaitForState(context.Background(), mgr, inst, StateRunning, 30*time.Second)
+	results := startWaitForState(t, subs, mgr, inst, StateRunning, 30*time.Second)
+	subs.Notify(context.Background(), LifecycleEvent{
+		Action:     LifecycleEventStart,
+		InstanceID: "test-sub",
+		Instance:   &Instance{State: StateRunning},
+	})
+	waitResult := <-results
+	result, err := waitResult.result, waitResult.err
 	elapsed := time.Since(start)
 
 	require.NoError(t, err)
@@ -127,17 +144,15 @@ func TestWaitForState_ChannelClosedOnDelete(t *testing.T) {
 	inst.Id = "test-close"
 	inst.State = StateInitializing
 
-	// Simulate instance deletion (close all subscriber channels).
-	go func() {
-		time.Sleep(100 * time.Millisecond)
-		subs.Notify(context.Background(), LifecycleEvent{
-			Action:     LifecycleEventDelete,
-			InstanceID: "test-close",
-		})
-	}()
-
+	// Simulate instance deletion.
+	results := startWaitForState(t, subs, mgr, inst, StateRunning, 30*time.Second)
+	subs.Notify(context.Background(), LifecycleEvent{
+		Action:     LifecycleEventDelete,
+		InstanceID: "test-close",
+	})
 	start := time.Now()
-	result, err := WaitForState(context.Background(), mgr, inst, StateRunning, 30*time.Second)
+	waitResult := <-results
+	result, err := waitResult.result, waitResult.err
 	elapsed := time.Since(start)
 
 	require.ErrorIs(t, err, ErrNotFound)
@@ -154,16 +169,14 @@ func TestWaitForState_TerminalViaSubscription(t *testing.T) {
 	inst.Id = "test-terminal-sub"
 	inst.State = StateInitializing
 
-	go func() {
-		time.Sleep(100 * time.Millisecond)
-		subs.Notify(context.Background(), LifecycleEvent{
-			Action:     LifecycleEventStop,
-			InstanceID: "test-terminal-sub",
-			Instance:   &Instance{State: StateStopped},
-		})
-	}()
-
-	result, err := WaitForState(context.Background(), mgr, inst, StateRunning, 30*time.Second)
+	results := startWaitForState(t, subs, mgr, inst, StateRunning, 30*time.Second)
+	subs.Notify(context.Background(), LifecycleEvent{
+		Action:     LifecycleEventStop,
+		InstanceID: "test-terminal-sub",
+		Instance:   &Instance{State: StateStopped},
+	})
+	waitResult := <-results
+	result, err := waitResult.result, waitResult.err
 
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -180,17 +193,15 @@ func TestWaitForState_ShutdownIsTerminal(t *testing.T) {
 	inst.Id = "test-shutdown"
 	inst.State = StateInitializing
 
-	go func() {
-		time.Sleep(100 * time.Millisecond)
-		subs.Notify(context.Background(), LifecycleEvent{
-			Action:     LifecycleEventStop,
-			InstanceID: "test-shutdown",
-			Instance:   &Instance{State: StateShutdown},
-		})
-	}()
-
 	start := time.Now()
-	result, err := WaitForState(context.Background(), mgr, inst, StateRunning, 30*time.Second)
+	results := startWaitForState(t, subs, mgr, inst, StateRunning, 30*time.Second)
+	subs.Notify(context.Background(), LifecycleEvent{
+		Action:     LifecycleEventStop,
+		InstanceID: "test-shutdown",
+		Instance:   &Instance{State: StateShutdown},
+	})
+	waitResult := <-results
+	result, err := waitResult.result, waitResult.err
 	elapsed := time.Since(start)
 
 	require.NoError(t, err)
@@ -209,17 +220,15 @@ func TestWaitForState_PausedIsTerminal(t *testing.T) {
 	inst.Id = "test-paused"
 	inst.State = StateInitializing
 
-	go func() {
-		time.Sleep(100 * time.Millisecond)
-		subs.Notify(context.Background(), LifecycleEvent{
-			Action:     LifecycleEventStandby,
-			InstanceID: "test-paused",
-			Instance:   &Instance{State: StatePaused},
-		})
-	}()
-
 	start := time.Now()
-	result, err := WaitForState(context.Background(), mgr, inst, StateRunning, 30*time.Second)
+	results := startWaitForState(t, subs, mgr, inst, StateRunning, 30*time.Second)
+	subs.Notify(context.Background(), LifecycleEvent{
+		Action:     LifecycleEventStandby,
+		InstanceID: "test-paused",
+		Instance:   &Instance{State: StatePaused},
+	})
+	waitResult := <-results
+	result, err := waitResult.result, waitResult.err
 	elapsed := time.Since(start)
 
 	require.NoError(t, err)
@@ -238,22 +247,19 @@ func TestWaitForState_IgnoresEventsForOtherInstances(t *testing.T) {
 	inst.Id = "target-instance"
 	inst.State = StateInitializing
 
-	go func() {
-		time.Sleep(50 * time.Millisecond)
-		subs.Notify(context.Background(), LifecycleEvent{
-			Action:     LifecycleEventStart,
-			InstanceID: "other-instance",
-			Instance:   &Instance{State: StateRunning},
-		})
-		time.Sleep(50 * time.Millisecond)
-		subs.Notify(context.Background(), LifecycleEvent{
-			Action:     LifecycleEventStart,
-			InstanceID: "target-instance",
-			Instance:   &Instance{State: StateRunning},
-		})
-	}()
-
-	result, err := WaitForState(context.Background(), mgr, inst, StateRunning, 30*time.Second)
+	results := startWaitForState(t, subs, mgr, inst, StateRunning, 30*time.Second)
+	subs.Notify(context.Background(), LifecycleEvent{
+		Action:     LifecycleEventStart,
+		InstanceID: "other-instance",
+		Instance:   &Instance{State: StateRunning},
+	})
+	subs.Notify(context.Background(), LifecycleEvent{
+		Action:     LifecycleEventStart,
+		InstanceID: "target-instance",
+		Instance:   &Instance{State: StateRunning},
+	})
+	waitResult := <-results
+	result, err := waitResult.result, waitResult.err
 
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -277,16 +283,14 @@ func TestWaitForState_IgnoresNilInstancePayloadAndUsesPollingFallback(t *testing
 	inst.Id = "test-nil-event"
 	inst.State = StateInitializing
 
-	go func() {
-		time.Sleep(100 * time.Millisecond)
-		subs.Notify(context.Background(), LifecycleEvent{
-			Action:     LifecycleEventStart,
-			InstanceID: "test-nil-event",
-		})
-	}()
-
 	start := time.Now()
-	result, err := WaitForState(context.Background(), mgr, inst, StateRunning, 6*time.Second)
+	results := startWaitForState(t, subs, mgr, inst, StateRunning, 6*time.Second)
+	subs.Notify(context.Background(), LifecycleEvent{
+		Action:     LifecycleEventStart,
+		InstanceID: "test-nil-event",
+	})
+	waitResult := <-results
+	result, err := waitResult.result, waitResult.err
 	elapsed := time.Since(start)
 
 	require.NoError(t, err)

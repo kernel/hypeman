@@ -46,6 +46,10 @@ type Manager interface {
 	// Unlike CreateImage, it does not resolve from a remote registry.
 	ImportLocalImage(ctx context.Context, repo, reference, digest string) (*Image, error)
 	GetImage(ctx context.Context, name string) (*Image, error)
+	// TagImage creates or updates a local tag pointing at an existing ready
+	// image, without pulling or reconverting. Source and target may be in
+	// different repositories.
+	TagImage(ctx context.Context, source, target string) (*Image, error)
 	DeleteImage(ctx context.Context, name string) error
 	RecoverInterruptedBuilds()
 	// TotalImageBytes returns the total size of all ready images on disk.
@@ -333,6 +337,13 @@ func (m *manager) restoreTagGenerations(metas []*imageMetadata) {
 		m.restoreTagGeneration(ref.Repository(), meta.RequestedTag, meta.TagGeneration)
 		for _, claim := range meta.TagClaims {
 			m.restoreTagGeneration(claim.Repository, claim.Tag, claim.TagGeneration)
+		}
+		for reference, generation := range meta.ReferenceGenerations {
+			ref, err := ParseNormalizedRef(reference)
+			if err != nil || ref.IsDigest() {
+				continue
+			}
+			m.restoreTagGeneration(ref.Repository(), ref.Tag(), generation)
 		}
 	}
 }
@@ -634,27 +645,34 @@ func (m *manager) claimImageTags(ref *ResolvedRef, meta *imageMetadata) {
 	if requestedTag == "" {
 		requestedTag = ref.Tag()
 	}
-	m.claimTag(ref.Repository(), ref.DigestHex(), requestedTag, meta.PreviousTagDigest, meta.TagGeneration, meta.RequestedTag == "")
+	claimed := m.claimTag(ref.Repository(), ref.DigestHex(), requestedTag, meta.PreviousTagDigest, meta.TagGeneration, meta.RequestedTag == "")
 	for _, claim := range meta.TagClaims {
-		m.claimTag(claim.Repository, ref.DigestHex(), claim.Tag, claim.PreviousTagDigest, claim.TagGeneration, false)
+		claimed = m.claimTag(claim.Repository, ref.DigestHex(), claim.Tag, claim.PreviousTagDigest, claim.TagGeneration, false) || claimed
+	}
+	if !claimed {
+		if err := removeDigestIfUnreferenced(m.paths, ref.Repository(), ref.DigestHex(), true); err != nil {
+			slog.Warn("failed to collect stale image", "repository", ref.Repository(), "digest", ref.DigestHex(), "error", err)
+		}
 	}
 }
 
-func (m *manager) claimTag(repository, digestHex, tag, previous string, generation uint64, allowMissing bool) {
+func (m *manager) claimTag(repository, digestHex, tag, previous string, generation uint64, allowMissing bool) bool {
 	if tag == "" || m.tagGenerations[tagGenerationKey(repository, tag)] != generation {
-		return
+		return false
 	}
 	current, err := resolveTag(m.paths, repository, tag)
 	if err != nil {
 		if !allowMissing || !errors.Is(err, ErrNotFound) {
-			return
+			return false
 		}
 	} else if current != digestHex && current != previous {
-		return
+		return false
 	}
 	if err := createTagSymlink(m.paths, repository, tag, digestHex); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: failed to create tag symlink: %v\n", err)
+		return false
 	}
+	return true
 }
 
 func phaseStatus(err error) string {
@@ -768,23 +786,7 @@ func (m *manager) GetImage(ctx context.Context, name string) (*Image, error) {
 		return nil, fmt.Errorf("%w: %s", ErrInvalidName, err.Error())
 	}
 
-	repository := ref.Repository()
-
-	var digestHex string
-	if ref.IsDigest() {
-		// Direct digest lookup
-		digestHex = ref.DigestHex()
-	} else {
-		// Tag lookup - resolve symlink
-		tag := ref.Tag()
-		d, err := resolveTag(m.paths, repository, tag)
-		if err != nil {
-			return nil, err
-		}
-		digestHex = d
-	}
-
-	meta, err := readMetadata(m.paths, repository, digestHex)
+	_, meta, err := resolveRefMetadata(m.paths, ref)
 	if err != nil {
 		return nil, err
 	}

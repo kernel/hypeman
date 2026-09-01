@@ -373,6 +373,19 @@ func (m *mockImageManager) DeleteImage(ctx context.Context, name string) error {
 	return nil
 }
 
+func (m *mockImageManager) TagImage(ctx context.Context, source, target string) (*images.Image, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	img, ok := m.images[source]
+	if !ok {
+		return nil, images.ErrNotFound
+	}
+	tagged := *img
+	tagged.Name = target
+	m.images[target] = &tagged
+	return &tagged, nil
+}
+
 func (m *mockImageManager) RecoverInterruptedBuilds() {}
 
 func (m *mockImageManager) TotalImageBytes(ctx context.Context) (int64, error) {
