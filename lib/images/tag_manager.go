@@ -183,10 +183,17 @@ func (m *manager) installTag(source, target *NormalizedRef, digest string, meta 
 			return fmt.Errorf("promote image to content: %w", err)
 		}
 	}
-	if err := createTagSymlink(m.paths, target.Repository(), target.Tag(), digest); err != nil {
+	installed, err := installTagSymlink(m.paths, target.Repository(), target.Tag(), digest)
+	if err != nil {
 		return fmt.Errorf("create image tag: %w", err)
 	}
 	if err := writeMetadata(m.paths, target.Repository(), digest, meta); err != nil {
+		if restoreErr := restoreTagSymlink(&installed); restoreErr != nil {
+			return errors.Join(
+				fmt.Errorf("write tagged image metadata: %w", err),
+				fmt.Errorf("restore image tag: %w", restoreErr),
+			)
+		}
 		return fmt.Errorf("write tagged image metadata: %w", err)
 	}
 	return nil

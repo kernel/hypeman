@@ -348,12 +348,14 @@ type symlinkState struct {
 }
 
 type stagedTagSymlink struct {
-	repository string
-	tag        string
-	linkPath   string
-	tempDir    string
-	tempPath   string
-	previous   symlinkState
+	repository    string
+	tag           string
+	linkPath      string
+	tempDir       string
+	tempPath      string
+	previous      symlinkState
+	stalePath     string
+	previousStale symlinkState
 }
 
 func stageTagSymlink(p *paths.Paths, repository, tag, digestHex string) (stagedTagSymlink, error) {
@@ -372,6 +374,14 @@ func stageTagSymlink(p *paths.Paths, repository, tag, digestHex string) (stagedT
 	if err != nil {
 		return stagedTagSymlink{}, err
 	}
+	stalePath := p.ImageTagSymlink(repository, tag)
+	if stalePath == linkPath {
+		stalePath = p.ImageRepositoryTagSymlink(repository, tag)
+	}
+	previousStale, err := readSymlinkState(stalePath)
+	if err != nil {
+		return stagedTagSymlink{}, err
+	}
 	if err := os.MkdirAll(filepath.Dir(linkPath), 0755); err != nil {
 		return stagedTagSymlink{}, fmt.Errorf("create parent directory: %w", err)
 	}
@@ -385,12 +395,14 @@ func stageTagSymlink(p *paths.Paths, repository, tag, digestHex string) (stagedT
 		return stagedTagSymlink{}, fmt.Errorf("create temporary tag symlink: %w", err)
 	}
 	return stagedTagSymlink{
-		repository: repository,
-		tag:        tag,
-		linkPath:   linkPath,
-		tempDir:    tempDir,
-		tempPath:   tempPath,
-		previous:   previous,
+		repository:    repository,
+		tag:           tag,
+		linkPath:      linkPath,
+		tempDir:       tempDir,
+		tempPath:      tempPath,
+		previous:      previous,
+		stalePath:     stalePath,
+		previousStale: previousStale,
 	}, nil
 }
 
@@ -423,7 +435,7 @@ func restoreSymlinkState(path string, state symlinkState) error {
 func rollbackTagSymlinks(refs []stagedTagSymlink) error {
 	var rollbackErrs []error
 	for i := len(refs) - 1; i >= 0; i-- {
-		if err := restoreSymlinkState(refs[i].linkPath, refs[i].previous); err != nil {
+		if err := restoreTagSymlink(&refs[i]); err != nil {
 			rollbackErrs = append(rollbackErrs, err)
 		}
 	}
@@ -441,20 +453,32 @@ func removeStaleTagSymlink(p *paths.Paths, ref *stagedTagSymlink) error {
 	return nil
 }
 
-func createTagSymlink(p *paths.Paths, repository, tag, digestHex string) error {
+func installTagSymlink(p *paths.Paths, repository, tag, digestHex string) (stagedTagSymlink, error) {
 	ref, err := stageTagSymlink(p, repository, tag, digestHex)
 	if err != nil {
-		return fmt.Errorf("stage tag symlink: %w", err)
+		return stagedTagSymlink{}, fmt.Errorf("stage tag symlink: %w", err)
 	}
 	if err := os.Rename(ref.tempPath, ref.linkPath); err != nil {
 		_ = os.RemoveAll(ref.tempDir)
-		return fmt.Errorf("install tag symlink: %w", err)
+		return stagedTagSymlink{}, fmt.Errorf("install tag symlink: %w", err)
 	}
 	if err := removeStaleTagSymlink(p, &ref); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: failed to remove stale tag symlink %s: %v\n", tag, err)
 	}
 	_ = os.RemoveAll(ref.tempDir)
-	return nil
+	return ref, nil
+}
+
+func createTagSymlink(p *paths.Paths, repository, tag, digestHex string) error {
+	_, err := installTagSymlink(p, repository, tag, digestHex)
+	return err
+}
+
+func restoreTagSymlink(ref *stagedTagSymlink) error {
+	if err := restoreSymlinkState(ref.linkPath, ref.previous); err != nil {
+		return err
+	}
+	return restoreSymlinkState(ref.stalePath, ref.previousStale)
 }
 
 // errInvalidSymlinkTarget marks a tag symlink that does not resolve to a

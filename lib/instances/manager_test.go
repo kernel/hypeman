@@ -1391,8 +1391,7 @@ func TestEntrypointEnvVars(t *testing.T) {
 
 	// Cleanup
 	t.Log("Cleaning up...")
-	err = mgr.DeleteInstance(ctx, inst.Id)
-	require.NoError(t, err)
+	deleteInstanceEventually(t, ctx, mgr, inst.Id)
 }
 
 func TestStorageOperations(t *testing.T) {
