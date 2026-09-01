@@ -126,7 +126,9 @@ func NewManager(p *paths.Paths, maxConcurrentBuilds int, meter metric.Meter) (Ma
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: failed to scan legacy images for promotion: %v\n", err)
 	} else {
-		go promoteLegacyImages(p, legacyRefs)
+		m.createMu.Lock()
+		promoteLegacyImages(p, legacyRefs)
+		m.createMu.Unlock()
 	}
 	return m, nil
 }
@@ -402,12 +404,14 @@ func (m *manager) createAndQueueImage(ref *ResolvedRef, req CreateImageRequest, 
 	if err := writeMetadata(m.paths, ref.Repository(), ref.DigestHex(), meta); err != nil {
 		if ref.Tag() != "" {
 			m.revertTagGeneration(ref.Repository(), ref.Tag())
+			m.clearRequestedTag(ref.Repository(), ref.Tag(), ref.DigestHex())
 		}
 		return nil, fmt.Errorf("write initial metadata: %w", err)
 	}
 	if ref.Tag() != "" && previousTagDigest == "" {
 		if err := createTagSymlink(m.paths, ref.Repository(), ref.Tag(), ref.DigestHex()); err != nil {
 			m.revertTagGeneration(ref.Repository(), ref.Tag())
+			m.clearRequestedTag(ref.Repository(), ref.Tag(), ref.DigestHex())
 			return nil, fmt.Errorf("create pending image tag: %w", err)
 		}
 	}
@@ -538,12 +542,6 @@ func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, diskSize i
 		return errStaleBuild
 	}
 
-	if err := installAtomically(layout.disk, func(path string) error {
-		return os.Rename(diskTempPath, path)
-	}); err != nil {
-		return fmt.Errorf("install image disk: %w", err)
-	}
-
 	// The pulled image config is the source of truth for the platform.
 	var requestedPlatform string
 	if meta.Request != nil {
@@ -554,6 +552,29 @@ func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, diskSize i
 		return err
 	}
 
+	diskInstalled := false
+	modelWritten := false
+	rollback := func(cause error) error {
+		var rollbackErr error
+		if modelWritten {
+			rollbackErr = errors.Join(rollbackErr, os.Remove(m.paths.ImageContentManifestModel(ref.DigestHex())))
+		}
+		if diskInstalled {
+			rollbackErr = errors.Join(rollbackErr, os.Remove(layout.disk))
+		}
+		if rollbackErr != nil {
+			return errors.Join(cause, fmt.Errorf("rollback finalization: %w", rollbackErr))
+		}
+		return cause
+	}
+
+	if err := installAtomically(layout.disk, func(path string) error {
+		return os.Rename(diskTempPath, path)
+	}); err != nil {
+		return fmt.Errorf("install image disk: %w", err)
+	}
+	diskInstalled = true
+
 	// Persist the manifest content model beside the shared content so later
 	// stages can recompose the image from per-layer artifacts and GC can tell
 	// which OCI blobs are still referenced.
@@ -561,8 +582,9 @@ func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, diskSize i
 		model := *result.Manifest
 		model.Platform = actualPlatform.String()
 		if err := writeManifestModel(m.paths, ref.DigestHex(), &model); err != nil {
-			return fmt.Errorf("write manifest model: %w", err)
+			return rollback(fmt.Errorf("write manifest model: %w", err))
 		}
+		modelWritten = true
 	}
 
 	meta.Status = StatusReady
@@ -576,7 +598,7 @@ func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, diskSize i
 	meta.WorkingDir = result.Metadata.WorkingDir
 
 	if err := writeMetadataFile(layout.metadata, meta); err != nil {
-		return fmt.Errorf("write final metadata: %w", err)
+		return rollback(fmt.Errorf("write final metadata: %w", err))
 	}
 
 	m.notifyReady(ref.DigestHex(), StatusReady, nil)
@@ -654,6 +676,7 @@ func (m *manager) updateStatusByDigest(ref *ResolvedRef, status string, err erro
 	// same tag can still repoint it.
 	if status == StatusFailed && meta.RequestedTag != "" {
 		m.releaseTagGeneration(ref.Repository(), meta.RequestedTag, meta.TagGeneration)
+		m.clearRequestedTag(ref.Repository(), meta.RequestedTag, strings.TrimPrefix(meta.Digest, "sha256:"))
 	}
 }
 
@@ -744,6 +767,7 @@ func (m *manager) DeleteImage(ctx context.Context, name string) error {
 		if err := removeDigestIfUnreferenced(m.paths, repository, digestHex, false); err != nil {
 			return err
 		}
+		m.clearRequestedDigest(digestHex)
 		m.refreshDiskUsageTotals()
 		return nil
 	}
@@ -760,6 +784,7 @@ func (m *manager) DeleteImage(ctx context.Context, name string) error {
 	if err := deleteTag(m.paths, repository, tag); err != nil {
 		return err
 	}
+	m.clearRequestedTag(repository, tag, digestHex)
 	m.pruneTagGenerations()
 
 	// Check if the digest is now orphaned (no other tags reference it)

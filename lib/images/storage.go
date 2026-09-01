@@ -253,32 +253,37 @@ func readMetadataAt(layout imageLayout) (*imageMetadata, error) {
 }
 
 func promoteImageToContent(p *paths.Paths, sourceRepository, digestHex string, sourceMeta *imageMetadata) error {
-	contentReady := false
-	if contentMeta, err := readContentMetadata(p, digestHex); err == nil {
-		contentReady = contentMeta.Status == StatusReady
+	contentMeta, err := readContentMetadata(p, digestHex)
+	if err == nil {
+		if contentMeta.Status == StatusReady {
+			return promoteLegacyTags(p, sourceRepository, digestHex)
+		}
+		return fmt.Errorf("%w: content status is %s", ErrImageNotReady, contentMeta.Status)
 	}
-	if !contentReady {
-		sourceLayout := resolveImageLayout(p, sourceRepository, digestHex)
-		sourceDiskPath := sourceLayout.disk
-		if _, err := os.Stat(sourceDiskPath); err != nil {
-			return fmt.Errorf("stat source disk: %w", err)
-		}
-		if err := os.MkdirAll(p.ImageContentDir(digestHex), 0755); err != nil {
-			return fmt.Errorf("create content directory: %w", err)
-		}
-		contentMeta := *sourceMeta
-		contentMeta.Status = StatusConverting
-		if err := writeMetadataFile(p.ImageContentMetadata(digestHex), &contentMeta); err != nil {
-			return fmt.Errorf("write content metadata: %w", err)
-		}
-		if err := installAtomically(p.ImageContentPath(digestHex), func(path string) error {
-			return os.Link(sourceDiskPath, path)
-		}); err != nil {
-			return fmt.Errorf("link source disk: %w", err)
-		}
-		if err := writeMetadataFile(p.ImageContentMetadata(digestHex), sourceMeta); err != nil {
-			return fmt.Errorf("finalize content metadata: %w", err)
-		}
+	if !errors.Is(err, ErrNotFound) {
+		return err
+	}
+
+	sourceLayout := resolveImageLayout(p, sourceRepository, digestHex)
+	sourceDiskPath := sourceLayout.disk
+	if _, err := os.Stat(sourceDiskPath); err != nil {
+		return fmt.Errorf("stat source disk: %w", err)
+	}
+	if err := os.MkdirAll(p.ImageContentDir(digestHex), 0755); err != nil {
+		return fmt.Errorf("create content directory: %w", err)
+	}
+	pendingMeta := *sourceMeta
+	pendingMeta.Status = StatusConverting
+	if err := writeMetadataFile(p.ImageContentMetadata(digestHex), &pendingMeta); err != nil {
+		return fmt.Errorf("write content metadata: %w", err)
+	}
+	if err := installAtomically(p.ImageContentPath(digestHex), func(path string) error {
+		return os.Link(sourceDiskPath, path)
+	}); err != nil {
+		return fmt.Errorf("link source disk: %w", err)
+	}
+	if err := writeMetadataFile(p.ImageContentMetadata(digestHex), sourceMeta); err != nil {
+		return fmt.Errorf("finalize content metadata: %w", err)
 	}
 
 	return promoteLegacyTags(p, sourceRepository, digestHex)

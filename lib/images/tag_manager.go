@@ -61,6 +61,9 @@ func (m *manager) pruneTagGenerations() {
 func (m *manager) restoreTagState(metas []*imageMetadata) {
 	m.ensureTagState()
 	for _, meta := range metas {
+		if meta.Status != StatusPending && meta.Status != StatusPulling && meta.Status != StatusConverting {
+			continue
+		}
 		if meta.RequestedTag == "" || meta.Digest == "" {
 			continue
 		}
@@ -100,6 +103,21 @@ func (m *manager) trackRequestedTag(repository, tag, digestHex string) {
 	m.requestedTags[tagGenerationKey(repository, tag)] = digestHex
 }
 
+func (m *manager) clearRequestedTag(repository, tag, digestHex string) {
+	key := tagGenerationKey(repository, tag)
+	if current, ok := m.requestedTags[key]; ok && (digestHex == "" || current == digestHex) {
+		delete(m.requestedTags, key)
+	}
+}
+
+func (m *manager) clearRequestedDigest(digestHex string) {
+	for key, current := range m.requestedTags {
+		if current == digestHex {
+			delete(m.requestedTags, key)
+		}
+	}
+}
+
 func (m *manager) requestedTagImage(ref *NormalizedRef) *Image {
 	m.createMu.Lock()
 	digestHex, ok := m.requestedTags[tagGenerationKey(ref.Repository(), ref.Tag())]
@@ -121,12 +139,14 @@ func (m *manager) claimRequestedTag(ref *ResolvedRef, meta *imageMetadata) bool 
 		tag = ref.Tag()
 	}
 	if !m.tagClaimIsCurrent(ref.Repository(), tag, ref.DigestHex(), meta, allowMissing) {
+		m.clearRequestedTag(ref.Repository(), tag, ref.DigestHex())
 		return false
 	}
 	if err := createTagSymlink(m.paths, ref.Repository(), tag, ref.DigestHex()); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: failed to create tag symlink: %v\n", err)
 		return false
 	}
+	m.clearRequestedTag(ref.Repository(), tag, ref.DigestHex())
 	return true
 }
 
@@ -164,6 +184,7 @@ func (m *manager) TagImage(ctx context.Context, source, target string) (*Image, 
 		return nil, err
 	}
 	m.nextTagGeneration(targetRef.Repository(), targetRef.Tag())
+	m.clearRequestedTag(targetRef.Repository(), targetRef.Tag(), "")
 	m.cleanupReplacedTag(targetRef, previousDigest, digestHex)
 
 	return meta.toImageFor(targetRef.String()), nil
