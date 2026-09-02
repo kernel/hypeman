@@ -5,7 +5,9 @@ package devices
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -89,32 +91,54 @@ func getCachedProfiles(firstVF string) []profileMetadata {
 	return cachedProfiles
 }
 
-// DiscoverVFs returns all SR-IOV Virtual Functions available for vGPU.
-// These are discovered by scanning /sys/class/mdev_bus/ which contains
-// VFs that can host mdev devices.
-func DiscoverVFs() ([]VirtualFunction, error) {
-	entries, err := os.ReadDir(mdevBusPath)
+// discoverMdevVFs returns all SR-IOV Virtual Functions available for vGPU,
+// discovered by scanning /sys/class/mdev_bus/.
+func discoverMdevVFs() ([]VirtualFunction, error) {
+	return discoverMdevVFsWith(mdevBusPath, pciDevicesPath, ListMdevDevices)
+}
+
+func discoverMdevVFsWith(busPath, pciPath string, listMdevs func() ([]MdevDevice, error)) ([]VirtualFunction, error) {
+	entries, err := os.ReadDir(busPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil // No mdev_bus means no vGPU support
+			return nil, nil // No mdev_bus means no mdev vGPU support
 		}
 		return nil, fmt.Errorf("read mdev_bus: %w", err)
 	}
 
 	// List mdevs once and build a lookup map to avoid O(n*m) performance
-	mdevs, _ := ListMdevDevices()
+	mdevs, _ := listMdevs()
 	mdevByVF := make(map[string]bool, len(mdevs))
 	for _, mdev := range mdevs {
 		mdevByVF[mdev.VFAddress] = true
 	}
 
 	var vfs []VirtualFunction
+	var vfErrs []error
 	for _, entry := range entries {
 		vfAddr := entry.Name()
+		types, err := os.ReadDir(filepath.Join(busPath, vfAddr, "mdev_supported_types"))
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			vfErrs = append(vfErrs, fmt.Errorf("read mdev supported types for VF %s: %w", vfAddr, err))
+			continue
+		}
+		usable := false
+		for _, typ := range types {
+			if typ.IsDir() {
+				usable = true
+				break
+			}
+		}
+		if !usable {
+			continue
+		}
 
 		// Find parent GPU by checking physfn symlink
 		// VFs have a physfn symlink pointing to their parent Physical Function
-		physfnPath := filepath.Join("/sys/bus/pci/devices", vfAddr, "physfn")
+		physfnPath := filepath.Join(pciPath, vfAddr, "physfn")
 		parentGPU := ""
 		if target, err := os.Readlink(physfnPath); err == nil {
 			parentGPU = filepath.Base(target)
@@ -129,24 +153,23 @@ func DiscoverVFs() ([]VirtualFunction, error) {
 			Allocated:  hasMdev,
 		})
 	}
+	if len(vfErrs) > 0 {
+		// Mirror vendor VFIO discovery: one unreadable VF must not blank out
+		// the host's GPU capacity. Only when no VF is readable does discovery
+		// fail, so a wholesale sysfs outage cannot demote an mdev host to
+		// vendor VFIO or passthrough while assignments exist.
+		if len(vfs) == 0 {
+			return nil, errors.Join(vfErrs...)
+		}
+		slog.Default().Warn("skipping unreadable mdev VFs", "error", errors.Join(vfErrs...))
+	}
 
 	return vfs, nil
 }
 
-// ListGPUProfiles returns available vGPU profiles with availability counts.
-// Profiles are discovered from the first VF's mdev_supported_types directory.
-func ListGPUProfiles() ([]GPUProfile, error) {
-	vfs, err := DiscoverVFs()
-	if err != nil {
-		return nil, err
-	}
-	return ListGPUProfilesWithVFs(vfs)
-}
-
-// ListGPUProfilesWithVFs returns available vGPU profiles using pre-discovered VFs.
-// This avoids redundant VF discovery when the caller already has the list.
-// Uses parallel sysfs reads for fast availability counting.
-func ListGPUProfilesWithVFs(vfs []VirtualFunction) ([]GPUProfile, error) {
+// listMdevGPUProfilesWithVFs returns available vGPU profiles using
+// pre-discovered VFs. Uses parallel sysfs reads for fast availability counting.
+func listMdevGPUProfilesWithVFs(vfs []VirtualFunction) ([]GPUProfile, error) {
 	if len(vfs) == 0 {
 		return nil, nil
 	}
@@ -305,7 +328,7 @@ func countAvailableForSingleProfile(freeVFsByParent map[string][]VirtualFunction
 
 // findProfileType finds the internal type name (e.g., "nvidia-556") for a profile name (e.g., "L40S-1Q")
 func findProfileType(profileName string) (string, error) {
-	vfs, err := DiscoverVFs()
+	vfs, err := discoverMdevVFs()
 	if err != nil || len(vfs) == 0 {
 		return "", fmt.Errorf("no VFs available")
 	}
@@ -531,7 +554,7 @@ func CreateMdev(ctx context.Context, profileName, instanceID string) (*MdevDevic
 	}
 
 	// Discover all VFs
-	vfs, err := DiscoverVFs()
+	vfs, err := discoverMdevVFs()
 	if err != nil {
 		return nil, fmt.Errorf("discover VFs: %w", err)
 	}
@@ -697,7 +720,7 @@ func ReconcileMdevs(ctx context.Context, instanceInfos []MdevReconcileInfo) erro
 	log := logger.FromContext(ctx)
 	_ = instanceInfos
 
-	vfs, err := DiscoverVFs()
+	vfs, err := discoverMdevVFs()
 	if err != nil {
 		return fmt.Errorf("discover managed VFs: %w", err)
 	}

@@ -177,6 +177,7 @@ func (m *manager) startInstance(
 				Framework:  device.Framework,
 				DevicePath: device.SysfsPath,
 				MdevUUID:   device.MdevUUID,
+				InstanceID: id,
 			}
 			if err := devices.DestroyVGPU(ctx, assignment); err != nil {
 				log.WarnContext(ctx, "failed to destroy vGPU on cleanup", "instance_id", id, "uuid", device.MdevUUID, "error", err)
