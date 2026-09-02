@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
 	"strings"
 
 	"github.com/kernel/hypeman/lib/paths"
@@ -46,16 +45,9 @@ func (m *manager) releaseTagGeneration(repository, tag string, generation uint64
 	}
 }
 
-func (m *manager) pruneTagGenerations() {
-	for key := range m.tagGenerations {
-		colon := strings.LastIndexByte(key, ':')
-		if colon < 0 {
-			continue
-		}
-		if _, err := resolveTag(m.paths, key[:colon], key[colon+1:]); err != nil {
-			delete(m.tagGenerations, key)
-		}
-	}
+func (m *manager) forgetTagState(repository, tag string) {
+	delete(m.tagGenerations, tagGenerationKey(repository, tag))
+	m.clearRequestedTag(repository, tag, "")
 }
 
 func (m *manager) restoreTagState(metas []*imageMetadata) {
@@ -64,19 +56,32 @@ func (m *manager) restoreTagState(metas []*imageMetadata) {
 		if meta.Status != StatusPending && meta.Status != StatusPulling && meta.Status != StatusConverting {
 			continue
 		}
-		if meta.RequestedTag == "" || meta.Digest == "" {
+		if meta.Digest == "" {
 			continue
 		}
+		digestHex := strings.TrimPrefix(meta.Digest, "sha256:")
 		ref, err := ParseNormalizedRef(meta.Name)
 		if err != nil {
 			continue
 		}
-		key := tagGenerationKey(ref.Repository(), meta.RequestedTag)
-		if meta.TagGeneration > m.tagGenerations[key] {
-			m.tagGenerations[key] = meta.TagGeneration
+		if meta.RequestedTag != "" && !meta.TagClaimCanceled {
+			m.restoreRequestedTag(ref.Repository(), meta.RequestedTag, digestHex, meta.TagGeneration)
 		}
-		m.requestedTags[key] = strings.TrimPrefix(meta.Digest, "sha256:")
+		for _, claim := range meta.TagClaims {
+			m.restoreRequestedTag(claim.Repository, claim.Tag, digestHex, claim.TagGeneration)
+		}
 	}
+}
+
+func (m *manager) restoreRequestedTag(repository, tag, digestHex string, generation uint64) {
+	if tag == "" {
+		return
+	}
+	key := tagGenerationKey(repository, tag)
+	if generation > m.tagGenerations[key] {
+		m.tagGenerations[key] = generation
+	}
+	m.requestedTags[key] = digestHex
 }
 
 func (m *manager) claimTagForStatus(meta *imageMetadata, ref *ResolvedRef) error {
@@ -89,7 +94,37 @@ func (m *manager) claimTagForStatus(meta *imageMetadata, ref *ResolvedRef) error
 	// Keep the existing tag visible until the build succeeds, but remember this
 	// digest as the newest request for the tag. Finalization will claim it along
 	// with every other tag waiting for the same digest.
-	m.nextTagGeneration(ref.Repository(), ref.Tag())
+	if meta.RequestedTag == ref.Tag() && strings.HasPrefix(meta.Name, ref.Repository()+":") {
+		wasCanceled := meta.TagClaimCanceled
+		meta.TagClaimCanceled = false
+		m.trackRequestedTag(ref.Repository(), ref.Tag(), ref.DigestHex())
+		if wasCanceled {
+			return writeMetadata(m.paths, ref.Repository(), ref.DigestHex(), meta)
+		}
+		return nil
+	}
+	for _, claim := range meta.TagClaims {
+		if claim.Repository == ref.Repository() && claim.Tag == ref.Tag() {
+			m.restoreRequestedTag(claim.Repository, claim.Tag, ref.DigestHex(), claim.TagGeneration)
+			return nil
+		}
+	}
+	previous, err := resolveTag(m.paths, ref.Repository(), ref.Tag())
+	if err != nil && !errors.Is(err, ErrNotFound) {
+		return err
+	}
+	generation := m.nextTagGeneration(ref.Repository(), ref.Tag())
+	meta.TagClaims = append(meta.TagClaims, imageTagClaim{
+		Repository:        ref.Repository(),
+		Tag:               ref.Tag(),
+		PreviousTagDigest: previous,
+		TagGeneration:     generation,
+	})
+	if err := writeMetadata(m.paths, ref.Repository(), ref.DigestHex(), meta); err != nil {
+		m.revertTagGeneration(ref.Repository(), ref.Tag())
+		meta.TagClaims = meta.TagClaims[:len(meta.TagClaims)-1]
+		return err
+	}
 	m.trackRequestedTag(ref.Repository(), ref.Tag(), ref.DigestHex())
 	return nil
 }
@@ -124,6 +159,42 @@ func (m *manager) clearRequestedDigest(digestHex string) {
 	}
 }
 
+func (m *manager) cancelPendingTag(repository, tag string) error {
+	metas, err := listAllMetadata(m.paths)
+	if err != nil {
+		return err
+	}
+	for _, meta := range metas {
+		if meta.Status != StatusPending && meta.Status != StatusPulling && meta.Status != StatusConverting {
+			continue
+		}
+		ref, err := ParseNormalizedRef(meta.Name)
+		if err != nil {
+			continue
+		}
+		changed := false
+		if ref.Repository() == repository && meta.RequestedTag == tag {
+			meta.TagClaimCanceled = true
+			changed = true
+		}
+		claims := meta.TagClaims[:0]
+		for _, claim := range meta.TagClaims {
+			if claim.Repository == repository && claim.Tag == tag {
+				changed = true
+				continue
+			}
+			claims = append(claims, claim)
+		}
+		meta.TagClaims = claims
+		if changed {
+			if err := writeMetadata(m.paths, ref.Repository(), strings.TrimPrefix(meta.Digest, "sha256:"), meta); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func (m *manager) requestedTagImage(ref *NormalizedRef) *Image {
 	m.createMu.Lock()
 	digestHex, ok := m.requestedTags[tagGenerationKey(ref.Repository(), ref.Tag())]
@@ -136,24 +207,6 @@ func (m *manager) requestedTagImage(ref *NormalizedRef) *Image {
 		return nil
 	}
 	return meta.toImageFor(ref.String())
-}
-
-func (m *manager) claimRequestedTag(ref *ResolvedRef, meta *imageMetadata) bool {
-	tag := meta.RequestedTag
-	allowMissing := tag == ""
-	if allowMissing {
-		tag = ref.Tag()
-	}
-	if !m.tagClaimIsCurrent(ref.Repository(), tag, ref.DigestHex(), meta, allowMissing) {
-		m.clearRequestedTag(ref.Repository(), tag, ref.DigestHex())
-		return false
-	}
-	if err := createTagSymlink(m.paths, ref.Repository(), tag, ref.DigestHex()); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to create tag symlink: %v\n", err)
-		return false
-	}
-	m.clearRequestedTag(ref.Repository(), tag, ref.DigestHex())
-	return true
 }
 
 func (m *manager) claimRequestedTags(ref *ResolvedRef, meta *imageMetadata) bool {
@@ -169,7 +222,7 @@ func (m *manager) claimRequestedTags(ref *ResolvedRef, meta *imageMetadata) bool
 		}
 		repository, tag := key[:separator], key[separator+1:]
 		if err := createTagSymlink(m.paths, repository, tag, digestHex); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to create tag symlink: %v\n", err)
+			slog.Warn("failed to claim image tag", "repository", repository, "tag", tag, "digest", digestHex, "error", err)
 			continue
 		}
 		delete(m.requestedTags, key)
@@ -182,11 +235,11 @@ func (m *manager) claimRequestedTags(ref *ResolvedRef, meta *imageMetadata) bool
 	if primaryTag == "" {
 		primaryTag = ref.Tag()
 	}
-	primaryKey := tagGenerationKey(ref.Repository(), primaryTag)
-	if primaryTag != "" {
+	if primaryTag != "" && !meta.TagClaimCanceled {
+		primaryKey := tagGenerationKey(ref.Repository(), primaryTag)
 		if _, hasRequest := m.requestedTags[primaryKey]; !hasRequest && m.tagClaimIsCurrent(ref.Repository(), primaryTag, digestHex, meta, meta.RequestedTag == "") {
 			if err := createTagSymlink(m.paths, ref.Repository(), primaryTag, digestHex); err != nil {
-				fmt.Fprintf(os.Stderr, "Warning: failed to create tag symlink: %v\n", err)
+				slog.Warn("failed to claim image tag", "repository", ref.Repository(), "tag", primaryTag, "digest", digestHex, "error", err)
 			} else {
 				claimed = true
 			}
@@ -229,6 +282,9 @@ func (m *manager) TagImage(ctx context.Context, source, target string) (*Image, 
 	digestHex, meta, err := m.readyTagImage(sourceRef)
 	if err != nil {
 		return nil, err
+	}
+	if err := m.cancelPendingTag(targetRef.Repository(), targetRef.Tag()); err != nil {
+		return nil, fmt.Errorf("cancel pending image tag: %w", err)
 	}
 	if err := m.installTag(sourceRef, targetRef, digestHex, meta); err != nil {
 		return nil, err

@@ -156,11 +156,52 @@ func TestStaleTagClaimCollectsContent(t *testing.T) {
 	meta.RequestedTag = "latest"
 	meta.TagGeneration = 1
 
-	require.False(t, m.claimRequestedTag(ref, meta))
+	require.False(t, m.claimRequestedTags(ref, meta))
 	m.cleanupUnclaimedImage(ref)
 
 	_, err = os.Stat(p.ImageContentDir(digest))
 	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestDeletingPendingTagDoesNotReclaimIt(t *testing.T) {
+	p, m, repository := newTagTestCase(t)
+	oldDigest := strings.Repeat("a1", 32)
+	newDigest := strings.Repeat("b2", 32)
+	seedContent(t, p, repository, "latest", oldDigest)
+
+	pending := &imageMetadata{
+		Name: repository + ":latest", Digest: "sha256:" + newDigest,
+		Status: StatusPending, RequestedTag: "latest", TagGeneration: 1,
+		PreviousTagDigest: oldDigest, CreatedAt: time.Now().UTC(),
+	}
+	require.NoError(t, os.MkdirAll(p.ImageContentDir(newDigest), 0o755))
+	require.NoError(t, writeMetadataFile(p.ImageContentMetadata(newDigest), pending))
+	m.tagGenerations[tagGenerationKey(repository, "latest")] = 1
+	m.requestedTags = map[string]string{tagGenerationKey(repository, "latest"): newDigest}
+
+	require.NoError(t, m.DeleteImage(context.Background(), repository+":latest"))
+	pending, err := readContentMetadata(p, newDigest)
+	require.NoError(t, err)
+	require.True(t, pending.TagClaimCanceled)
+	ref, err := ParseNormalizedRef(repository + ":latest")
+	require.NoError(t, err)
+	require.False(t, m.claimRequestedTags(NewResolvedRef(ref, "sha256:"+newDigest), pending))
+	_, err = resolveTag(p, repository, "latest")
+	require.ErrorIs(t, err, ErrNotFound)
+}
+
+func TestRestoreTagStateRestoresSecondaryClaims(t *testing.T) {
+	_, m, repository := newTagTestCase(t)
+	digest := strings.Repeat("c3", 32)
+	meta := &imageMetadata{
+		Name: repository + ":latest", Digest: "sha256:" + digest,
+		Status: StatusConverting, RequestedTag: "latest", TagGeneration: 1,
+		TagClaims: []imageTagClaim{{Repository: repository, Tag: "stable", TagGeneration: 2}},
+	}
+	m.restoreTagState([]*imageMetadata{meta})
+	require.Equal(t, digest, m.requestedTags[tagGenerationKey(repository, "latest")])
+	require.Equal(t, digest, m.requestedTags[tagGenerationKey(repository, "stable")])
+	require.Equal(t, uint64(2), m.tagGenerations[tagGenerationKey(repository, "stable")])
 }
 
 func TestPendingDigestClaimsAllRequestedTags(t *testing.T) {

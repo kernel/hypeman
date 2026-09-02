@@ -126,11 +126,18 @@ func parseSHA256Digest(value string) (digest.Digest, error) {
 }
 
 func writeManifestModel(p *paths.Paths, digestHex string, model *imageManifestModel) error {
+	return writeManifestModelAt(p.ImageContentManifestModel(digestHex), digestHex, model)
+}
+
+func writeManifestModelAt(path, digestHex string, model *imageManifestModel) error {
+	if err := validateManifestModel(digestHex, model); err != nil {
+		return err
+	}
 	data, err := json.MarshalIndent(model, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal manifest model: %w", err)
 	}
-	return writeJSONAtomic(p.ImageContentManifestModel(digestHex), data)
+	return writeJSONAtomic(path, data)
 }
 
 // readManifestModel loads the manifest model for a digest, if present.

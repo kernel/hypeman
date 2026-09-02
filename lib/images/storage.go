@@ -33,6 +33,15 @@ type imageMetadata struct {
 	RequestedTag      string              `json:"requested_tag,omitempty"`
 	PreviousTagDigest string              `json:"previous_tag_digest,omitempty"`
 	TagGeneration     uint64              `json:"tag_generation,omitempty"`
+	TagClaimCanceled  bool                `json:"tag_claim_canceled,omitempty"`
+	TagClaims         []imageTagClaim     `json:"tag_claims,omitempty"`
+}
+
+type imageTagClaim struct {
+	Repository        string `json:"repository"`
+	Tag               string `json:"tag"`
+	PreviousTagDigest string `json:"previous_tag_digest,omitempty"`
+	TagGeneration     uint64 `json:"tag_generation,omitempty"`
 }
 
 func (m *imageMetadata) toImageFor(reference string) *Image {

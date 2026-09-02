@@ -119,9 +119,10 @@ func NewManager(p *paths.Paths, maxConcurrentBuilds int, meter metric.Meter) (Ma
 	}
 
 	m.RecoverInterruptedBuilds()
-	// Legacy images remain in place until a later operation needs to promote
-	// their content. This keeps startup reads available even if migration work
-	// cannot complete.
+	// Keep legacy images readable in their existing layout and promote them only
+	// when an operation needs shared content, such as a cross-repository tag.
+	// Avoiding a startup-wide migration keeps startup bounded and independent of
+	// migration success.
 	return m, nil
 }
 
@@ -265,7 +266,7 @@ func (m *manager) reuseExistingImage(ref *ResolvedRef, credentials *authn.AuthCo
 		}
 		return nil, false, nil
 	}
-	if ref.Tag() != "" && meta.Status != StatusReady {
+	if meta.Status != StatusReady {
 		// A pending pull with different credentials does not get to point
 		// the tag at its digest or update its labels.
 		if !m.inflightCredentialsMatch(ref.Digest(), credentials) {
@@ -551,11 +552,15 @@ func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, diskSize i
 	}
 
 	diskInstalled := false
+	modelPath := m.paths.ImageContentManifestModel(ref.DigestHex())
+	if !layout.content {
+		modelPath = filepath.Join(layout.dir, "manifest.json")
+	}
 	modelWritten := false
 	rollback := func(cause error) error {
 		var rollbackErr error
 		if modelWritten {
-			rollbackErr = errors.Join(rollbackErr, os.Remove(m.paths.ImageContentManifestModel(ref.DigestHex())))
+			rollbackErr = errors.Join(rollbackErr, os.Remove(modelPath))
 		}
 		if diskInstalled {
 			rollbackErr = errors.Join(rollbackErr, os.Remove(layout.disk))
@@ -579,7 +584,7 @@ func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, diskSize i
 	if result.Manifest != nil {
 		model := *result.Manifest
 		model.Platform = actualPlatform.String()
-		if err := writeManifestModel(m.paths, ref.DigestHex(), &model); err != nil {
+		if err := writeManifestModelAt(modelPath, ref.DigestHex(), &model); err != nil {
 			return rollback(fmt.Errorf("write manifest model: %w", err))
 		}
 		modelWritten = true
@@ -760,10 +765,19 @@ func (m *manager) DeleteImage(ctx context.Context, name string) error {
 		if _, err := readMetadata(m.paths, repository, digestHex); err != nil {
 			return err
 		}
+		tags, err := tagsForDigest(m.paths, repository, digestHex)
+		if err != nil {
+			return err
+		}
 		if err := deleteTagsForDigest(m.paths, repository, digestHex); err != nil {
 			return err
 		}
-		m.pruneTagGenerations()
+		for _, tag := range tags {
+			m.forgetTagState(repository, tag)
+			if err := m.cancelPendingTag(repository, tag); err != nil {
+				return fmt.Errorf("cancel pending image tag: %w", err)
+			}
+		}
 		if err := removeDigestIfUnreferenced(m.paths, repository, digestHex, false); err != nil {
 			return err
 		}
@@ -784,8 +798,10 @@ func (m *manager) DeleteImage(ctx context.Context, name string) error {
 	if err := deleteTag(m.paths, repository, tag); err != nil {
 		return err
 	}
-	m.clearRequestedTag(repository, tag, digestHex)
-	m.pruneTagGenerations()
+	m.forgetTagState(repository, tag)
+	if err := m.cancelPendingTag(repository, tag); err != nil {
+		return fmt.Errorf("cancel pending image tag: %w", err)
+	}
 
 	// Check if the digest is now orphaned (no other tags reference it)
 	count, err := countTagsForDigest(m.paths, repository, digestHex)
