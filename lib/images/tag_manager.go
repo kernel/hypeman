@@ -165,34 +165,40 @@ func (m *manager) cancelPendingTag(repository, tag string) error {
 		return err
 	}
 	for _, meta := range metas {
-		if meta.Status != StatusPending && meta.Status != StatusPulling && meta.Status != StatusConverting {
+		if !isPendingImageStatus(meta.Status) {
 			continue
 		}
 		ref, err := ParseNormalizedRef(meta.Name)
-		if err != nil {
+		if err != nil || !cancelTagClaim(meta, ref, repository, tag) {
 			continue
 		}
-		changed := false
-		if ref.Repository() == repository && meta.RequestedTag == tag {
-			meta.TagClaimCanceled = true
-			changed = true
-		}
-		claims := meta.TagClaims[:0]
-		for _, claim := range meta.TagClaims {
-			if claim.Repository == repository && claim.Tag == tag {
-				changed = true
-				continue
-			}
-			claims = append(claims, claim)
-		}
-		meta.TagClaims = claims
-		if changed {
-			if err := writeMetadata(m.paths, ref.Repository(), strings.TrimPrefix(meta.Digest, "sha256:"), meta); err != nil {
-				return err
-			}
+		if err := writeMetadata(m.paths, ref.Repository(), strings.TrimPrefix(meta.Digest, "sha256:"), meta); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+func isPendingImageStatus(status string) bool {
+	return status == StatusPending || status == StatusPulling || status == StatusConverting
+}
+
+func cancelTagClaim(meta *imageMetadata, ref *NormalizedRef, repository, tag string) bool {
+	changed := false
+	if ref.Repository() == repository && meta.RequestedTag == tag {
+		meta.TagClaimCanceled = true
+		changed = true
+	}
+	claims := meta.TagClaims[:0]
+	for _, claim := range meta.TagClaims {
+		if claim.Repository == repository && claim.Tag == tag {
+			changed = true
+			continue
+		}
+		claims = append(claims, claim)
+	}
+	meta.TagClaims = claims
+	return changed
 }
 
 func (m *manager) requestedTagImage(ref *NormalizedRef) *Image {
@@ -211,6 +217,19 @@ func (m *manager) requestedTagImage(ref *NormalizedRef) *Image {
 
 func (m *manager) claimRequestedTags(ref *ResolvedRef, meta *imageMetadata) bool {
 	digestHex := ref.DigestHex()
+	claimed := m.claimMatchingTags(digestHex)
+	if m.claimPrimaryTag(ref, meta, digestHex) {
+		claimed = true
+	}
+	if claimed {
+		return true
+	}
+	// Digest-only images have no tag claim but must remain addressable by their
+	// digest after finalization.
+	return meta.RequestedTag == "" && ref.Tag() == ""
+}
+
+func (m *manager) claimMatchingTags(digestHex string) bool {
 	claimed := false
 	for key, requestedDigest := range m.requestedTags {
 		if requestedDigest != digestHex {
@@ -228,29 +247,29 @@ func (m *manager) claimRequestedTags(ref *ResolvedRef, meta *imageMetadata) bool
 		delete(m.requestedTags, key)
 		claimed = true
 	}
+	return claimed
+}
 
-	// Older metadata did not persist RequestedTag or a requestedTags entry. Keep
-	// those recovered builds addressable by falling back to the build reference.
+func (m *manager) claimPrimaryTag(ref *ResolvedRef, meta *imageMetadata, digestHex string) bool {
+	if meta.TagClaimCanceled {
+		return false
+	}
 	primaryTag := meta.RequestedTag
 	if primaryTag == "" {
 		primaryTag = ref.Tag()
 	}
-	if primaryTag != "" && !meta.TagClaimCanceled {
-		primaryKey := tagGenerationKey(ref.Repository(), primaryTag)
-		if _, hasRequest := m.requestedTags[primaryKey]; !hasRequest && m.tagClaimIsCurrent(ref.Repository(), primaryTag, digestHex, meta, meta.RequestedTag == "") {
-			if err := createTagSymlink(m.paths, ref.Repository(), primaryTag, digestHex); err != nil {
-				slog.Warn("failed to claim image tag", "repository", ref.Repository(), "tag", primaryTag, "digest", digestHex, "error", err)
-			} else {
-				claimed = true
-			}
-		}
+	if primaryTag == "" {
+		return false
 	}
-	if claimed {
-		return true
+	primaryKey := tagGenerationKey(ref.Repository(), primaryTag)
+	if _, hasRequest := m.requestedTags[primaryKey]; hasRequest || !m.tagClaimIsCurrent(ref.Repository(), primaryTag, digestHex, meta, meta.RequestedTag == "") {
+		return false
 	}
-	// Digest-only images have no tag claim but must remain addressable by their
-	// digest after finalization.
-	return meta.RequestedTag == "" && ref.Tag() == ""
+	if err := createTagSymlink(m.paths, ref.Repository(), primaryTag, digestHex); err != nil {
+		slog.Warn("failed to claim image tag", "repository", ref.Repository(), "tag", primaryTag, "digest", digestHex, "error", err)
+		return false
+	}
+	return true
 }
 
 func (m *manager) tagClaimIsCurrent(repository, tag, digest string, meta *imageMetadata, allowMissing bool) bool {

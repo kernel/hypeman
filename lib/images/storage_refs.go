@@ -81,93 +81,122 @@ func promoteLegacyImages(p *paths.Paths, refs []legacyRef) {
 	}
 }
 
+type metadataIndex struct {
+	seen                 map[string]struct{}
+	contentDigests       map[string]struct{}
+	taggedDigests        map[string]struct{}
+	taggedContentDigests map[string]struct{}
+	metadataRefs         []metadataReference
+	seenMetadataRefs     map[string]struct{}
+	metas                []*imageMetadata
+}
+
 func listAllMetadata(p *paths.Paths) ([]*imageMetadata, error) {
-	imagesDir := p.ImagesDir()
-	seen := make(map[string]struct{})
-	contentDigests := make(map[string]struct{})
-	taggedDigests := make(map[string]struct{})
-	taggedContentDigests := make(map[string]struct{})
-	metadataRefs := make([]metadataReference, 0)
-	seenMetadataRefs := make(map[string]struct{})
-	metas := make([]*imageMetadata, 0)
-
-	err := filepath.Walk(imagesDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return nil // Skip errors
-		}
-		rel, err := filepath.Rel(imagesDir, path)
-		if err != nil {
-			return nil
-		}
-		parts := strings.Split(rel, string(filepath.Separator))
-		if len(parts) > 0 && parts[0] == "content" {
-			if info.IsDir() {
-				return nil
-			}
-			if info.Name() != "metadata.json" {
-				return nil
-			}
-			digestHex := filepath.Base(filepath.Dir(path))
-			contentDigests[digestHex] = struct{}{}
-			return nil
-		}
-
-		switch {
-		case info.Mode()&os.ModeSymlink != 0:
-			digestHex, err := os.Readlink(path)
-			if err != nil {
-				return nil // Skip invalid symlinks
-			}
-			digestHex = filepath.Base(digestHex)
-
-			var repository, tag string
-			if len(parts) > 1 && parts[0] == "repositories" {
-				repository = filepath.Join(parts[1 : len(parts)-1]...)
-				tag = parts[len(parts)-1]
-			} else {
-				repository = filepath.Dir(rel)
-				tag = filepath.Base(path)
-			}
-			return appendMetadataForTag(p, repository, tag, digestHex, seen, taggedDigests, taggedContentDigests, &metas)
-		case !info.IsDir() && info.Name() == "metadata.json":
-			digestHex := filepath.Base(filepath.Dir(path))
-			repository, err := filepath.Rel(imagesDir, filepath.Dir(filepath.Dir(path)))
-			if err != nil {
-				return nil
-			}
-			key := repository + "@" + digestHex
-			if _, ok := seenMetadataRefs[key]; !ok {
-				seenMetadataRefs[key] = struct{}{}
-				metadataRefs = append(metadataRefs, metadataReference{repository: repository, digestHex: digestHex})
-			}
-			return nil
-		default:
-			return nil
-		}
-	})
-
-	if err != nil && !os.IsNotExist(err) {
-		return nil, fmt.Errorf("walk images directory: %w", err)
+	index := metadataIndex{
+		seen:                 make(map[string]struct{}),
+		contentDigests:       make(map[string]struct{}),
+		taggedDigests:        make(map[string]struct{}),
+		taggedContentDigests: make(map[string]struct{}),
+		metadataRefs:         make([]metadataReference, 0),
+		seenMetadataRefs:     make(map[string]struct{}),
+		metas:                make([]*imageMetadata, 0),
 	}
-	seenDigests := make(map[string]struct{}, len(metas))
-	for _, ref := range metadataRefs {
-		if _, tagged := taggedDigests[ref.repository+"@"+ref.digestHex]; tagged {
+	if err := index.walk(p); err != nil {
+		return nil, err
+	}
+	index.appendUnreferenced(p)
+	return index.metas, nil
+}
+
+func (i *metadataIndex) walk(p *paths.Paths) error {
+	imagesDir := p.ImagesDir()
+	err := filepath.Walk(imagesDir, func(path string, info os.FileInfo, err error) error {
+		return i.visit(p, imagesDir, path, info, err)
+	})
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("walk images directory: %w", err)
+	}
+	return nil
+}
+
+func (i *metadataIndex) visit(p *paths.Paths, imagesDir, path string, info os.FileInfo, walkErr error) error {
+	if walkErr != nil {
+		return nil
+	}
+	rel, err := filepath.Rel(imagesDir, path)
+	if err != nil {
+		return nil
+	}
+	parts := strings.Split(rel, string(filepath.Separator))
+	if len(parts) > 0 && parts[0] == "content" {
+		return i.visitContent(path, info)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return i.visitTag(p, path, rel, parts)
+	}
+	if !info.IsDir() && info.Name() == "metadata.json" {
+		i.recordMetadataRef(imagesDir, path)
+	}
+	return nil
+}
+
+func (i *metadataIndex) visitContent(path string, info os.FileInfo) error {
+	if info.IsDir() || info.Name() != "metadata.json" {
+		return nil
+	}
+	i.contentDigests[filepath.Base(filepath.Dir(path))] = struct{}{}
+	return nil
+}
+
+func (i *metadataIndex) visitTag(p *paths.Paths, path, rel string, parts []string) error {
+	digestHex, err := os.Readlink(path)
+	if err != nil {
+		return nil
+	}
+	digestHex = filepath.Base(digestHex)
+	var repository, tag string
+	if len(parts) > 1 && parts[0] == "repositories" {
+		repository = filepath.Join(parts[1 : len(parts)-1]...)
+		tag = parts[len(parts)-1]
+	} else {
+		repository = filepath.Dir(rel)
+		tag = filepath.Base(path)
+	}
+	return appendMetadataForTag(p, repository, tag, digestHex, i.seen, i.taggedDigests, i.taggedContentDigests, &i.metas)
+}
+
+func (i *metadataIndex) recordMetadataRef(imagesDir, path string) {
+	digestHex := filepath.Base(filepath.Dir(path))
+	repository, err := filepath.Rel(imagesDir, filepath.Dir(filepath.Dir(path)))
+	if err != nil {
+		return
+	}
+	key := repository + "@" + digestHex
+	if _, ok := i.seenMetadataRefs[key]; ok {
+		return
+	}
+	i.seenMetadataRefs[key] = struct{}{}
+	i.metadataRefs = append(i.metadataRefs, metadataReference{repository: repository, digestHex: digestHex})
+}
+
+func (i *metadataIndex) appendUnreferenced(p *paths.Paths) {
+	seenDigests := make(map[string]struct{}, len(i.metas))
+	for _, ref := range i.metadataRefs {
+		if _, tagged := i.taggedDigests[ref.repository+"@"+ref.digestHex]; tagged {
 			continue
 		}
-		appendMetadataIfNew(p, ref.repository, ref.digestHex, seen, &metas)
+		appendMetadataIfNew(p, ref.repository, ref.digestHex, i.seen, &i.metas)
 		seenDigests[ref.digestHex] = struct{}{}
 	}
-	for digestHex := range contentDigests {
-		if _, found := taggedContentDigests[digestHex]; found {
+	for digestHex := range i.contentDigests {
+		if _, found := i.taggedContentDigests[digestHex]; found {
 			continue
 		}
 		if _, found := seenDigests[digestHex]; found {
 			continue
 		}
-		appendContentMetadataIfNew(p, digestHex, seen, &metas)
+		appendContentMetadataIfNew(p, digestHex, i.seen, &i.metas)
 	}
-
-	return metas, nil
 }
 
 type metadataReference struct {

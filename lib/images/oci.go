@@ -428,6 +428,17 @@ func (c *ociClient) extractOCIImageBundle(layoutTag string) (*ociImageBundle, er
 		return nil, fmt.Errorf("get config digest: %w", err)
 	}
 
+	meta := containerMetadataFromConfig(configFile)
+	model, compressedBytes := manifestModelFromImage(layoutTag, configFile, manifest, configDigest)
+	return &ociImageBundle{
+		Meta:            meta,
+		Model:           model,
+		LayerCount:      len(manifest.Layers),
+		CompressedBytes: compressedBytes,
+	}, nil
+}
+
+func containerMetadataFromConfig(configFile *gcr.ConfigFile) *containerMetadata {
 	meta := &containerMetadata{
 		OS:           configFile.OS,
 		Architecture: configFile.Architecture,
@@ -438,21 +449,18 @@ func (c *ociClient) extractOCIImageBundle(layoutTag string) (*ociImageBundle, er
 		Labels:       make(map[string]string),
 		WorkingDir:   configFile.Config.WorkingDir,
 	}
-	// Parse environment variables
 	for _, env := range configFile.Config.Env {
-		for i := 0; i < len(env); i++ {
-			if env[i] == '=' {
-				key := env[:i]
-				val := env[i+1:]
-				meta.Env[key] = val
-				break
-			}
+		if key, value, ok := strings.Cut(env, "="); ok {
+			meta.Env[key] = value
 		}
 	}
 	for key, value := range configFile.Config.Labels {
 		meta.Labels[key] = value
 	}
+	return meta
+}
 
+func manifestModelFromImage(layoutTag string, configFile *gcr.ConfigFile, manifest *gcr.Manifest, configDigest gcr.Hash) (*imageManifestModel, int64) {
 	model := &imageManifestModel{
 		SchemaVersion: manifestModelSchemaVersion,
 		Digest:        digestFromHex(layoutTag),
@@ -486,12 +494,7 @@ func (c *ociClient) extractOCIImageBundle(layoutTag string) (*ociImageBundle, er
 		}
 		model.Layers = append(model.Layers, layer)
 	}
-	return &ociImageBundle{
-		Meta:            meta,
-		Model:           model,
-		LayerCount:      len(manifest.Layers),
-		CompressedBytes: compressedBytes,
-	}, nil
+	return model, compressedBytes
 }
 
 // unpackLayers unpacks all OCI layers to a target directory using umoci
