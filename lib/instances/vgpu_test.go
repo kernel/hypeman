@@ -120,9 +120,11 @@ func TestSelectVendorVFIOVFFailsClosedOnClaimedVF(t *testing.T) {
 	profiles := map[string][]devices.VGPUProfileType{
 		"0000:82:00.4": {{TypeName: testVFProfileType, Name: testVGPUProfile, FramebufferMB: 2048}},
 	}
-	_, _, err := selectVendorVFIOVF(vfs, profiles, []StoredMetadata{{
-		GPUDevicePath: testVFDevicePath,
-	}}, nil, testVGPUProfile, nil)
+	_, _, err := selectVendorVFIOVF(vendorVFIOCandidates{
+		vfs:          vfs,
+		profilesByVF: profiles,
+		claims:       []StoredMetadata{{GPUDevicePath: testVFDevicePath}},
+	}, testVGPUProfile, nil)
 	require.ErrorContains(t, err, "no available VF")
 }
 
@@ -145,11 +147,11 @@ func TestSelectVendorVFIOVFSkipsQuarantinedVF(t *testing.T) {
 	}
 	quarantined := map[string]struct{}{"0000:82:00.4": {}}
 
-	vf, _, err := selectVendorVFIOVF(vfs, testVFProfiles("0000:82:00.4", "0000:82:00.5"), nil, quarantined, testVGPUProfile, pickFirst)
+	vf, _, err := selectVendorVFIOVF(vendorVFIOCandidates{vfs: vfs, profilesByVF: testVFProfiles("0000:82:00.4", "0000:82:00.5"), quarantined: quarantined}, testVGPUProfile, pickFirst)
 	require.NoError(t, err)
 	assert.Equal(t, "0000:82:00.5", vf)
 
-	_, _, err = selectVendorVFIOVF(vfs[:1], testVFProfiles("0000:82:00.4"), nil, quarantined, testVGPUProfile, pickFirst)
+	_, _, err = selectVendorVFIOVF(vendorVFIOCandidates{vfs: vfs[:1], profilesByVF: testVFProfiles("0000:82:00.4"), quarantined: quarantined}, testVGPUProfile, pickFirst)
 	require.ErrorContains(t, err, "no available VF")
 }
 
@@ -163,7 +165,7 @@ func TestSelectVendorVFIOVFAvoidsGPUWithQuarantinedVF(t *testing.T) {
 	}
 	quarantined := map[string]struct{}{"0000:82:00.4": {}}
 
-	vf, _, err := selectVendorVFIOVF(vfs, testVFProfiles("0000:82:00.4", "0000:82:00.5", "0000:e3:00.4"), nil, quarantined, testVGPUProfile, pickFirst)
+	vf, _, err := selectVendorVFIOVF(vendorVFIOCandidates{vfs: vfs, profilesByVF: testVFProfiles("0000:82:00.4", "0000:82:00.5", "0000:e3:00.4"), quarantined: quarantined}, testVGPUProfile, pickFirst)
 	require.NoError(t, err)
 	assert.Equal(t, "0000:e3:00.4", vf)
 }
@@ -179,7 +181,7 @@ func TestSelectVendorVFIOVFPicksAmongEquivalentFreeVFs(t *testing.T) {
 		return n - 1
 	}
 
-	vf, _, err := selectVendorVFIOVF(vfs, testVFProfiles("0000:82:00.4", "0000:82:00.5"), nil, nil, testVGPUProfile, pick)
+	vf, _, err := selectVendorVFIOVF(vendorVFIOCandidates{vfs: vfs, profilesByVF: testVFProfiles("0000:82:00.4", "0000:82:00.5")}, testVGPUProfile, pick)
 	require.NoError(t, err)
 	assert.Equal(t, 2, offered)
 	assert.Equal(t, "0000:82:00.5", vf)
@@ -199,12 +201,12 @@ func TestSelectVendorVFIOVFRandomizesOnlyAmongCleanVFs(t *testing.T) {
 		return n - 1
 	}
 
-	vf, _, err := selectVendorVFIOVF(vfs, testVFProfiles("0000:82:00.5", "0000:82:00.6"), nil, nil, testVGPUProfile, pick)
+	vf, _, err := selectVendorVFIOVF(vendorVFIOCandidates{vfs: vfs, profilesByVF: testVFProfiles("0000:82:00.5", "0000:82:00.6")}, testVGPUProfile, pick)
 	require.NoError(t, err)
 	assert.Equal(t, 2, offered)
 	assert.Equal(t, "0000:82:00.6", vf)
 
-	vf, _, err = selectVendorVFIOVF(vfs[:1], testVFProfiles("0000:82:00.4"), nil, nil, testVGPUProfile, pickLast)
+	vf, _, err = selectVendorVFIOVF(vendorVFIOCandidates{vfs: vfs[:1], profilesByVF: testVFProfiles("0000:82:00.4")}, testVGPUProfile, pickLast)
 	require.NoError(t, err)
 	assert.Equal(t, "0000:82:00.4", vf)
 }
@@ -229,13 +231,13 @@ func TestSelectVendorVFIOVFPrefersGPUWithKnownLoad(t *testing.T) {
 		{GPUProfile: testVGPUProfile, GPUDevicePath: "/sys/bus/pci/devices/0000:e3:00.4"},
 	}
 
-	vf, profileType, err := selectVendorVFIOVF(vfs, profiles, claims, nil, testVGPUProfile, nil)
+	vf, profileType, err := selectVendorVFIOVF(vendorVFIOCandidates{vfs: vfs, profilesByVF: profiles, claims: claims}, testVGPUProfile, nil)
 	require.NoError(t, err)
 	assert.Equal(t, "0000:e3:00.5", vf)
 	assert.Equal(t, testVFProfileType, profileType)
 
 	// With no alternative, the GPU with unknown load is still used.
-	vf, _, err = selectVendorVFIOVF(vfs[:2], profiles, claims[:1], nil, testVGPUProfile, nil)
+	vf, _, err = selectVendorVFIOVF(vendorVFIOCandidates{vfs: vfs[:2], profilesByVF: profiles, claims: claims[:1]}, testVGPUProfile, nil)
 	require.NoError(t, err)
 	assert.Equal(t, "0000:82:00.5", vf)
 }
