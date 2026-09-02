@@ -506,3 +506,25 @@
   - Run 2: `443s`
   - Run 3: `369s`
 - Full command used `go test -count=1 -tags containers_image_openpgp -timeout=20m ./...` with the CI prewarm directory, registry mirror, reflink strict mode, and `/ci` scratch path.
+
+## 2026-09-02 - Current main network cleanup flake
+
+### Flake signature
+- Main Linux CI failed `TestCreateInstanceWithNetwork` while validating orphaned bridge tc cleanup.
+- The test created a live and stale tc class/filter pair, then observed `CleanupOrphanedClasses` return `0` instead of at least `2`.
+- The surrounding CI log reported `skipping orphaned tc cleanup: failed to list links error="results may be incomplete or inconsistent"`.
+
+### Root cause
+- `netlink.LinkList` can return `netlink.ErrDumpInterrupted` while parallel tests are creating and deleting TAP devices. `CleanupOrphanedClasses` treated that transient, incomplete dump as a permanent cleanup skip, making the test assertion fail.
+
+### Fix
+- Added bounded retry handling for interrupted netlink link dumps.
+- Applied it to both orphaned tc-class cleanup and orphaned TAP cleanup.
+
+### Validation
+- `go test ./lib/network` passed locally after the change.
+- Targeted `TestCreateInstanceWithNetwork` passed 5 times on the Linux KVM runner.
+- Full no-cache Linux suite passed three consecutive times after the change:
+  - Run 1: `356s`
+  - Run 2: `423s`
+  - Run 3: `458s`
