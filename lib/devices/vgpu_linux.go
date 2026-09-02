@@ -58,28 +58,34 @@ func CreateVGPU(ctx context.Context, profileName, instanceID string) (*VGPUDevic
 	if err != nil {
 		return nil, err
 	}
-	switch framework {
-	case VGPUFrameworkMdev:
-		mdev, err := CreateMdev(ctx, profileName, instanceID)
-		if err != nil {
-			return nil, err
-		}
-		return &VGPUDevice{
-			Framework:   VGPUFrameworkMdev,
-			VFAddress:   mdev.VFAddress,
-			ProfileType: mdev.ProfileType,
-			ProfileName: mdev.ProfileName,
-			SysfsPath:   mdev.SysfsPath,
-			MdevUUID:    mdev.UUID,
-		}, nil
-	case VGPUFrameworkVendorVFIO:
-		// The instance lifecycle does not yet persist vendor VFIO assignments
-		// durably or guard their release against live claims, so keep the
-		// backend out of the create path until that integration lands.
-		return nil, fmt.Errorf("vendor VFIO vGPU support is not yet integrated with the instance lifecycle")
-	default:
+	if framework == VGPUFrameworkVendorVFIO {
+		return nil, fmt.Errorf("vendor VFIO vGPU requires a metadata claim")
+	}
+	if framework != VGPUFrameworkMdev {
 		return nil, fmt.Errorf("vGPU framework not available")
 	}
+	mdev, err := CreateMdev(ctx, profileName, instanceID)
+	if err != nil {
+		return nil, err
+	}
+	return &VGPUDevice{
+		Framework:   VGPUFrameworkMdev,
+		VFAddress:   mdev.VFAddress,
+		ProfileType: mdev.ProfileType,
+		ProfileName: mdev.ProfileName,
+		SysfsPath:   mdev.SysfsPath,
+		MdevUUID:    mdev.UUID,
+	}, nil
+}
+
+// ListVendorVFIOProfileTypes returns the profiles advertised by each VF.
+func ListVendorVFIOProfileTypes(vfs []VirtualFunction) (map[string][]VGPUProfileType, error) {
+	return hostVendorVFIO.profileTypes(vfs)
+}
+
+// ConfigureVGPU idempotently configures a claimed vendor VFIO VF.
+func ConfigureVGPU(ctx context.Context, vfAddress, profileType string) error {
+	return hostVendorVFIO.configure(ctx, vfAddress, profileType)
 }
 
 func DestroyVGPU(ctx context.Context, assignment VGPUAssignment) error {
@@ -107,6 +113,17 @@ func DestroyVGPU(ctx context.Context, assignment VGPUAssignment) error {
 	}
 }
 
+func mdevReconcileInfos(protectedDevicePaths map[string]struct{}) []MdevReconcileInfo {
+	instanceInfos := make([]MdevReconcileInfo, 0, len(protectedDevicePaths))
+	for devicePath := range protectedDevicePaths {
+		instanceInfos = append(instanceInfos, MdevReconcileInfo{
+			MdevUUID:  filepath.Base(devicePath),
+			IsRunning: true,
+		})
+	}
+	return instanceInfos
+}
+
 // ReconcileVGPUs releases orphaned vGPU assignments.
 func ReconcileVGPUs(ctx context.Context, protectedDevicePaths map[string]struct{}) error {
 	framework, _, err := DiscoverVGPU()
@@ -116,13 +133,9 @@ func ReconcileVGPUs(ctx context.Context, protectedDevicePaths map[string]struct{
 
 	switch framework {
 	case VGPUFrameworkMdev:
-		return ReconcileMdevs(ctx, nil)
+		return ReconcileMdevs(ctx, mdevReconcileInfos(protectedDevicePaths))
 	case VGPUFrameworkVendorVFIO:
-		if protectedDevicePaths == nil {
-			return nil
-		}
-		return hostVendorVFIO.reconcile(ctx, protectedDevicePaths)
-	default:
 		return nil
 	}
+	return nil
 }

@@ -12,6 +12,30 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestMdevReconcileInfosProtectClaimedDevicePath(t *testing.T) {
+	t.Parallel()
+
+	infos := mdevReconcileInfos(map[string]struct{}{
+		"/sys/bus/mdev/devices/claimed": {},
+	})
+
+	assert.Equal(t, []MdevReconcileInfo{{MdevUUID: "claimed", IsRunning: true}}, infos)
+}
+
+func TestProtectedMdevUUIDs(t *testing.T) {
+	t.Parallel()
+
+	protected := protectedMdevUUIDs([]MdevReconcileInfo{
+		{MdevUUID: "claimed", IsRunning: true},
+		{MdevUUID: "stale"},
+		{IsRunning: true},
+	})
+
+	assert.Contains(t, protected, "claimed")
+	assert.NotContains(t, protected, "stale")
+	assert.Len(t, protected, 1)
+}
+
 func TestDiscoverVGPUWithPropagatesMdevError(t *testing.T) {
 	t.Parallel()
 

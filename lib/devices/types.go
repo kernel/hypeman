@@ -100,15 +100,12 @@ type VGPUDevice struct {
 	MdevUUID    string
 }
 
-// VGPUCreateCleanupPendingError reports a failed create whose assignment could
-// not be rolled back. Device identifies the assignment that still needs release.
-type VGPUCreateCleanupPendingError struct {
-	Device VGPUDevice
-	Err    error
+// VGPUProfileType describes a driver profile that can be configured on a VF.
+type VGPUProfileType struct {
+	TypeName      string
+	Name          string
+	FramebufferMB int
 }
-
-func (e *VGPUCreateCleanupPendingError) Error() string { return e.Err.Error() }
-func (e *VGPUCreateCleanupPendingError) Unwrap() error { return e.Err }
 
 // MdevDevice represents an active mediated device (vGPU instance)
 type MdevDevice struct {

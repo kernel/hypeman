@@ -227,6 +227,7 @@ func buildQMPArgs(socketPath string) []string {
 type startedProcess struct {
 	pid          int
 	socketPath   string
+	termGrace    time.Duration
 	waitDone     chan error
 	waitConsumed bool
 	waitErr      error
@@ -277,18 +278,47 @@ func (p *startedProcess) wait() error {
 	return err
 }
 
+func (p *startedProcess) waitFor(d time.Duration) bool {
+	if _, exited := p.checkExited(); exited {
+		return true
+	}
+	select {
+	case err := <-p.waitDone:
+		p.waitConsumed = true
+		p.waitErr = err
+		return true
+	case <-time.After(d):
+		return false
+	}
+}
+
 func (p *startedProcess) cleanup() {
 	if _, exited := p.checkExited(); !exited {
-		_ = syscall.Kill(p.pid, syscall.SIGKILL)
-		_ = p.wait()
+		terminated := false
+		if p.termGrace > 0 {
+			if syscall.Kill(p.pid, syscall.SIGTERM) == nil {
+				terminated = p.waitFor(p.termGrace)
+			}
+		}
+		if !terminated {
+			_ = syscall.Kill(p.pid, syscall.SIGKILL)
+			_ = p.wait()
+		}
 	}
 	_ = os.Remove(p.socketPath)
+}
+
+func vfioTermGraceFor(cfg hypervisor.VMConfig) time.Duration {
+	if cfg.VGPUDevicePath != "" || len(cfg.PCIDevices) > 0 {
+		return hypervisor.VFIOTermGrace
+	}
+	return 0
 }
 
 // startQEMUProcess handles the common QEMU process startup logic.
 // Returns the PID, hypervisor client, and a cleanup function.
 // The cleanup function must be called on error; call cleanup.Release() on success.
-func (s *Starter) startQEMUProcess(ctx context.Context, p *paths.Paths, version string, socketPath string, args []string) (int, *QEMU, *cleanup.Cleanup, error) {
+func (s *Starter) startQEMUProcess(ctx context.Context, p *paths.Paths, version string, socketPath string, args []string, termGrace time.Duration) (int, *QEMU, *cleanup.Cleanup, error) {
 	log := logger.FromContext(ctx)
 	processAttrs := hypervisor.TraceAttributesFromContext(ctx)
 	processAttrs = append(processAttrs,
@@ -358,6 +388,7 @@ func (s *Starter) startQEMUProcess(ctx context.Context, p *paths.Paths, version 
 	}
 
 	pid := proc.pid
+	proc.termGrace = termGrace
 	log.DebugContext(processCtx, "QEMU process started", "pid", pid, "duration_ms", time.Since(processStartTime).Milliseconds())
 
 	// Setup cleanup to kill, reap, and remove the socket if subsequent steps fail.
@@ -474,7 +505,7 @@ func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, s
 			// Build command arguments: QMP socket + VM configuration
 			args := buildQMPArgs(socketPath)
 			args = append(args, buildArgs(attempt, machineType)...)
-			pid, hv, cu, err = s.startQEMUProcess(ctx, p, version, socketPath, args)
+			pid, hv, cu, err = s.startQEMUProcess(ctx, p, version, socketPath, args, vfioTermGraceFor(attempt))
 			if err == nil {
 				booted = attempt
 				started = true
@@ -609,7 +640,7 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 	incomingURI := "exec:cat < " + memoryFile
 	args = append(args, "-incoming", incomingURI)
 
-	pid, hv, cu, err := s.startQEMUProcess(ctx, p, version, socketPath, args)
+	pid, hv, cu, err := s.startQEMUProcess(ctx, p, version, socketPath, args, vfioTermGraceFor(config))
 	if err != nil {
 		return 0, nil, err
 	}

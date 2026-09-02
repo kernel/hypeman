@@ -90,14 +90,14 @@ On an mdev host, the response also includes the assigned mdev UUID:
 
 ### Ephemeral vGPU Lifecycle
 
-vGPU assignments are created on instance start and released on stop or delete. Hypeman creates/removes an mdev on mdev hosts and writes the profile ID/`0` to `current_vgpu_type` on vendor VFIO hosts.
+vGPU assignments are created on instance start and released on stop or delete. Hypeman creates/removes an mdev on mdev hosts. On vendor VFIO hosts, it first reserves a VF by persisting its path in instance metadata, then writes the profile ID to `current_vgpu_type`. Metadata is the authoritative VF claim.
 
 ```
-Instance Create → Assign profile to VF → Attach VF to VM → Instance Running
-Instance Stop/Delete → Release profile → VF available again
+Instance Create → Persist VF claim → Configure profile → Attach VF to VM → Instance Running
+Instance Stop/Delete → Reset profile → Remove VF claim → VF available again
 ```
 
-Hypeman reconciles orphaned assignments on server restart while preserving devices held open by a running VMM.
+Hypeman reconciles metadata claims once at startup and every minute afterward, skipping hosts without GPUs. A claim whose VMM is confirmed dead is reset before the claim is removed. mdev hosts also sweep orphaned device-level assignments. Vendor VFIO hosts repair an unclaimed dirty VF when the allocator next selects it; repair checks for open VFIO handles before resetting `current_vgpu_type`. The allocator prefers VFs that are already clean, and a dirty VF that refuses its reset is skipped in favor of another candidate.
 
 ### Hypervisor Support
 
@@ -288,10 +288,17 @@ every request, so one wedged VF presents as all vGPU instances failing while
 `/resources` reports full capacity.
 
 The wedge itself leaves no host-side log: no kernel error, no XID, no plugin
-crash. In the observed case it followed a period of heavy attach/teardown
-churn on the VF, including QEMU processes that exited within seconds of
-opening the VFIO device (failed start attempts that were then retried), so
-suspect any workload that repeatedly kills the VMM mid-device-init.
+crash. The trigger is a SIGKILL delivered to QEMU while the vGPU plugin is
+still initializing the VF (roughly the first seconds after process start):
+a single hard kill in that window wedges the VF near-deterministically,
+while QEMU processes that exit voluntarily — error exits, QMP quit, SIGTERM —
+run their VFIO teardown and never wedge, and hard kills of fully-initialized
+vGPU VMs are also safe. Hypeman therefore SIGTERMs a vGPU QEMU first and only
+escalates to SIGKILL after a grace period, both in start-failure cleanup and
+when force-killing any vGPU instance (the instance reports Running seconds
+before driver init completes, so no state reliably marks the window); a hard
+kill after an ignored SIGTERM logs `VF may wedge` with the device path.
+External SIGKILLs (OOM killer, manual `kill -9`) can still trigger it.
 
 Confirm by assigning the same profile on a different VF: if that guest
 initializes, the VF is wedged, not the driver stack. Remediate by cycling

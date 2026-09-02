@@ -56,7 +56,7 @@ func wrapCreateVGPUErr(profile string, err error) error {
 	if errors.Is(err, devices.ErrVGPUNotSupportedOnMacOS) {
 		return fmt.Errorf("%w: %w", ErrInvalidRequest, err)
 	}
-	return fmt.Errorf("create vGPU mdev for profile %s: %w", profile, err)
+	return fmt.Errorf("create vGPU for profile %s: %w", profile, err)
 }
 
 // generateVsockCID converts first 8 chars of instance ID to a unique CID
@@ -273,15 +273,16 @@ func (m *manager) createInstance(
 	var attachedDeviceIDs []string
 	var resolvedDeviceIDs []string
 	var gpuDevice *devices.VGPUDevice
-	var gpuProfile string
-	var gpuFramework devices.VGPUFramework
-	var gpuDevicePath string
-	var gpuMdevUUID string
-
-	// Setup cleanup stack early so device attachment errors trigger cleanup
+	gpuProfile := ""
+	if req.GPU != nil {
+		gpuProfile = req.GPU.Profile
+	}
+	cleanupInstanceData := true
 	cu := cleanup.Make(func() {
 		log.DebugContext(ctx, "cleaning up instance on error", "instance_id", id)
-		m.deleteInstanceData(id)
+		if cleanupInstanceData {
+			m.deleteInstanceData(id)
+		}
 	})
 	defer cu.Clean()
 
@@ -291,35 +292,6 @@ func (m *manager) createInstance(
 			for _, deviceID := range attachedDeviceIDs {
 				log.DebugContext(ctx, "detaching device on cleanup", "instance_id", id, "device", deviceID)
 				m.deviceManager.MarkDetached(ctx, deviceID)
-			}
-		})
-	}
-
-	// Handle vGPU profile request
-	if req.GPU != nil && req.GPU.Profile != "" {
-		log.InfoContext(ctx, "creating vGPU", "instance_id", id, "profile", req.GPU.Profile)
-		gpuDevice, err = devices.CreateVGPU(ctx, req.GPU.Profile, id)
-		if err != nil {
-			log.ErrorContext(ctx, "failed to create vGPU", "profile", req.GPU.Profile, "error", err)
-			return nil, wrapCreateVGPUErr(req.GPU.Profile, err)
-		}
-		gpuProfile = gpuDevice.ProfileName
-		gpuFramework = gpuDevice.Framework
-		gpuDevicePath = gpuDevice.SysfsPath
-		gpuMdevUUID = gpuDevice.MdevUUID
-		log.InfoContext(ctx, "created vGPU", "instance_id", id, "profile", gpuProfile, "uuid", gpuMdevUUID)
-
-		// Add vGPU cleanup to stack
-		cu.Add(func() {
-			log.DebugContext(ctx, "destroying vGPU on cleanup", "instance_id", id, "uuid", gpuDevice.MdevUUID)
-			assignment := devices.VGPUAssignment{
-				Framework:  gpuDevice.Framework,
-				DevicePath: gpuDevice.SysfsPath,
-				MdevUUID:   gpuDevice.MdevUUID,
-				InstanceID: id,
-			}
-			if err := devices.DestroyVGPU(ctx, assignment); err != nil {
-				log.WarnContext(ctx, "failed to destroy vGPU on cleanup", "instance_id", id, "uuid", gpuDevice.MdevUUID, "error", err)
 			}
 		})
 	}
@@ -393,9 +365,6 @@ func (m *manager) createInstance(
 		VsockSocket:              vsockSocket,
 		Devices:                  resolvedDeviceIDs,
 		GPUProfile:               gpuProfile,
-		GPUFramework:             gpuFramework,
-		GPUDevicePath:            gpuDevicePath,
-		GPUMdevUUID:              gpuMdevUUID,
 		Entrypoint:               req.Entrypoint,
 		Cmd:                      req.Cmd,
 		SkipKernelHeaders:        req.SkipKernelHeaders,
@@ -412,6 +381,33 @@ func (m *manager) createInstance(
 	if err := m.ensureDirectories(id); err != nil {
 		log.ErrorContext(ctx, "failed to create directories", "instance_id", id, "error", err)
 		return nil, fmt.Errorf("ensure directories: %w", err)
+	}
+
+	if gpuProfile != "" {
+		log.InfoContext(ctx, "claiming vGPU", "instance_id", id, "profile", gpuProfile)
+		claimMeta := &metadata{StoredMetadata: *stored}
+		gpuDevice, err = m.claimVGPU(ctx, claimMeta, gpuProfile)
+		if err != nil {
+			log.ErrorContext(ctx, "failed to claim vGPU", "profile", gpuProfile, "error", err)
+			return nil, wrapCreateVGPUErr(gpuProfile, err)
+		}
+		if gpuDevice.Framework == devices.VGPUFrameworkVendorVFIO {
+			*stored = claimMeta.StoredMetadata
+		} else {
+			setStoredVGPUDevice(stored, gpuDevice)
+		}
+		cu.Add(func() {
+			if !m.cleanupCreateVGPU(ctx, stored) {
+				cleanupInstanceData = false
+				log.ErrorContext(ctx, "retaining instance data for failed create because its vGPU claim could not be released; delete the instance to retry",
+					"instance_id", id, "device_path", storedVGPUDevicePath(stored))
+			}
+		})
+		if err := m.configureClaimedVGPU(ctx, gpuDevice); err != nil {
+			log.ErrorContext(ctx, "failed to configure vGPU", "profile", gpuProfile, "error", err)
+			return nil, wrapCreateVGPUErr(gpuProfile, err)
+		}
+		log.InfoContext(ctx, "configured vGPU", "instance_id", id, "profile", gpuProfile, "uuid", gpuDevice.MdevUUID)
 	}
 
 	// 13. Create overlay disk with specified size
