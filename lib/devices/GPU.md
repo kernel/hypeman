@@ -330,9 +330,10 @@ External SIGKILLs (OOM killer, manual `kill -9`) can still trigger it.
 Confirm by assigning the same profile on a different VF: if that guest
 initializes, the VF is wedged, not the driver stack. Remediate by cycling
 SR-IOV on the parent GPU (this destroys and recreates all of its VFs, so it
-requires no vGPU assignments on that GPU). The DCGM quiesce is not optional:
-with `nv-hostengine`/`dcgm-exporter` holding the GPUs open, `sriov-manage -d`
-fails with `Cannot obtain unbindLock` on first contact.
+requires no vGPU assignments on that GPU). Quiescing the services that hold
+the GPU open is not optional: with `nv-hostengine`/`dcgm-exporter` or
+`nvidia-persistenced` attached, `sriov-manage -d` fails with `Cannot obtain
+unbindLock` on first contact.
 
 Any manual edit to `vf-health.json` needs an immediate hypeman restart: the
 store loads only at startup, and a failure report landing first re-persists
@@ -352,14 +353,14 @@ GPU; once none remain, run the cycle below.
 
 ```bash
 # 1. Quiesce the services holding the GPU (required for the unbind lock).
-systemctl stop nvidia-dcgm-exporter nvidia-dcgm
+systemctl stop nvidia-dcgm-exporter nvidia-dcgm nvidia-persistenced
 
 # 2. Cycle SR-IOV on the parent GPU.
 /usr/lib/nvidia/sriov-manage -d <parent-gpu-pci-addr>
 /usr/lib/nvidia/sriov-manage -e <parent-gpu-pci-addr>
 
 # 3. Restart the quiesced services.
-systemctl start nvidia-dcgm nvidia-dcgm-exporter
+systemctl start nvidia-persistenced nvidia-dcgm nvidia-dcgm-exporter
 ```
 
 After the cycle, remove the card's entries from `vf-health.json`, restart,
