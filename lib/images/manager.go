@@ -77,7 +77,7 @@ type manager struct {
 	createMu                   sync.Mutex
 	diskUsageMu                sync.RWMutex
 	tagGenerations             map[string]uint64
-	requestedTags              map[string]string // newest pull's digest per requested tag
+	requestedTags              map[requestedTagKey]string // newest pull's digest per requested tag
 	diskUsageLoaded            bool
 	readyImageBytes            int64
 	ociCacheBytes              int64
@@ -106,7 +106,7 @@ func NewManager(p *paths.Paths, maxConcurrentBuilds int, meter metric.Meter) (Ma
 		borrowedCredentialsTimeout: DefaultBorrowedCredentialsTimeout,
 		readySubscribers:           make(map[string][]chan StatusEvent),
 		tagGenerations:             make(map[string]uint64),
-		requestedTags:              make(map[string]string),
+		requestedTags:              make(map[requestedTagKey]string),
 	}
 
 	// Initialize metrics if meter is provided
@@ -688,7 +688,7 @@ func (m *manager) updateStatusByDigest(ref *ResolvedRef, status string, err erro
 		if meta.RequestedTag != "" {
 			m.releaseTagGeneration(ref.Repository(), meta.RequestedTag, meta.TagGeneration)
 		}
-		m.clearRequestedDigest(strings.TrimPrefix(meta.Digest, "sha256:"))
+		m.clearRequestedDigest(meta.digestHex())
 	}
 }
 
@@ -715,7 +715,7 @@ func (m *manager) RecoverInterruptedBuilds() {
 }
 
 func (m *manager) recoverInterruptedBuild(meta *imageMetadata) bool {
-	if meta.Status != StatusPending && meta.Status != StatusPulling && meta.Status != StatusConverting {
+	if !isPendingImageStatus(meta.Status) {
 		return false
 	}
 	if meta.Request == nil || meta.Digest == "" {
@@ -777,18 +777,18 @@ func (m *manager) deleteDigestImage(repository, digestHex string) error {
 	if _, err := readMetadata(m.paths, repository, digestHex); err != nil {
 		return err
 	}
-	tags, err := tagsForDigest(m.paths, repository, digestHex)
+	digestTags, err := tagsForDigest(m.paths, repository, digestHex)
 	if err != nil {
 		return err
 	}
-	if err := deleteTagsForDigest(m.paths, repository, digestHex); err != nil {
+	if err := deleteTagsForDigest(m.paths, repository, digestTags); err != nil {
 		return err
 	}
-	for _, tag := range tags {
+	for _, tag := range digestTags {
 		m.forgetTagState(repository, tag)
-		if err := m.cancelPendingTag(repository, tag); err != nil {
-			return fmt.Errorf("cancel pending image tag: %w", err)
-		}
+	}
+	if err := m.cancelPendingTags(repository, digestTags); err != nil {
+		return fmt.Errorf("cancel pending image tags: %w", err)
 	}
 	if err := removeDigestIfUnreferenced(m.paths, repository, digestHex, false); err != nil {
 		return err

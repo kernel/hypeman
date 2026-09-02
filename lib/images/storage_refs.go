@@ -36,51 +36,6 @@ func listTags(p *paths.Paths, repository string) ([]string, error) {
 	return tags, nil
 }
 
-type legacyRef struct {
-	repository string
-	digestHex  string
-}
-
-func collectLegacyImages(p *paths.Paths) ([]legacyRef, error) {
-	imagesDir := p.ImagesDir()
-	refs := make([]legacyRef, 0)
-	err := filepath.Walk(imagesDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() || info.Name() != "metadata.json" {
-			return nil
-		}
-		rel, relErr := filepath.Rel(imagesDir, path)
-		if relErr != nil {
-			return nil
-		}
-		parts := strings.Split(rel, string(filepath.Separator))
-		if len(parts) < 3 || parts[0] == "content" || parts[0] == "repositories" {
-			return nil
-		}
-		refs = append(refs, legacyRef{
-			repository: filepath.Join(parts[:len(parts)-2]...),
-			digestHex:  parts[len(parts)-2],
-		})
-		return nil
-	})
-	if err != nil && !os.IsNotExist(err) {
-		return nil, err
-	}
-	return refs, nil
-}
-
-func promoteLegacyImages(p *paths.Paths, refs []legacyRef) {
-	for _, ref := range refs {
-		layout := resolveImageLayout(p, ref.repository, ref.digestHex)
-		meta, readErr := readMetadataAt(layout)
-		if readErr != nil || meta.Status != StatusReady {
-			continue
-		}
-		if promoteErr := promoteImageToContent(p, ref.repository, ref.digestHex, meta); promoteErr != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to promote legacy image %s@%s: %v\n", ref.repository, ref.digestHex, promoteErr)
-		}
-	}
-}
-
 type metadataIndex struct {
 	seen                 map[string]struct{}
 	contentDigests       map[string]struct{}
@@ -162,7 +117,7 @@ func (i *metadataIndex) visitTag(p *paths.Paths, path, rel string, parts []strin
 		repository = filepath.Dir(rel)
 		tag = filepath.Base(path)
 	}
-	return appendMetadataForTag(p, repository, tag, digestHex, i.seen, i.taggedDigests, i.taggedContentDigests, &i.metas)
+	return i.appendMetadataForTag(p, repository, tag, digestHex)
 }
 
 func (i *metadataIndex) recordMetadataRef(imagesDir, path string) {
@@ -232,9 +187,9 @@ func appendContentMetadataIfNew(p *paths.Paths, digestHex string, seen map[strin
 	*metas = append(*metas, meta)
 }
 
-func appendMetadataForTag(p *paths.Paths, repository, tag, digestHex string, seen, taggedDigests, taggedContentDigests map[string]struct{}, metas *[]*imageMetadata) error {
+func (i *metadataIndex) appendMetadataForTag(p *paths.Paths, repository, tag, digestHex string) error {
 	tagKey := repository + ":" + tag
-	if _, ok := seen[tagKey]; ok {
+	if _, ok := i.seen[tagKey]; ok {
 		return nil
 	}
 	meta, err := readMetadata(p, repository, digestHex)
@@ -242,10 +197,10 @@ func appendMetadataForTag(p *paths.Paths, repository, tag, digestHex string, see
 		return nil
 	}
 	meta.Name = repository + ":" + tag
-	seen[tagKey] = struct{}{}
-	taggedDigests[repository+"@"+digestHex] = struct{}{}
-	taggedContentDigests[digestHex] = struct{}{}
-	*metas = append(*metas, meta)
+	i.seen[tagKey] = struct{}{}
+	i.taggedDigests[repository+"@"+digestHex] = struct{}{}
+	i.taggedContentDigests[digestHex] = struct{}{}
+	i.metas = append(i.metas, meta)
 	return nil
 }
 
@@ -293,11 +248,7 @@ func countTagsForDigest(p *paths.Paths, repository, digestHex string) (int, erro
 	return len(tags), err
 }
 
-func deleteTagsForDigest(p *paths.Paths, repository, digestHex string) error {
-	tags, err := tagsForDigest(p, repository, digestHex)
-	if err != nil {
-		return err
-	}
+func deleteTagsForDigest(p *paths.Paths, repository string, tags []string) error {
 	for _, tag := range tags {
 		if err := deleteTag(p, repository, tag); err != nil && !errors.Is(err, ErrNotFound) {
 			return err

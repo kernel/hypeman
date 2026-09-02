@@ -44,6 +44,10 @@ type imageTagClaim struct {
 	TagGeneration     uint64 `json:"tag_generation,omitempty"`
 }
 
+func (m *imageMetadata) digestHex() string {
+	return strings.TrimPrefix(m.Digest, "sha256:")
+}
+
 func (m *imageMetadata) toImageFor(reference string) *Image {
 	img := m.toImage()
 	img.Name = reference
@@ -264,12 +268,14 @@ func readMetadataAt(layout imageLayout) (*imageMetadata, error) {
 func promoteImageToContent(p *paths.Paths, sourceRepository, digestHex string, sourceMeta *imageMetadata) error {
 	contentMeta, err := readContentMetadata(p, digestHex)
 	if err == nil {
-		if contentMeta.Status == StatusReady {
+		switch contentMeta.Status {
+		case StatusReady:
 			return promoteLegacyTags(p, sourceRepository, digestHex)
+		case StatusPending, StatusPulling, StatusConverting:
+			return fmt.Errorf("%w: content status is %s", ErrImageNotReady, contentMeta.Status)
 		}
-		return fmt.Errorf("%w: content status is %s", ErrImageNotReady, contentMeta.Status)
 	}
-	if !errors.Is(err, ErrNotFound) {
+	if err != nil && !errors.Is(err, ErrNotFound) {
 		return err
 	}
 

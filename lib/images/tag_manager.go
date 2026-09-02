@@ -10,8 +10,17 @@ import (
 	"github.com/kernel/hypeman/lib/paths"
 )
 
+type requestedTagKey struct {
+	repository string
+	tag        string
+}
+
 func tagGenerationKey(repository, tag string) string {
 	return repository + ":" + tag
+}
+
+func requestedTagKeyFor(repository, tag string) requestedTagKey {
+	return requestedTagKey{repository: repository, tag: tag}
 }
 
 func (m *manager) ensureTagState() {
@@ -19,7 +28,7 @@ func (m *manager) ensureTagState() {
 		m.tagGenerations = make(map[string]uint64)
 	}
 	if m.requestedTags == nil {
-		m.requestedTags = make(map[string]string)
+		m.requestedTags = make(map[requestedTagKey]string)
 	}
 }
 
@@ -53,13 +62,13 @@ func (m *manager) forgetTagState(repository, tag string) {
 func (m *manager) restoreTagState(metas []*imageMetadata) {
 	m.ensureTagState()
 	for _, meta := range metas {
-		if meta.Status != StatusPending && meta.Status != StatusPulling && meta.Status != StatusConverting {
+		if !isPendingImageStatus(meta.Status) {
 			continue
 		}
 		if meta.Digest == "" {
 			continue
 		}
-		digestHex := strings.TrimPrefix(meta.Digest, "sha256:")
+		digestHex := meta.digestHex()
 		ref, err := ParseNormalizedRef(meta.Name)
 		if err != nil {
 			continue
@@ -81,7 +90,7 @@ func (m *manager) restoreRequestedTag(repository, tag, digestHex string, generat
 	if generation > m.tagGenerations[key] {
 		m.tagGenerations[key] = generation
 	}
-	m.requestedTags[key] = digestHex
+	m.requestedTags[requestedTagKeyFor(repository, tag)] = digestHex
 }
 
 func (m *manager) claimTagForStatus(meta *imageMetadata, ref *ResolvedRef) error {
@@ -135,17 +144,17 @@ func (m *manager) claimReadyTag(repository, tag, digestHex string) error {
 		m.revertTagGeneration(repository, tag)
 		return err
 	}
-	m.clearRequestedTag(repository, tag, digestHex)
+	m.clearRequestedTag(repository, tag, "")
 	return nil
 }
 
 func (m *manager) trackRequestedTag(repository, tag, digestHex string) {
 	m.ensureTagState()
-	m.requestedTags[tagGenerationKey(repository, tag)] = digestHex
+	m.requestedTags[requestedTagKeyFor(repository, tag)] = digestHex
 }
 
 func (m *manager) clearRequestedTag(repository, tag, digestHex string) {
-	key := tagGenerationKey(repository, tag)
+	key := requestedTagKeyFor(repository, tag)
 	if current, ok := m.requestedTags[key]; ok && (digestHex == "" || current == digestHex) {
 		delete(m.requestedTags, key)
 	}
@@ -160,6 +169,17 @@ func (m *manager) clearRequestedDigest(digestHex string) {
 }
 
 func (m *manager) cancelPendingTag(repository, tag string) error {
+	return m.cancelPendingTags(repository, []string{tag})
+}
+
+func (m *manager) cancelPendingTags(repository string, tags []string) error {
+	if len(tags) == 0 {
+		return nil
+	}
+	tagSet := make(map[string]struct{}, len(tags))
+	for _, tag := range tags {
+		tagSet[tag] = struct{}{}
+	}
 	metas, err := listAllMetadata(m.paths)
 	if err != nil {
 		return err
@@ -169,10 +189,19 @@ func (m *manager) cancelPendingTag(repository, tag string) error {
 			continue
 		}
 		ref, err := ParseNormalizedRef(meta.Name)
-		if err != nil || !cancelTagClaim(meta, ref, repository, tag) {
+		if err != nil {
 			continue
 		}
-		if err := writeMetadata(m.paths, ref.Repository(), strings.TrimPrefix(meta.Digest, "sha256:"), meta); err != nil {
+		changed := false
+		for tag := range tagSet {
+			if cancelTagClaim(meta, ref, repository, tag) {
+				changed = true
+			}
+		}
+		if !changed {
+			continue
+		}
+		if err := writeMetadata(m.paths, ref.Repository(), meta.digestHex(), meta); err != nil {
 			return err
 		}
 	}
@@ -203,7 +232,7 @@ func cancelTagClaim(meta *imageMetadata, ref *NormalizedRef, repository, tag str
 
 func (m *manager) requestedTagImage(ref *NormalizedRef) *Image {
 	m.createMu.Lock()
-	digestHex, ok := m.requestedTags[tagGenerationKey(ref.Repository(), ref.Tag())]
+	digestHex, ok := m.requestedTags[requestedTagKeyFor(ref.Repository(), ref.Tag())]
 	m.createMu.Unlock()
 	if !ok {
 		return nil
@@ -235,11 +264,7 @@ func (m *manager) claimMatchingTags(digestHex string) bool {
 		if requestedDigest != digestHex {
 			continue
 		}
-		separator := strings.LastIndexByte(key, ':')
-		if separator <= 0 || separator == len(key)-1 {
-			continue
-		}
-		repository, tag := key[:separator], key[separator+1:]
+		repository, tag := key.repository, key.tag
 		if err := createTagSymlink(m.paths, repository, tag, digestHex); err != nil {
 			slog.Warn("failed to claim image tag", "repository", repository, "tag", tag, "digest", digestHex, "error", err)
 			continue
@@ -261,7 +286,7 @@ func (m *manager) claimPrimaryTag(ref *ResolvedRef, meta *imageMetadata, digestH
 	if primaryTag == "" {
 		return false
 	}
-	primaryKey := tagGenerationKey(ref.Repository(), primaryTag)
+	primaryKey := requestedTagKeyFor(ref.Repository(), primaryTag)
 	if _, hasRequest := m.requestedTags[primaryKey]; hasRequest || !m.tagClaimIsCurrent(ref.Repository(), primaryTag, digestHex, meta, meta.RequestedTag == "") {
 		return false
 	}
