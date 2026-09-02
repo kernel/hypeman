@@ -132,15 +132,6 @@ func InitVFHealth(path string, threshold int) error {
 	return vfHealth.loadLocked()
 }
 
-// setThreshold changes the quarantine threshold on a loaded store and
-// re-evaluates recorded tallies against it.
-func (s *vfHealthStore) setThreshold(n int) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.threshold = n
-	return s.requarantineLocked()
-}
-
 // requarantineLocked quarantines records whose failure tallies meet the
 // current threshold, so threshold changes and loaded state agree.
 //
