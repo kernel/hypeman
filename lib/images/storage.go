@@ -297,6 +297,15 @@ func promoteImageToContent(p *paths.Paths, sourceRepository, digestHex string, s
 	}); err != nil {
 		return fmt.Errorf("link source disk: %w", err)
 	}
+	sourceManifestPath := filepath.Join(sourceLayout.dir, "manifest.json")
+	if _, err := os.Stat(sourceManifestPath); err == nil {
+		targetManifestPath := p.ImageContentManifestModel(digestHex)
+		if _, err := os.Stat(targetManifestPath); os.IsNotExist(err) {
+			_ = installAtomically(targetManifestPath, func(path string) error {
+				return os.Link(sourceManifestPath, path)
+			})
+		}
+	}
 	if err := writeMetadataFile(p.ImageContentMetadata(digestHex), sourceMeta); err != nil {
 		return fmt.Errorf("finalize content metadata: %w", err)
 	}
@@ -341,6 +350,9 @@ func promoteLegacyTags(p *paths.Paths, repository, digestHex string) error {
 				return errors.Join(fmt.Errorf("promote legacy tag: %w", err), rollbackErr)
 			}
 			return fmt.Errorf("promote legacy tag: %w", err)
+		}
+		if err := removeStaleTagSymlink(p, &ref); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to remove stale legacy tag symlink: %v\n", err)
 		}
 	}
 	return nil

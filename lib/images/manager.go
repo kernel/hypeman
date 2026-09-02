@@ -688,6 +688,9 @@ func (m *manager) updateStatusByDigest(ref *ResolvedRef, status string, err erro
 		if meta.RequestedTag != "" {
 			m.releaseTagGeneration(ref.Repository(), meta.RequestedTag, meta.TagGeneration)
 		}
+		for _, claim := range meta.TagClaims {
+			m.releaseTagGeneration(claim.Repository, claim.Tag, claim.TagGeneration)
+		}
 		m.clearRequestedDigest(meta.digestHex())
 	}
 }
@@ -774,20 +777,37 @@ func (m *manager) DeleteImage(ctx context.Context, name string) error {
 }
 
 func (m *manager) deleteDigestImage(repository, digestHex string) error {
-	if _, err := readMetadata(m.paths, repository, digestHex); err != nil {
+	meta, err := readMetadata(m.paths, repository, digestHex)
+	if err != nil {
 		return err
 	}
 	digestTags, err := tagsForDigest(m.paths, repository, digestHex)
 	if err != nil {
 		return err
 	}
-	if err := deleteTagsForDigest(m.paths, repository, digestTags); err != nil {
+	if err := deleteTags(m.paths, repository, digestTags); err != nil {
 		return err
 	}
+	allTags := make(map[string]struct{}, len(digestTags)+len(meta.TagClaims)+1)
 	for _, tag := range digestTags {
+		allTags[tag] = struct{}{}
+	}
+	if meta.RequestedTag != "" {
+		allTags[meta.RequestedTag] = struct{}{}
+	}
+	for _, claim := range meta.TagClaims {
+		if claim.Repository == repository && claim.Tag != "" {
+			allTags[claim.Tag] = struct{}{}
+		}
+	}
+	tagsToClean := make([]string, 0, len(allTags))
+	for tag := range allTags {
+		tagsToClean = append(tagsToClean, tag)
+	}
+	for _, tag := range tagsToClean {
 		m.forgetTagState(repository, tag)
 	}
-	if err := m.cancelPendingTags(repository, digestTags); err != nil {
+	if err := m.cancelPendingTags(repository, tagsToClean); err != nil {
 		return fmt.Errorf("cancel pending image tags: %w", err)
 	}
 	if err := removeDigestIfUnreferenced(m.paths, repository, digestHex, false); err != nil {
@@ -799,16 +819,23 @@ func (m *manager) deleteDigestImage(repository, digestHex string) error {
 }
 
 func (m *manager) deleteTaggedImage(repository, tag string) error {
-	digestHex, err := resolveTag(m.paths, repository, tag)
-	if err != nil {
-		return err
+	digestHex, resolveErr := resolveTag(m.paths, repository, tag)
+	if resolveErr != nil && !errors.Is(resolveErr, ErrNotFound) && !os.IsNotExist(resolveErr) {
+		return resolveErr
 	}
-	if err := deleteTag(m.paths, repository, tag); err != nil {
-		return err
+
+	if resolveErr == nil {
+		if err := deleteTag(m.paths, repository, tag); err != nil {
+			return err
+		}
 	}
 	m.forgetTagState(repository, tag)
 	if err := m.cancelPendingTag(repository, tag); err != nil {
 		return fmt.Errorf("cancel pending image tag: %w", err)
+	}
+
+	if resolveErr != nil {
+		return resolveErr
 	}
 
 	count, err := countTagsForDigest(m.paths, repository, digestHex)

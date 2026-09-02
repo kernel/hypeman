@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/kernel/hypeman/lib/paths"
 )
@@ -60,6 +61,8 @@ func (m *manager) forgetTagState(repository, tag string) {
 }
 
 func (m *manager) restoreTagState(metas []*imageMetadata) {
+	m.createMu.Lock()
+	defer m.createMu.Unlock()
 	m.ensureTagState()
 	for _, meta := range metas {
 		if !isPendingImageStatus(meta.Status) {
@@ -87,10 +90,10 @@ func (m *manager) restoreRequestedTag(repository, tag, digestHex string, generat
 		return
 	}
 	key := tagGenerationKey(repository, tag)
-	if generation > m.tagGenerations[key] {
+	if currentGen, ok := m.tagGenerations[key]; !ok || generation >= currentGen {
 		m.tagGenerations[key] = generation
+		m.requestedTags[requestedTagKeyFor(repository, tag)] = digestHex
 	}
-	m.requestedTags[requestedTagKeyFor(repository, tag)] = digestHex
 }
 
 func (m *manager) claimTagForStatus(meta *imageMetadata, ref *ResolvedRef) error {
@@ -129,7 +132,17 @@ func (m *manager) claimTagForStatus(meta *imageMetadata, ref *ResolvedRef) error
 		PreviousTagDigest: previous,
 		TagGeneration:     generation,
 	})
+	if previous == "" {
+		if err := createTagSymlink(m.paths, ref.Repository(), ref.Tag(), ref.DigestHex()); err != nil {
+			m.revertTagGeneration(ref.Repository(), ref.Tag())
+			meta.TagClaims = meta.TagClaims[:len(meta.TagClaims)-1]
+			return err
+		}
+	}
 	if err := writeMetadata(m.paths, ref.Repository(), ref.DigestHex(), meta); err != nil {
+		if previous == "" {
+			_ = deleteTag(m.paths, ref.Repository(), ref.Tag())
+		}
 		m.revertTagGeneration(ref.Repository(), ref.Tag())
 		meta.TagClaims = meta.TagClaims[:len(meta.TagClaims)-1]
 		return err
@@ -164,8 +177,48 @@ func (m *manager) clearRequestedDigest(digestHex string) {
 	for key, current := range m.requestedTags {
 		if current == digestHex {
 			delete(m.requestedTags, key)
+			if nextDigest := m.findPendingDigestForTag(key.repository, key.tag, digestHex); nextDigest != "" {
+				m.requestedTags[key] = nextDigest
+			}
 		}
 	}
+}
+
+func (m *manager) findPendingDigestForTag(repository, tag, excludeDigestHex string) string {
+	metas, err := listAllMetadata(m.paths)
+	if err != nil {
+		return ""
+	}
+	var (
+		bestDigest string
+		bestTime   time.Time
+		bestGen    uint64
+	)
+	for _, meta := range metas {
+		if !isPendingImageStatus(meta.Status) || meta.digestHex() == excludeDigestHex {
+			continue
+		}
+		if !meta.TagClaimCanceled && meta.RequestedTag == tag {
+			ref, err := ParseNormalizedRef(meta.Name)
+			if err == nil && ref.Repository() == repository {
+				if meta.TagGeneration >= bestGen || (meta.TagGeneration == bestGen && meta.CreatedAt.After(bestTime)) {
+					bestDigest = meta.digestHex()
+					bestTime = meta.CreatedAt
+					bestGen = meta.TagGeneration
+				}
+			}
+		}
+		for _, claim := range meta.TagClaims {
+			if claim.Repository == repository && claim.Tag == tag {
+				if claim.TagGeneration >= bestGen || (claim.TagGeneration == bestGen && meta.CreatedAt.After(bestTime)) {
+					bestDigest = meta.digestHex()
+					bestTime = meta.CreatedAt
+					bestGen = claim.TagGeneration
+				}
+			}
+		}
+	}
+	return bestDigest
 }
 
 func (m *manager) cancelPendingTag(repository, tag string) error {
@@ -184,24 +237,42 @@ func (m *manager) cancelPendingTags(repository string, tags []string) error {
 	if err != nil {
 		return err
 	}
+	seenDigests := make(map[string]struct{}, len(metas))
 	for _, meta := range metas {
 		if !isPendingImageStatus(meta.Status) {
 			continue
 		}
-		ref, err := ParseNormalizedRef(meta.Name)
-		if err != nil {
+		digestHex := meta.digestHex()
+		if _, seen := seenDigests[digestHex]; seen {
 			continue
 		}
+		seenDigests[digestHex] = struct{}{}
+
+		canonicalMeta, err := readMetadata(m.paths, repository, digestHex)
+		if err != nil {
+			canonicalMeta = meta
+		}
+
+		ref, err := ParseNormalizedRef(canonicalMeta.Name)
+		if canonicalMeta.Request != nil && canonicalMeta.Request.Name != "" {
+			if reqRef, err := ParseNormalizedRef(canonicalMeta.Request.Name); err == nil {
+				ref = reqRef
+			}
+		}
+		if ref == nil {
+			continue
+		}
+
 		changed := false
 		for tag := range tagSet {
-			if cancelTagClaim(meta, ref, repository, tag) {
+			if cancelTagClaim(canonicalMeta, ref, repository, tag) {
 				changed = true
 			}
 		}
 		if !changed {
 			continue
 		}
-		if err := writeMetadata(m.paths, ref.Repository(), meta.digestHex(), meta); err != nil {
+		if err := writeMetadata(m.paths, ref.Repository(), digestHex, canonicalMeta); err != nil {
 			return err
 		}
 	}
@@ -215,8 +286,10 @@ func isPendingImageStatus(status string) bool {
 func cancelTagClaim(meta *imageMetadata, ref *NormalizedRef, repository, tag string) bool {
 	changed := false
 	if ref.Repository() == repository && meta.RequestedTag == tag {
-		meta.TagClaimCanceled = true
-		changed = true
+		if !meta.TagClaimCanceled {
+			meta.TagClaimCanceled = true
+			changed = true
+		}
 	}
 	claims := meta.TagClaims[:0]
 	for _, claim := range meta.TagClaims {
@@ -246,9 +319,41 @@ func (m *manager) requestedTagImage(ref *NormalizedRef) *Image {
 
 func (m *manager) claimRequestedTags(ref *ResolvedRef, meta *imageMetadata) bool {
 	digestHex := ref.DigestHex()
-	claimed := m.claimMatchingTags(digestHex)
-	if m.claimPrimaryTag(ref, meta, digestHex) {
+	primaryTag := meta.RequestedTag
+	if primaryTag == "" {
+		primaryTag = ref.Tag()
+	}
+	primaryKey := requestedTagKeyFor(ref.Repository(), primaryTag)
+
+	claimed := false
+	primaryClaimed := false
+	for key, requestedDigest := range m.requestedTags {
+		if requestedDigest != digestHex {
+			continue
+		}
+		repository, tag := key.repository, key.tag
+		if err := createTagSymlink(m.paths, repository, tag, digestHex); err != nil {
+			slog.Warn("failed to claim image tag", "repository", repository, "tag", tag, "digest", digestHex, "error", err)
+			continue
+		}
+		delete(m.requestedTags, key)
 		claimed = true
+		if key == primaryKey {
+			primaryClaimed = true
+		}
+	}
+	if !primaryClaimed && m.claimPrimaryTag(ref, meta, digestHex) {
+		claimed = true
+	}
+	for _, claim := range meta.TagClaims {
+		claimKey := requestedTagKeyFor(claim.Repository, claim.Tag)
+		if m.tagClaimIsCurrent(claim.Repository, claim.Tag, digestHex, meta, false) {
+			if _, hasReq := m.requestedTags[claimKey]; !hasReq {
+				if err := createTagSymlink(m.paths, claim.Repository, claim.Tag, digestHex); err == nil {
+					claimed = true
+				}
+			}
+		}
 	}
 	if claimed {
 		return true

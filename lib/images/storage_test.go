@@ -271,3 +271,47 @@ func TestPromoteImageToContentReplacesFailedContent(t *testing.T) {
 	require.Equal(t, StatusReady, contentMeta.Status)
 	require.FileExists(t, p.ImageContentPath(digest))
 }
+
+func TestPromoteLegacyTagsRemovesStaleLegacySymlinks(t *testing.T) {
+	p := paths.New(t.TempDir())
+	repository := "docker.io/library/alpine"
+	digest := "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+	seedLegacy(t, p, repository, "latest", digest)
+
+	legacySymlink := p.ImageTagSymlink(repository, "latest")
+	require.FileExists(t, legacySymlink)
+
+	legacyMeta, err := readMetadata(p, repository, digest)
+	require.NoError(t, err)
+
+	require.NoError(t, promoteImageToContent(p, repository, digest, legacyMeta))
+
+	// New repository tag symlink should exist
+	require.FileExists(t, p.ImageRepositoryTagSymlink(repository, "latest"))
+	// Old legacy symlink must be removed
+	_, err = os.Lstat(legacySymlink)
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestPromoteImageToContentLinksManifestModel(t *testing.T) {
+	p := paths.New(t.TempDir())
+	repository := "docker.io/library/alpine"
+	digest := "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+	seedLegacy(t, p, repository, "latest", digest)
+
+	// Create a legacy manifest.json
+	legacyManifestPath := filepath.Join(p.ImageDigestDir(repository, digest), "manifest.json")
+	require.NoError(t, os.WriteFile(legacyManifestPath, []byte(`{"schemaVersion":2}`), 0o644))
+
+	legacyMeta, err := readMetadata(p, repository, digest)
+	require.NoError(t, err)
+
+	require.NoError(t, promoteImageToContent(p, repository, digest, legacyMeta))
+
+	// The promoted content directory must have manifest.json
+	contentManifest := p.ImageContentManifestModel(digest)
+	require.FileExists(t, contentManifest)
+	data, err := os.ReadFile(contentManifest)
+	require.NoError(t, err)
+	require.Equal(t, `{"schemaVersion":2}`, string(data))
+}

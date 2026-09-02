@@ -196,11 +196,12 @@ func (i *metadataIndex) appendMetadataForTag(p *paths.Paths, repository, tag, di
 	if err != nil {
 		return nil
 	}
-	meta.Name = repository + ":" + tag
+	clone := *meta
+	clone.Name = repository + ":" + tag
 	i.seen[tagKey] = struct{}{}
 	i.taggedDigests[repository+"@"+digestHex] = struct{}{}
 	i.taggedContentDigests[digestHex] = struct{}{}
-	i.metas = append(i.metas, meta)
+	i.metas = append(i.metas, &clone)
 	return nil
 }
 
@@ -248,13 +249,17 @@ func countTagsForDigest(p *paths.Paths, repository, digestHex string) (int, erro
 	return len(tags), err
 }
 
-func deleteTagsForDigest(p *paths.Paths, repository string, tags []string) error {
+func deleteTags(p *paths.Paths, repository string, tags []string) error {
 	for _, tag := range tags {
 		if err := deleteTag(p, repository, tag); err != nil && !errors.Is(err, ErrNotFound) {
 			return err
 		}
 	}
 	return nil
+}
+
+func deleteTagsForDigest(p *paths.Paths, repository string, tags []string) error {
+	return deleteTags(p, repository, tags)
 }
 
 func contentTagCount(p *paths.Paths, digestHex string) (int, error) {
@@ -286,7 +291,7 @@ func contentTagCount(p *paths.Paths, digestHex string) (int, error) {
 
 func contentPullInProgress(p *paths.Paths, digestHex string) bool {
 	status, ok := metadataStatus(p.ImageContentMetadata(digestHex))
-	return ok && (status == StatusPending || status == StatusPulling || status == StatusConverting)
+	return ok && isPendingImageStatus(status)
 }
 
 func contentIsDigestOnly(p *paths.Paths, digestHex string) bool {
