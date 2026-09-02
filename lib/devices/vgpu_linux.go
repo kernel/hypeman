@@ -42,17 +42,17 @@ func ListGPUProfiles() ([]GPUProfile, error) {
 	if err != nil {
 		return nil, err
 	}
-	return ListGPUProfilesWithVFs(framework, vfs, availability)
+	return ListGPUProfilesWithVFs(framework, vfs, availability.Quarantined)
 }
 
 // ListGPUProfilesWithVFs returns available profiles for discovered VFs.
-// Quarantined VFs from availability are excluded from vendor VFIO counts.
-func ListGPUProfilesWithVFs(framework VGPUFramework, vfs []VirtualFunction, availability VGPUAvailability) ([]GPUProfile, error) {
+// Quarantined VFs are excluded from vendor VFIO counts.
+func ListGPUProfilesWithVFs(framework VGPUFramework, vfs []VirtualFunction, quarantined map[string]struct{}) ([]GPUProfile, error) {
 	switch framework {
 	case VGPUFrameworkMdev:
 		return listMdevGPUProfilesWithVFs(vfs)
 	case VGPUFrameworkVendorVFIO:
-		return hostVendorVFIO.listProfiles(vfs, availability.quarantined)
+		return hostVendorVFIO.listProfiles(vfs, quarantined)
 	default:
 		return nil, nil
 	}

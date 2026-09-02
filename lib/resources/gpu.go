@@ -70,7 +70,7 @@ func getVGPUStatus(ctx context.Context, framework devices.VGPUFramework, vfs []d
 	status.QuarantinedSlots = availability.QuarantinedSlots
 
 	// Get available profiles (reuse VFs to avoid redundant discovery)
-	profiles, err := devices.ListGPUProfilesWithVFs(framework, vfs, availability)
+	profiles, err := devices.ListGPUProfilesWithVFs(framework, vfs, availability.Quarantined)
 	if err != nil {
 		logger.FromContext(ctx).WarnContext(ctx, "failed to list vGPU profiles; reporting none", "framework", framework, "error", err)
 		profiles = nil

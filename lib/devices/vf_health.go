@@ -267,12 +267,12 @@ func QuarantinedVFAddresses() (map[string]struct{}, error) {
 }
 
 // VGPUAvailability is one VF health snapshot applied to discovered VFs.
-// Pass it to ListGPUProfilesWithVFs so profile availability is computed from
-// the same snapshot without reading the store again.
+// Pass Quarantined to ListGPUProfilesWithVFs so profile availability is
+// computed from the same snapshot without reading the store again.
 type VGPUAvailability struct {
 	AllocatableSlots int // free VFs eligible for placement
 	QuarantinedSlots int
-	quarantined      map[string]struct{}
+	Quarantined      map[string]struct{} // PCI addresses of quarantined VFs
 }
 
 // GetVGPUAvailability counts free allocatable and quarantined VFs. It fails
@@ -287,7 +287,7 @@ func GetVGPUAvailability(framework VGPUFramework, vfs []VirtualFunction) (VGPUAv
 	}
 	availability := VGPUAvailability{
 		AllocatableSlots: countFreeVFs(vfs, addresses),
-		quarantined:      addresses,
+		Quarantined:      addresses,
 	}
 	for _, vf := range vfs {
 		if _, ok := addresses[vf.PCIAddress]; ok {

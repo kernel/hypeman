@@ -218,7 +218,7 @@ func TestVendorVFIOListProfilesExcludesQuarantinedFromAvailability(t *testing.T)
 	require.NoError(t, err)
 	availability, err := GetVGPUAvailability(VGPUFrameworkVendorVFIO, vfs)
 	require.NoError(t, err)
-	profiles, err := sysfs.listProfiles(vfs, availability.quarantined)
+	profiles, err := sysfs.listProfiles(vfs, availability.Quarantined)
 	require.NoError(t, err)
 	assert.Equal(t, 1, profileAvailability(profiles, "NVIDIA L40S-1Q"))
 }
