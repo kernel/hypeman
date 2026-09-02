@@ -194,6 +194,7 @@ func (c *ociClient) inspectDigestPlatformAuth(ctx context.Context, imageRef stri
 // pullResult contains the metadata and digest from pulling an image
 type pullResult struct {
 	Metadata        *containerMetadata
+	Manifest        *imageManifestModel
 	Digest          string // sha256:abc123...
 	CacheHit        bool
 	LayerCount      int
@@ -205,6 +206,14 @@ type imageBuildPhaseMeasurement struct {
 	Phase    string
 	Duration time.Duration
 	Status   string
+}
+
+// ociImageBundle is the extracted content of one OCI image in the cache.
+type ociImageBundle struct {
+	Meta            *containerMetadata
+	Model           *imageManifestModel
+	LayerCount      int
+	CompressedBytes int64
 }
 
 func (r *pullResult) measure(phase string, operation func() error) error {
@@ -260,20 +269,19 @@ func (c *ociClient) pullAndExportWithPlatformAuth(ctx context.Context, imageRef,
 	// If cached, we skip the pull entirely
 
 	// Extract metadata (from cache or freshly pulled)
-	var meta *containerMetadata
-	var layerCount int
-	var compressedBytes int64
+	var bundle *ociImageBundle
 	err := result.measure("metadata_extract", func() error {
 		var err error
-		meta, layerCount, compressedBytes, err = c.extractOCIImageDetails(layoutTag)
+		bundle, err = c.extractOCIImageBundle(layoutTag)
 		return err
 	})
 	if err != nil {
 		return result, fmt.Errorf("extract metadata: %w", err)
 	}
-	result.Metadata = meta
-	result.LayerCount = layerCount
-	result.CompressedBytes = compressedBytes
+	result.Metadata = bundle.Meta
+	result.Manifest = bundle.Model
+	result.LayerCount = bundle.LayerCount
+	result.CompressedBytes = bundle.CompressedBytes
 
 	// Unpack layers to the export directory
 	if err := result.measure("layer_unpack", func() error {
@@ -395,44 +403,42 @@ func imageByAnnotation(path layout.Path, layoutTag string) (gcr.Image, error) {
 	return nil, fmt.Errorf("no image found with tag %s", layoutTag)
 }
 
-// extractOCIMetadata reads metadata from OCI layout config.json
-// Uses go-containerregistry which handles both Docker v2 and OCI v1 manifests.
-func (c *ociClient) extractOCIMetadata(layoutTag string) (*containerMetadata, error) {
-	meta, _, _, err := c.extractOCIImageDetails(layoutTag)
-	return meta, err
-}
-
-func (c *ociClient) extractOCIImageDetails(layoutTag string) (*containerMetadata, int, int64, error) {
-	// Open OCI layout using go-containerregistry (handles Docker v2 and OCI v1)
+// extractOCIImageBundle reads metadata, the manifest content model, and layer
+// stats from the cached OCI layout. Uses go-containerregistry which handles
+// both Docker v2 and OCI v1 manifests.
+func (c *ociClient) extractOCIImageBundle(layoutTag string) (*ociImageBundle, error) {
 	path, err := layout.FromPath(c.cacheDir)
 	if err != nil {
-		return nil, 0, 0, fmt.Errorf("open oci layout: %w", err)
+		return nil, fmt.Errorf("open oci layout: %w", err)
 	}
-
-	// Get the image by annotation tag from the layout
 	img, err := imageByAnnotation(path, layoutTag)
 	if err != nil {
-		return nil, 0, 0, fmt.Errorf("find image by tag %s: %w", layoutTag, err)
+		return nil, fmt.Errorf("find image by tag %s: %w", layoutTag, err)
 	}
-
-	// Get config file (go-containerregistry handles manifest format automatically)
 	configFile, err := img.ConfigFile()
 	if err != nil {
-		return nil, 0, 0, fmt.Errorf("get config file: %w", err)
+		return nil, fmt.Errorf("get config file: %w", err)
 	}
-
 	manifest, err := img.Manifest()
 	if err != nil {
-		return nil, 0, 0, fmt.Errorf("get manifest: %w", err)
+		return nil, fmt.Errorf("get manifest: %w", err)
 	}
-	var compressedBytes int64
-	for _, layer := range manifest.Layers {
-		compressedBytes += layer.Size
+	configDigest, err := img.ConfigName()
+	if err != nil {
+		return nil, fmt.Errorf("get config digest: %w", err)
 	}
 
-	// Extract metadata from config. OS/Architecture/Variant come straight from
-	// the pulled image config, so they reflect the manifest actually fetched
-	// rather than what the caller requested.
+	meta := containerMetadataFromConfig(configFile)
+	model, compressedBytes := manifestModelFromImage(layoutTag, configFile, manifest, configDigest)
+	return &ociImageBundle{
+		Meta:            meta,
+		Model:           model,
+		LayerCount:      len(manifest.Layers),
+		CompressedBytes: compressedBytes,
+	}, nil
+}
+
+func containerMetadataFromConfig(configFile *gcr.ConfigFile) *containerMetadata {
 	meta := &containerMetadata{
 		OS:           configFile.OS,
 		Architecture: configFile.Architecture,
@@ -443,24 +449,52 @@ func (c *ociClient) extractOCIImageDetails(layoutTag string) (*containerMetadata
 		Labels:       make(map[string]string),
 		WorkingDir:   configFile.Config.WorkingDir,
 	}
-
-	// Parse environment variables
 	for _, env := range configFile.Config.Env {
-		for i := 0; i < len(env); i++ {
-			if env[i] == '=' {
-				key := env[:i]
-				val := env[i+1:]
-				meta.Env[key] = val
-				break
-			}
+		if key, value, ok := strings.Cut(env, "="); ok {
+			meta.Env[key] = value
 		}
 	}
-
 	for key, value := range configFile.Config.Labels {
 		meta.Labels[key] = value
 	}
+	return meta
+}
 
-	return meta, len(manifest.Layers), compressedBytes, nil
+func manifestModelFromImage(layoutTag string, configFile *gcr.ConfigFile, manifest *gcr.Manifest, configDigest gcr.Hash) (*imageManifestModel, int64) {
+	model := &imageManifestModel{
+		SchemaVersion: manifestModelSchemaVersion,
+		Digest:        digestFromHex(layoutTag),
+		MediaType:     string(manifest.MediaType),
+		Platform: Platform{
+			OS:           configFile.OS,
+			Architecture: configFile.Architecture,
+			Variant:      configFile.Variant,
+		}.String(),
+		Config: manifestConfigRef{
+			Digest:    configDigest.String(),
+			MediaType: string(manifest.Config.MediaType),
+			DiffIDs:   make([]string, 0, len(configFile.RootFS.DiffIDs)),
+		},
+		RootFSType: configFile.RootFS.Type,
+		Layers:     make([]layerDescriptor, 0, len(manifest.Layers)),
+	}
+	for _, diffID := range configFile.RootFS.DiffIDs {
+		model.Config.DiffIDs = append(model.Config.DiffIDs, diffID.String())
+	}
+	var compressedBytes int64
+	for i, descriptor := range manifest.Layers {
+		compressedBytes += descriptor.Size
+		layer := layerDescriptor{
+			Digest:    descriptor.Digest.String(),
+			Size:      descriptor.Size,
+			MediaType: string(descriptor.MediaType),
+		}
+		if i < len(model.Config.DiffIDs) {
+			layer.DiffID = model.Config.DiffIDs[i]
+		}
+		model.Layers = append(model.Layers, layer)
+	}
+	return model, compressedBytes
 }
 
 // unpackLayers unpacks all OCI layers to a target directory using umoci

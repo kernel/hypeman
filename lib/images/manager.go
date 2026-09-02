@@ -77,6 +77,7 @@ type manager struct {
 	createMu                   sync.Mutex
 	diskUsageMu                sync.RWMutex
 	tagGenerations             map[string]uint64
+	requestedTags              map[string]string // newest pull's digest per requested tag
 	diskUsageLoaded            bool
 	readyImageBytes            int64
 	ociCacheBytes              int64
@@ -105,6 +106,7 @@ func NewManager(p *paths.Paths, maxConcurrentBuilds int, meter metric.Meter) (Ma
 		borrowedCredentialsTimeout: DefaultBorrowedCredentialsTimeout,
 		readySubscribers:           make(map[string][]chan StatusEvent),
 		tagGenerations:             make(map[string]uint64),
+		requestedTags:              make(map[string]string),
 	}
 
 	// Initialize metrics if meter is provided
@@ -117,7 +119,10 @@ func NewManager(p *paths.Paths, maxConcurrentBuilds int, meter metric.Meter) (Ma
 	}
 
 	m.RecoverInterruptedBuilds()
-	promoteLegacyImages(m.paths)
+	// Keep legacy images readable in their existing layout and promote them only
+	// when an operation needs shared content, such as a cross-repository tag.
+	// Avoiding a startup-wide migration keeps startup bounded and independent of
+	// migration success.
 	return m, nil
 }
 
@@ -247,7 +252,6 @@ func (m *manager) ImportLocalImage(ctx context.Context, repo, reference, digest 
 	if img, found, err := m.reuseExistingImage(ref, nil, nil); found || err != nil {
 		return img, err
 	}
-
 	return m.createAndQueueImage(ref, CreateImageRequest{Name: imageRef}, hostPlatform())
 }
 
@@ -262,100 +266,29 @@ func (m *manager) reuseExistingImage(ref *ResolvedRef, credentials *authn.AuthCo
 		}
 		return nil, false, nil
 	}
-	if err := m.updateExistingReference(meta, ref, resourceTags); err != nil {
-		return nil, true, fmt.Errorf("update image reference: %w", err)
+	if meta.Status != StatusReady {
+		// A pending pull with different credentials does not get to point
+		// the tag at its digest or update its labels.
+		if !m.inflightCredentialsMatch(ref.Digest(), credentials) {
+			return nil, true, fmt.Errorf("%w: retry after the current pull completes", ErrCredentialConflict)
+		}
+	}
+	if resourceTags != nil {
+		meta.Tags = tags.Clone(resourceTags)
+		if err := writeMetadata(m.paths, ref.Repository(), ref.DigestHex(), meta); err != nil {
+			return nil, true, fmt.Errorf("update image tags: %w", err)
+		}
+	}
+	if ref.Tag() != "" {
+		if err := m.claimTagForStatus(meta, ref); err != nil {
+			return nil, true, fmt.Errorf("create image tag: %w", err)
+		}
 	}
 	img := meta.toImageFor(ref.String())
-	if meta.Status == StatusReady {
-		return img, true, nil
-	}
-	if !m.inflightCredentialsMatch(ref.Digest(), credentials) {
-		return nil, true, fmt.Errorf("%w: retry after the current pull completes", ErrCredentialConflict)
-	}
 	if meta.Status == StatusPending {
 		img.QueuePosition = m.queue.GetPosition(meta.Digest)
 	}
 	return img, true, nil
-}
-
-func (m *manager) updateExistingReference(meta *imageMetadata, ref *ResolvedRef, resourceTags tags.Tags) error {
-	if ref.Tag() == "" {
-		return nil
-	}
-	if meta.Status == StatusReady {
-		m.nextTagGeneration(ref.Repository(), ref.Tag())
-		if err := createTagSymlink(m.paths, ref.Repository(), ref.Tag(), ref.DigestHex()); err != nil {
-			return err
-		}
-	} else if err := m.recordPendingTag(meta, ref); err != nil {
-		return err
-	}
-	setReferenceTags(meta, ref.String(), resourceTags)
-	return writeMetadata(m.paths, ref.Repository(), ref.DigestHex(), meta)
-}
-
-func tagGenerationKey(repository, tag string) string {
-	return repository + ":" + tag
-}
-
-func (m *manager) nextTagGeneration(repository, tag string) uint64 {
-	key := tagGenerationKey(repository, tag)
-	m.tagGenerations[key]++
-	return m.tagGenerations[key]
-}
-
-func (m *manager) recordPendingTag(meta *imageMetadata, ref *ResolvedRef) error {
-	if meta.RequestedTag == ref.Tag() && strings.HasPrefix(meta.Name, ref.Repository()+":") {
-		return ensurePendingTag(m.paths, ref.Repository(), ref.Tag(), ref.DigestHex())
-	}
-	for _, claim := range meta.TagClaims {
-		if claim.Repository == ref.Repository() && claim.Tag == ref.Tag() {
-			return ensurePendingTag(m.paths, ref.Repository(), ref.Tag(), ref.DigestHex())
-		}
-	}
-	previous, err := resolveTag(m.paths, ref.Repository(), ref.Tag())
-	if err != nil && !errors.Is(err, ErrNotFound) {
-		return err
-	}
-	meta.TagClaims = append(meta.TagClaims, imageTagClaim{
-		Repository:        ref.Repository(),
-		Tag:               ref.Tag(),
-		PreviousTagDigest: previous,
-		TagGeneration:     m.nextTagGeneration(ref.Repository(), ref.Tag()),
-	})
-	return ensurePendingTag(m.paths, ref.Repository(), ref.Tag(), ref.DigestHex())
-}
-
-func (m *manager) restoreTagGenerations(metas []*imageMetadata) {
-	m.createMu.Lock()
-	defer m.createMu.Unlock()
-	for _, meta := range metas {
-		ref, err := ParseNormalizedRef(meta.Name)
-		if err != nil {
-			continue
-		}
-		m.restoreTagGeneration(ref.Repository(), meta.RequestedTag, meta.TagGeneration)
-		for _, claim := range meta.TagClaims {
-			m.restoreTagGeneration(claim.Repository, claim.Tag, claim.TagGeneration)
-		}
-		for reference, generation := range meta.ReferenceGenerations {
-			ref, err := ParseNormalizedRef(reference)
-			if err != nil || ref.IsDigest() {
-				continue
-			}
-			m.restoreTagGeneration(ref.Repository(), ref.Tag(), generation)
-		}
-	}
-}
-
-func (m *manager) restoreTagGeneration(repository, tag string, generation uint64) {
-	if tag == "" {
-		return
-	}
-	key := tagGenerationKey(repository, tag)
-	if generation > m.tagGenerations[key] {
-		m.tagGenerations[key] = generation
-	}
 }
 
 func (m *manager) inflightCredentialsMatch(digest string, credentials *authn.AuthConfig) bool {
@@ -428,50 +361,23 @@ func (m *manager) borrowedAuth(digest string, expected *inflightImagePull) (*aut
 }
 
 func (m *manager) createAndQueueImage(ref *ResolvedRef, req CreateImageRequest, requestedPlatform Platform) (*Image, error) {
-	// Build one request value and reuse it for both the persisted metadata and
-	// the queue entry so they never diverge.
-	storedReq := CreateImageRequest{
-		Name:     ref.String(),
-		Tags:     tags.Clone(req.Tags),
-		Platform: req.Platform,
-	}
-	// Record the requested platform optimistically while the build is pending;
-	// buildImage overwrites it with the authoritative manifest platform once the
-	// image config is pulled.
-	previousTagDigest := ""
-	var err error
-	if ref.Tag() != "" {
-		previousTagDigest, err = resolveTag(m.paths, ref.Repository(), ref.Tag())
-		if err != nil && !errors.Is(err, ErrNotFound) {
-			return nil, fmt.Errorf("resolve existing image tag: %w", err)
-		}
-	}
-	tagGeneration := uint64(0)
-	if ref.Tag() != "" {
-		tagGeneration = m.nextTagGeneration(ref.Repository(), ref.Tag())
-	}
-	meta := &imageMetadata{
-		Name:              ref.String(),
-		Digest:            ref.Digest(),
-		Platform:          requestedPlatform.String(),
-		Status:            StatusPending,
-		Request:           &storedReq,
-		BorrowedAuth:      req.Credentials != nil,
-		BuildID:           uuid.New().String(),
-		Tags:              tags.Clone(req.Tags),
-		RequestedTag:      ref.Tag(),
-		PreviousTagDigest: previousTagDigest,
-		TagGeneration:     tagGeneration,
-		References:        map[string]tags.Tags{ref.String(): tags.Clone(req.Tags)},
-		CreatedAt:         time.Now(),
+	meta, previousTagDigest, err := m.newPendingImageMetadata(ref, req, requestedPlatform)
+	if err != nil {
+		return nil, err
 	}
 
 	// Write initial metadata
 	if err := writeMetadata(m.paths, ref.Repository(), ref.DigestHex(), meta); err != nil {
+		if ref.Tag() != "" {
+			m.revertTagGeneration(ref.Repository(), ref.Tag())
+			m.clearRequestedTag(ref.Repository(), ref.Tag(), ref.DigestHex())
+		}
 		return nil, fmt.Errorf("write initial metadata: %w", err)
 	}
 	if ref.Tag() != "" && previousTagDigest == "" {
 		if err := createTagSymlink(m.paths, ref.Repository(), ref.Tag(), ref.DigestHex()); err != nil {
+			m.revertTagGeneration(ref.Repository(), ref.Tag())
+			m.clearRequestedTag(ref.Repository(), ref.Tag(), ref.DigestHex())
 			return nil, fmt.Errorf("create pending image tag: %w", err)
 		}
 	}
@@ -503,6 +409,41 @@ func (m *manager) createAndQueueImage(ref *ResolvedRef, req CreateImageRequest, 
 		img.QueuePosition = &queuePos
 	}
 	return img, nil
+}
+
+func (m *manager) newPendingImageMetadata(ref *ResolvedRef, req CreateImageRequest, requestedPlatform Platform) (*imageMetadata, string, error) {
+	previousTagDigest := ""
+	if ref.Tag() != "" {
+		var err error
+		previousTagDigest, err = resolveTag(m.paths, ref.Repository(), ref.Tag())
+		if err != nil && !errors.Is(err, ErrNotFound) {
+			return nil, "", fmt.Errorf("resolve existing image tag: %w", err)
+		}
+	}
+	tagGeneration := uint64(0)
+	if ref.Tag() != "" {
+		tagGeneration = m.nextTagGeneration(ref.Repository(), ref.Tag())
+		m.trackRequestedTag(ref.Repository(), ref.Tag(), ref.DigestHex())
+	}
+	storedReq := CreateImageRequest{
+		Name:     ref.String(),
+		Tags:     tags.Clone(req.Tags),
+		Platform: req.Platform,
+	}
+	return &imageMetadata{
+		Name:              ref.String(),
+		Digest:            ref.Digest(),
+		Platform:          requestedPlatform.String(),
+		Status:            StatusPending,
+		Request:           &storedReq,
+		BorrowedAuth:      req.Credentials != nil,
+		BuildID:           uuid.New().String(),
+		Tags:              tags.Clone(req.Tags),
+		RequestedTag:      ref.Tag(),
+		PreviousTagDigest: previousTagDigest,
+		TagGeneration:     tagGeneration,
+		CreatedAt:         time.Now(),
+	}, previousTagDigest, nil
 }
 
 func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef, credentials *authn.AuthConfig, buildID string) {
@@ -549,8 +490,7 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef, credentials 
 			// Another build completed first; last-pull-wins repoints the tag.
 			if ref.Tag() != "" {
 				m.createMu.Lock()
-				m.nextTagGeneration(ref.Repository(), ref.Tag())
-				err := createTagSymlink(m.paths, ref.Repository(), ref.Tag(), ref.DigestHex())
+				err := m.claimReadyTag(ref.Repository(), ref.Tag(), ref.DigestHex())
 				m.createMu.Unlock()
 				if err != nil {
 					slog.Warn("failed to claim ready image tag", "repository", ref.Repository(), "tag", ref.Tag(), "error", err)
@@ -564,6 +504,8 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef, credentials 
 	m.updateStatusByDigest(ref, StatusConverting, nil, buildID)
 
 	diskPath := resolveImageLayout(m.paths, ref.Repository(), ref.DigestHex()).disk
+	// Keep the temporary filesystem beside its final path so finalization stays
+	// atomic even when system/builds and images are on different filesystems.
 	diskTempPath := diskPath + ".tmp-" + buildID
 	defer os.Remove(diskTempPath)
 	// Use default image format (erofs on Linux, ext4 on Darwin)
@@ -590,24 +532,15 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef, credentials 
 }
 
 func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, diskSize int64, buildID, diskTempPath string) error {
-	if diskTempPath != "" {
-		defer os.Remove(diskTempPath)
-	}
-
 	m.createMu.Lock()
 	defer m.createMu.Unlock()
 
+	layout := resolveImageLayout(m.paths, ref.Repository(), ref.DigestHex())
+
 	// Read current metadata to preserve request info and reject stale builds.
-	meta, err := readMetadata(m.paths, ref.Repository(), ref.DigestHex())
+	meta, err := readMetadataAt(layout)
 	if err != nil || meta.BuildID != buildID {
 		return errStaleBuild
-	}
-
-	finalDiskPath := resolveImageLayout(m.paths, ref.Repository(), ref.DigestHex()).disk
-	if err := installAtomically(finalDiskPath, func(path string) error {
-		return os.Rename(diskTempPath, path)
-	}); err != nil {
-		return fmt.Errorf("install image disk: %w", err)
 	}
 
 	// The pulled image config is the source of truth for the platform.
@@ -620,6 +553,29 @@ func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, diskSize i
 		return err
 	}
 
+	modelPath := manifestModelPath(m.paths, layout, ref.DigestHex())
+	diskInstalled := false
+	modelWritten := false
+
+	if err := installAtomically(layout.disk, func(path string) error {
+		return os.Rename(diskTempPath, path)
+	}); err != nil {
+		return fmt.Errorf("install image disk: %w", err)
+	}
+	diskInstalled = true
+
+	// Persist the manifest content model beside the shared content so later
+	// stages can recompose the image from per-layer artifacts and GC can tell
+	// which OCI blobs are still referenced.
+	if result.Manifest != nil {
+		model := *result.Manifest
+		model.Platform = actualPlatform.String()
+		if err := writeManifestModelAt(modelPath, ref.DigestHex(), &model); err != nil {
+			return rollbackFinalization(layout, modelPath, diskInstalled, modelWritten, fmt.Errorf("write manifest model: %w", err))
+		}
+		modelWritten = true
+	}
+
 	meta.Status = StatusReady
 	meta.Error = nil
 	meta.Platform = actualPlatform.String()
@@ -630,49 +586,37 @@ func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, diskSize i
 	meta.Labels = result.Metadata.Labels
 	meta.WorkingDir = result.Metadata.WorkingDir
 
-	if err := writeMetadata(m.paths, ref.Repository(), ref.DigestHex(), meta); err != nil {
-		return fmt.Errorf("write final metadata: %w", err)
+	if err := writeMetadataFile(layout.metadata, meta); err != nil {
+		return rollbackFinalization(layout, modelPath, diskInstalled, modelWritten, fmt.Errorf("write final metadata: %w", err))
 	}
 
 	m.notifyReady(ref.DigestHex(), StatusReady, nil)
-	m.claimImageTags(ref, meta)
+	if !m.claimRequestedTags(ref, meta) {
+		m.cleanupUnclaimedImage(ref)
+	}
 	m.refreshDiskUsageTotals()
 	return nil
 }
 
-func (m *manager) claimImageTags(ref *ResolvedRef, meta *imageMetadata) {
-	requestedTag := meta.RequestedTag
-	if requestedTag == "" {
-		requestedTag = ref.Tag()
+func manifestModelPath(p *paths.Paths, layout imageLayout, digestHex string) string {
+	if layout.content {
+		return p.ImageContentManifestModel(digestHex)
 	}
-	claimed := m.claimTag(ref.Repository(), ref.DigestHex(), requestedTag, meta.PreviousTagDigest, meta.TagGeneration, meta.RequestedTag == "")
-	for _, claim := range meta.TagClaims {
-		claimed = m.claimTag(claim.Repository, ref.DigestHex(), claim.Tag, claim.PreviousTagDigest, claim.TagGeneration, false) || claimed
-	}
-	if !claimed {
-		if err := removeDigestIfUnreferenced(m.paths, ref.Repository(), ref.DigestHex(), true); err != nil {
-			slog.Warn("failed to collect stale image", "repository", ref.Repository(), "digest", ref.DigestHex(), "error", err)
-		}
-	}
+	return filepath.Join(layout.dir, "manifest.json")
 }
 
-func (m *manager) claimTag(repository, digestHex, tag, previous string, generation uint64, allowMissing bool) bool {
-	if tag == "" || m.tagGenerations[tagGenerationKey(repository, tag)] != generation {
-		return false
+func rollbackFinalization(layout imageLayout, modelPath string, diskInstalled, modelWritten bool, cause error) error {
+	var rollbackErr error
+	if modelWritten {
+		rollbackErr = errors.Join(rollbackErr, os.Remove(modelPath))
 	}
-	current, err := resolveTag(m.paths, repository, tag)
-	if err != nil {
-		if !allowMissing || !errors.Is(err, ErrNotFound) {
-			return false
-		}
-	} else if current != digestHex && current != previous {
-		return false
+	if diskInstalled {
+		rollbackErr = errors.Join(rollbackErr, os.Remove(layout.disk))
 	}
-	if err := createTagSymlink(m.paths, repository, tag, digestHex); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to create tag symlink: %v\n", err)
-		return false
+	if rollbackErr != nil {
+		return errors.Join(cause, fmt.Errorf("rollback finalization: %w", rollbackErr))
 	}
-	return true
+	return cause
 }
 
 func phaseStatus(err error) string {
@@ -719,7 +663,8 @@ func (m *manager) updateStatusByDigest(ref *ResolvedRef, status string, err erro
 	m.createMu.Lock()
 	defer m.createMu.Unlock()
 
-	meta, readErr := readMetadata(m.paths, ref.Repository(), ref.DigestHex())
+	layout := resolveImageLayout(m.paths, ref.Repository(), ref.DigestHex())
+	meta, readErr := readMetadataAt(layout)
 	if readErr != nil || meta.BuildID != buildID {
 		return
 	}
@@ -730,12 +675,23 @@ func (m *manager) updateStatusByDigest(ref *ResolvedRef, status string, err erro
 		meta.Error = &errorMsg
 	}
 
-	writeMetadata(m.paths, ref.Repository(), ref.DigestHex(), meta)
+	writeMetadataFile(layout.metadata, meta)
 
 	// Notify while holding createMu so a delete/recreate cannot race the
 	// metadata write and receive a terminal event for the old build.
 	if status == StatusReady || status == StatusFailed {
 		m.notifyReady(ref.DigestHex(), status, err)
+	}
+	// A failed pull releases its tag claim so an older in-flight pull of the
+	// same tag can still repoint it.
+	if status == StatusFailed {
+		if meta.RequestedTag != "" {
+			m.releaseTagGeneration(ref.Repository(), meta.RequestedTag, meta.TagGeneration)
+		}
+		for _, claim := range meta.TagClaims {
+			m.releaseTagGeneration(claim.Repository, claim.Tag, claim.TagGeneration)
+		}
+		m.clearRequestedDigest(meta.digestHex())
 	}
 }
 
@@ -744,39 +700,44 @@ func (m *manager) RecoverInterruptedBuilds() {
 	if err != nil {
 		return // Best effort
 	}
-	m.restoreTagGenerations(metas)
 
-	// Sort by created_at to maintain FIFO order
 	sort.Slice(metas, func(i, j int) bool {
 		return metas[i].CreatedAt.Before(metas[j].CreatedAt)
 	})
+	m.restoreTagState(metas)
 
 	seenDigests := make(map[string]struct{})
 	for _, meta := range metas {
-		if meta.Status != StatusPending && meta.Status != StatusPulling && meta.Status != StatusConverting {
-			continue
-		}
-		if meta.Request == nil || meta.Digest == "" {
-			continue
-		}
 		if _, seen := seenDigests[meta.Digest]; seen {
 			continue
 		}
-		seenDigests[meta.Digest] = struct{}{}
-		normalized, err := ParseNormalizedRef(meta.Name)
-		if err != nil {
-			continue
+		if m.recoverInterruptedBuild(meta) {
+			seenDigests[meta.Digest] = struct{}{}
 		}
-		ref := NewResolvedRef(normalized, meta.Digest)
-		if meta.BorrowedAuth && (meta.Status != StatusConverting || !m.ociClient.existsInLayout(digestToLayoutTag(meta.Digest))) {
-			m.updateStatusByDigest(ref, StatusFailed, ErrBorrowedCredentialsExpired, meta.BuildID)
-			continue
-		}
-		buildID := meta.BuildID
-		m.queue.Enqueue(meta.Digest, func() {
-			m.buildImage(context.Background(), ref, nil, buildID)
-		}, nil)
 	}
+}
+
+func (m *manager) recoverInterruptedBuild(meta *imageMetadata) bool {
+	if !isPendingImageStatus(meta.Status) {
+		return false
+	}
+	if meta.Request == nil || meta.Digest == "" {
+		return false
+	}
+	normalized, err := ParseNormalizedRef(meta.Name)
+	if err != nil {
+		return false
+	}
+	ref := NewResolvedRef(normalized, meta.Digest)
+	if meta.BorrowedAuth && (meta.Status != StatusConverting || !m.ociClient.existsInLayout(digestToLayoutTag(meta.Digest))) {
+		m.updateStatusByDigest(ref, StatusFailed, ErrBorrowedCredentialsExpired, meta.BuildID)
+		return true
+	}
+	buildID := meta.BuildID
+	m.queue.Enqueue(meta.Digest, func() {
+		m.buildImage(context.Background(), ref, nil, buildID)
+	}, nil)
+	return true
 }
 
 func (m *manager) GetImage(ctx context.Context, name string) (*Image, error) {
@@ -801,61 +762,86 @@ func (m *manager) GetImage(ctx context.Context, name string) (*Image, error) {
 }
 
 func (m *manager) DeleteImage(ctx context.Context, name string) error {
-	// Parse and normalize the reference
 	ref, err := ParseNormalizedRef(name)
 	if err != nil {
 		return fmt.Errorf("%w: %s", ErrInvalidName, err.Error())
 	}
 
-	repository := ref.Repository()
-
-	// Hold createMu during delete so tag resolution, tag removal, and orphan checks
-	// stay consistent with concurrent creates for the same repository digest.
 	m.createMu.Lock()
 	defer m.createMu.Unlock()
 
 	if ref.IsDigest() {
-		digestHex := ref.DigestHex()
-		if _, err := readMetadata(m.paths, repository, digestHex); err != nil {
-			return err
-		}
-		if err := deleteTagsForDigest(m.paths, repository, digestHex); err != nil {
-			return err
-		}
-		if err := removeDigestIfUnreferenced(m.paths, repository, digestHex, false); err != nil {
-			return err
-		}
-		m.refreshDiskUsageTotals()
-		return nil
+		return m.deleteDigestImage(ref.Repository(), ref.DigestHex())
 	}
+	return m.deleteTaggedImage(ref.Repository(), ref.Tag())
+}
 
-	tag := ref.Tag()
-	m.nextTagGeneration(repository, tag)
-
-	// Resolve the tag to get the digest before deleting
-	digestHex, err := resolveTag(m.paths, repository, tag)
+func (m *manager) deleteDigestImage(repository, digestHex string) error {
+	meta, err := readMetadata(m.paths, repository, digestHex)
 	if err != nil {
 		return err
 	}
-
-	// Delete the tag symlink
-	if err := deleteTag(m.paths, repository, tag); err != nil {
+	digestTags, err := tagsForDigest(m.paths, repository, digestHex)
+	if err != nil {
 		return err
 	}
+	if err := deleteTags(m.paths, repository, digestTags); err != nil {
+		return err
+	}
+	tagsToClean := append([]string(nil), digestTags...)
+	if meta.RequestedTag != "" {
+		tagsToClean = append(tagsToClean, meta.RequestedTag)
+	}
+	for _, claim := range meta.TagClaims {
+		if claim.Repository == repository && claim.Tag != "" {
+			tagsToClean = append(tagsToClean, claim.Tag)
+		}
+	}
+	for _, tag := range tagsToClean {
+		m.forgetTagState(repository, tag)
+	}
+	if err := m.cancelPendingTags(repository, tagsToClean); err != nil {
+		return fmt.Errorf("cancel pending image tags: %w", err)
+	}
+	if err := removeDigestIfUnreferenced(m.paths, repository, digestHex, false); err != nil {
+		return err
+	}
+	m.clearRequestedDigest(digestHex)
+	m.refreshDiskUsageTotals()
+	return nil
+}
 
-	// Check if the digest is now orphaned (no other tags reference it)
+func (m *manager) deleteTaggedImage(repository, tag string) error {
+	digestHex, resolveErr := resolveTag(m.paths, repository, tag)
+	if resolveErr != nil && !errors.Is(resolveErr, ErrNotFound) && !os.IsNotExist(resolveErr) {
+		return resolveErr
+	}
+
+	if resolveErr == nil {
+		if err := deleteTag(m.paths, repository, tag); err != nil {
+			return err
+		}
+	}
+	m.forgetTagState(repository, tag)
+	if err := m.cancelPendingTag(repository, tag); err != nil {
+		return fmt.Errorf("cancel pending image tag: %w", err)
+	}
+
+	if resolveErr != nil {
+		return resolveErr
+	}
+
 	count, err := countTagsForDigest(m.paths, repository, digestHex)
 	if err != nil {
 		return fmt.Errorf("count tags for digest %s: %w", digestHex, err)
 	}
-
-	if count == 0 {
-		if err := removeDigestIfUnreferenced(m.paths, repository, digestHex, true); err != nil {
-			return fmt.Errorf("delete orphaned digest %s: %w", digestHex, err)
-		}
-		m.refreshDiskUsageTotals()
+	if count > 0 {
+		return nil
 	}
-
+	if err := removeDigestIfUnreferenced(m.paths, repository, digestHex, true); err != nil {
+		return fmt.Errorf("delete orphaned digest %s: %w", digestHex, err)
+	}
+	m.refreshDiskUsageTotals()
 	return nil
 }
 
@@ -877,30 +863,6 @@ func (m *manager) TotalOCICacheBytes(ctx context.Context) (int64, error) {
 	return ociCacheBytes, nil
 }
 
-func (m *manager) findRequestedTagImage(ref *NormalizedRef) *Image {
-	metas, err := listAllMetadata(m.paths)
-	if err != nil {
-		return nil
-	}
-	var newest *imageMetadata
-	for _, meta := range metas {
-		requestedTag := meta.RequestedTag
-		if requestedTag == "" {
-			requestedTag = strings.TrimPrefix(meta.Name, ref.Repository()+":")
-		}
-		if requestedTag != ref.Tag() || !strings.HasPrefix(meta.Name, ref.Repository()+":") {
-			continue
-		}
-		if newest == nil || newest.CreatedAt.Before(meta.CreatedAt) {
-			newest = meta
-		}
-	}
-	if newest == nil {
-		return nil
-	}
-	return newest.toImageFor(ref.String())
-}
-
 // WaitForReady blocks until the image reaches a terminal state (ready or failed)
 // or the context is cancelled.
 func (m *manager) WaitForReady(ctx context.Context, name string) error {
@@ -912,11 +874,8 @@ func (m *manager) WaitForReady(ctx context.Context, name string) error {
 	if err != nil {
 		return err
 	}
-	if img.Status == StatusReady {
-		return nil
-	}
-	if img.Status == StatusFailed {
-		return conversionFailedErr(img.Error, nil)
+	if terminal, err := terminalImageError(img); terminal {
+		return err
 	}
 
 	digestHex := strings.TrimPrefix(img.Digest, "sha256:")
@@ -929,11 +888,8 @@ func (m *manager) WaitForReady(ctx context.Context, name string) error {
 	// Re-check after subscribing to close the race window
 	img, err = m.GetImage(ctx, ref.Repository()+"@"+img.Digest)
 	if err == nil {
-		if img.Status == StatusReady {
-			return nil
-		}
-		if img.Status == StatusFailed {
-			return conversionFailedErr(img.Error, nil)
+		if terminal, terminalErr := terminalImageError(img); terminal {
+			return terminalErr
 		}
 	}
 
@@ -957,7 +913,7 @@ func (m *manager) waitForImage(ctx context.Context, name string, ref *Normalized
 	for {
 		var img *Image
 		if !ref.IsDigest() {
-			img = m.findRequestedTagImage(ref)
+			img = m.requestedTagImage(ref)
 		}
 		if img == nil {
 			img, lastErr = m.GetImage(ctx, name)
@@ -973,6 +929,17 @@ func (m *manager) waitForImage(ctx context.Context, name string, ref *Normalized
 			return nil, ctx.Err()
 		case <-time.After(pollInterval):
 		}
+	}
+}
+
+func terminalImageError(img *Image) (bool, error) {
+	switch img.Status {
+	case StatusReady:
+		return true, nil
+	case StatusFailed:
+		return true, conversionFailedErr(img.Error, nil)
+	default:
+		return false, nil
 	}
 }
 

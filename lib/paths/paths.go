@@ -161,6 +161,12 @@ func (p *Paths) ImageContentMetadata(digestHex string) string {
 	return filepath.Join(p.ImageContentDir(digestHex), "metadata.json")
 }
 
+// ImageContentManifestModel returns the path to the persisted OCI manifest
+// model (layer descriptors, config, platform) for content-addressed image data.
+func (p *Paths) ImageContentManifestModel(digestHex string) string {
+	return filepath.Join(p.ImageContentDir(digestHex), "manifest.json")
+}
+
 // ImageRepositoriesDir returns the root directory for repository tag references.
 func (p *Paths) ImageRepositoriesDir() string {
 	return filepath.Join(p.dataDir, "images", "repositories")

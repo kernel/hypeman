@@ -5,21 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+
+	"github.com/kernel/hypeman/lib/paths"
 )
 
 // TagImage creates a ready-image tag without pulling or converting content.
-// Cross-repository tags promote legacy content into the shared layout. The
-// target tag's generation is only committed after the new tag and metadata are
-// on disk, so pending pulls that claimed the target tag keep their claim. When
-// the target previously pointed at different content, that digest is collected
-// after the new tag is live; cleanup failures are logged and do not fail the
-// call, since the tag is already installed at that point.
-//
-// Promotion deliberately runs before the symlink install, so a symlink
-// failure after a cross-repo promotion leaves the content promoted with no
-// target tag. That state is gc-consistent (unreferenced content is
-// collected) and retry is idempotent (promoteImageToContent short-circuits
-// on ready content), which beats rolling back a completed promotion.
+// Cross-repository tags promote content into the shared layout.
 func (m *manager) TagImage(ctx context.Context, source, target string) (*Image, error) {
 	sourceRef, targetRef, err := parseTagReferences(source, target)
 	if err != nil {
@@ -29,53 +20,67 @@ func (m *manager) TagImage(ctx context.Context, source, target string) (*Image, 
 	m.createMu.Lock()
 	defer m.createMu.Unlock()
 
+	previousDigest, err := existingTagDigest(m.paths, targetRef)
+	if err != nil {
+		return nil, err
+	}
 	digestHex, meta, err := m.readyTagImage(sourceRef)
 	if err != nil {
 		return nil, err
 	}
-
-	// A dangling or malformed target symlink is treated like a missing tag so
-	// the retag self-heals; createTagSymlink replaces the link either way.
-	previousDigest, err := resolveTag(m.paths, targetRef.Repository(), targetRef.Tag())
-	if err != nil && !errors.Is(err, ErrNotFound) && !errors.Is(err, errInvalidSymlinkTarget) {
-		return nil, fmt.Errorf("resolve existing target tag: %w", err)
+	if err := m.cancelPendingTag(targetRef.Repository(), targetRef.Tag()); err != nil {
+		return nil, fmt.Errorf("cancel pending image tag: %w", err)
 	}
-	if sourceRef.Repository() != targetRef.Repository() {
-		if err := promoteImageToContent(m.paths, sourceRef.Repository(), digestHex, meta); err != nil {
-			return nil, fmt.Errorf("promote image to content: %w", err)
+	if err := m.installTag(sourceRef, targetRef, digestHex, meta); err != nil {
+		return nil, err
+	}
+	m.nextTagGeneration(targetRef.Repository(), targetRef.Tag())
+	m.clearRequestedTag(targetRef.Repository(), targetRef.Tag(), "")
+	m.cleanupReplacedTag(targetRef, previousDigest, digestHex)
+
+	return meta.toImageFor(targetRef.String()), nil
+}
+
+func existingTagDigest(p *paths.Paths, ref *NormalizedRef) (string, error) {
+	digest, err := resolveTag(p, ref.Repository(), ref.Tag())
+	if err == nil || errors.Is(err, ErrNotFound) || errors.Is(err, errInvalidSymlinkTarget) {
+		return digest, nil
+	}
+	return "", fmt.Errorf("resolve existing target tag: %w", err)
+}
+
+func (m *manager) installTag(source, target *NormalizedRef, digest string, meta *imageMetadata) error {
+	if source.Repository() != target.Repository() {
+		if err := promoteImageToContent(m.paths, source.Repository(), digest, meta); err != nil {
+			return fmt.Errorf("promote image to content: %w", err)
 		}
 	}
-
-	targetKey := tagGenerationKey(targetRef.Repository(), targetRef.Tag())
-	targetGeneration := m.tagGenerations[targetKey] + 1
-	setReferenceTags(meta, targetRef.String(), nil)
-	setReferenceGeneration(meta, targetRef.String(), targetGeneration)
-
-	installed, err := installTagSymlink(m.paths, targetRef.Repository(), targetRef.Tag(), digestHex)
+	installed, err := installTagSymlink(m.paths, target.Repository(), target.Tag(), digest)
 	if err != nil {
-		return nil, fmt.Errorf("create image tag: %w", err)
+		return fmt.Errorf("create image tag: %w", err)
 	}
-	if err := writeMetadata(m.paths, targetRef.Repository(), digestHex, meta); err != nil {
+	if err := writeMetadata(m.paths, target.Repository(), digest, meta); err != nil {
 		if restoreErr := restoreTagSymlink(&installed); restoreErr != nil {
-			return nil, errors.Join(
+			return errors.Join(
 				fmt.Errorf("write tagged image metadata: %w", err),
 				fmt.Errorf("restore image tag: %w", restoreErr),
 			)
 		}
-		return nil, fmt.Errorf("write tagged image metadata: %w", err)
+		return fmt.Errorf("write tagged image metadata: %w", err)
 	}
-	m.tagGenerations[targetKey] = targetGeneration
-	m.cleanupReplacedTag(targetRef, previousDigest, digestHex)
+	return nil
+}
 
-	return meta.toImageFor(targetRef.String()), nil
+func (m *manager) cleanupUnclaimedImage(ref *ResolvedRef) {
+	if err := removeDigestIfUnreferenced(m.paths, ref.Repository(), ref.DigestHex(), true); err != nil {
+		slog.Warn("failed to collect stale image", "repository", ref.Repository(), "digest", ref.DigestHex(), "error", err)
+	}
 }
 
 func (m *manager) cleanupReplacedTag(ref *NormalizedRef, previousDigest, digestHex string) {
 	if previousDigest == "" || previousDigest == digestHex {
 		return
 	}
-	// Sibling tags in this repository may still reference the previous
-	// digest; only collect when this was the last reference.
 	count, err := countTagsForDigest(m.paths, ref.Repository(), previousDigest)
 	if err != nil {
 		slog.Warn("failed to count tags for replaced image", "repository", ref.Repository(), "digest", previousDigest, "error", err)
