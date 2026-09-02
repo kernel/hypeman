@@ -1,6 +1,7 @@
 package instances
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
+	"github.com/kernel/hypeman/lib/logger"
 )
 
 // linuxBootIDPath is the kernel-provided boot ID used to scope process
@@ -24,6 +26,25 @@ const linuxBootIDPath = "/proc/sys/kernel/random/boot_id"
 // that survives SIGKILL is stuck in uninterruptible sleep, and waiting longer
 // does not unstick it, so the wait is short to keep stop and delete fast.
 const hypervisorSIGKILLWaitTimeout = 2 * time.Second
+
+func (m *manager) vfioTerminationGrace() time.Duration {
+	if m.vfioTermGrace > 0 {
+		return m.vfioTermGrace
+	}
+	return hypervisor.VFIOTermGrace
+}
+
+// SIGKILL during guest driver init can wedge a VF until the parent GPU is reset.
+func (m *manager) terminateThenKill(ctx context.Context, inst *Instance, pid int) error {
+	if storedVGPUDevicePath(&inst.StoredMetadata) != "" || len(inst.Devices) > 0 {
+		if syscall.Kill(pid, syscall.SIGTERM) == nil && WaitForProcessExit(pid, m.vfioTerminationGrace()) {
+			return nil
+		}
+		logger.FromContext(ctx).WarnContext(ctx, "hypervisor with VFIO devices did not exit on SIGTERM; hard-killing, device may wedge if the guest driver was initializing",
+			"instance_id", inst.Id, "device_path", inst.GPUDevicePath)
+	}
+	return killProcessAndWait(pid)
+}
 
 // killProcessAndWait SIGKILLs pid and waits for it to exit. A process that
 // survives the first wait gets its process group killed too (the hypervisor
@@ -178,6 +199,12 @@ func classifyResolvedHypervisorOwner(socketPath string, stored, resolved int, er
 		return 0, fmt.Errorf("cannot confirm ownership of socket %s for stored hypervisor PID %d: %w", socketPath, stored, err)
 	}
 	return 0, fmt.Errorf("cannot confirm ownership of socket %s: %w", socketPath, err)
+}
+
+// Ambiguous ownership is treated as live; this must not authorize teardown.
+func hypervisorMayBeAlive(id HypervisorProcessIdentity, socketPath string) bool {
+	pid, err := resolveLiveHypervisorPID(id, socketPath)
+	return err != nil || pid > 0
 }
 
 // ProcessExists reports whether pid belongs to a live, non-zombie process.

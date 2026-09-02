@@ -27,7 +27,12 @@ type VMConfig struct {
 	PCIDevices     []string
 	VGPUDevicePath string
 
-	// Boot configuration
+	// Boot configuration. Empty BootMode preserves the existing direct-kernel
+	// behavior for Linux callers.
+	BootMode BootMode
+	Firmware *FirmwareConfig
+	TPM      *TPMConfig
+
 	KernelPath string
 	InitrdPath string
 	KernelArgs string
@@ -55,9 +60,54 @@ type CPUTopology struct {
 	Packages       int
 }
 
+type BootMode string
+
+const (
+	BootModeDirect BootMode = "direct"
+	BootModeUEFI   BootMode = "uefi"
+)
+
+// EffectiveBootMode preserves direct Linux kernel boot for existing callers.
+func (c VMConfig) EffectiveBootMode() BootMode {
+	if c.BootMode == "" {
+		return BootModeDirect
+	}
+	return c.BootMode
+}
+
+// FirmwareConfig describes UEFI firmware files. CodePath is immutable firmware;
+// VarsPath is per-instance writable variable storage.
+type FirmwareConfig struct {
+	CodePath   string
+	VarsPath   string
+	SecureBoot bool
+}
+
+// TPMConfig describes a per-instance software TPM 2.0 endpoint.
+type TPMConfig struct {
+	SocketPath string
+	StateDir   string
+}
+
+type DiskFormat string
+
+const (
+	DiskFormatRaw   DiskFormat = "raw"
+	DiskFormatQCOW2 DiskFormat = "qcow2"
+)
+
+// EffectiveFormat preserves raw disks for existing callers.
+func (d DiskConfig) EffectiveFormat() DiskFormat {
+	if d.Format == "" {
+		return DiskFormatRaw
+	}
+	return d.Format
+}
+
 // DiskConfig represents a disk attached to the VM
 type DiskConfig struct {
 	Path       string
+	Format     DiskFormat
 	Readonly   bool
 	IOBps      int64 // Sustained I/O rate limit in bytes/sec (0 = unlimited)
 	IOBurstBps int64 // Burst I/O rate in bytes/sec (0 = same as IOBps)

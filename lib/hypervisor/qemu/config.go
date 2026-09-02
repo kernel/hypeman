@@ -20,7 +20,11 @@ func buildArgs(cfg hypervisor.VMConfig, machine MachineType) []string {
 	microvm := machine == MachineTypeMicroVM
 
 	// Machine type with KVM acceleration (arch-specific when omitted).
-	args = append(args, "-machine", string(machine)+",accel=kvm")
+	machineArg := string(machine) + ",accel=kvm"
+	if cfg.Firmware != nil && cfg.Firmware.SecureBoot {
+		machineArg += ",smm=on"
+	}
+	args = append(args, "-machine", machineArg)
 	if microvm {
 		// Do not allow a host qemu.conf to add devices outside microvm's
 		// documented eight virtio-mmio-device limit.
@@ -51,6 +55,18 @@ func buildArgs(cfg hypervisor.VMConfig, machine MachineType) []string {
 		args = append(args, "-device", strings.Join(balloonOpts, ","))
 	}
 
+	// Firmware boot. The code image is shared and immutable; variable storage is
+	// a per-instance writable copy.
+	if cfg.EffectiveBootMode() == hypervisor.BootModeUEFI {
+		args = append(args,
+			"-drive", fmt.Sprintf("if=pflash,format=raw,unit=0,file=%s,readonly=on", cfg.Firmware.CodePath),
+			"-drive", fmt.Sprintf("if=pflash,format=raw,unit=1,file=%s", cfg.Firmware.VarsPath),
+		)
+		if cfg.Firmware.SecureBoot {
+			args = append(args, "-global", "driver=cfi.pflash01,property=secure,value=on")
+		}
+	}
+
 	// Kernel and initrd
 	if cfg.KernelPath != "" {
 		args = append(args, "-kernel", cfg.KernelPath)
@@ -64,7 +80,7 @@ func buildArgs(cfg hypervisor.VMConfig, machine MachineType) []string {
 
 	// Disk configuration
 	for i, disk := range cfg.Disks {
-		driveOpts := fmt.Sprintf("file=%s,format=raw,if=none,id=drive%d", disk.Path, i)
+		driveOpts := fmt.Sprintf("file=%s,format=%s,if=none,id=drive%d", disk.Path, disk.EffectiveFormat(), i)
 		if disk.Readonly {
 			// Disable host-side file locking for shared readonly bases so multiple
 			// VMs can boot concurrently from the same image without lock contention.
@@ -78,6 +94,15 @@ func buildArgs(cfg hypervisor.VMConfig, machine MachineType) []string {
 		}
 		args = append(args, "-drive", driveOpts)
 		args = append(args, "-device", fmt.Sprintf("%s,drive=drive%d", virtioDevice(microvm, "virtio-blk"), i))
+	}
+
+	// Software TPM 2.0. The swtpm process is started by Starter before QEMU.
+	if cfg.TPM != nil {
+		args = append(args,
+			"-chardev", fmt.Sprintf("socket,id=chrtpm,path=%s", cfg.TPM.SocketPath),
+			"-tpmdev", "emulator,id=tpm0,chardev=chrtpm",
+			"-device", "tpm-crb,tpmdev=tpm0",
+		)
 	}
 
 	// Network configuration

@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -21,21 +23,23 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestVGPU is an integration test that verifies vGPU (SR-IOV mdev) support works.
+// TestVGPU is an integration test that verifies vGPU (SR-IOV) support works
+// on the host's framework: mdev or NVIDIA's vendor-specific VFIO.
 //
 // This test automatically detects vGPU availability and skips if:
-//   - No SR-IOV VFs are found in /sys/class/mdev_bus/
+//   - No vGPU framework (mdev or vendor VFIO) is discovered
 //   - No vGPU profiles are available
-//   - Not running as root (required for mdev creation)
+//   - Not running as root (required for sysfs vGPU assignment)
 //   - KVM is not available
 //
 // To run manually:
 //
 //	sudo go test -v -run TestVGPU -timeout 5m ./integration/...
 //
-// Note: This test verifies mdev creation and PCI device visibility inside the VM.
-// It does NOT test nvidia-smi or CUDA functionality since that requires NVIDIA
-// guest drivers pre-installed in the image.
+// Note: This test verifies vGPU assignment, release on stop, reacquisition on
+// start, and PCI device visibility inside the VM. It does NOT test nvidia-smi
+// or CUDA functionality since that requires NVIDIA guest drivers pre-installed
+// in the image.
 func TestVGPU(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
@@ -84,9 +88,15 @@ func TestVGPU(t *testing.T) {
 
 	// Cleanup any orphaned instances and mdevs
 	t.Cleanup(func() {
-		if instanceID != "" {
-			t.Log("Cleanup: Deleting instance...")
-			instanceManager.DeleteInstance(ctx, instanceID)
+		if instanceID == "" {
+			return
+		}
+		if _, err := instanceManager.StopInstance(ctx, instanceID); err != nil {
+			t.Logf("Cleanup: stop instance: %v", err)
+		}
+		t.Log("Cleanup: Deleting instance...")
+		if err := instanceManager.DeleteInstance(ctx, instanceID); err != nil {
+			t.Errorf("cleanup: delete instance: %v", err)
 		}
 	})
 
@@ -159,9 +169,18 @@ func TestVGPU(t *testing.T) {
 	instanceID = inst.Id
 	t.Logf("Instance created: %s", inst.Id)
 
-	// Verify mdev UUID was assigned
-	require.NotEmpty(t, inst.GPUMdevUUID, "Instance should have mdev UUID assigned")
-	t.Logf("mdev UUID: %s", inst.GPUMdevUUID)
+	// Verify the assignment matches the host's framework
+	require.NotEmpty(t, inst.GPUDevicePath, "Instance should have a vGPU device path assigned")
+	switch inst.GPUFramework {
+	case devices.VGPUFrameworkMdev:
+		require.NotEmpty(t, inst.GPUMdevUUID, "mdev instance should have a UUID assigned")
+		t.Logf("mdev UUID: %s", inst.GPUMdevUUID)
+	case devices.VGPUFrameworkVendorVFIO:
+		require.Empty(t, inst.GPUMdevUUID, "vendor VFIO instance should not have an mdev UUID")
+		t.Logf("vendor VFIO VF: %s", inst.GPUDevicePath)
+	default:
+		t.Fatalf("unexpected vGPU framework %q", inst.GPUFramework)
+	}
 
 	// Step 5: Check GPU resources AFTER creating instance
 	t.Run("ResourcesDecrementedAfterCreation", func(t *testing.T) {
@@ -180,12 +199,9 @@ func TestVGPU(t *testing.T) {
 		assert.Less(t, availableAfter, availableBefore, "available instances should decrease after creating VM")
 	})
 
-	// Step 6: Verify mdev was created in sysfs
-	t.Run("MdevCreated", func(t *testing.T) {
-		mdevPath := "/sys/bus/mdev/devices/" + inst.GPUMdevUUID
-		_, err := os.Stat(mdevPath)
-		assert.NoError(t, err, "mdev device should exist at %s", mdevPath)
-		t.Logf("mdev exists at: %s", mdevPath)
+	// Step 6: Verify the assignment exists in sysfs
+	t.Run("VGPUAssignedInSysfs", func(t *testing.T) {
+		assertVGPUAssigned(t, inst.GPUFramework, inst.GPUDevicePath)
 	})
 
 	// Step 7: Wait for guest agent to be ready
@@ -225,11 +241,66 @@ func TestVGPU(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.Equal(t, profile, actualInst.GPUProfile, "GPU profile should match")
-		assert.NotEmpty(t, actualInst.GPUMdevUUID, "mdev UUID should be set")
-		t.Logf("Instance GPU: profile=%s, mdev=%s", actualInst.GPUProfile, actualInst.GPUMdevUUID)
+		assert.Equal(t, inst.GPUFramework, actualInst.GPUFramework, "framework should match")
+		assert.NotEmpty(t, actualInst.GPUDevicePath, "device path should be set")
+		if inst.GPUFramework == devices.VGPUFrameworkMdev {
+			assert.NotEmpty(t, actualInst.GPUMdevUUID, "mdev UUID should be set")
+		}
+		t.Logf("Instance GPU: profile=%s, framework=%s, device=%s", actualInst.GPUProfile, actualInst.GPUFramework, actualInst.GPUDevicePath)
+	})
+
+	t.Log("Step 10: Stopping instance...")
+	_, err = instanceManager.StopInstance(ctx, inst.Id)
+	require.NoError(t, err, "stop should succeed")
+
+	t.Run("VGPUReleasedOnStop", func(t *testing.T) {
+		stopped, err := instanceManager.GetInstance(ctx, inst.Id)
+		require.NoError(t, err)
+		assert.Empty(t, stopped.GPUDevicePath, "assignment metadata should be cleared on stop")
+		assertVGPUReleased(t, inst.GPUFramework, inst.GPUDevicePath)
+	})
+
+	t.Log("Step 11: Starting instance to reacquire a vGPU...")
+	started, err := instanceManager.StartInstance(ctx, inst.Id, instances.StartInstanceRequest{})
+	require.NoError(t, err, "start should succeed")
+
+	t.Run("VGPUReacquiredOnStart", func(t *testing.T) {
+		require.NotEmpty(t, started.GPUDevicePath, "start should assign a vGPU")
+		assert.Equal(t, inst.GPUFramework, started.GPUFramework, "framework should match")
+		assertVGPUAssigned(t, started.GPUFramework, started.GPUDevicePath)
 	})
 
 	t.Log("✅ vGPU test PASSED!")
+}
+
+func assertVGPUAssigned(t *testing.T, framework devices.VGPUFramework, devicePath string) {
+	t.Helper()
+	switch framework {
+	case devices.VGPUFrameworkMdev:
+		_, err := os.Stat(devicePath)
+		assert.NoError(t, err, "mdev device should exist at %s", devicePath)
+	case devices.VGPUFrameworkVendorVFIO:
+		data, err := os.ReadFile(filepath.Join(devicePath, "nvidia", "current_vgpu_type"))
+		require.NoError(t, err, "VF should expose current_vgpu_type")
+		assert.NotEqual(t, "0", strings.TrimSpace(string(data)), "VF should have a vGPU type assigned")
+	default:
+		t.Fatalf("unexpected vGPU framework %q", framework)
+	}
+}
+
+func assertVGPUReleased(t *testing.T, framework devices.VGPUFramework, devicePath string) {
+	t.Helper()
+	switch framework {
+	case devices.VGPUFrameworkMdev:
+		_, err := os.Stat(devicePath)
+		assert.True(t, os.IsNotExist(err), "mdev device should be gone from %s", devicePath)
+	case devices.VGPUFrameworkVendorVFIO:
+		data, err := os.ReadFile(filepath.Join(devicePath, "nvidia", "current_vgpu_type"))
+		require.NoError(t, err, "VF should expose current_vgpu_type")
+		assert.Equal(t, "0", strings.TrimSpace(string(data)), "VF assignment should be released")
+	default:
+		t.Fatalf("unexpected vGPU framework %q", framework)
+	}
 }
 
 // checkVGPUTestPrerequisites checks if vGPU test can run.
@@ -245,10 +316,13 @@ func checkVGPUTestPrerequisites() (string, string) {
 		return "vGPU test requires root (sudo) for mdev creation", ""
 	}
 
-	// Check for vGPU mode (SR-IOV VFs present)
-	mode := devices.DetectHostGPUMode()
-	if mode != devices.GPUModeVGPU {
-		return "vGPU test requires SR-IOV VFs in /sys/class/mdev_bus/", ""
+	// Check for a vGPU framework (mdev or vendor VFIO)
+	framework, _, err := devices.DiscoverVGPU()
+	if err != nil {
+		return "vGPU test failed to discover vGPU framework: " + err.Error(), ""
+	}
+	if framework == devices.VGPUFrameworkNone {
+		return "vGPU test requires SR-IOV VFs with an mdev or vendor VFIO vGPU framework", ""
 	}
 
 	// Check for available profiles

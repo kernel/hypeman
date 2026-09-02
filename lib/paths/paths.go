@@ -276,6 +276,11 @@ func (p *Paths) InstanceHypemanLog(id string) string {
 	return filepath.Join(p.InstanceLogs(id), "hypeman.log")
 }
 
+// InstanceSWTPMLog returns the path to the instance software TPM log.
+func (p *Paths) InstanceSWTPMLog(id string) string {
+	return filepath.Join(p.InstanceLogs(id), "swtpm.log")
+}
+
 // InstanceSnapshots returns the path to instance snapshots directory.
 func (p *Paths) InstanceSnapshots(id string) string {
 	return filepath.Join(p.InstanceDir(id), "snapshots")

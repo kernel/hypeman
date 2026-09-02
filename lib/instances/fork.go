@@ -219,7 +219,6 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 	default:
 		return nil, false, fmt.Errorf("%w: cannot fork from state %s (must be Stopped or Standby)", ErrInvalidState, source.State)
 	}
-
 	if !supportValidated {
 		if err := m.validateForkSupport(ctx, stored.HypervisorType); err != nil {
 			return nil, false, err

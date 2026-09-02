@@ -5,7 +5,9 @@ package devices
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -21,10 +23,10 @@ import (
 )
 
 const (
-	mdevBusPath             = "/sys/class/mdev_bus"
-	mdevDevices             = "/sys/bus/mdev/devices"
-	orphanedMdevGracePeriod = 5 * time.Minute
-	procPath                = "/proc"
+	mdevBusPath               = "/sys/class/mdev_bus"
+	mdevDevices               = "/sys/bus/mdev/devices"
+	procPath                  = "/proc"
+	mdevAssignmentGracePeriod = 5 * time.Minute
 )
 
 // mdevMu protects mdev creation/destruction to prevent race conditions
@@ -89,32 +91,54 @@ func getCachedProfiles(firstVF string) []profileMetadata {
 	return cachedProfiles
 }
 
-// DiscoverVFs returns all SR-IOV Virtual Functions available for vGPU.
-// These are discovered by scanning /sys/class/mdev_bus/ which contains
-// VFs that can host mdev devices.
-func DiscoverVFs() ([]VirtualFunction, error) {
-	entries, err := os.ReadDir(mdevBusPath)
+// discoverMdevVFs returns all SR-IOV Virtual Functions available for vGPU,
+// discovered by scanning /sys/class/mdev_bus/.
+func discoverMdevVFs() ([]VirtualFunction, error) {
+	return discoverMdevVFsWith(mdevBusPath, pciDevicesPath, ListMdevDevices)
+}
+
+func discoverMdevVFsWith(busPath, pciPath string, listMdevs func() ([]MdevDevice, error)) ([]VirtualFunction, error) {
+	entries, err := os.ReadDir(busPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil // No mdev_bus means no vGPU support
+			return nil, nil // No mdev_bus means no mdev vGPU support
 		}
 		return nil, fmt.Errorf("read mdev_bus: %w", err)
 	}
 
 	// List mdevs once and build a lookup map to avoid O(n*m) performance
-	mdevs, _ := ListMdevDevices()
+	mdevs, _ := listMdevs()
 	mdevByVF := make(map[string]bool, len(mdevs))
 	for _, mdev := range mdevs {
 		mdevByVF[mdev.VFAddress] = true
 	}
 
 	var vfs []VirtualFunction
+	var vfErrs []error
 	for _, entry := range entries {
 		vfAddr := entry.Name()
+		types, err := os.ReadDir(filepath.Join(busPath, vfAddr, "mdev_supported_types"))
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			vfErrs = append(vfErrs, fmt.Errorf("read mdev supported types for VF %s: %w", vfAddr, err))
+			continue
+		}
+		usable := false
+		for _, typ := range types {
+			if typ.IsDir() {
+				usable = true
+				break
+			}
+		}
+		if !usable {
+			continue
+		}
 
 		// Find parent GPU by checking physfn symlink
 		// VFs have a physfn symlink pointing to their parent Physical Function
-		physfnPath := filepath.Join("/sys/bus/pci/devices", vfAddr, "physfn")
+		physfnPath := filepath.Join(pciPath, vfAddr, "physfn")
 		parentGPU := ""
 		if target, err := os.Readlink(physfnPath); err == nil {
 			parentGPU = filepath.Base(target)
@@ -129,24 +153,23 @@ func DiscoverVFs() ([]VirtualFunction, error) {
 			Allocated:  hasMdev,
 		})
 	}
+	if len(vfErrs) > 0 {
+		// Mirror vendor VFIO discovery: one unreadable VF must not blank out
+		// the host's GPU capacity. Only when no VF is readable does discovery
+		// fail, so a wholesale sysfs outage cannot demote an mdev host to
+		// vendor VFIO or passthrough while assignments exist.
+		if len(vfs) == 0 {
+			return nil, errors.Join(vfErrs...)
+		}
+		slog.Default().Warn("skipping unreadable mdev VFs", "error", errors.Join(vfErrs...))
+	}
 
 	return vfs, nil
 }
 
-// ListGPUProfiles returns available vGPU profiles with availability counts.
-// Profiles are discovered from the first VF's mdev_supported_types directory.
-func ListGPUProfiles() ([]GPUProfile, error) {
-	vfs, err := DiscoverVFs()
-	if err != nil {
-		return nil, err
-	}
-	return ListGPUProfilesWithVFs(vfs)
-}
-
-// ListGPUProfilesWithVFs returns available vGPU profiles using pre-discovered VFs.
-// This avoids redundant VF discovery when the caller already has the list.
-// Uses parallel sysfs reads for fast availability counting.
-func ListGPUProfilesWithVFs(vfs []VirtualFunction) ([]GPUProfile, error) {
+// listMdevGPUProfilesWithVFs returns available vGPU profiles using
+// pre-discovered VFs. Uses parallel sysfs reads for fast availability counting.
+func listMdevGPUProfilesWithVFs(vfs []VirtualFunction) ([]GPUProfile, error) {
 	if len(vfs) == 0 {
 		return nil, nil
 	}
@@ -305,7 +328,7 @@ func countAvailableForSingleProfile(freeVFsByParent map[string][]VirtualFunction
 
 // findProfileType finds the internal type name (e.g., "nvidia-556") for a profile name (e.g., "L40S-1Q")
 func findProfileType(profileName string) (string, error) {
-	vfs, err := DiscoverVFs()
+	vfs, err := discoverMdevVFs()
 	if err != nil || len(vfs) == 0 {
 		return "", fmt.Errorf("no VFs available")
 	}
@@ -531,7 +554,7 @@ func CreateMdev(ctx context.Context, profileName, instanceID string) (*MdevDevic
 	}
 
 	// Discover all VFs
-	vfs, err := DiscoverVFs()
+	vfs, err := discoverMdevVFs()
 	if err != nil {
 		return nil, fmt.Errorf("discover VFs: %w", err)
 	}
@@ -685,19 +708,29 @@ func mdevPastGracePeriod(mdevUUID string, gracePeriod time.Duration) (bool, time
 	return age >= gracePeriod, age, nil
 }
 
+func protectedMdevUUIDs(instanceInfos []MdevReconcileInfo) map[string]struct{} {
+	protected := make(map[string]struct{}, len(instanceInfos))
+	for _, info := range instanceInfos {
+		if info.MdevUUID != "" && info.IsRunning {
+			protected[info.MdevUUID] = struct{}{}
+		}
+	}
+	return protected
+}
+
 // ReconcileMdevs destroys orphaned mdevs on managed VFs.
-// This is called on server startup to clean up stale mdevs from previous runs.
 //
 // Policy:
 //   - Consider only mdevs whose parent VF is currently managed by hypeman (discoverable via /sys/class/mdev_bus)
+//   - Keep mdevs claimed by live instance metadata
 //   - Keep mdevs whose VFIO group has an open file handle (/dev/vfio/<group>)
 //   - Keep mdevs younger than a short grace period to avoid racing very recent state transitions
 //   - Delete all remaining mdevs
 func ReconcileMdevs(ctx context.Context, instanceInfos []MdevReconcileInfo) error {
 	log := logger.FromContext(ctx)
-	_ = instanceInfos
+	protectedMdevs := protectedMdevUUIDs(instanceInfos)
 
-	vfs, err := DiscoverVFs()
+	vfs, err := discoverMdevVFs()
 	if err != nil {
 		return fmt.Errorf("discover managed VFs: %w", err)
 	}
@@ -724,15 +757,20 @@ func ReconcileMdevs(ctx context.Context, instanceInfos []MdevReconcileInfo) erro
 	log.InfoContext(ctx, "reconciling mdev devices",
 		"total_mdevs", len(mdevs),
 		"managed_vfs", len(managedVFs),
-		"grace_period", orphanedMdevGracePeriod.String(),
+		"grace_period", mdevAssignmentGracePeriod.String(),
 	)
 
 	groupInUseCache := make(map[int]bool)
-	var destroyed, failedDestroy, skippedUnmanagedVF, skippedInUse, skippedGrace, skippedProbeError int
+	var destroyed, failedDestroy, skippedUnmanagedVF, skippedClaimed, skippedInUse, skippedGrace, skippedProbeError int
 	for _, mdev := range mdevs {
 		if _, ok := managedVFs[mdev.VFAddress]; !ok {
 			log.DebugContext(ctx, "skipping mdev on unmanaged VF", "uuid", mdev.UUID, "vf", mdev.VFAddress)
 			skippedUnmanagedVF++
+			continue
+		}
+		if _, ok := protectedMdevs[mdev.UUID]; ok {
+			log.DebugContext(ctx, "skipping mdev claimed by live instance", "uuid", mdev.UUID)
+			skippedClaimed++
 			continue
 		}
 
@@ -759,7 +797,7 @@ func ReconcileMdevs(ctx context.Context, instanceInfos []MdevReconcileInfo) erro
 			continue
 		}
 
-		pastGracePeriod, age, err := mdevPastGracePeriod(mdev.UUID, orphanedMdevGracePeriod)
+		pastGracePeriod, age, err := mdevPastGracePeriod(mdev.UUID, mdevAssignmentGracePeriod)
 		if err != nil {
 			log.WarnContext(ctx, "failed to determine mdev age, skipping cleanup", "uuid", mdev.UUID, "error", err)
 			skippedProbeError++
@@ -769,7 +807,7 @@ func ReconcileMdevs(ctx context.Context, instanceInfos []MdevReconcileInfo) erro
 			log.DebugContext(ctx, "skipping recently created mdev during grace period",
 				"uuid", mdev.UUID,
 				"age", age.String(),
-				"grace_period", orphanedMdevGracePeriod.String(),
+				"grace_period", mdevAssignmentGracePeriod.String(),
 			)
 			skippedGrace++
 			continue
@@ -795,6 +833,7 @@ func ReconcileMdevs(ctx context.Context, instanceInfos []MdevReconcileInfo) erro
 		"destroyed", destroyed,
 		"failed_destroy", failedDestroy,
 		"skipped_unmanaged_vf", skippedUnmanagedVF,
+		"skipped_claimed", skippedClaimed,
 		"skipped_in_use", skippedInUse,
 		"skipped_grace", skippedGrace,
 		"skipped_probe_error", skippedProbeError,

@@ -920,6 +920,8 @@ func (s *ApiService) GetInstanceLogs(ctx context.Context, request oapi.GetInstan
 			source = instances.LogSourceVMM
 		case oapi.Hypeman:
 			source = instances.LogSourceHypeman
+		case oapi.Swtpm:
+			source = instances.LogSourceSWTPM
 		}
 	}
 
@@ -1268,6 +1270,9 @@ func instanceToOAPI(inst instances.Instance) oapi.Instance {
 		// Only set MdevUuid when non-empty to avoid "mdev_uuid": "" in output
 		if inst.GPUMdevUUID != "" {
 			gpu.MdevUuid = lo.ToPtr(inst.GPUMdevUUID)
+		}
+		if inst.GPUDevicePath != "" {
+			gpu.DevicePath = lo.ToPtr(inst.GPUDevicePath)
 		}
 		oapiInst.Gpu = gpu
 	}

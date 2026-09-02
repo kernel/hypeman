@@ -263,7 +263,6 @@ func (m *manager) restoreSnapshot(ctx context.Context, id string, snapshotID str
 	if sourceInst.State == StateRunning {
 		return nil, fmt.Errorf("%w: cannot restore snapshot while source is %s", ErrInvalidState, sourceInst.State)
 	}
-
 	targetState, err := resolveSnapshotTargetState(rec.Snapshot.Kind, req.TargetState)
 	if err != nil {
 		return nil, err
