@@ -3,6 +3,7 @@ package images
 import (
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -86,15 +87,25 @@ func totalReadyImageBytesFromMetadata(imagesDir string) (int64, error) {
 // totalLayerArtifactBytesFromFilesystem sums materialized layer artifacts.
 func totalLayerArtifactBytesFromFilesystem(layersDir string) (int64, error) {
 	var total int64
-	err := filepath.Walk(layersDir, func(path string, info os.FileInfo, err error) error {
+	err := filepath.WalkDir(layersDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			if os.IsNotExist(err) {
 				return nil
 			}
 			return err
 		}
-		if info.IsDir() || !strings.HasPrefix(info.Name(), "layer.") {
+		if d.IsDir() {
+			if strings.HasPrefix(d.Name(), ".") && path != layersDir {
+				return filepath.SkipDir
+			}
 			return nil
+		}
+		if !strings.HasPrefix(d.Name(), "layer.") {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
 		}
 		total += info.Size()
 		return nil

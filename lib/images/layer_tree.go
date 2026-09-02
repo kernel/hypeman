@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -37,7 +38,7 @@ func makeTreeWritable(path string) error {
 	if err := os.Chmod(path, info.Mode().Perm()|0700); err != nil {
 		return err
 	}
-	return filepath.WalkDir(path, func(path string, entry fs.DirEntry, err error) error {
+	return filepath.WalkDir(path, func(p string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -46,7 +47,7 @@ func makeTreeWritable(path string) error {
 			if err != nil {
 				return err
 			}
-			return os.Chmod(path, info.Mode().Perm()|0700)
+			return os.Chmod(p, info.Mode().Perm()|0700)
 		}
 		return nil
 	})
@@ -97,6 +98,9 @@ func applyLayerTree(layerDir, targetDir string) (err error) {
 			return clearDirContents(targetParent)
 		}
 		hidden := strings.TrimPrefix(base, whiteoutPrefix)
+		if hidden == "" || hidden == "." || hidden == ".." {
+			return nil
+		}
 		target, err := safeJoin(targetDir, filepath.Join(filepath.Dir(rel), hidden))
 		if err != nil {
 			return err
@@ -161,7 +165,8 @@ func applyLayerTree(layerDir, targetDir string) (err error) {
 	if err != nil {
 		return fmt.Errorf("copy layer tree: %w", err)
 	}
-	for _, dir := range pendingDirs {
+	for i := len(pendingDirs) - 1; i >= 0; i-- {
+		dir := pendingDirs[i]
 		if err := copyEntryMetadata(dir.src, dir.dst, dir.info); err != nil {
 			return fmt.Errorf("restore dir metadata %s: %w", dir.dst, err)
 		}
@@ -176,30 +181,57 @@ func makePathWritable(root, path string, originalModes map[string]fs.FileMode) e
 	if path != root && !strings.HasPrefix(path, root+string(filepath.Separator)) {
 		return fmt.Errorf("path is outside target root: %s", path)
 	}
-	for current := path; ; current = filepath.Dir(current) {
-		info, err := os.Lstat(current)
-		if err == nil {
-			if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-				return fmt.Errorf("target parent is not a directory: %s", current)
-			}
-			if _, recorded := originalModes[current]; !recorded {
-				originalModes[current] = info.Mode()
-				if err := os.Chmod(current, info.Mode().Perm()|0700); err != nil {
-					return err
-				}
-			}
-		} else if !os.IsNotExist(err) {
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return err
+	}
+	if err := makeDirWritable(root, originalModes); err != nil {
+		return err
+	}
+	if rel == "." {
+		return nil
+	}
+	current := root
+	for _, part := range strings.Split(rel, string(filepath.Separator)) {
+		current = filepath.Join(current, part)
+		if err := makeDirWritable(current, originalModes); err != nil {
 			return err
 		}
-		if current == root {
+	}
+	return nil
+}
+
+func makeDirWritable(dir string, originalModes map[string]fs.FileMode) error {
+	info, err := os.Lstat(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
 			return nil
 		}
+		return err
 	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return fmt.Errorf("target parent is not a directory: %s", dir)
+	}
+	if _, recorded := originalModes[dir]; !recorded {
+		originalModes[dir] = info.Mode()
+		if err := os.Chmod(dir, info.Mode().Perm()|0700); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func restoreDirectoryModes(originalModes map[string]fs.FileMode) error {
+	paths := make([]string, 0, len(originalModes))
+	for path := range originalModes {
+		paths = append(paths, path)
+	}
+	sort.Slice(paths, func(i, j int) bool {
+		return len(paths[i]) > len(paths[j])
+	})
 	var restoreErr error
-	for path, mode := range originalModes {
+	for _, path := range paths {
+		mode := originalModes[path]
 		if _, err := os.Lstat(path); os.IsNotExist(err) {
 			continue
 		} else if err != nil {
@@ -339,14 +371,14 @@ func copySpecialEntry(src, dst string, info os.FileInfo) error {
 }
 
 func specialFileMode(mode fs.FileMode) (uint32, error) {
-	switch mode {
-	case fs.ModeCharDevice:
+	switch {
+	case mode&fs.ModeCharDevice != 0:
 		return syscall.S_IFCHR, nil
-	case fs.ModeDevice:
+	case mode&fs.ModeDevice != 0:
 		return syscall.S_IFBLK, nil
-	case fs.ModeNamedPipe:
+	case mode&fs.ModeNamedPipe != 0:
 		return syscall.S_IFIFO, nil
-	case fs.ModeSocket:
+	case mode&fs.ModeSocket != 0:
 		return syscall.S_IFSOCK, nil
 	default:
 		return 0, fmt.Errorf("unsupported file mode")

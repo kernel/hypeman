@@ -175,7 +175,7 @@ func (m *manager) materializeLayerArtifact(desc layerDescriptor) (*layerArtifact
 	if err != nil {
 		return nil, fmt.Errorf("create unpack directory: %w", err)
 	}
-	defer os.RemoveAll(unpackDir)
+	defer removePath(unpackDir)
 
 	stats, err := unpackLayerBlob(blobPath, desc.MediaType, unpackDir)
 	if err != nil {
@@ -310,7 +310,8 @@ func unpackLayerBlob(blobPath, mediaType, dest string) (*unpackStats, error) {
 	if err := resolveHardlinks(dest, pendingHardlinks); err != nil {
 		return nil, err
 	}
-	for _, dir := range pendingDirs {
+	for i := len(pendingDirs) - 1; i >= 0; i-- {
+		dir := pendingDirs[i]
 		if err := applyTarMetadata(dir.target, dir.header); err != nil {
 			return nil, fmt.Errorf("restore dir metadata %s: %w", dir.target, err)
 		}
@@ -325,8 +326,9 @@ type pendingDir struct {
 }
 
 type pendingHardlink struct {
-	target   string
-	linkname string
+	target     string
+	linkname   string
+	linkTarget string
 }
 
 func resolveHardlinks(root string, pending []pendingHardlink) error {
@@ -337,6 +339,7 @@ func resolveHardlinks(root string, pending []pendingHardlink) error {
 		if err != nil {
 			return err
 		}
+		link.linkTarget = linkTarget
 		if _, err := os.Lstat(linkTarget); err == nil {
 			ready = append(ready, link)
 		} else if os.IsNotExist(err) {
@@ -353,9 +356,7 @@ func resolveHardlinks(root string, pending []pendingHardlink) error {
 		if err := prepareTarTarget(link.target); err != nil {
 			return err
 		}
-		if linkTarget, err := safeJoin(root, link.linkname); err != nil {
-			return err
-		} else if err := os.Link(linkTarget, link.target); err != nil {
+		if err := os.Link(link.linkTarget, link.target); err != nil {
 			return fmt.Errorf("create hardlink %s -> %s: %w", link.target, link.linkname, err)
 		}
 		resolved++
@@ -411,6 +412,7 @@ func (c multiCloser) Close() error {
 // do not exist yet, so their targets are checked by
 // validateSymlinkTarget instead.
 func safeJoin(root, name string) (string, error) {
+	root = filepath.Clean(root)
 	rootInfo, err := os.Lstat(root)
 	if err != nil {
 		return "", fmt.Errorf("inspect extraction root: %w", err)
@@ -423,12 +425,11 @@ func safeJoin(root, name string) (string, error) {
 	}
 	clean := filepath.Clean(name)
 	if clean == "." {
-		return filepath.Clean(root), nil
+		return root, nil
 	}
 	if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
 		return "", fmt.Errorf("tar entry escapes root: %s", name)
 	}
-	root = filepath.Clean(root)
 	target := filepath.Join(root, clean)
 	if target == root {
 		return target, nil
@@ -588,13 +589,10 @@ func applyTarMetadata(path string, header *tar.Header) error {
 		uid:      header.Uid,
 		gid:      header.Gid,
 		hasOwner: true,
-		mode:     os.FileMode(header.Mode),
+		mode:     header.FileInfo().Mode(),
 		symlink:  header.Typeflag == tar.TypeSymlink,
 		atime:    atime,
 		mtime:    mtime,
 		xattrs:   tarXattrs(header),
 	})
 }
-
-// removePath removes whatever entry occupies path, including non-empty
-// directories, and tolerates a missing path.

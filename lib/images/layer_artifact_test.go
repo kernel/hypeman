@@ -501,3 +501,106 @@ func TestApplyLayerTreePreservesDirMtime(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, info.ModTime().Equal(old), "dir mtime must survive the merge")
 }
+
+func TestSpecialFileModeSupportsCharDevice(t *testing.T) {
+	mode, err := specialFileMode(fs.ModeCharDevice | fs.ModeDevice)
+	require.NoError(t, err)
+	require.Equal(t, uint32(syscall.S_IFCHR), mode)
+}
+
+func TestApplyTarMetadataPreservesSpecialBits(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "suid-bin")
+	require.NoError(t, os.WriteFile(target, []byte("bin"), 0755))
+
+	header := &tar.Header{
+		Name:     "suid-bin",
+		Typeflag: tar.TypeReg,
+		Mode:     04755,
+	}
+	require.NoError(t, applyTarMetadata(target, header))
+
+	info, err := os.Stat(target)
+	require.NoError(t, err)
+	require.Equal(t, os.ModeSetuid, info.Mode()&os.ModeSetuid, "setuid bit must be preserved")
+}
+
+func TestApplyLayerTreeSanitizesWhiteouts(t *testing.T) {
+	root := t.TempDir()
+	targetDir := filepath.Join(root, "target")
+	layerDir := filepath.Join(root, "layer")
+
+	require.NoError(t, os.MkdirAll(filepath.Join(targetDir, "parent", "child"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(targetDir, "parent", "victim.txt"), []byte("v"), 0644))
+	require.NoError(t, os.MkdirAll(filepath.Join(layerDir, "parent"), 0755))
+	// Malformed whiteouts that must be safely ignored:
+	require.NoError(t, os.WriteFile(filepath.Join(layerDir, "parent", ".wh."), nil, 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(layerDir, "parent", ".wh.."), nil, 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(layerDir, "parent", ".wh..."), nil, 0644))
+
+	require.NoError(t, applyLayerTree(layerDir, targetDir))
+
+	// Parent directory must not be deleted by malformed whiteout paths.
+	info, err := os.Stat(filepath.Join(targetDir, "parent"))
+	require.NoError(t, err)
+	require.True(t, info.IsDir())
+	require.FileExists(t, filepath.Join(targetDir, "parent", "victim.txt"))
+}
+
+func TestApplyLayerTreeRestoresRestrictiveNestedDirModes(t *testing.T) {
+	root := t.TempDir()
+	t.Cleanup(func() { _ = makeTreeWritable(root) })
+	targetDir := filepath.Join(root, "target")
+	layerDir := filepath.Join(root, "layer")
+
+	require.NoError(t, os.MkdirAll(filepath.Join(layerDir, "outer", "inner"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(layerDir, "outer", "inner", "file.txt"), []byte("data"), 0644))
+	require.NoError(t, os.Chmod(filepath.Join(layerDir, "outer", "inner"), 0500))
+	require.NoError(t, os.Chmod(filepath.Join(layerDir, "outer"), 0500))
+
+	require.NoError(t, applyLayerTree(layerDir, targetDir))
+
+	infoOuter, err := os.Stat(filepath.Join(targetDir, "outer"))
+	require.NoError(t, err)
+	require.Equal(t, os.FileMode(0500), infoOuter.Mode().Perm())
+
+	infoInner, err := os.Stat(filepath.Join(targetDir, "outer", "inner"))
+	require.NoError(t, err)
+	require.Equal(t, os.FileMode(0500), infoInner.Mode().Perm())
+}
+
+func TestMakePathWritableTopDown(t *testing.T) {
+	root := t.TempDir()
+	t.Cleanup(func() { _ = makeTreeWritable(root) })
+	parent := filepath.Join(root, "restricted")
+	child := filepath.Join(parent, "child")
+	require.NoError(t, os.MkdirAll(child, 0755))
+	require.NoError(t, os.Chmod(parent, 0400)) // read-only, no execute
+
+	originalModes := make(map[string]fs.FileMode)
+	err := makePathWritable(root, child, originalModes)
+	require.NoError(t, err)
+
+	info, err := os.Stat(parent)
+	require.NoError(t, err)
+	require.True(t, info.Mode().Perm()&0700 == 0700)
+
+	require.NoError(t, restoreDirectoryModes(originalModes))
+	infoAfter, err := os.Stat(parent)
+	require.NoError(t, err)
+	require.Equal(t, os.FileMode(0400), infoAfter.Mode().Perm())
+}
+
+func TestSafeJoinCleanRootSymlink(t *testing.T) {
+	root := t.TempDir()
+	realDir := filepath.Join(root, "real")
+	symDir := filepath.Join(root, "sym")
+	require.NoError(t, os.Mkdir(realDir, 0755))
+	require.NoError(t, os.Symlink("real", symDir))
+
+	// Calling safeJoin with trailing slash on symlink root must be rejected as symlink.
+	_, err := safeJoin(symDir+"/", "file.txt")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "extraction root is not a directory")
+}
+
