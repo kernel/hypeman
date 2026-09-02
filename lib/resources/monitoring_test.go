@@ -3,6 +3,7 @@ package resources
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"sync"
@@ -231,6 +232,37 @@ func TestStartMonitoringPublishesGPUMetrics(t *testing.T) {
 	require.Equal(t, int64(1), int64GaugeValue(t, rm, "hypeman_resources_gpu_slots", map[string]string{"kind": "quarantined"}))
 	require.Equal(t, int64(5), int64GaugeValue(t, rm, "hypeman_resources_gpu_profile_slots", map[string]string{"profile": "L40S-1Q", "kind": "available"}))
 	require.Equal(t, int64(2), int64GaugeValue(t, rm, "hypeman_resources_gpu_profile_slots", map[string]string{"profile": "L40S-2Q", "kind": "available"}))
+	require.Equal(t, int64(0), int64GaugeValue(t, rm, "hypeman_resources_gpu_placement_disabled", nil))
+}
+
+func TestStartMonitoringPublishesGPUPlacementDisabled(t *testing.T) {
+	mgr, _, _ := monitoringTestManager(t)
+
+	originalProvider := currentGPUStatusProvider()
+	setGPUStatusProvider(func(context.Context) (*GPUResourceStatus, error) {
+		return &GPUResourceStatus{
+			Mode:                    "vgpu",
+			TotalSlots:              8,
+			UsedSlots:               3,
+			PlacementDisabledReason: "VF health state unavailable: read failed",
+		}, errors.New("VF health state unavailable: read failed")
+	})
+	defer func() {
+		setGPUStatusProvider(originalProvider)
+	}()
+
+	reader := otelmetric.NewManualReader()
+	provider := otelmetric.NewMeterProvider(otelmetric.WithReader(reader))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	require.NoError(t, mgr.StartMonitoring(ctx, provider.Meter("test"), time.Hour))
+	waitForMonitoringSnapshot(t, mgr)
+
+	rm := collectMonitoringMetrics(t, reader)
+	require.Equal(t, int64(0), int64GaugeValue(t, rm, "hypeman_resources_gpu_slots", map[string]string{"kind": "allocatable"}))
+	require.Equal(t, int64(1), int64GaugeValue(t, rm, "hypeman_resources_gpu_placement_disabled", nil))
 }
 
 func TestStartMonitoringPublishesDiskUtilizationFromCachedSnapshot(t *testing.T) {

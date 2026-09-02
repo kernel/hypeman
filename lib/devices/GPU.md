@@ -315,7 +315,9 @@ the store is unavailable, `allocatable_slots` is 0 and
 `placement_disabled_reason` carries the load or write error, so a broken
 state file is distinguishable from a full host. The
 `hypeman_resources_gpu_slots` gauge exports the same counts under
-`kind=allocatable` and `kind=quarantined`.
+`kind=allocatable` and `kind=quarantined`, and
+`hypeman_resources_gpu_placement_disabled` is 1 while the store is
+unavailable, so the condition is alertable without scraping `/resources`.
 
 Quarantine only removes capacity — it never touches a running instance.
 
