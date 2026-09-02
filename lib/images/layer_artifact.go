@@ -192,7 +192,7 @@ func (m *manager) installLayerArtifact(desc layerDescriptor, layerHex, unpackDir
 	record := &layerArtifact{
 		SchemaVersion: layerRecordSchemaVersion,
 		Digest:        desc.Digest,
-		DiffID:        desc.DiffID,
+		DiffID:        stats.diffID,
 		Format:        layerArtifactFormat(),
 		UnpackedBytes: stats.unpackedBytes,
 		Entries:       stats.entries,
@@ -544,13 +544,8 @@ func extractTarDevice(target string, header *tar.Header) error {
 		mode = uint32(syscall.S_IFBLK)
 	}
 	dev := int(unix.Mkdev(uint32(header.Devmajor), uint32(header.Devminor)))
-	if err := unix.Mknod(target, mode|uint32(header.FileInfo().Mode().Perm()), dev); err != nil {
-		if !errors.Is(err, unix.EPERM) {
-			return fmt.Errorf("mknod: %w", err)
-		}
-		if err := createRootlessDevicePlaceholder(target); err != nil {
-			return err
-		}
+	if err := mknodWithRootlessFallback(target, mode|uint32(header.FileInfo().Mode().Perm()), dev); err != nil {
+		return err
 	}
 	return applyTarMetadata(target, header)
 }
@@ -563,17 +558,6 @@ func extractTarFIFO(target string, header *tar.Header) error {
 		return err
 	}
 	return applyTarMetadata(target, header)
-}
-
-func createRootlessDevicePlaceholder(path string) error {
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|syscall.O_NOFOLLOW, 0644)
-	if err != nil {
-		return fmt.Errorf("create rootless device placeholder: %w", err)
-	}
-	if err := file.Close(); err != nil {
-		return err
-	}
-	return nil
 }
 
 func applyTarMetadata(path string, header *tar.Header) error {

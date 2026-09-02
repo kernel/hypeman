@@ -74,6 +74,12 @@ func applyLayerTree(layerDir, targetDir string) (err error) {
 		}
 	}()
 
+	// Prepare directories before whiteouts so nested markers are applied after
+	// the layer has replaced any conflicting lower-layer entry.
+	if err := prepareLayerDirectories(layerDir, targetDir, originalModes); err != nil {
+		return fmt.Errorf("prepare layer directories: %w", err)
+	}
+
 	// Phase 1: apply whiteouts against what is already in the target.
 	err = filepath.WalkDir(layerDir, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
@@ -173,6 +179,39 @@ func applyLayerTree(layerDir, targetDir string) (err error) {
 		delete(originalModes, dir.dst)
 	}
 	return nil
+}
+
+func prepareLayerDirectories(layerDir, targetDir string, originalModes map[string]fs.FileMode) error {
+	return filepath.WalkDir(layerDir, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if path == layerDir || !entry.IsDir() {
+			return nil
+		}
+		if strings.HasPrefix(entry.Name(), whiteoutPrefix) {
+			return filepath.SkipDir
+		}
+		rel, err := filepath.Rel(layerDir, path)
+		if err != nil {
+			return err
+		}
+		target, err := safeJoin(targetDir, rel)
+		if err != nil {
+			return err
+		}
+		if err := makePathWritable(targetDir, filepath.Dir(target), originalModes); err != nil {
+			return err
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if err := copyDirectoryEntry(path, target, info); err != nil {
+			return err
+		}
+		return makePathWritable(targetDir, target, originalModes)
+	})
 }
 
 func makePathWritable(root, path string, originalModes map[string]fs.FileMode) error {
@@ -359,13 +398,8 @@ func copySpecialEntry(src, dst string, info os.FileInfo) error {
 	if err != nil {
 		return fmt.Errorf("unsupported entry type for %s: %w", src, err)
 	}
-	if err := unix.Mknod(dst, mode|uint32(info.Mode().Perm()), int(stat.Rdev)); err != nil {
-		if !errors.Is(err, unix.EPERM) {
-			return fmt.Errorf("mknod: %w", err)
-		}
-		if err := createRootlessDevicePlaceholder(dst); err != nil {
-			return err
-		}
+	if err := mknodWithRootlessFallback(dst, mode|uint32(info.Mode().Perm()), int(stat.Rdev)); err != nil {
+		return err
 	}
 	return copyEntryMetadata(src, dst, info)
 }

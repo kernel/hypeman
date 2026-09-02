@@ -132,7 +132,7 @@ type InstanceAllocation struct {
 type ImageLister interface {
 	// TotalImageBytes returns the total size of all images on disk.
 	TotalImageBytes(ctx context.Context) (int64, error)
-	// TotalOCICacheBytes returns the total size of the OCI layer cache.
+	// TotalOCICacheBytes returns the total size of the OCI and materialized layer caches.
 	TotalOCICacheBytes(ctx context.Context) (int64, error)
 }
 

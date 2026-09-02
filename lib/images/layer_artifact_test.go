@@ -272,6 +272,30 @@ func TestApplyLayerTreeWhiteoutSemantics(t *testing.T) {
 	require.Empty(t, leaked)
 }
 
+func TestApplyLayerTreeReplacesSymlinkBeforeNestedWhiteout(t *testing.T) {
+	root := t.TempDir()
+	targetDir := filepath.Join(root, "target")
+	layerDir := filepath.Join(root, "layer")
+	lowerDir := filepath.Join(root, "lower")
+
+	require.NoError(t, os.MkdirAll(targetDir, 0755))
+	require.NoError(t, os.MkdirAll(lowerDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(lowerDir, "old.txt"), []byte("old"), 0644))
+	require.NoError(t, os.Symlink("../lower", filepath.Join(targetDir, "replaced")))
+	require.NoError(t, os.MkdirAll(filepath.Join(layerDir, "replaced"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(layerDir, "replaced", ".wh.old.txt"), nil, 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(layerDir, "replaced", "new.txt"), []byte("new"), 0644))
+
+	require.NoError(t, applyLayerTree(layerDir, targetDir))
+
+	info, err := os.Lstat(filepath.Join(targetDir, "replaced"))
+	require.NoError(t, err)
+	require.True(t, info.IsDir())
+	require.FileExists(t, filepath.Join(targetDir, "replaced", "new.txt"))
+	_, err = os.Lstat(filepath.Join(targetDir, "replaced", "old.txt"))
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
 func TestApplyLayerTreePreservesUpperDirectoryMode(t *testing.T) {
 	root := t.TempDir()
 	targetDir := filepath.Join(root, "target")
@@ -603,4 +627,3 @@ func TestSafeJoinCleanRootSymlink(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "extraction root is not a directory")
 }
-

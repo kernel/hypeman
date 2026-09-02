@@ -855,7 +855,7 @@ func (m *manager) TotalImageBytes(ctx context.Context) (int64, error) {
 	return readyImageBytes, nil
 }
 
-// TotalOCICacheBytes returns the total size of the OCI layer cache.
+// TotalOCICacheBytes returns the total size of the OCI and materialized layer caches.
 func (m *manager) TotalOCICacheBytes(ctx context.Context) (int64, error) {
 	_, ociCacheBytes, err := m.getDiskUsageTotals()
 	if err != nil {
