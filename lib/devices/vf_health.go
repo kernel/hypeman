@@ -312,9 +312,65 @@ func ReportVFInitFailure(report VFInitFailureReport) (VFReportResult, error) {
 // ReportVFInitSuccess clears failures through an exactly matched successful
 // assignment. A quarantine is rescinded only when that assignment triggered it.
 func ReportVFInitSuccess(report VFInitSuccessReport) (VFSuccessResult, error) {
+	if !vfHealth.hasFailures(report.VFAddress) {
+		return VFSuccessResult{}, nil
+	}
 	vendorVFIOMu.Lock()
 	defer vendorVFIOMu.Unlock()
 	return vfHealth.reportSuccess(report)
+}
+
+// hasFailures reports whether a success for address could clear anything. It
+// takes only s.mu so the sentinel's routine OK reports for healthy VFs skip
+// vendorVFIOMu. Load and address errors report true so reportSuccess
+// surfaces them.
+func (s *vfHealthStore) hasFailures(address string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.loadErr != nil || !vfHealthAddressPattern.MatchString(address) {
+		return true
+	}
+	record, ok := s.records[address]
+	return ok && len(record.Failures) > 0
+}
+
+// RepairVFHealthStore retries a failed load or persist. It serializes with
+// vendor-VFIO configure, destroy, and health mutations, and returns without
+// taking those locks while the store is healthy.
+func RepairVFHealthStore() error {
+	if !VFHealthStoreUnavailable() {
+		return nil
+	}
+	vendorVFIOMu.Lock()
+	defer vendorVFIOMu.Unlock()
+
+	vfHealth.mu.Lock()
+	defer vfHealth.mu.Unlock()
+	if err := vfHealth.ensureLoadedLocked(); err != nil {
+		return err
+	}
+	return vfHealth.retryPersistLocked()
+}
+
+// VFHealthStoreUnavailable reports whether persisted state failed to load or
+// the last write failed.
+func VFHealthStoreUnavailable() bool {
+	vfHealth.mu.Lock()
+	defer vfHealth.mu.Unlock()
+	return vfHealth.loadErr != nil || vfHealth.persistErr != nil
+}
+
+// TotalQuarantinedVFs returns the number of quarantined VFs in persisted state.
+func TotalQuarantinedVFs() int {
+	vfHealth.mu.Lock()
+	defer vfHealth.mu.Unlock()
+	count := 0
+	for _, record := range vfHealth.records {
+		if record.QuarantinedAt != nil {
+			count++
+		}
+	}
+	return count
 }
 
 func (s *vfHealthStore) sortedRecordsLocked() []vfHealthRecord {
@@ -335,9 +391,6 @@ func (s *vfHealthStore) reportFailure(report VFInitFailureReport) (VFReportResul
 	if !vfHealthAddressPattern.MatchString(report.VFAddress) {
 		return VFReportResult{}, fmt.Errorf("invalid VF address %q", report.VFAddress)
 	}
-	if err := s.retryPersistLocked(); err != nil {
-		return VFReportResult{}, err
-	}
 
 	previous, existed := s.records[report.VFAddress]
 	result := VFReportResult{Failures: len(previous.Failures), Threshold: s.threshold}
@@ -348,6 +401,9 @@ func (s *vfHealthStore) reportFailure(report VFInitFailureReport) (VFReportResul
 		if sameVFAssignment(failure, report.InstanceID, report.AssignedAt) {
 			return result, nil
 		}
+	}
+	if s.persistErr != nil {
+		return VFReportResult{}, fmt.Errorf("VF health state unavailable: last write failed: %w", s.persistErr)
 	}
 
 	record := vfHealthRecord{
@@ -393,9 +449,6 @@ func (s *vfHealthStore) reportSuccess(report VFInitSuccessReport) (VFSuccessResu
 	if !vfHealthAddressPattern.MatchString(report.VFAddress) {
 		return VFSuccessResult{}, fmt.Errorf("invalid VF address %q", report.VFAddress)
 	}
-	if err := s.retryPersistLocked(); err != nil {
-		return VFSuccessResult{}, err
-	}
 	previous, ok := s.records[report.VFAddress]
 	if !ok || len(previous.Failures) == 0 {
 		return VFSuccessResult{}, nil
@@ -410,6 +463,9 @@ func (s *vfHealthStore) reportSuccess(report VFInitSuccessReport) (VFSuccessResu
 	}
 	if match < 0 {
 		return VFSuccessResult{}, nil
+	}
+	if s.persistErr != nil {
+		return VFSuccessResult{}, fmt.Errorf("VF health state unavailable: last write failed: %w", s.persistErr)
 	}
 
 	// Only the newest failure can rescind a quarantine; see VFInitSuccessReport.

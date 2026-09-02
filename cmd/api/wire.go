@@ -29,26 +29,27 @@ import (
 
 // application struct to hold initialized components
 type application struct {
-	Ctx                   context.Context
-	Logger                *slog.Logger
-	Config                *config.Config
-	ImageManager          images.Manager
-	SystemManager         system.Manager
-	NetworkManager        network.Manager
-	DeviceManager         devices.Manager
-	InstanceManager       instances.Manager
-	VolumeManager         volumes.Manager
-	BuilderManager        builders.Manager
-	IngressManager        ingress.Manager
-	BuildManager          builds.Manager
-	PushManager           imagepush.Manager
-	ResourceManager       *resources.Manager
-	GuestMemoryController guestmemory.Controller
-	AutoStandbyController *autostandby.Controller
-	HealthCheckController *instances.HealthCheckController
-	VMMetricsManager      *vm_metrics.Manager
-	Registry              *registry.Registry
-	ApiService            *api.ApiService
+	Ctx                    context.Context
+	Logger                 *slog.Logger
+	Config                 *config.Config
+	ImageManager           images.Manager
+	SystemManager          system.Manager
+	NetworkManager         network.Manager
+	DeviceManager          devices.Manager
+	InstanceManager        instances.Manager
+	VolumeManager          volumes.Manager
+	BuilderManager         builders.Manager
+	IngressManager         ingress.Manager
+	BuildManager           builds.Manager
+	PushManager            imagepush.Manager
+	ResourceManager        *resources.Manager
+	GuestMemoryController  guestmemory.Controller
+	AutoStandbyController  *autostandby.Controller
+	HealthCheckController  *instances.HealthCheckController
+	VGPUSentinelController *instances.VGPUSentinelController
+	VMMetricsManager       *vm_metrics.Manager
+	Registry               *registry.Registry
+	ApiService             *api.ApiService
 }
 
 // initializeApp is the injector function
@@ -72,6 +73,7 @@ func initializeApp() (*application, func(), error) {
 		providers.ProvideGuestMemoryController,
 		providers.ProvideAutoStandbyController,
 		providers.ProvideHealthCheckController,
+		providers.ProvideVGPUSentinelController,
 		providers.ProvideVMMetricsManager,
 		providers.ProvideRegistry,
 		api.New,

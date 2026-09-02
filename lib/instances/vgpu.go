@@ -327,6 +327,22 @@ func clearStoredVGPUDevice(stored *StoredMetadata) {
 	stored.GPUClaimedAt = nil
 }
 
+// vgpuHypervisorMayBeAlive treats ambiguous ownership as live, so it never
+// authorizes a release, and records why ownership could not be established
+// so retained capacity remains diagnosable.
+func (m *manager) vgpuHypervisorMayBeAlive(ctx context.Context, stored *StoredMetadata) bool {
+	pid, err := resolveLiveHypervisorPID(stored.HypervisorProcessIdentity, stored.SocketPath)
+	if err == nil {
+		return pid > 0
+	}
+	logger.FromContext(ctx).WarnContext(ctx, "preserving vGPU claim because hypervisor liveness is uncertain",
+		"instance_id", stored.Id,
+		"device_path", storedVGPUDevicePath(stored),
+		"error", err)
+	m.recordVGPULivenessUncertain(ctx)
+	return true
+}
+
 // vgpuCleanupGuard checks whether the VF can be safely released: the VMM
 // must be dead and, for vendor VFIO, the on-disk claim must still match.
 // Returns the device path, or "" when cleanup must be skipped.
@@ -335,8 +351,7 @@ func (m *manager) vgpuCleanupGuard(ctx context.Context, stored *StoredMetadata) 
 	if path == "" {
 		return ""
 	}
-	if hypervisorMayBeAlive(stored.HypervisorProcessIdentity, stored.SocketPath) {
-		logger.FromContext(ctx).WarnContext(ctx, "preserving vGPU claim because hypervisor liveness is not clear", "instance_id", stored.Id, "device_path", path)
+	if m.vgpuHypervisorMayBeAlive(ctx, stored) {
 		return ""
 	}
 	if stored.GPUFramework == devices.VGPUFrameworkVendorVFIO {

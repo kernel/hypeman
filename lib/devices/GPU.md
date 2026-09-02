@@ -99,7 +99,7 @@ Instance Create → Persist VF claim → Configure profile → Attach VF to VM �
 Instance Stop/Delete → Reset profile → Remove VF claim → VF available again
 ```
 
-Hypeman reconciles metadata claims once at startup and every minute afterward, skipping hosts without GPUs. A claim whose VMM is confirmed dead is reset before the claim is removed. mdev hosts also sweep orphaned device-level assignments. Vendor VFIO hosts repair an unclaimed dirty VF when the allocator next selects it; repair checks for open VFIO handles before resetting `current_vgpu_type`. The allocator prefers VFs that are already clean, and a dirty VF that refuses its reset is skipped in favor of another candidate.
+Hypeman reconciles metadata claims once at startup and every minute afterward, skipping hosts without GPUs. A claim whose VMM is confirmed dead is reset before the claim is removed. An ambiguous hypervisor ownership check preserves the claim, logs a warning, and increments `hypeman_instances_vgpu_liveness_uncertain_total`; the create and start cleanup paths preserve and count the same way. mdev hosts also sweep orphaned device-level assignments. Vendor VFIO hosts repair an unclaimed dirty VF when the allocator next selects it; repair checks for open VFIO handles before resetting `current_vgpu_type`. The allocator prefers VFs that are already clean, and a dirty VF that refuses its reset is skipped in favor of another candidate.
 
 ### Hypervisor Support
 
@@ -290,24 +290,46 @@ NVRM: GPU 0000:00:03.0: RmInitAdapter failed! (0x22:0x65:884)
 (0x65 = timeout; the guest's init requests are never answered, and
 `/proc/interrupts` shows the GPU's MSI-X vectors allocated but idle).
 
-Hypeman tracks these failures in `<data-dir>/gpu/vf-health.json` (it survives
-restarts): each reported init failure is tallied per instance assignment, and
-once failures accumulate from `gpu.vf_quarantine_threshold` distinct
-assignments (default 2), the VF is quarantined: excluded from placement and
-from advertised profile availability, and its parent GPU becomes
+Hypeman detects this automatically: the guest agent watches the guest kernel
+log (`/dev/kmsg`) for that line and records it as its GPU init state, which
+the vGPU sentinel controller polls over vsock (`GetGPUInitStatus`) for every
+vendor VFIO instance whose VMM is up (control socket present). Stopped and
+standby instances are not polled, even when a failed release leaves their
+claim in metadata — QEMU vsock dials by guest CID alone, and a stale CID
+could since have been reused by an unrelated instance.
+
+The guest agent also probes driver init at boot with `nvidia-smi -L`: the
+device open runs RmInitAdapter, so on a wedged VF the probe itself triggers
+the failure line without waiting for the workload to touch the GPU. On success
+the reported state becomes a terminal OK, suppressing later failure reports.
+The probe is the only source of an OK state, so an image without `nvidia-smi`
+(or a driver that takes longer than the 10 minute probe window to initialize)
+stays UNKNOWN: its failures are still detected, but its assignments can never
+clear a tally or rescind a quarantine.
+
+A guest-reported failure records one init failure against the VF in
+`<data-dir>/gpu/vf-health.json` (it survives restarts), tallied per instance
+assignment; once failures accumulate from `gpu.vf_quarantine_threshold`
+distinct assignments (default 2), the VF is quarantined: excluded from
+placement and from advertised profile availability, and its parent GPU becomes
 overflow-only — deprioritized for new placements. Selection among a card's
 equivalent free VFs is randomized so a wedged VF cannot capture every
 placement. A reported init success clears failures only when that exact
 assignment has a recorded failure, removing the match and older tallies; if
 that assignment is the most recent failure recorded (the one that crossed
-the threshold), its later success also rescinds the quarantine. If the state
-file exists but cannot be loaded, or the last write to it failed, placement
-and advertised availability fail closed; the load or write is retried on the
-next placement or `/resources` read, so the store recovers on its own once
-the file is repaired or the disk is writable again.
-Recorded tallies are re-evaluated against the configured
+the threshold), its later success also rescinds the quarantine. A success
+with no exact match clears nothing; other quarantines require manual
+recovery. Recorded tallies are re-evaluated against the configured
 threshold at load, so lowering `gpu.vf_quarantine_threshold` quarantines VFs
 whose persisted failures already meet the new value.
+
+If the state file exists but cannot be loaded, or the last write to it failed,
+placement and advertised availability fail closed. The load or write is
+retried on the next placement or `/resources` read, and the sentinel makes one
+repair attempt before each poll while the store is unavailable, so the store
+recovers on its own once the file is repaired or the disk is writable again.
+Individual guest reports do not retry the full-store write, and reports that
+would change nothing still succeed.
 
 `used_slots` includes quarantined VFs still held by running instances, so it
 can overlap `quarantined_slots`; use `allocatable_slots` for admission. While
@@ -318,11 +340,38 @@ state file is distinguishable from a full host. The
 `kind=allocatable` and `kind=quarantined`, and
 `hypeman_resources_gpu_placement_disabled` is 1 while the store is
 unavailable, so the condition is alertable without scraping `/resources`.
+Quarantine only removes a VF from future placement: it never detaches the VF
+or otherwise affects a running instance.
 
-Quarantine only removes capacity — it never touches a running instance.
+Below-threshold failures log at warn and increment
+`hypeman_instances_vgpu_sentinel_init_failures_total`; quarantines log at
+error and increment `hypeman_instances_vgpu_sentinel_quarantines_total`.
+`hypeman_instances_vgpu_sentinel_checks_total` records checks by result
+(`ok`, `failed`, `unknown`, `rpc_error`, `unsupported_agent`, or `list_error`)
+so hosts that lose sentinel coverage are visible. `unsupported_agent` means a
+running instance has a guest agent from before the status RPC was introduced;
+it is expected while those instances drain during an upgrade.
+`hypeman_instances_vgpu_quarantined_vfs` gauges the current count.
+`hypeman_instances_vgpu_vf_health_store_unavailable` is 1 while persisted
+health state cannot be loaded or the last write failed (and placement is
+therefore disabled), and 0 otherwise. A systemic guest/host driver mismatch
+can still quarantine every VF, so validate driver changes on a test host and
+alert on the failure counter.
 
-The wedge itself leaves no host-side log: no kernel error, no XID, no plugin
-crash. The trigger is a SIGKILL delivered to QEMU while the vGPU plugin is
+Detection requires the hypeman guest agent and a running instance: the state
+lives in the agent and travels only over the vsock control channel — the
+serial console is shared with workload output, so nothing a workload prints
+can influence the tally. The guest is still the reporter, though: a workload
+with root in the guest could replace the agent and answer FAILED, so the tally
+is a capacity signal from cooperating guests, not a security boundary. The
+per-assignment threshold and randomized VF selection bound how quickly one
+tenant can drain a host's VFs. The wedge-creating kill itself leaves no host-side
+log: no kernel error, no XID, no plugin crash. A wedge is therefore detected
+on the next boot that lands on the VF, whose guest driver starts failing ~27s
+after spawn; that also covers a wedged instance that stopped before the next
+poll (5s).
+
+The trigger is a SIGKILL delivered to QEMU while the vGPU plugin is
 still initializing the VF (roughly the first seconds after process start):
 a single hard kill in that window wedges the VF near-deterministically,
 while QEMU processes that exit voluntarily — error exits, QMP quit, SIGTERM —
@@ -371,7 +420,9 @@ systemctl start nvidia-persistenced nvidia-dcgm nvidia-dcgm-exporter
 ```
 
 After the cycle, remove the card's entries from `vf-health.json`, restart,
-and boot a GPU instance to verify recovery.
+and boot a GPU instance to verify recovery. If the cycle did not work, the
+sentinel quarantines the VF again after the configured number of fresh
+assignment failures.
 
 Do not unbind/rebind the VF from the nvidia driver — it breaks the
 nvidia-vgpu-vfio core-device registration (`vfio_pci_core_device not found`)

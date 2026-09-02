@@ -76,7 +76,7 @@ func (m *manager) reconcileVGPUAssignments(ctx context.Context) (map[string]stru
 		if devicePath == "" {
 			continue
 		}
-		if hypervisorMayBeAlive(stored.HypervisorProcessIdentity, stored.SocketPath) {
+		if m.vgpuHypervisorMayBeAlive(ctx, stored) {
 			protected[devicePath] = struct{}{}
 			continue
 		}
@@ -105,7 +105,7 @@ func (m *manager) releaseStaleVGPUAssignment(ctx context.Context, id string) {
 	if path == "" {
 		return
 	}
-	if hypervisorMayBeAlive(stored.HypervisorProcessIdentity, stored.SocketPath) {
+	if m.vgpuHypervisorMayBeAlive(ctx, stored) {
 		return
 	}
 	if err := m.releaseStoredVGPUPersisted(ctx, meta); err != nil {
