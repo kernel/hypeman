@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"os"
 	"runtime"
 	"strings"
@@ -86,9 +85,6 @@ type manager struct {
 // NewManager creates a new device manager.
 // Use SetLivenessChecker after construction to enable accurate orphan detection.
 func NewManager(p *paths.Paths) Manager {
-	if err := initVFHealth(p.VFHealthState()); err != nil {
-		slog.Default().Error("failed to load VF health state; vGPU placement is disabled until the state file is repaired or removed", "error", err)
-	}
 	return &manager{
 		paths:      p,
 		vfioBinder: NewVFIOBinder(),

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -14,7 +15,7 @@ import (
 func resetVFHealthStore(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "vf-health.json")
-	require.NoError(t, initVFHealth(path))
+	require.NoError(t, InitVFHealth(path))
 	t.Cleanup(func() {
 		vfHealth.mu.Lock()
 		defer vfHealth.mu.Unlock()
@@ -26,6 +27,12 @@ func resetVFHealthStore(t *testing.T) string {
 		vfHealth.syncDirFunc = syncDir
 	})
 	return path
+}
+
+func vfHealthStoreUnavailable() bool {
+	vfHealth.mu.Lock()
+	defer vfHealth.mu.Unlock()
+	return vfHealth.loadErr != nil || vfHealth.persistErr != nil
 }
 
 func quarantinedVFs() []vfHealthRecord {
@@ -76,7 +83,7 @@ func TestVGPUAvailability(t *testing.T) {
 func TestVGPUAvailabilityFailsWhenStoreUnavailable(t *testing.T) {
 	path := resetVFHealthStore(t)
 	require.NoError(t, os.WriteFile(path, []byte("not json"), 0o644))
-	require.Error(t, initVFHealth(path))
+	require.Error(t, InitVFHealth(path))
 
 	_, _, err := VGPUAvailability(VGPUFrameworkVendorVFIO, []VirtualFunction{{PCIAddress: "0000:82:00.4"}})
 	require.ErrorContains(t, err, "VF health state unavailable")
@@ -104,7 +111,7 @@ func TestVGPUAvailabilityFailsClosedAfterPersistFailure(t *testing.T) {
 
 	_, err := ReportVFInitFailure(VFInitFailureReport{VFAddress: "0000:e3:00.4", InstanceID: "instance-1"})
 	require.Error(t, err)
-	assert.True(t, VFHealthStoreUnavailable())
+	assert.True(t, vfHealthStoreUnavailable())
 	_, _, err = VGPUAvailability(VGPUFrameworkVendorVFIO, []VirtualFunction{{PCIAddress: "0000:e3:00.4"}})
 	require.ErrorContains(t, err, "last write failed")
 
@@ -112,7 +119,7 @@ func TestVGPUAvailabilityFailsClosedAfterPersistFailure(t *testing.T) {
 	result, err := ReportVFInitFailure(VFInitFailureReport{VFAddress: "0000:e3:00.4", InstanceID: "instance-1"})
 	require.NoError(t, err)
 	assert.Equal(t, VFReportQuarantined, result.Outcome)
-	assert.False(t, VFHealthStoreUnavailable())
+	assert.False(t, vfHealthStoreUnavailable())
 
 	available, quarantined, err := VGPUAvailability(VGPUFrameworkVendorVFIO, []VirtualFunction{{PCIAddress: "0000:e3:00.4"}})
 	require.NoError(t, err)
@@ -158,7 +165,7 @@ func TestLoadReevaluatesTalliesAgainstConfiguredThreshold(t *testing.T) {
 	vfHealth.records = make(map[string]vfHealthRecord)
 	vfHealth.threshold = 2
 	vfHealth.mu.Unlock()
-	require.NoError(t, initVFHealth(path))
+	require.NoError(t, InitVFHealth(path))
 
 	records := quarantinedVFs()
 	require.Len(t, records, 1)
@@ -171,7 +178,7 @@ func TestReportVFInitFailureQuarantinesAtThreshold(t *testing.T) {
 	result, err := ReportVFInitFailure(VFInitFailureReport{
 		VFAddress:  "0000:e3:00.4",
 		InstanceID: "instance-1",
-		AssignedAt: "2026-08-20T15:00:00Z",
+		AssignedAt: FormatVFAssignedAt(time.Date(2026, 8, 20, 15, 0, 0, 0, time.UTC)),
 	})
 	require.NoError(t, err)
 	assert.Equal(t, VFReportRecorded, result.Outcome)
@@ -190,7 +197,6 @@ func TestReportVFInitFailureQuarantinesAtThreshold(t *testing.T) {
 
 	records := quarantinedVFs()
 	require.Len(t, records, 1)
-	assert.Equal(t, 1, TotalQuarantinedVFs())
 	assert.Equal(t, "0000:e3:00.4", records[0].VFAddress)
 	require.NotNil(t, records[0].QuarantinedAt)
 	require.Len(t, records[0].Failures, 2)
@@ -200,7 +206,7 @@ func TestReportVFInitFailureQuarantinesAtThreshold(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, VFReportUnchanged, result.Outcome)
 
-	require.NoError(t, initVFHealth(path))
+	require.NoError(t, InitVFHealth(path))
 	reloaded := quarantinedVFs()
 	require.Len(t, reloaded, 1)
 	assert.Equal(t, "0000:e3:00.4", reloaded[0].VFAddress)
@@ -251,7 +257,7 @@ func TestReportVFInitSuccessClearsFailureTally(t *testing.T) {
 	require.NoError(t, err)
 	assert.Zero(t, successResult.Cleared)
 
-	require.NoError(t, initVFHealth(path))
+	require.NoError(t, InitVFHealth(path))
 	result, err := ReportVFInitFailure(VFInitFailureReport{VFAddress: report.VFAddress, InstanceID: "instance-3"})
 	require.NoError(t, err)
 	assert.Equal(t, VFReportRecorded, result.Outcome)
@@ -369,14 +375,14 @@ func TestReportVFInitFailureRetriesParentSyncAfterFailure(t *testing.T) {
 	report := VFInitFailureReport{VFAddress: "0000:e3:00.4", InstanceID: "instance-1"}
 	_, err := ReportVFInitFailure(report)
 	require.ErrorContains(t, err, "sync VF health state parent dir")
-	assert.True(t, VFHealthStoreUnavailable())
+	assert.True(t, vfHealthStoreUnavailable())
 
 	result, err := ReportVFInitFailure(report)
 	require.NoError(t, err)
 	assert.Equal(t, VFReportRecorded, result.Outcome)
 	assert.Equal(t, 3, parentSyncs)
 	assert.True(t, retrySawPersistErr, "retry must sync the parent before clearing the write failure")
-	assert.False(t, VFHealthStoreUnavailable())
+	assert.False(t, vfHealthStoreUnavailable())
 }
 
 func TestReportVFInitFailureRetainsRenamedStateAfterSyncFailure(t *testing.T) {
@@ -401,13 +407,13 @@ func TestReportVFInitFailureRetainsRenamedStateAfterSyncFailure(t *testing.T) {
 	require.Len(t, state.Records, 1)
 	assert.NotNil(t, state.Records[0].QuarantinedAt)
 	require.Len(t, quarantinedVFs(), 1, "memory must retain state already renamed into place")
-	assert.True(t, VFHealthStoreUnavailable())
+	assert.True(t, vfHealthStoreUnavailable())
 
 	vfHealth.syncDirFunc = syncDir
 	result, err := ReportVFInitFailure(VFInitFailureReport{VFAddress: "0000:e3:00.5", InstanceID: "other-instance"})
 	require.NoError(t, err)
 	assert.Equal(t, VFReportRecorded, result.Outcome)
-	assert.False(t, VFHealthStoreUnavailable())
+	assert.False(t, vfHealthStoreUnavailable())
 
 	data, err = os.ReadFile(path)
 	require.NoError(t, err)
@@ -441,13 +447,13 @@ func TestReportRetriesFailedThresholdPersistence(t *testing.T) {
 	require.NoError(t, os.WriteFile(blocker, nil, 0644))
 	vfHealth.path = filepath.Join(blocker, "vf-health.json")
 	SetVFQuarantineThreshold(2)
-	assert.True(t, VFHealthStoreUnavailable())
+	assert.True(t, vfHealthStoreUnavailable())
 
 	vfHealth.path = path
 	result, err := ReportVFInitFailure(VFInitFailureReport{VFAddress: vf, InstanceID: "instance-3"})
 	require.NoError(t, err)
 	assert.Equal(t, VFReportUnchanged, result.Outcome)
-	assert.False(t, VFHealthStoreUnavailable())
+	assert.False(t, vfHealthStoreUnavailable())
 
 	data, err := os.ReadFile(path)
 	require.NoError(t, err)
@@ -525,8 +531,8 @@ func TestCheckedAddressesFailsClosedOnInvalidRecord(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			path := resetVFHealthStore(t)
 			require.NoError(t, os.WriteFile(path, []byte(tt.state), 0644))
-			require.ErrorContains(t, initVFHealth(path), tt.wantErr)
-			assert.True(t, VFHealthStoreUnavailable())
+			require.ErrorContains(t, InitVFHealth(path), tt.wantErr)
+			assert.True(t, vfHealthStoreUnavailable())
 			assert.Empty(t, quarantinedVFs())
 
 			_, err := vfHealth.checkedAddresses()
@@ -540,7 +546,7 @@ func TestReportVFInitFailureRefusesToClobberUnloadedState(t *testing.T) {
 	quarantineVF(t, "0000:e3:00.4")
 
 	require.NoError(t, os.WriteFile(path, []byte("not json"), 0644))
-	require.Error(t, initVFHealth(path))
+	require.Error(t, InitVFHealth(path))
 
 	_, err := ReportVFInitFailure(VFInitFailureReport{VFAddress: "0000:e3:00.5"})
 	require.Error(t, err)

@@ -16,15 +16,16 @@ import (
 
 func initVFHealthForTest(t *testing.T, state []byte) {
 	t.Helper()
-	dataDir := t.TempDir()
+	path := paths.New(t.TempDir()).VFHealthState()
 	if state != nil {
-		path := paths.New(dataDir).VFHealthState()
 		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
 		require.NoError(t, os.WriteFile(path, state, 0o644))
 	}
-	devices.NewManager(paths.New(dataDir))
-	resetDir := t.TempDir()
-	t.Cleanup(func() { devices.NewManager(paths.New(resetDir)) })
+	err := devices.InitVFHealth(path)
+	if state == nil {
+		require.NoError(t, err)
+	}
+	t.Cleanup(func() { require.NoError(t, devices.InitVFHealth(paths.New(t.TempDir()).VFHealthState())) })
 }
 
 func TestGetVGPUStatusFailsClosedWhenVFHealthIsUnavailable(t *testing.T) {

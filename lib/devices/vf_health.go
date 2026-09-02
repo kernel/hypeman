@@ -35,6 +35,11 @@ type vfHealthFile struct {
 }
 
 // VFInitFailureReport describes one guest-reported driver init failure.
+//
+// InstanceID and AssignedAt together identify the assignment. AssignedAt is
+// the instance's stored GPUClaimedAt rendered with FormatVFAssignedAt; a
+// success report only clears a failure whose AssignedAt string matches
+// exactly, so every reporter must use that formatting.
 type VFInitFailureReport struct {
 	VFAddress  string
 	InstanceID string
@@ -42,10 +47,17 @@ type VFInitFailureReport struct {
 }
 
 // VFInitSuccessReport identifies the assignment that successfully initialized.
+// AssignedAt follows the same format as VFInitFailureReport.AssignedAt.
 type VFInitSuccessReport struct {
 	VFAddress  string
 	InstanceID string
 	AssignedAt string
+}
+
+// FormatVFAssignedAt renders a claim time as the AssignedAt key used in VF
+// health reports.
+func FormatVFAssignedAt(claimedAt time.Time) string {
+	return claimedAt.UTC().Format(time.RFC3339Nano)
 }
 
 // VFReportOutcome describes how a failure report changed a VF's health state.
@@ -84,6 +96,10 @@ type vfHealthStore struct {
 	syncDirFunc func(string) error
 }
 
+// vfHealthAddressPattern is stricter than ValidatePCIAddress on purpose:
+// addresses are map keys compared against sysfs entry names, which are
+// lowercase with a 0-7 function digit, and this file also builds on macOS
+// where ValidatePCIAddress always returns false.
 var vfHealthAddressPattern = regexp.MustCompile(`^[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]$`)
 
 var (
@@ -98,7 +114,11 @@ var (
 	vendorVFIOMu sync.Mutex
 )
 
-func initVFHealth(path string) error {
+// InitVFHealth loads persisted VF health state from path. Call it after
+// SetVFQuarantineThreshold so loaded tallies are evaluated against the
+// configured threshold. A load error leaves the store unavailable, which
+// fails vGPU placement closed until a later load succeeds.
+func InitVFHealth(path string) error {
 	vfHealth.mu.Lock()
 	defer vfHealth.mu.Unlock()
 	vfHealth.path = path
@@ -276,27 +296,6 @@ func ReportVFInitSuccess(report VFInitSuccessReport) (VFSuccessResult, error) {
 	return vfHealth.reportSuccess(report)
 }
 
-// VFHealthStoreUnavailable reports whether persisted state failed to load or
-// the last write failed.
-func VFHealthStoreUnavailable() bool {
-	vfHealth.mu.Lock()
-	defer vfHealth.mu.Unlock()
-	return vfHealth.loadErr != nil || vfHealth.persistErr != nil
-}
-
-// TotalQuarantinedVFs returns the number of quarantined VFs in persisted state.
-func TotalQuarantinedVFs() int {
-	vfHealth.mu.Lock()
-	defer vfHealth.mu.Unlock()
-	count := 0
-	for _, record := range vfHealth.records {
-		if record.QuarantinedAt != nil {
-			count++
-		}
-	}
-	return count
-}
-
 func (s *vfHealthStore) sortedRecordsLocked() []vfHealthRecord {
 	records := make([]vfHealthRecord, 0, len(s.records))
 	for _, record := range s.records {
@@ -446,6 +445,9 @@ func (s *vfHealthStore) writeStateLocked() (bool, error) {
 	if err := os.MkdirAll(dirPath, 0755); err != nil {
 		return false, fmt.Errorf("create VF health state dir: %w", err)
 	}
+	// The first write creates the state directory; syncing its parent makes
+	// that creation durable. Doing it on every write keeps the path
+	// stateless and cheap relative to how rarely the store is written.
 	if err := s.syncDirFunc(filepath.Dir(dirPath)); err != nil {
 		return false, fmt.Errorf("sync VF health state parent dir: %w", err)
 	}

@@ -48,26 +48,29 @@ func getVGPUStatus(ctx context.Context, framework devices.VGPUFramework, vfs []d
 		}
 	}
 
+	status := &GPUResourceStatus{
+		Mode:       string(devices.GPUModeVGPU),
+		TotalSlots: len(vfs),
+		UsedSlots:  usedSlots,
+	}
+	// Profile listing fails on the same unavailable health store, so check
+	// availability first and report the cause once.
+	allocatableSlots, quarantinedSlots, err := devices.VGPUAvailability(framework, vfs)
+	if err != nil {
+		logger.FromContext(ctx).WarnContext(ctx, "failed to count allocatable vGPU slots; reporting none and no profiles", "framework", framework, "error", err)
+		return status, err
+	}
+	status.AllocatableSlots = allocatableSlots
+	status.QuarantinedSlots = quarantinedSlots
+
 	// Get available profiles (reuse VFs to avoid redundant discovery)
 	profiles, err := devices.ListGPUProfilesWithVFs(framework, vfs)
 	if err != nil {
 		logger.FromContext(ctx).WarnContext(ctx, "failed to list vGPU profiles; reporting none", "framework", framework, "error", err)
 		profiles = nil
 	}
-	allocatableSlots, quarantinedSlots, err := devices.VGPUAvailability(framework, vfs)
-	status := &GPUResourceStatus{
-		Mode:             string(devices.GPUModeVGPU),
-		TotalSlots:       len(vfs),
-		UsedSlots:        usedSlots,
-		AllocatableSlots: allocatableSlots,
-		QuarantinedSlots: quarantinedSlots,
-		Profiles:         profiles,
-	}
-	if err != nil {
-		logger.FromContext(ctx).WarnContext(ctx, "failed to count allocatable vGPU slots; reporting none", "framework", framework, "error", err)
-		status.AllocatableSlots = 0
-	}
-	return status, err
+	status.Profiles = profiles
+	return status, nil
 }
 
 // getPassthroughStatus returns GPU status for whole-GPU passthrough mode.
