@@ -100,6 +100,7 @@ This keeps pull and push views aligned because both are sourced from the same OT
 | `hypeman_resources_image_storage_bytes` | gauge | kind | Current and maximum image storage bytes |
 | `hypeman_resources_gpu_slots` | gauge | kind | Total and used GPU slots |
 | `hypeman_resources_gpu_profile_slots` | gauge | profile, kind | Available GPU slots by profile |
+| `hypeman_gpu_mdevs_total` | gauge | state | Host vGPU mdevs that an instance references (`claimed`) or that nothing references (`orphaned`) |
 
 ### Volumes
 | Metric | Type | Description |

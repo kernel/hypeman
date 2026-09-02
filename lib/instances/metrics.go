@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	mw "github.com/kernel/hypeman/lib/middleware"
 	hypotel "github.com/kernel/hypeman/lib/otel"
@@ -288,6 +289,14 @@ func newInstanceMetrics(meter metric.Meter, tracer trace.Tracer, m *manager) (*M
 		return nil, err
 	}
 
+	gpuMdevsTotal, err := meter.Int64ObservableGauge(
+		"hypeman_gpu_mdevs_total",
+		metric.WithDescription("Host vGPU mdev devices by whether an instance references them"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
 	snapshotCompressionActiveTotal, err := meter.Int64ObservableGauge(
 		"hypeman_snapshot_compression_active_total",
 		metric.WithDescription("Total number of actively running snapshot compression jobs"),
@@ -359,10 +368,19 @@ func newInstanceMetrics(meter metric.Meter, tracer trace.Tracer, m *manager) (*M
 				o.ObserveInt64(instancesTotal, count, metric.WithAttributes(attrs...))
 				o.ObserveFloat64(oldestInStateSeconds, oldestAgeSeconds[key], metric.WithAttributes(attrs...))
 			}
+
+			mdevs, err := devices.ListMdevDevices()
+			if err != nil || len(mdevs) == 0 {
+				return nil
+			}
+			claimed, orphaned := countGPUMdevs(mdevs, instances)
+			o.ObserveInt64(gpuMdevsTotal, claimed, metric.WithAttributes(attribute.String("state", "claimed")))
+			o.ObserveInt64(gpuMdevsTotal, orphaned, metric.WithAttributes(attribute.String("state", "orphaned")))
 			return nil
 		},
 		instancesTotal,
 		oldestInStateSeconds,
+		gpuMdevsTotal,
 	)
 	if err != nil {
 		return nil, err
@@ -682,4 +700,24 @@ func (m *manager) recordLifecycleEventDropped(ctx context.Context, consumer Life
 		attribute.String("consumer", string(consumer)),
 		attribute.String("reason", string(reason)),
 	))
+}
+
+// countGPUMdevs splits host mdevs into those referenced by an instance and
+// those no instance references. An unreferenced mdev holds a vGPU slot that
+// nothing will release until the next startup reconciliation.
+func countGPUMdevs(mdevs []devices.MdevDevice, instances []Instance) (claimed, orphaned int64) {
+	referenced := make(map[string]struct{}, len(instances))
+	for _, inst := range instances {
+		if inst.GPUMdevUUID != "" {
+			referenced[inst.GPUMdevUUID] = struct{}{}
+		}
+	}
+	for _, mdev := range mdevs {
+		if _, ok := referenced[mdev.UUID]; ok {
+			claimed++
+		} else {
+			orphaned++
+		}
+	}
+	return claimed, orphaned
 }
