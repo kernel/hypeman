@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -93,6 +94,43 @@ func TestMaterializeLayerArtifact(t *testing.T) {
 	require.Equal(t, artifactInfo.ModTime(), artifactInfoAfter.ModTime(), "reuse must not rebuild")
 }
 
+func TestMaterializeLayerArtifactRecoversCorruptRecord(t *testing.T) {
+	if _, err := exec.LookPath("mkfs.ext4"); err != nil {
+		t.Skip("mkfs.ext4 not available")
+	}
+	originalFormat := DefaultImageFormat
+	DefaultImageFormat = FormatExt4
+	t.Cleanup(func() { DefaultImageFormat = originalFormat })
+
+	p := paths.New(t.TempDir())
+	img, err := mutate.AppendLayers(empty.Image, syntheticLayer(t, "base.txt", "base layer content"))
+	require.NoError(t, err)
+	writeLayerTestLayout(t, p, img)
+
+	desc := layerDescFromImage(t, img, 0)
+	m := &manager{paths: p}
+	first, err := m.materializeLayerArtifact(desc)
+	require.NoError(t, err)
+
+	layerHex := desc.Digest[len("sha256:"):]
+	require.NoError(t, os.WriteFile(
+		p.ImageLayerRecordForFormat(layerHex, layerArtifactFormat()),
+		[]byte("{not valid json"),
+		0600,
+	))
+
+	second, err := m.materializeLayerArtifact(desc)
+	require.NoError(t, err)
+	require.NotEqual(t, first.CreatedAt, second.CreatedAt, "corrupt record must trigger a rebuild")
+	require.FileExists(t, p.ImageLayerArtifactForFormat(layerHex, layerArtifactFormat()))
+
+	data, err := os.ReadFile(p.ImageLayerRecordForFormat(layerHex, layerArtifactFormat()))
+	require.NoError(t, err)
+	var record layerArtifact
+	require.NoError(t, json.Unmarshal(data, &record))
+	require.NoError(t, record.validate())
+}
+
 func TestMaterializeLayerArtifactMissingBlob(t *testing.T) {
 	p := paths.New(t.TempDir())
 	m := &manager{paths: p}
@@ -141,7 +179,7 @@ func whiteoutLayer(t *testing.T) gcr.Layer {
 	return layer
 }
 
-func TestMaterializeLayerRecordsWhiteouts(t *testing.T) {
+func TestMaterializeLayerDoesNotPersistWhiteoutInventory(t *testing.T) {
 	if _, err := exec.LookPath("mkfs.erofs"); err != nil {
 		t.Skip("mkfs.erofs not available")
 	}
@@ -154,22 +192,12 @@ func TestMaterializeLayerRecordsWhiteouts(t *testing.T) {
 	desc := layerDescFromImage(t, img, 0)
 	m := &manager{paths: p}
 
-	record, err := m.materializeLayerArtifact(desc)
+	_, err = m.materializeLayerArtifact(desc)
 	require.NoError(t, err)
 
-	require.Contains(t, record.Whiteouts, whiteoutRecord{Dir: "gone", Target: "deleted.txt"})
-	require.Contains(t, record.Whiteouts, whiteoutRecord{Dir: "opq", Opaque: true})
-	require.Contains(t, record.Whiteouts, whiteoutRecord{Dir: "added", Target: "foo"})
-
-	// Opaque and whiteout markers are recorded distinctly.
-	opaqueCount := 0
-	for _, whiteout := range record.Whiteouts {
-		if whiteout.Opaque {
-			opaqueCount++
-			require.Empty(t, whiteout.Target)
-		}
-	}
-	require.Equal(t, 1, opaqueCount)
+	data, err := os.ReadFile(p.ImageLayerRecordForFormat(desc.Digest[len("sha256:"):], layerArtifactFormat()))
+	require.NoError(t, err)
+	require.NotContains(t, string(data), "whiteouts")
 }
 
 func TestApplyLayerTreeWhiteoutSemantics(t *testing.T) {
@@ -244,6 +272,38 @@ func TestApplyLayerTreeWhiteoutSemantics(t *testing.T) {
 	require.Empty(t, leaked)
 }
 
+func TestApplyLayerTreePreservesUpperDirectoryMode(t *testing.T) {
+	root := t.TempDir()
+	targetDir := filepath.Join(root, "target")
+	layerDir := filepath.Join(root, "layer")
+
+	require.NoError(t, os.MkdirAll(filepath.Join(targetDir, "etc"), 0755))
+	require.NoError(t, os.MkdirAll(filepath.Join(layerDir, "etc"), 0750))
+	require.NoError(t, os.WriteFile(filepath.Join(layerDir, "etc", "new.txt"), []byte("new"), 0644))
+
+	require.NoError(t, applyLayerTree(layerDir, targetDir))
+
+	info, err := os.Stat(filepath.Join(targetDir, "etc"))
+	require.NoError(t, err)
+	require.Equal(t, os.FileMode(0750), info.Mode().Perm())
+}
+
+func TestApplyLayerTreeWhiteoutRemovesReadOnlyDirectory(t *testing.T) {
+	root := t.TempDir()
+	targetDir := filepath.Join(root, "target")
+	layerDir := filepath.Join(root, "layer")
+
+	require.NoError(t, os.MkdirAll(filepath.Join(targetDir, "gone"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(targetDir, "gone", "inner.txt"), []byte("old"), 0644))
+	require.NoError(t, os.Chmod(filepath.Join(targetDir, "gone"), 0555))
+	require.NoError(t, os.MkdirAll(layerDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(layerDir, ".wh.gone"), nil, 0644))
+
+	require.NoError(t, applyLayerTree(layerDir, targetDir))
+	_, err := os.Lstat(filepath.Join(targetDir, "gone"))
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
 func TestUnpackLayerBlobIncludesTrailingTarPaddingInDiffID(t *testing.T) {
 	root := t.TempDir()
 	blobPath := filepath.Join(root, "layer.tar.gz")
@@ -268,6 +328,24 @@ func TestUnpackLayerBlobIncludesTrailingTarPaddingInDiffID(t *testing.T) {
 	require.NoError(t, err)
 	want := sha256.Sum256(tarData.Bytes())
 	require.Equal(t, "sha256:"+fmt.Sprintf("%x", want), stats.diffID)
+}
+
+func TestResolveHardlinksResolvesDependencyChain(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "source"), []byte("content"), 0644))
+
+	pending := []pendingHardlink{
+		{target: filepath.Join(root, "third"), linkname: "second"},
+		{target: filepath.Join(root, "second"), linkname: "first"},
+		{target: filepath.Join(root, "first"), linkname: "source"},
+	}
+	require.NoError(t, resolveHardlinks(root, pending))
+
+	source, err := os.Stat(filepath.Join(root, "source"))
+	require.NoError(t, err)
+	third, err := os.Stat(filepath.Join(root, "third"))
+	require.NoError(t, err)
+	require.True(t, os.SameFile(source, third))
 }
 
 func TestUnpackLayerBlobRejectsSymlinkTraversal(t *testing.T) {
@@ -344,7 +422,9 @@ func TestCopyXattrs(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, unix.Lsetxattr(src, "user.two", []byte("22"), 0))
 
-	require.NoError(t, copyXattrs(src, dst))
+	xattrs, err := readXattrs(src)
+	require.NoError(t, err)
+	require.NoError(t, applyXattrs(dst, xattrs))
 
 	for name, want := range map[string]string{"user.one": "1", "user.two": "22"} {
 		size, err := unix.Lgetxattr(dst, name, nil)

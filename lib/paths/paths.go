@@ -193,10 +193,10 @@ func (p *Paths) ImageLayerArtifactForFormat(layerHex, format string) string {
 	return filepath.Join(p.ImageLayerDir(layerHex), "layer."+format)
 }
 
-// ImageLayerRecord returns the path to the artifact record describing one
-// materialized layer (format, options, whiteout inventory).
-func (p *Paths) ImageLayerRecord(layerHex string) string {
-	return filepath.Join(p.ImageLayerDir(layerHex), "artifact.json")
+// ImageLayerRecordForFormat returns the path to the artifact record for one
+// materialized layer and format.
+func (p *Paths) ImageLayerRecordForFormat(layerHex, format string) string {
+	return filepath.Join(p.ImageLayerDir(layerHex), "artifact."+format+".json")
 }
 
 // ImageDigestDir returns the directory for a specific image digest.

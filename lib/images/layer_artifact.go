@@ -2,14 +2,12 @@ package images
 
 import (
 	"archive/tar"
-	"bytes"
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -37,19 +35,20 @@ const (
 	maxLayerUnpackedBytes    = 100 << 30
 )
 
+var errCorruptLayerRecord = errors.New("corrupt layer record")
+
 // layerArtifact is the persisted record for one materialized layer artifact.
 // The key is the compressed layer blob digest plus the artifact format, so the
 // same layer can coexist in several materializations.
 type layerArtifact struct {
-	SchemaVersion int              `json:"schema_version"`
-	Digest        string           `json:"digest"` // compressed layer blob digest, sha256:...
-	DiffID        string           `json:"diff_id,omitempty"`
-	Format        string           `json:"format"`
-	SizeBytes     int64            `json:"size_bytes"` // artifact bytes on disk
-	UnpackedBytes int64            `json:"unpacked_bytes"`
-	Entries       int              `json:"entries"`
-	Whiteouts     []whiteoutRecord `json:"whiteouts,omitempty"`
-	CreatedAt     time.Time        `json:"created_at"`
+	SchemaVersion int       `json:"schema_version"`
+	Digest        string    `json:"digest"` // compressed layer blob digest, sha256:...
+	DiffID        string    `json:"diff_id,omitempty"`
+	Format        string    `json:"format"`
+	SizeBytes     int64     `json:"size_bytes"` // artifact bytes on disk
+	UnpackedBytes int64     `json:"unpacked_bytes"`
+	Entries       int       `json:"entries"`
+	CreatedAt     time.Time `json:"created_at"`
 }
 
 // validate checks a record read back from disk. The format fully determines
@@ -62,22 +61,13 @@ func (a *layerArtifact) validate() error {
 	if a.Digest == "" {
 		return fmt.Errorf("missing digest")
 	}
-	if a.Format != layerFormatErofs && a.Format != layerFormatExt4 {
+	if a.Format != string(FormatErofs) && a.Format != string(FormatExt4) {
 		return fmt.Errorf("invalid format: %s", a.Format)
 	}
 	if a.SizeBytes < 0 || a.UnpackedBytes < 0 || a.Entries < 0 {
 		return fmt.Errorf("invalid size or entry counts")
 	}
 	return nil
-}
-
-// whiteoutRecord describes one whiteout marker found in a layer. Dir is the
-// directory containing the marker relative to the layer root ("" for root).
-// For opaque markers, Target is empty and the whole directory is hidden.
-type whiteoutRecord struct {
-	Dir    string `json:"dir"`
-	Target string `json:"target,omitempty"`
-	Opaque bool   `json:"opaque,omitempty"`
 }
 
 func (a *layerArtifact) matches(desc layerDescriptor) bool {
@@ -87,17 +77,10 @@ func (a *layerArtifact) matches(desc layerDescriptor) bool {
 	return desc.DiffID == "" || a.DiffID == desc.DiffID
 }
 
-const (
-	layerFormatErofs = "erofs"
-	layerFormatExt4  = "ext4"
-)
-
 func layerArtifactFormat() string {
 	switch DefaultImageFormat {
-	case FormatErofs:
-		return layerFormatErofs
-	case FormatExt4:
-		return layerFormatExt4
+	case FormatErofs, FormatExt4:
+		return string(DefaultImageFormat)
 	default:
 		return ""
 	}
@@ -107,11 +90,15 @@ func layerArtifactPath(p *paths.Paths, layerHex string) string {
 	return p.ImageLayerArtifactForFormat(layerHex, layerArtifactFormat())
 }
 
+func layerArtifactRecordPath(p *paths.Paths, layerHex string) string {
+	return p.ImageLayerRecordForFormat(layerHex, layerArtifactFormat())
+}
+
 // readLayerRecord loads the artifact record for a layer digest, if present.
 // A missing record returns (nil, nil): the layer simply was never
 // materialized.
 func readLayerRecord(p *paths.Paths, layerHex string) (*layerArtifact, error) {
-	data, err := os.ReadFile(p.ImageLayerRecord(layerHex))
+	data, err := os.ReadFile(layerArtifactRecordPath(p, layerHex))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -120,12 +107,24 @@ func readLayerRecord(p *paths.Paths, layerHex string) (*layerArtifact, error) {
 	}
 	var record layerArtifact
 	if err := json.Unmarshal(data, &record); err != nil {
-		return nil, fmt.Errorf("unmarshal layer record: %w", err)
+		return nil, fmt.Errorf("%w: unmarshal layer record: %v", errCorruptLayerRecord, err)
 	}
 	if err := record.validate(); err != nil {
-		return nil, fmt.Errorf("invalid layer record: %w", err)
+		return nil, fmt.Errorf("%w: invalid layer record: %v", errCorruptLayerRecord, err)
 	}
 	return &record, nil
+}
+
+func discardLayerCache(p *paths.Paths, layerHex string) error {
+	for _, path := range []string{
+		layerArtifactRecordPath(p, layerHex),
+		layerArtifactPath(p, layerHex),
+	} {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	return nil
 }
 
 // materializeLayerArtifact ensures a layer has a materialized artifact keyed
@@ -143,11 +142,16 @@ func (m *manager) materializeLayerArtifact(desc layerDescriptor) (*layerArtifact
 	}
 	layerHex := strings.TrimPrefix(desc.Digest, "sha256:")
 	if err := paths.ValidatePathComponent(layerHex); err != nil {
-		return nil, fmt.Errorf("invalid layer digest: %s", desc.Digest)
+		return nil, fmt.Errorf("invalid layer digest %s: %w", desc.Digest, err)
 	}
 
 	if record, err := readLayerRecord(m.paths, layerHex); err != nil {
-		return nil, err
+		if !errors.Is(err, errCorruptLayerRecord) {
+			return nil, err
+		}
+		if discardErr := discardLayerCache(m.paths, layerHex); discardErr != nil {
+			return nil, fmt.Errorf("discard corrupt layer cache: %w", discardErr)
+		}
 	} else if record != nil && record.matches(desc) {
 		if _, statErr := os.Stat(layerArtifactPath(m.paths, layerHex)); statErr == nil {
 			return record, nil
@@ -192,10 +196,7 @@ func (m *manager) installLayerArtifact(desc layerDescriptor, layerHex, unpackDir
 		Format:        layerArtifactFormat(),
 		UnpackedBytes: stats.unpackedBytes,
 		Entries:       stats.entries,
-		// Nothing reads Whiteouts yet; composition re-derives whiteouts
-		// from the unpacked tree once it lands.
-		Whiteouts: stats.whiteouts,
-		CreatedAt: time.Now(),
+		CreatedAt:     time.Now(),
 	}
 
 	if err := installAtomically(layerArtifactPath(m.paths, layerHex), func(path string) error {
@@ -215,7 +216,7 @@ func (m *manager) installLayerArtifact(desc layerDescriptor, layerHex, unpackDir
 	if err != nil {
 		return nil, fmt.Errorf("marshal layer record: %w", err)
 	}
-	if err := writeJSONAtomic(m.paths.ImageLayerRecord(layerHex), data); err != nil {
+	if err := writeJSONAtomic(layerArtifactRecordPath(m.paths, layerHex), data); err != nil {
 		_ = os.Remove(layerArtifactPath(m.paths, layerHex))
 		return nil, fmt.Errorf("write layer record: %w", err)
 	}
@@ -226,11 +227,12 @@ type unpackStats struct {
 	entries       int
 	unpackedBytes int64
 	diffID        string
-	whiteouts     []whiteoutRecord
 }
 
-// unpackLayerBlob extracts one compressed layer blob into dest, preserving
-// whiteout marker files and recording them. Paths are confined to dest.
+// unpackLayerBlob extracts one compressed layer blob into dest while preserving
+// whiteout marker files. It intentionally does not use umoci's layer unpacker:
+// umoci consumes whiteouts while this store must retain them for composition.
+// Paths are confined to dest.
 func unpackLayerBlob(blobPath, mediaType, dest string) (*unpackStats, error) {
 	if err := os.MkdirAll(dest, 0755); err != nil {
 		return nil, fmt.Errorf("create extraction root: %w", err)
@@ -248,7 +250,7 @@ func unpackLayerBlob(blobPath, mediaType, dest string) (*unpackStats, error) {
 	defer closer.Close()
 
 	hash := sha256.New()
-	stats := &unpackStats{whiteouts: make([]whiteoutRecord, 0)}
+	stats := &unpackStats{}
 	// Directory metadata is re-applied after extraction, once children
 	// exist, so tar directory mtimes are not overwritten by later writes.
 	pendingDirs := make([]pendingDir, 0)
@@ -277,18 +279,12 @@ func unpackLayerBlob(blobPath, mediaType, dest string) (*unpackStats, error) {
 		}
 		stats.entries++
 
-		dir, base := filepath.Dir(header.Name), filepath.Base(header.Name)
-		if dir == "." {
-			dir = ""
-		}
-		if base == opaqueWhiteout {
-			stats.whiteouts = append(stats.whiteouts, whiteoutRecord{Dir: dir, Opaque: true})
-		} else if strings.HasPrefix(base, whiteoutPrefix) {
+		base := filepath.Base(header.Name)
+		if strings.HasPrefix(base, whiteoutPrefix) && base != opaqueWhiteout {
 			targetName := strings.TrimPrefix(base, whiteoutPrefix)
 			if targetName == "" || targetName == "." || targetName == ".." {
 				return nil, fmt.Errorf("invalid whiteout entry: %s", header.Name)
 			}
-			stats.whiteouts = append(stats.whiteouts, whiteoutRecord{Dir: dir, Target: targetName})
 		}
 
 		if header.Typeflag == tar.TypeDir {
@@ -334,33 +330,42 @@ type pendingHardlink struct {
 }
 
 func resolveHardlinks(root string, pending []pendingHardlink) error {
-	for len(pending) > 0 {
-		resolved := 0
-		remaining := make([]pendingHardlink, 0, len(pending))
-		for _, link := range pending {
-			linkTarget, err := safeJoin(root, link.linkname)
-			if err != nil {
-				return err
-			}
-			if _, err := os.Lstat(linkTarget); err != nil {
-				if os.IsNotExist(err) {
-					remaining = append(remaining, link)
-					continue
-				}
-				return err
-			}
-			if err := prepareTarTarget(link.target); err != nil {
-				return err
-			}
-			if err := os.Link(linkTarget, link.target); err != nil {
-				return fmt.Errorf("create hardlink %s: %w", link.target, err)
-			}
-			resolved++
+	waiting := make(map[string][]pendingHardlink)
+	ready := make([]pendingHardlink, 0, len(pending))
+	for _, link := range pending {
+		linkTarget, err := safeJoin(root, link.linkname)
+		if err != nil {
+			return err
 		}
-		if resolved == 0 {
-			return fmt.Errorf("hardlink target not found")
+		if _, err := os.Lstat(linkTarget); err == nil {
+			ready = append(ready, link)
+		} else if os.IsNotExist(err) {
+			waiting[linkTarget] = append(waiting[linkTarget], link)
+		} else {
+			return err
 		}
-		pending = remaining
+	}
+
+	resolved := 0
+	for len(ready) > 0 {
+		link := ready[0]
+		ready = ready[1:]
+		if err := prepareTarTarget(link.target); err != nil {
+			return err
+		}
+		if linkTarget, err := safeJoin(root, link.linkname); err != nil {
+			return err
+		} else if err := os.Link(linkTarget, link.target); err != nil {
+			return fmt.Errorf("create hardlink %s -> %s: %w", link.target, link.linkname, err)
+		}
+		resolved++
+		ready = append(ready, waiting[link.target]...)
+		delete(waiting, link.target)
+	}
+	if resolved != len(pending) {
+		for _, links := range waiting {
+			return fmt.Errorf("hardlink target not found for %s", links[0].linkname)
+		}
 	}
 	return nil
 }
@@ -542,12 +547,8 @@ func extractTarDevice(target string, header *tar.Header) error {
 		if !errors.Is(err, unix.EPERM) {
 			return fmt.Errorf("mknod: %w", err)
 		}
-		file, openErr := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|syscall.O_NOFOLLOW, 0644)
-		if openErr != nil {
-			return fmt.Errorf("create rootless device placeholder: %w", openErr)
-		}
-		if closeErr := file.Close(); closeErr != nil {
-			return closeErr
+		if err := createRootlessDevicePlaceholder(target); err != nil {
+			return err
 		}
 	}
 	return applyTarMetadata(target, header)
@@ -563,417 +564,37 @@ func extractTarFIFO(target string, header *tar.Header) error {
 	return applyTarMetadata(target, header)
 }
 
-func applyTarMetadata(path string, header *tar.Header) error {
-	if err := os.Lchown(path, header.Uid, header.Gid); err != nil && !errors.Is(err, os.ErrPermission) && !errors.Is(err, unix.EPERM) {
-		return fmt.Errorf("restore ownership: %w", err)
+func createRootlessDevicePlaceholder(path string) error {
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|syscall.O_NOFOLLOW, 0644)
+	if err != nil {
+		return fmt.Errorf("create rootless device placeholder: %w", err)
 	}
-	if header.Typeflag != tar.TypeSymlink {
-		if err := os.Chmod(path, os.FileMode(header.Mode)); err != nil {
-			return fmt.Errorf("restore mode: %w", err)
-		}
-		mtime := header.ModTime
-		if mtime.IsZero() {
-			mtime = time.Now()
-		}
-		atime := header.AccessTime
-		if atime.IsZero() {
-			atime = mtime
-		}
-		if err := os.Chtimes(path, atime, mtime); err != nil {
-			return fmt.Errorf("restore timestamps: %w", err)
-		}
-	}
-	for name, value := range header.Xattrs {
-		if err := unix.Lsetxattr(path, name, []byte(value), 0); err != nil && !errors.Is(err, unix.ENOTSUP) && !errors.Is(err, unix.EPERM) {
-			return fmt.Errorf("restore xattr %s: %w", name, err)
-		}
+	if err := file.Close(); err != nil {
+		return err
 	}
 	return nil
+}
+
+func applyTarMetadata(path string, header *tar.Header) error {
+	mtime := header.ModTime
+	if mtime.IsZero() {
+		mtime = time.Now()
+	}
+	atime := header.AccessTime
+	if atime.IsZero() {
+		atime = mtime
+	}
+	return applyEntryMetadata(path, entryMetadata{
+		uid:      header.Uid,
+		gid:      header.Gid,
+		hasOwner: true,
+		mode:     os.FileMode(header.Mode),
+		symlink:  header.Typeflag == tar.TypeSymlink,
+		atime:    atime,
+		mtime:    mtime,
+		xattrs:   tarXattrs(header),
+	})
 }
 
 // removePath removes whatever entry occupies path, including non-empty
 // directories, and tolerates a missing path.
-func removePath(path string) error {
-	if err := os.RemoveAll(path); err != nil && !os.IsNotExist(err) {
-		return err
-	}
-	return nil
-}
-
-// applyLayerTree merges one unpacked layer directory into targetDir following
-// OCI whiteout semantics: whiteouts and opaque markers remove what lower layers
-// contributed, then the layer's own entries are copied on top. Raw tar
-// whiteout files are interpreted here rather than passed through, because
-// overlayfs does not understand them. No production caller yet; composition
-// lands in a later change.
-func applyLayerTree(layerDir, targetDir string) (err error) {
-	if err := os.MkdirAll(targetDir, 0755); err != nil {
-		return fmt.Errorf("create target directory: %w", err)
-	}
-	originalModes := make(map[string]fs.FileMode)
-	defer func() {
-		if restoreErr := restoreDirectoryModes(originalModes); restoreErr != nil {
-			if err == nil {
-				err = fmt.Errorf("restore directory modes: %w", restoreErr)
-			} else {
-				err = errors.Join(err, fmt.Errorf("restore directory modes: %w", restoreErr))
-			}
-		}
-	}()
-
-	// Phase 1: apply whiteouts against what is already in the target.
-	err = filepath.WalkDir(layerDir, func(path string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		base := entry.Name()
-		if path == layerDir || !strings.HasPrefix(base, whiteoutPrefix) {
-			return nil
-		}
-		rel, err := filepath.Rel(layerDir, path)
-		if err != nil {
-			return err
-		}
-		targetParent, err := safeJoin(targetDir, filepath.Dir(rel))
-		if err != nil {
-			return err
-		}
-		if err := makePathWritable(targetDir, targetParent, originalModes); err != nil {
-			return err
-		}
-		if base == opaqueWhiteout {
-			return clearDirContents(targetParent)
-		}
-		hidden := strings.TrimPrefix(base, whiteoutPrefix)
-		target, err := safeJoin(targetDir, filepath.Join(filepath.Dir(rel), hidden))
-		if err != nil {
-			return err
-		}
-		return removePath(target)
-	})
-	if err != nil {
-		return fmt.Errorf("apply whiteouts: %w", err)
-	}
-
-	// Phase 2: copy the layer's own entries, skipping whiteout markers.
-	// Directory metadata is deferred until all children are copied, so tar
-	// directory mtimes survive the merge.
-	pendingDirs := make([]dirMeta, 0)
-	hardlinks := make(map[hardlinkIdentity]string)
-	err = filepath.WalkDir(layerDir, func(path string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if path == layerDir {
-			return nil
-		}
-		if strings.HasPrefix(entry.Name(), whiteoutPrefix) {
-			if entry.IsDir() {
-				return fs.SkipDir
-			}
-			return nil
-		}
-		rel, err := filepath.Rel(layerDir, path)
-		if err != nil {
-			return err
-		}
-		target, err := safeJoin(targetDir, rel)
-		if err != nil {
-			return err
-		}
-		if err := makePathWritable(targetDir, filepath.Dir(target), originalModes); err != nil {
-			return err
-		}
-		if entry.IsDir() {
-			info, err := entry.Info()
-			if err != nil {
-				return err
-			}
-			pendingDirs = append(pendingDirs, dirMeta{src: path, dst: target, info: info})
-		}
-		if err := copyEntryInto(path, target, hardlinks); err != nil {
-			return err
-		}
-		if entry.IsDir() {
-			return makePathWritable(targetDir, target, originalModes)
-		}
-		return nil
-	})
-	if err != nil {
-		return fmt.Errorf("copy layer tree: %w", err)
-	}
-	for _, dir := range pendingDirs {
-		if err := copyEntryMetadata(dir.src, dir.dst, dir.info); err != nil {
-			return fmt.Errorf("restore dir metadata %s: %w", dir.dst, err)
-		}
-	}
-	return nil
-}
-
-func makePathWritable(root, path string, originalModes map[string]fs.FileMode) error {
-	root = filepath.Clean(root)
-	path = filepath.Clean(path)
-	if path != root && !strings.HasPrefix(path, root+string(filepath.Separator)) {
-		return fmt.Errorf("path is outside target root: %s", path)
-	}
-	for current := path; ; current = filepath.Dir(current) {
-		info, err := os.Lstat(current)
-		if err == nil {
-			if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-				return fmt.Errorf("target parent is not a directory: %s", current)
-			}
-			if _, recorded := originalModes[current]; !recorded {
-				originalModes[current] = info.Mode()
-				if err := os.Chmod(current, info.Mode().Perm()|0700); err != nil {
-					return err
-				}
-			}
-		} else if !os.IsNotExist(err) {
-			return err
-		}
-		if current == root {
-			return nil
-		}
-	}
-}
-
-func restoreDirectoryModes(originalModes map[string]fs.FileMode) error {
-	var restoreErr error
-	for path, mode := range originalModes {
-		if _, err := os.Lstat(path); os.IsNotExist(err) {
-			continue
-		} else if err != nil {
-			restoreErr = errors.Join(restoreErr, err)
-			continue
-		}
-		if err := os.Chmod(path, mode.Perm()|mode&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky)); err != nil {
-			restoreErr = errors.Join(restoreErr, err)
-		}
-	}
-	return restoreErr
-}
-
-type dirMeta struct {
-	src, dst string
-	info     os.FileInfo
-}
-
-// clearDirContents removes everything inside dir without removing dir itself,
-// and without following symlinks.
-func clearDirContents(dir string) error {
-	info, err := os.Lstat(dir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-	if !info.IsDir() {
-		return removePath(dir)
-	}
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return err
-	}
-	for _, entry := range entries {
-		if err := os.RemoveAll(filepath.Join(dir, entry.Name())); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-type hardlinkIdentity struct {
-	dev uint64
-	ino uint64
-}
-
-// copyEntryInto copies one filesystem entry from src to dst, replacing any
-// conflicting entry and preserving hardlinks within the layer.
-func copyEntryInto(src, dst string, hardlinks map[hardlinkIdentity]string) error {
-	info, err := os.Lstat(src)
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
-		return err
-	}
-
-	switch info.Mode() & fs.ModeType {
-	case 0:
-		return copyRegularEntry(src, dst, info, hardlinks)
-	case fs.ModeDir:
-		return copyDirectoryEntry(src, dst, info)
-	case fs.ModeSymlink:
-		return copySymlinkEntry(src, dst)
-	default:
-		return copySpecialEntry(src, dst, info)
-	}
-}
-
-func copyRegularEntry(src, dst string, info os.FileInfo, hardlinks map[hardlinkIdentity]string) error {
-	if err := removePath(dst); err != nil {
-		return err
-	}
-	if stat, ok := info.Sys().(*syscall.Stat_t); ok && stat.Nlink > 1 {
-		identity := hardlinkIdentity{dev: uint64(stat.Dev), ino: uint64(stat.Ino)}
-		if first, seen := hardlinks[identity]; seen {
-			return os.Link(first, dst)
-		}
-		hardlinks[identity] = dst
-	}
-	if err := copyFileContents(src, dst); err != nil {
-		return err
-	}
-	return copyEntryMetadata(src, dst, info)
-}
-
-func copyDirectoryEntry(src, dst string, info os.FileInfo) error {
-	if existing, err := os.Lstat(dst); err == nil && !existing.IsDir() {
-		if err := removePath(dst); err != nil {
-			return err
-		}
-	}
-	return os.MkdirAll(dst, info.Mode().Perm())
-}
-
-func copySymlinkEntry(src, dst string) error {
-	linkTarget, err := os.Readlink(src)
-	if err != nil {
-		return err
-	}
-	if err := removePath(dst); err != nil {
-		return err
-	}
-	if err := os.Symlink(linkTarget, dst); err != nil {
-		return err
-	}
-	info, err := os.Lstat(src)
-	if err != nil {
-		return err
-	}
-	return copyEntryMetadata(src, dst, info)
-}
-
-func copySpecialEntry(src, dst string, info os.FileInfo) error {
-	if err := removePath(dst); err != nil {
-		return err
-	}
-	stat, ok := info.Sys().(*syscall.Stat_t)
-	if !ok {
-		return fmt.Errorf("unsupported entry type for %s", src)
-	}
-	mode, err := specialFileMode(info.Mode() & fs.ModeType)
-	if err != nil {
-		return fmt.Errorf("unsupported entry type for %s: %w", src, err)
-	}
-	if err := unix.Mknod(dst, mode|uint32(info.Mode().Perm()), int(stat.Rdev)); err != nil {
-		if !errors.Is(err, unix.EPERM) {
-			return fmt.Errorf("mknod: %w", err)
-		}
-		file, openErr := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|syscall.O_NOFOLLOW, 0644)
-		if openErr != nil {
-			return fmt.Errorf("create rootless device placeholder: %w", openErr)
-		}
-		if closeErr := file.Close(); closeErr != nil {
-			return closeErr
-		}
-	}
-	return copyEntryMetadata(src, dst, info)
-}
-
-func specialFileMode(mode fs.FileMode) (uint32, error) {
-	switch mode {
-	case fs.ModeCharDevice:
-		return syscall.S_IFCHR, nil
-	case fs.ModeDevice:
-		return syscall.S_IFBLK, nil
-	case fs.ModeNamedPipe:
-		return syscall.S_IFIFO, nil
-	case fs.ModeSocket:
-		return syscall.S_IFSOCK, nil
-	default:
-		return 0, fmt.Errorf("unsupported file mode")
-	}
-}
-
-func copyEntryMetadata(src, dst string, info os.FileInfo) error {
-	if stat, ok := info.Sys().(*syscall.Stat_t); ok {
-		if err := os.Lchown(dst, int(stat.Uid), int(stat.Gid)); err != nil && !errors.Is(err, os.ErrPermission) && !errors.Is(err, unix.EPERM) {
-			return err
-		}
-	}
-	if info.Mode()&os.ModeSymlink == 0 {
-		mode := info.Mode().Perm() | info.Mode()&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky)
-		if err := os.Chmod(dst, mode); err != nil {
-			return err
-		}
-		atime := info.ModTime()
-		if stat, ok := info.Sys().(*syscall.Stat_t); ok {
-			atime = time.Unix(stat.Atim.Sec, stat.Atim.Nsec)
-		}
-		if err := os.Chtimes(dst, atime, info.ModTime()); err != nil {
-			return err
-		}
-		if err := copyXattrs(src, dst); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func copyXattrs(src, dst string) error {
-	size, err := unix.Llistxattr(src, nil)
-	if err != nil {
-		if errors.Is(err, unix.ENOTSUP) || errors.Is(err, unix.EPERM) {
-			return nil
-		}
-		return err
-	}
-	names := make([]byte, size)
-	if size > 0 {
-		n, err := unix.Llistxattr(src, names)
-		if err != nil {
-			return err
-		}
-		names = names[:n]
-	}
-	for _, attr := range bytes.Split(bytes.TrimSuffix(names, []byte{0}), []byte{0}) {
-		if len(attr) == 0 {
-			continue
-		}
-		name := string(attr)
-		size, err := unix.Lgetxattr(src, name, nil)
-		if err != nil {
-			if errors.Is(err, unix.ENOTSUP) || errors.Is(err, unix.EPERM) || errors.Is(err, unix.ENODATA) {
-				continue
-			}
-			return err
-		}
-		value := make([]byte, size)
-		if _, err := unix.Lgetxattr(src, name, value); err != nil {
-			return err
-		}
-		if err := unix.Lsetxattr(dst, name, value, 0); err != nil && !errors.Is(err, unix.ENOTSUP) && !errors.Is(err, unix.EPERM) {
-			return err
-		}
-	}
-	return nil
-}
-
-func copyFileContents(src, dst string) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC|syscall.O_NOFOLLOW, 0644)
-	if err != nil {
-		return err
-	}
-	if _, err := io.Copy(out, in); err != nil {
-		out.Close()
-		return err
-	}
-	return out.Close()
-}

@@ -55,7 +55,7 @@ type Manager interface {
 	// TotalImageBytes returns the total size of all ready images on disk.
 	// Used by the resource manager for disk capacity tracking.
 	TotalImageBytes(ctx context.Context) (int64, error)
-	// TotalOCICacheBytes returns the total size of the OCI layer cache.
+	// TotalOCICacheBytes returns the total size of the OCI and materialized layer caches.
 	// Used by the resource manager for disk capacity tracking.
 	TotalOCICacheBytes(ctx context.Context) (int64, error)
 	// WaitForReady blocks until the image identified by name reaches a terminal
