@@ -49,7 +49,7 @@ func TestVendorVFIOListProfilesCountsFreeVFs(t *testing.T) {
 
 	vfs, err := sysfs.discoverVFs()
 	require.NoError(t, err)
-	profiles, err := sysfs.listProfiles(vfs)
+	profiles, err := sysfs.listProfiles(vfs, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 1, profileAvailability(profiles, "NVIDIA L40S-2Q"))
 }
@@ -216,7 +216,9 @@ func TestVendorVFIOListProfilesExcludesQuarantinedFromAvailability(t *testing.T)
 
 	vfs, err := sysfs.discoverVFs()
 	require.NoError(t, err)
-	profiles, err := sysfs.listProfiles(vfs)
+	availability, err := GetVGPUAvailability(VGPUFrameworkVendorVFIO, vfs)
+	require.NoError(t, err)
+	profiles, err := sysfs.listProfiles(vfs, availability.quarantined)
 	require.NoError(t, err)
 	assert.Equal(t, 1, profileAvailability(profiles, "NVIDIA L40S-1Q"))
 }

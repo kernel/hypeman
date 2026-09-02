@@ -117,6 +117,9 @@ func (m *manager) claimVGPU(ctx context.Context, meta *metadata, profileName str
 		SysfsPath:   filepath.Clean(devices.GetDeviceSysfsPath(vfAddress)),
 	}
 	setStoredVGPUDevice(&meta.StoredMetadata, device)
+	// Only vendor VFIO claims carry an assignment identity, so the claim time
+	// is set here rather than in setStoredVGPUDevice. clearStoredVGPUDevice
+	// resets it with the rest of the device fields.
 	claimedAt := m.nowUTC()
 	meta.GPUClaimedAt = &claimedAt
 	if err := m.saveMetadata(meta); err != nil {

@@ -3,7 +3,6 @@ package devices
 import (
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -48,6 +47,11 @@ type VFInitFailureReport struct {
 
 // VFInitSuccessReport identifies the assignment that successfully initialized.
 // AssignedAt follows the same format as VFInitFailureReport.AssignedAt.
+//
+// A success clears the matched failure and every older tally. It rescinds a
+// quarantine only when the matched failure is the most recent one recorded:
+// the report that crossed the threshold, or the newest tally when a lowered
+// threshold quarantined the VF at load.
 type VFInitSuccessReport struct {
 	VFAddress  string
 	InstanceID string
@@ -116,8 +120,8 @@ var (
 
 // InitVFHealth loads persisted VF health state from path. Call it after
 // SetVFQuarantineThreshold so loaded tallies are evaluated against the
-// configured threshold. A load error leaves the store unavailable, which
-// fails vGPU placement closed until a later load succeeds.
+// configured threshold. An error leaves the store unavailable, which fails
+// vGPU placement closed until a later load or write succeeds.
 func InitVFHealth(path string) error {
 	vfHealth.mu.Lock()
 	defer vfHealth.mu.Unlock()
@@ -127,17 +131,24 @@ func InitVFHealth(path string) error {
 
 // SetVFQuarantineThreshold configures the number of failed assignments
 // required to quarantine a VF. Already-recorded tallies are re-evaluated so a
-// lowered threshold applies to failures persisted before the change.
-func SetVFQuarantineThreshold(n int) {
+// lowered threshold applies to failures persisted before the change. An
+// error means the re-evaluated quarantines could not be persisted; they stay
+// in effect and placement fails closed until a write succeeds.
+func SetVFQuarantineThreshold(n int) error {
 	vfHealth.mu.Lock()
 	defer vfHealth.mu.Unlock()
 	vfHealth.threshold = n
-	vfHealth.requarantineLocked()
+	return vfHealth.requarantineLocked()
 }
 
 // requarantineLocked quarantines records whose failure tallies meet the
 // current threshold, so threshold changes and loaded state agree.
-func (s *vfHealthStore) requarantineLocked() {
+//
+// Unlike reports, a failed persist here does not roll memory back: the
+// tallies already meet the threshold, so dropping the quarantine would
+// readmit a VF the store has judged unhealthy. The latched error closes
+// placement until a later read or report re-persists the in-memory state.
+func (s *vfHealthStore) requarantineLocked() error {
 	changed := false
 	for address, record := range s.records {
 		if record.QuarantinedAt != nil || len(record.Failures) < s.threshold {
@@ -148,11 +159,11 @@ func (s *vfHealthStore) requarantineLocked() {
 		s.records[address] = record
 		changed = true
 	}
-	if changed {
-		if _, err := s.persistLocked(); err != nil {
-			slog.Default().Error("failed to persist re-evaluated VF quarantines; vGPU placement is disabled until a write succeeds", "error", err)
-		}
+	if !changed {
+		return nil
 	}
+	_, err := s.persistLocked()
+	return err
 }
 
 func (s *vfHealthStore) loadLocked() error {
@@ -215,8 +226,7 @@ func (s *vfHealthStore) loadLocked() error {
 		loaded[record.VFAddress] = record
 	}
 	s.records = loaded
-	s.requarantineLocked()
-	return nil
+	return s.requarantineLocked()
 }
 
 func (s *vfHealthStore) ensureLoadedLocked() error {
@@ -253,21 +263,35 @@ func QuarantinedVFAddresses() (map[string]struct{}, error) {
 	return vfHealth.checkedAddresses()
 }
 
-// VGPUAvailability returns free allocatable and quarantined VF counts.
-func VGPUAvailability(framework VGPUFramework, vfs []VirtualFunction) (allocatable, quarantined int, err error) {
+// VGPUAvailability is one VF health snapshot applied to discovered VFs.
+// Pass it to ListGPUProfilesWithVFs so profile availability is computed from
+// the same snapshot without reading the store again.
+type VGPUAvailability struct {
+	AllocatableSlots int // free VFs eligible for placement
+	QuarantinedSlots int
+	quarantined      map[string]struct{}
+}
+
+// GetVGPUAvailability counts free allocatable and quarantined VFs. It fails
+// while the health store is unavailable so callers fail closed.
+func GetVGPUAvailability(framework VGPUFramework, vfs []VirtualFunction) (VGPUAvailability, error) {
 	if framework != VGPUFrameworkVendorVFIO {
-		return countFreeVFs(vfs, nil), 0, nil
+		return VGPUAvailability{AllocatableSlots: countFreeVFs(vfs, nil)}, nil
 	}
 	addresses, err := vfHealth.checkedAddresses()
 	if err != nil {
-		return 0, 0, err
+		return VGPUAvailability{}, err
+	}
+	availability := VGPUAvailability{
+		AllocatableSlots: countFreeVFs(vfs, addresses),
+		quarantined:      addresses,
 	}
 	for _, vf := range vfs {
 		if _, ok := addresses[vf.PCIAddress]; ok {
-			quarantined++
+			availability.QuarantinedSlots++
 		}
 	}
-	return countFreeVFs(vfs, addresses), quarantined, nil
+	return availability, nil
 }
 
 func countFreeVFs(vfs []VirtualFunction, quarantined map[string]struct{}) int {
@@ -390,6 +414,7 @@ func (s *vfHealthStore) reportSuccess(report VFInitSuccessReport) (VFSuccessResu
 			break
 		}
 	}
+	// Only the newest failure can rescind a quarantine; see VFInitSuccessReport.
 	if match < 0 || (previous.QuarantinedAt != nil && match != len(previous.Failures)-1) {
 		return VFSuccessResult{}, nil
 	}

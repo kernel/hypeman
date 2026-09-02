@@ -90,15 +90,12 @@ func (s vendorVFIOSysfs) discoverVFs() ([]VirtualFunction, error) {
 	return vfs, nil
 }
 
-// listProfiles counts each free VF advertising a type as one creatable
-// instance, matching the driver-reported units that mdev sums through
-// available_instances. This is a best-effort snapshot because creating on one
-// VF may revoke the type from siblings that share its GPU framebuffer.
-func (s vendorVFIOSysfs) listProfiles(vfs []VirtualFunction) ([]GPUProfile, error) {
-	quarantined, err := vfHealth.checkedAddresses()
-	if err != nil {
-		return nil, err
-	}
+// listProfiles counts each free, non-quarantined VF advertising a type as
+// one creatable instance, matching the driver-reported units that mdev sums
+// through available_instances. This is a best-effort snapshot because
+// creating on one VF may revoke the type from siblings that share its GPU
+// framebuffer.
+func (s vendorVFIOSysfs) listProfiles(vfs []VirtualFunction, quarantined map[string]struct{}) ([]GPUProfile, error) {
 	profilesByType := make(map[string]VGPUProfileType)
 	creatableVFs := make(map[string]int)
 	profilesByVF, err := s.profileTypes(vfs)

@@ -50,11 +50,11 @@ func quarantinedVFs() []vfHealthRecord {
 
 func quarantineVF(t *testing.T, address string) {
 	t.Helper()
-	SetVFQuarantineThreshold(1)
+	require.NoError(t, SetVFQuarantineThreshold(1))
 	result, err := ReportVFInitFailure(VFInitFailureReport{VFAddress: address, InstanceID: "quarantine-helper"})
 	require.NoError(t, err)
 	require.Equal(t, VFReportQuarantined, result.Outcome)
-	SetVFQuarantineThreshold(defaultVFQuarantineThreshold)
+	require.NoError(t, SetVFQuarantineThreshold(defaultVFQuarantineThreshold))
 }
 
 func TestVGPUAvailability(t *testing.T) {
@@ -69,15 +69,15 @@ func TestVGPUAvailability(t *testing.T) {
 		{PCIAddress: "0000:82:00.6"},
 	}
 
-	available, quarantined, err := VGPUAvailability(VGPUFrameworkVendorVFIO, vfs)
+	availability, err := GetVGPUAvailability(VGPUFrameworkVendorVFIO, vfs)
 	require.NoError(t, err)
-	assert.Equal(t, 1, available, "a below-threshold failure tally must not remove the VF from placement")
-	assert.Equal(t, 1, quarantined)
+	assert.Equal(t, 1, availability.AllocatableSlots, "a below-threshold failure tally must not remove the VF from placement")
+	assert.Equal(t, 1, availability.QuarantinedSlots)
 
-	available, quarantined, err = VGPUAvailability(VGPUFrameworkMdev, vfs)
+	availability, err = GetVGPUAvailability(VGPUFrameworkMdev, vfs)
 	require.NoError(t, err)
-	assert.Equal(t, 2, available)
-	assert.Zero(t, quarantined)
+	assert.Equal(t, 2, availability.AllocatableSlots)
+	assert.Zero(t, availability.QuarantinedSlots)
 }
 
 func TestVGPUAvailabilityFailsWhenStoreUnavailable(t *testing.T) {
@@ -85,25 +85,25 @@ func TestVGPUAvailabilityFailsWhenStoreUnavailable(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte("not json"), 0o644))
 	require.Error(t, InitVFHealth(path))
 
-	_, _, err := VGPUAvailability(VGPUFrameworkVendorVFIO, []VirtualFunction{{PCIAddress: "0000:82:00.4"}})
+	_, err := GetVGPUAvailability(VGPUFrameworkVendorVFIO, []VirtualFunction{{PCIAddress: "0000:82:00.4"}})
 	require.ErrorContains(t, err, "VF health state unavailable")
 
-	available, quarantined, err := VGPUAvailability(VGPUFrameworkMdev, []VirtualFunction{{PCIAddress: "0000:82:00.4"}})
+	availability, err := GetVGPUAvailability(VGPUFrameworkMdev, []VirtualFunction{{PCIAddress: "0000:82:00.4"}})
 	require.NoError(t, err)
-	assert.Equal(t, 1, available)
-	assert.Zero(t, quarantined)
+	assert.Equal(t, 1, availability.AllocatableSlots)
+	assert.Zero(t, availability.QuarantinedSlots)
 
 	restored := `{"version":1,"records":[{"vf_address":"0000:82:00.4","quarantined_at":"2026-08-20T00:00:00Z"}]}`
 	require.NoError(t, os.WriteFile(path, []byte(restored), 0o644))
-	available, quarantined, err = VGPUAvailability(VGPUFrameworkVendorVFIO, []VirtualFunction{{PCIAddress: "0000:82:00.4"}})
+	availability, err = GetVGPUAvailability(VGPUFrameworkVendorVFIO, []VirtualFunction{{PCIAddress: "0000:82:00.4"}})
 	require.NoError(t, err, "a repaired state file must re-enable placement without a new report")
-	assert.Zero(t, available)
-	assert.Equal(t, 1, quarantined)
+	assert.Zero(t, availability.AllocatableSlots)
+	assert.Equal(t, 1, availability.QuarantinedSlots)
 }
 
 func TestVGPUAvailabilityFailsClosedAfterPersistFailure(t *testing.T) {
 	resetVFHealthStore(t)
-	SetVFQuarantineThreshold(1)
+	require.NoError(t, SetVFQuarantineThreshold(1))
 	blocker := filepath.Join(t.TempDir(), "blocker")
 	require.NoError(t, os.WriteFile(blocker, nil, 0o644))
 	goodPath := vfHealth.path
@@ -112,7 +112,7 @@ func TestVGPUAvailabilityFailsClosedAfterPersistFailure(t *testing.T) {
 	_, err := ReportVFInitFailure(VFInitFailureReport{VFAddress: "0000:e3:00.4", InstanceID: "instance-1"})
 	require.Error(t, err)
 	assert.True(t, vfHealthStoreUnavailable())
-	_, _, err = VGPUAvailability(VGPUFrameworkVendorVFIO, []VirtualFunction{{PCIAddress: "0000:e3:00.4"}})
+	_, err = GetVGPUAvailability(VGPUFrameworkVendorVFIO, []VirtualFunction{{PCIAddress: "0000:e3:00.4"}})
 	require.ErrorContains(t, err, "last write failed")
 
 	vfHealth.path = goodPath
@@ -121,15 +121,15 @@ func TestVGPUAvailabilityFailsClosedAfterPersistFailure(t *testing.T) {
 	assert.Equal(t, VFReportQuarantined, result.Outcome)
 	assert.False(t, vfHealthStoreUnavailable())
 
-	available, quarantined, err := VGPUAvailability(VGPUFrameworkVendorVFIO, []VirtualFunction{{PCIAddress: "0000:e3:00.4"}})
+	availability, err := GetVGPUAvailability(VGPUFrameworkVendorVFIO, []VirtualFunction{{PCIAddress: "0000:e3:00.4"}})
 	require.NoError(t, err)
-	assert.Zero(t, available)
-	assert.Equal(t, 1, quarantined)
+	assert.Zero(t, availability.AllocatableSlots)
+	assert.Equal(t, 1, availability.QuarantinedSlots)
 }
 
 func TestCheckedAddressesRetriesFailedPersist(t *testing.T) {
 	path := resetVFHealthStore(t)
-	SetVFQuarantineThreshold(1)
+	require.NoError(t, SetVFQuarantineThreshold(1))
 	_, err := ReportVFInitFailure(VFInitFailureReport{VFAddress: "0000:e3:00.4", InstanceID: "instance-1"})
 	require.NoError(t, err)
 
@@ -137,16 +137,16 @@ func TestCheckedAddressesRetriesFailedPersist(t *testing.T) {
 	_, err = ReportVFInitFailure(VFInitFailureReport{VFAddress: "0000:e3:00.5", InstanceID: "instance-2"})
 	require.Error(t, err)
 	assert.True(t, vfHealthStoreUnavailable())
-	_, _, err = VGPUAvailability(VGPUFrameworkVendorVFIO, nil)
+	_, err = GetVGPUAvailability(VGPUFrameworkVendorVFIO, nil)
 	require.ErrorContains(t, err, "last write failed")
 
 	// No report arrives while placement is closed; a read alone must clear the latch.
 	vfHealth.syncDirFunc = syncDir
-	available, quarantined, err := VGPUAvailability(VGPUFrameworkVendorVFIO, []VirtualFunction{{PCIAddress: "0000:e3:00.4"}, {PCIAddress: "0000:e3:00.5"}})
+	availability, err := GetVGPUAvailability(VGPUFrameworkVendorVFIO, []VirtualFunction{{PCIAddress: "0000:e3:00.4"}, {PCIAddress: "0000:e3:00.5"}})
 	require.NoError(t, err)
 	assert.False(t, vfHealthStoreUnavailable())
-	assert.Equal(t, 1, available)
-	assert.Equal(t, 1, quarantined)
+	assert.Equal(t, 1, availability.AllocatableSlots)
+	assert.Equal(t, 1, availability.QuarantinedSlots)
 
 	data, err := os.ReadFile(path)
 	require.NoError(t, err)
@@ -158,14 +158,14 @@ func TestCheckedAddressesRetriesFailedPersist(t *testing.T) {
 
 func TestSetVFQuarantineThresholdReevaluatesRecordedFailures(t *testing.T) {
 	path := resetVFHealthStore(t)
-	SetVFQuarantineThreshold(3)
+	require.NoError(t, SetVFQuarantineThreshold(3))
 	for _, instance := range []string{"instance-1", "instance-2"} {
 		result, err := ReportVFInitFailure(VFInitFailureReport{VFAddress: "0000:e3:00.4", InstanceID: instance})
 		require.NoError(t, err)
 		require.Equal(t, VFReportRecorded, result.Outcome)
 	}
 
-	SetVFQuarantineThreshold(2)
+	require.NoError(t, SetVFQuarantineThreshold(2))
 
 	records := quarantinedVFs()
 	require.Len(t, records, 1)
@@ -181,7 +181,7 @@ func TestSetVFQuarantineThresholdReevaluatesRecordedFailures(t *testing.T) {
 
 func TestLoadReevaluatesTalliesAgainstConfiguredThreshold(t *testing.T) {
 	path := resetVFHealthStore(t)
-	SetVFQuarantineThreshold(3)
+	require.NoError(t, SetVFQuarantineThreshold(3))
 	for _, instance := range []string{"instance-1", "instance-2"} {
 		result, err := ReportVFInitFailure(VFInitFailureReport{VFAddress: "0000:e3:00.4", InstanceID: instance})
 		require.NoError(t, err)
@@ -457,16 +457,16 @@ func TestReportVFInitFailureRetainsRenamedStateAfterSyncFailure(t *testing.T) {
 	}
 	require.True(t, found)
 
-	available, quarantined, err := VGPUAvailability(VGPUFrameworkVendorVFIO, []VirtualFunction{{PCIAddress: vf}})
+	availability, err := GetVGPUAvailability(VGPUFrameworkVendorVFIO, []VirtualFunction{{PCIAddress: vf}})
 	require.NoError(t, err)
-	assert.Zero(t, available)
-	assert.Equal(t, 1, quarantined)
+	assert.Zero(t, availability.AllocatableSlots)
+	assert.Equal(t, 1, availability.QuarantinedSlots)
 }
 
 func TestReportRetriesFailedThresholdPersistence(t *testing.T) {
 	path := resetVFHealthStore(t)
 	vf := "0000:e3:00.4"
-	SetVFQuarantineThreshold(3)
+	require.NoError(t, SetVFQuarantineThreshold(3))
 	for _, instance := range []string{"instance-1", "instance-2"} {
 		_, err := ReportVFInitFailure(VFInitFailureReport{VFAddress: vf, InstanceID: instance})
 		require.NoError(t, err)
@@ -475,7 +475,7 @@ func TestReportRetriesFailedThresholdPersistence(t *testing.T) {
 	blocker := filepath.Join(t.TempDir(), "blocker")
 	require.NoError(t, os.WriteFile(blocker, nil, 0644))
 	vfHealth.path = filepath.Join(blocker, "vf-health.json")
-	SetVFQuarantineThreshold(2)
+	require.Error(t, SetVFQuarantineThreshold(2))
 	assert.True(t, vfHealthStoreUnavailable())
 
 	vfHealth.path = path
@@ -591,4 +591,29 @@ func TestReportVFInitFailureRefusesToClobberUnloadedState(t *testing.T) {
 	records := quarantinedVFs()
 	require.Len(t, records, 2, "reload must recover the previously persisted quarantine")
 	assert.Equal(t, "0000:e3:00.4", records[0].VFAddress)
+}
+
+func TestInitVFHealthFailsWhenReevaluatedQuarantineCannotPersist(t *testing.T) {
+	path := resetVFHealthStore(t)
+	// Two persisted tallies meet the default threshold, so loading them
+	// quarantines the VF and must write that back.
+	state := `{"version":1,"records":[{"vf_address":"0000:e3:00.4","failures":[` +
+		`{"instance_id":"instance-1","reported_at":"2026-08-20T00:00:00Z"},` +
+		`{"instance_id":"instance-2","reported_at":"2026-08-20T01:00:00Z"}]}]}`
+	require.NoError(t, os.WriteFile(path, []byte(state), 0o644))
+	vfHealth.syncDirFunc = func(string) error { return errors.New("injected sync failure") }
+
+	err := InitVFHealth(path)
+	require.ErrorContains(t, err, "injected sync failure")
+	require.Len(t, quarantinedVFs(), 1, "the re-evaluated quarantine must stay in effect in memory")
+	assert.True(t, vfHealthStoreUnavailable())
+	_, err = GetVGPUAvailability(VGPUFrameworkVendorVFIO, []VirtualFunction{{PCIAddress: "0000:e3:00.4"}})
+	require.ErrorContains(t, err, "last write failed")
+
+	vfHealth.syncDirFunc = syncDir
+	availability, err := GetVGPUAvailability(VGPUFrameworkVendorVFIO, []VirtualFunction{{PCIAddress: "0000:e3:00.4"}})
+	require.NoError(t, err, "a read must retry the failed write once the disk recovers")
+	assert.False(t, vfHealthStoreUnavailable())
+	assert.Zero(t, availability.AllocatableSlots)
+	assert.Equal(t, 1, availability.QuarantinedSlots)
 }

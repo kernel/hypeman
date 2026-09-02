@@ -53,18 +53,18 @@ func getVGPUStatus(ctx context.Context, framework devices.VGPUFramework, vfs []d
 		TotalSlots: len(vfs),
 		UsedSlots:  usedSlots,
 	}
-	// Profile listing fails on the same unavailable health store, so check
-	// availability first and report the cause once.
-	allocatableSlots, quarantinedSlots, err := devices.VGPUAvailability(framework, vfs)
+	// One VF health snapshot serves both the slot counts and the profile
+	// listing, so a status read touches the store once.
+	availability, err := devices.GetVGPUAvailability(framework, vfs)
 	if err != nil {
 		logger.FromContext(ctx).WarnContext(ctx, "failed to count allocatable vGPU slots; reporting none and no profiles", "framework", framework, "error", err)
 		return status, err
 	}
-	status.AllocatableSlots = allocatableSlots
-	status.QuarantinedSlots = quarantinedSlots
+	status.AllocatableSlots = availability.AllocatableSlots
+	status.QuarantinedSlots = availability.QuarantinedSlots
 
 	// Get available profiles (reuse VFs to avoid redundant discovery)
-	profiles, err := devices.ListGPUProfilesWithVFs(framework, vfs)
+	profiles, err := devices.ListGPUProfilesWithVFs(framework, vfs, availability)
 	if err != nil {
 		logger.FromContext(ctx).WarnContext(ctx, "failed to list vGPU profiles; reporting none", "framework", framework, "error", err)
 		profiles = nil
