@@ -77,7 +77,7 @@ type manager struct {
 	createMu                   sync.Mutex
 	diskUsageMu                sync.RWMutex
 	tagGenerations             map[string]uint64
-	requestedTags              map[requestedTagKey]string // newest pull's digest per requested tag
+	requestedTags              map[string]string // newest pull's digest per requested tag
 	diskUsageLoaded            bool
 	readyImageBytes            int64
 	ociCacheBytes              int64
@@ -106,7 +106,7 @@ func NewManager(p *paths.Paths, maxConcurrentBuilds int, meter metric.Meter) (Ma
 		borrowedCredentialsTimeout: DefaultBorrowedCredentialsTimeout,
 		readySubscribers:           make(map[string][]chan StatusEvent),
 		tagGenerations:             make(map[string]uint64),
-		requestedTags:              make(map[requestedTagKey]string),
+		requestedTags:              make(map[string]string),
 	}
 
 	// Initialize metrics if meter is provided
@@ -788,21 +788,14 @@ func (m *manager) deleteDigestImage(repository, digestHex string) error {
 	if err := deleteTags(m.paths, repository, digestTags); err != nil {
 		return err
 	}
-	allTags := make(map[string]struct{}, len(digestTags)+len(meta.TagClaims)+1)
-	for _, tag := range digestTags {
-		allTags[tag] = struct{}{}
-	}
+	tagsToClean := append([]string(nil), digestTags...)
 	if meta.RequestedTag != "" {
-		allTags[meta.RequestedTag] = struct{}{}
+		tagsToClean = append(tagsToClean, meta.RequestedTag)
 	}
 	for _, claim := range meta.TagClaims {
 		if claim.Repository == repository && claim.Tag != "" {
-			allTags[claim.Tag] = struct{}{}
+			tagsToClean = append(tagsToClean, claim.Tag)
 		}
-	}
-	tagsToClean := make([]string, 0, len(allTags))
-	for tag := range allTags {
-		tagsToClean = append(tagsToClean, tag)
 	}
 	for _, tag := range tagsToClean {
 		m.forgetTagState(repository, tag)

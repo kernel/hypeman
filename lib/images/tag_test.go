@@ -54,7 +54,7 @@ func seedImage(t *testing.T, p *paths.Paths, repository, tag, digestHex string, 
 func newTagTestCase(t *testing.T) (*paths.Paths, *manager, string) {
 	t.Helper()
 	p := paths.New(t.TempDir())
-	return p, &manager{paths: p, tagGenerations: make(map[string]uint64), requestedTags: make(map[requestedTagKey]string)}, "docker.io/library/alpine"
+	return p, &manager{paths: p, tagGenerations: make(map[string]uint64), requestedTags: make(map[string]string)}, "docker.io/library/alpine"
 }
 
 func requireTagResolvesTo(t *testing.T, p *paths.Paths, repository, tag, digest string) {
@@ -145,15 +145,15 @@ func TestReadyClaimDoesNotResurrectOlderPendingTag(t *testing.T) {
 	newDigest := strings.Repeat("b2", 32)
 	seedContent(t, p, repository, "latest", newDigest)
 
-	key := tagGenerationKey(repository, "latest")
+	key := tagKey(repository, "latest")
 	m.tagGenerations[key] = 1
-	m.requestedTags[requestedTagKeyFor(repository, "latest")] = oldDigest
+	m.requestedTags[tagKey(repository, "latest")] = oldDigest
 	meta := &imageMetadata{RequestedTag: "latest", TagGeneration: 1}
 	ref, err := ParseNormalizedRef(repository + ":latest")
 	require.NoError(t, err)
 
 	require.NoError(t, m.claimReadyTag(repository, "latest", newDigest))
-	require.NotContains(t, m.requestedTags, requestedTagKeyFor(repository, "latest"))
+	require.NotContains(t, m.requestedTags, tagKey(repository, "latest"))
 	require.False(t, m.claimRequestedTags(NewResolvedRef(ref, "sha256:"+oldDigest), meta))
 	requireTagResolvesTo(t, p, repository, "latest", newDigest)
 }
@@ -195,8 +195,8 @@ func TestDeletingPendingTagDoesNotReclaimIt(t *testing.T) {
 	}
 	require.NoError(t, os.MkdirAll(p.ImageContentDir(newDigest), 0o755))
 	require.NoError(t, writeMetadataFile(p.ImageContentMetadata(newDigest), pending))
-	m.tagGenerations[tagGenerationKey(repository, "latest")] = 1
-	m.requestedTags = map[requestedTagKey]string{requestedTagKeyFor(repository, "latest"): newDigest}
+	m.tagGenerations[tagKey(repository, "latest")] = 1
+	m.requestedTags = map[string]string{tagKey(repository, "latest"): newDigest}
 
 	require.NoError(t, m.DeleteImage(context.Background(), repository+":latest"))
 	pending, err := readContentMetadata(p, newDigest)
@@ -218,9 +218,9 @@ func TestRestoreTagStateRestoresSecondaryClaims(t *testing.T) {
 		TagClaims: []imageTagClaim{{Repository: repository, Tag: "stable", TagGeneration: 2}},
 	}
 	m.restoreTagState([]*imageMetadata{meta})
-	require.Equal(t, digest, m.requestedTags[requestedTagKeyFor(repository, "latest")])
-	require.Equal(t, digest, m.requestedTags[requestedTagKeyFor(repository, "stable")])
-	require.Equal(t, uint64(2), m.tagGenerations[tagGenerationKey(repository, "stable")])
+	require.Equal(t, digest, m.requestedTags[tagKey(repository, "latest")])
+	require.Equal(t, digest, m.requestedTags[tagKey(repository, "stable")])
+	require.Equal(t, uint64(2), m.tagGenerations[tagKey(repository, "stable")])
 }
 
 func TestPendingDigestClaimsAllRequestedTags(t *testing.T) {
@@ -249,7 +249,7 @@ func TestWaitForReadyUsesNewestPendingTag(t *testing.T) {
 	p, m, repository := newTagTestCase(t)
 	m.queue = queue.New(1)
 	m.readySubscribers = make(map[string][]chan StatusEvent)
-	m.requestedTags = make(map[requestedTagKey]string)
+	m.requestedTags = make(map[string]string)
 	oldDigest := strings.Repeat("a1", 32)
 	newDigest := strings.Repeat("b2", 32)
 	seedContent(t, p, repository, "latest", oldDigest)
@@ -260,7 +260,7 @@ func TestWaitForReadyUsesNewestPendingTag(t *testing.T) {
 		Status: StatusPending, CreatedAt: time.Now().UTC(),
 	}
 	require.NoError(t, writeMetadataFile(p.ImageContentMetadata(newDigest), pending))
-	m.requestedTags[requestedTagKeyFor(repository, "latest")] = newDigest
+	m.requestedTags[tagKey(repository, "latest")] = newDigest
 
 	result := make(chan error, 1)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -414,8 +414,8 @@ func TestOlderPendingBuildRestoredWhenNewerBuildFails(t *testing.T) {
 		RequestedTag: "latest", TagGeneration: 1, BuildID: "b",
 	}
 	require.NoError(t, writeMetadataFile(p.ImageContentMetadata(digestB), metaB))
-	m.tagGenerations[tagGenerationKey(repository, "latest")] = 1
-	m.requestedTags[requestedTagKeyFor(repository, "latest")] = digestB
+	m.tagGenerations[tagKey(repository, "latest")] = 1
+	m.requestedTags[tagKey(repository, "latest")] = digestB
 
 	// Build C starts for latest (generation 2)
 	require.NoError(t, os.MkdirAll(p.ImageContentDir(digestC), 0o755))
@@ -425,15 +425,15 @@ func TestOlderPendingBuildRestoredWhenNewerBuildFails(t *testing.T) {
 		RequestedTag: "latest", TagGeneration: 2, BuildID: "c",
 	}
 	require.NoError(t, writeMetadataFile(p.ImageContentMetadata(digestC), metaC))
-	m.tagGenerations[tagGenerationKey(repository, "latest")] = 2
-	m.requestedTags[requestedTagKeyFor(repository, "latest")] = digestC
+	m.tagGenerations[tagKey(repository, "latest")] = 2
+	m.requestedTags[tagKey(repository, "latest")] = digestC
 
 	// C fails
 	m.releaseTagGeneration(repository, metaC.RequestedTag, metaC.TagGeneration)
 	m.clearRequestedDigest(digestC)
 
 	// requestedTags must restore to build B
-	require.Equal(t, digestB, m.requestedTags[requestedTagKeyFor(repository, "latest")])
+	require.Equal(t, digestB, m.requestedTags[tagKey(repository, "latest")])
 
 	ref, err := ParseNormalizedRef(repository + ":latest")
 	require.NoError(t, err)
@@ -467,8 +467,8 @@ func TestSecondaryClaimReclaimedAfterNewerBuildFails(t *testing.T) {
 		},
 	}
 	require.NoError(t, writeMetadataFile(p.ImageContentMetadata(digestB), metaB))
-	m.tagGenerations[tagGenerationKey(repository, "stable")] = 1
-	m.requestedTags[requestedTagKeyFor(repository, "stable")] = digestB
+	m.tagGenerations[tagKey(repository, "stable")] = 1
+	m.requestedTags[tagKey(repository, "stable")] = digestB
 
 	// Newer build C starts for stable (generation 2)
 	require.NoError(t, os.MkdirAll(p.ImageContentDir(digestC), 0o755))
@@ -478,16 +478,16 @@ func TestSecondaryClaimReclaimedAfterNewerBuildFails(t *testing.T) {
 		RequestedTag: "stable", TagGeneration: 2, BuildID: "c",
 	}
 	require.NoError(t, writeMetadataFile(p.ImageContentMetadata(digestC), metaC))
-	m.tagGenerations[tagGenerationKey(repository, "stable")] = 2
-	m.requestedTags[requestedTagKeyFor(repository, "stable")] = digestC
+	m.tagGenerations[tagKey(repository, "stable")] = 2
+	m.requestedTags[tagKey(repository, "stable")] = digestC
 
 	// C fails
 	m.releaseTagGeneration(repository, metaC.RequestedTag, metaC.TagGeneration)
 	m.clearRequestedDigest(digestC)
 
 	// Generation for stable rolled back to 1 and requested tag restored to B
-	require.Equal(t, uint64(1), m.tagGenerations[tagGenerationKey(repository, "stable")])
-	require.Equal(t, digestB, m.requestedTags[requestedTagKeyFor(repository, "stable")])
+	require.Equal(t, uint64(1), m.tagGenerations[tagKey(repository, "stable")])
+	require.Equal(t, digestB, m.requestedTags[tagKey(repository, "stable")])
 
 	// B completes
 	refB, err := ParseNormalizedRef(repository + ":other")
@@ -523,16 +523,16 @@ func TestDeleteTaggedImageCleansPendingTagWithoutSymlink(t *testing.T) {
 	_, m, repository := newTagTestCase(t)
 	digest := strings.Repeat("e5", 32)
 
-	m.tagGenerations[tagGenerationKey(repository, "orphan")] = 3
-	m.requestedTags[requestedTagKeyFor(repository, "orphan")] = digest
+	m.tagGenerations[tagKey(repository, "orphan")] = 3
+	m.requestedTags[tagKey(repository, "orphan")] = digest
 
 	err := m.deleteTaggedImage(repository, "orphan")
 	require.Error(t, err) // Symlink was missing on disk
 
 	// But memory tag state should be cleared
-	_, hasGen := m.tagGenerations[tagGenerationKey(repository, "orphan")]
+	_, hasGen := m.tagGenerations[tagKey(repository, "orphan")]
 	require.False(t, hasGen)
-	_, hasReq := m.requestedTags[requestedTagKeyFor(repository, "orphan")]
+	_, hasReq := m.requestedTags[tagKey(repository, "orphan")]
 	require.False(t, hasReq)
 }
 
@@ -550,15 +550,15 @@ func TestDeleteDigestImageCleansPendingTagClaims(t *testing.T) {
 		RequestedTag: "latest", TagGeneration: 2, BuildID: "b",
 	}
 	require.NoError(t, writeMetadataFile(p.ImageContentMetadata(digestB), metaB))
-	m.tagGenerations[tagGenerationKey(repository, "latest")] = 2
-	m.requestedTags[requestedTagKeyFor(repository, "latest")] = digestB
+	m.tagGenerations[tagKey(repository, "latest")] = 2
+	m.requestedTags[tagKey(repository, "latest")] = digestB
 
 	require.NoError(t, m.deleteDigestImage(repository, digestB))
 
 	// In-memory state for latest should be cleared
-	_, hasGen := m.tagGenerations[tagGenerationKey(repository, "latest")]
+	_, hasGen := m.tagGenerations[tagKey(repository, "latest")]
 	require.False(t, hasGen)
-	_, hasReq := m.requestedTags[requestedTagKeyFor(repository, "latest")]
+	_, hasReq := m.requestedTags[tagKey(repository, "latest")]
 	require.False(t, hasReq)
 
 	// Pending metadata should have tag claim marked as canceled

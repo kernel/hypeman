@@ -258,10 +258,6 @@ func deleteTags(p *paths.Paths, repository string, tags []string) error {
 	return nil
 }
 
-func deleteTagsForDigest(p *paths.Paths, repository string, tags []string) error {
-	return deleteTags(p, repository, tags)
-}
-
 func contentTagCount(p *paths.Paths, digestHex string) (int, error) {
 	root := p.ImageRepositoriesDir()
 	count := 0
