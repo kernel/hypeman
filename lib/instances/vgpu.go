@@ -3,6 +3,7 @@ package instances
 import (
 	"context"
 	"fmt"
+	"math/rand/v2"
 	"path/filepath"
 	"sort"
 
@@ -56,7 +57,14 @@ func (m *manager) claimVGPU(ctx context.Context, meta *metadata, profileName str
 	if err != nil {
 		return nil, err
 	}
-	vfAddress, profileType, err := selectVendorVFIOVF(vfs, profilesByVF, allMetadata, profileName)
+	// Quarantine is read under the allocation lock but mutated under the
+	// devices lock, so this is a snapshot. configure re-checks it under the
+	// devices lock before the VF is touched.
+	quarantined, err := m.quarantinedVFAddresses()
+	if err != nil {
+		return nil, err
+	}
+	vfAddress, profileType, err := selectVendorVFIOVF(vfs, profilesByVF, allMetadata, quarantined, profileName, m.pickVFIndex)
 	if err != nil {
 		// A dirty unclaimed VF consumes framebuffer, which can make the
 		// requested profile vanish from every creatable list before the
@@ -70,7 +78,7 @@ func (m *manager) claimVGPU(ctx context.Context, meta *metadata, profileName str
 		if profilesByVF, err = listProfiles(vfs); err != nil {
 			return nil, err
 		}
-		if vfAddress, profileType, err = selectVendorVFIOVF(vfs, profilesByVF, allMetadata, profileName); err != nil {
+		if vfAddress, profileType, err = selectVendorVFIOVF(vfs, profilesByVF, allMetadata, quarantined, profileName, m.pickVFIndex); err != nil {
 			return nil, err
 		}
 	}
@@ -97,7 +105,7 @@ func (m *manager) claimVGPU(ctx context.Context, meta *metadata, profileName str
 		}
 		log.WarnContext(ctx, "dirty vGPU VF refused reset; trying another VF", "vf", vf.PCIAddress, "error", repairErr)
 		vfs = withoutVF(vfs, vf.PCIAddress)
-		if vfAddress, profileType, err = selectVendorVFIOVF(vfs, profilesByVF, allMetadata, profileName); err != nil {
+		if vfAddress, profileType, err = selectVendorVFIOVF(vfs, profilesByVF, allMetadata, quarantined, profileName, m.pickVFIndex); err != nil {
 			return nil, fmt.Errorf("repair dirty VF %s before claim: %w", vf.PCIAddress, repairErr)
 		}
 	}
@@ -109,6 +117,8 @@ func (m *manager) claimVGPU(ctx context.Context, meta *metadata, profileName str
 		SysfsPath:   filepath.Clean(devices.GetDeviceSysfsPath(vfAddress)),
 	}
 	setStoredVGPUDevice(&meta.StoredMetadata, device)
+	claimedAt := m.nowUTC()
+	meta.GPUClaimedAt = &claimedAt
 	if err := m.saveMetadata(meta); err != nil {
 		clearStoredVGPUDevice(&meta.StoredMetadata)
 		return nil, fmt.Errorf("save vGPU claim: %w", err)
@@ -150,7 +160,20 @@ func (m *manager) resetDirtyUnclaimedVFs(ctx context.Context, vfs []devices.Virt
 	return reset
 }
 
-func selectVendorVFIOVF(vfs []devices.VirtualFunction, profilesByVF map[string][]devices.VGPUProfileType, allMetadata []StoredMetadata, profileName string) (string, string, error) {
+func (m *manager) quarantinedVFAddresses() (map[string]struct{}, error) {
+	quarantined := m.quarantinedVFs
+	if quarantined == nil {
+		quarantined = devices.QuarantinedVFAddresses
+	}
+	return quarantined()
+}
+
+// selectVendorVFIOVF picks the VF to claim for profileName. Quarantined VFs
+// are never candidates and count against their parent GPU, so placement
+// drifts away from cards carrying a wedged VF. Among equally ranked
+// candidates on the chosen GPU, pick selects the index (nil is uniform
+// random), so a single VF cannot capture every placement on an idle host.
+func selectVendorVFIOVF(vfs []devices.VirtualFunction, profilesByVF map[string][]devices.VGPUProfileType, allMetadata []StoredMetadata, quarantined map[string]struct{}, profileName string, pick func(n int) int) (string, string, error) {
 	profilesByName := make(map[string]devices.VGPUProfileType)
 	advertises := make(map[string]map[string]struct{}, len(profilesByVF))
 	for vfAddress, profiles := range profilesByVF {
@@ -200,8 +223,13 @@ func selectVendorVFIOVF(vfs []devices.VirtualFunction, profilesByVF map[string][
 			parentAdvertises[vf.ParentGPU] = true
 		}
 	}
+	quarantinedByGPU := make(map[string]int)
 	freeByGPU := make(map[string][]devices.VirtualFunction)
 	for _, vf := range vfs {
+		if _, bad := quarantined[vf.PCIAddress]; bad {
+			quarantinedByGPU[vf.ParentGPU]++
+			continue
+		}
 		if _, ok := claimed[vf.PCIAddress]; ok {
 			continue
 		}
@@ -227,6 +255,9 @@ func selectVendorVFIOVF(vfs []devices.VirtualFunction, profilesByVF map[string][
 		gpus = append(gpus, gpu)
 	}
 	sort.Slice(gpus, func(i, j int) bool {
+		if quarantinedByGPU[gpus[i]] != quarantinedByGPU[gpus[j]] {
+			return quarantinedByGPU[gpus[i]] < quarantinedByGPU[gpus[j]]
+		}
 		if unknownUsageByGPU[gpus[i]] != unknownUsageByGPU[gpus[j]] {
 			return !unknownUsageByGPU[gpus[i]]
 		}
@@ -238,7 +269,17 @@ func selectVendorVFIOVF(vfs []devices.VirtualFunction, profilesByVF map[string][
 	if len(gpus) == 0 {
 		return "", "", fmt.Errorf("no available VF for profile %q", profileName)
 	}
-	return freeByGPU[gpus[0]][0].PCIAddress, requested.TypeName, nil
+	// Candidates are sorted clean-first, so the leading run with the same
+	// Allocated state is the set of equally ranked VFs.
+	candidates := freeByGPU[gpus[0]]
+	n := 1
+	for n < len(candidates) && candidates[n].Allocated == candidates[0].Allocated {
+		n++
+	}
+	if pick == nil {
+		pick = rand.IntN
+	}
+	return candidates[pick(n)].PCIAddress, requested.TypeName, nil
 }
 
 func (m *manager) configureClaimedVGPU(ctx context.Context, device *devices.VGPUDevice) error {
@@ -270,6 +311,7 @@ func clearStoredVGPUDevice(stored *StoredMetadata) {
 	stored.GPUFramework = devices.VGPUFrameworkNone
 	stored.GPUDevicePath = ""
 	stored.GPUMdevUUID = ""
+	stored.GPUClaimedAt = nil
 }
 
 // vgpuCleanupGuard checks whether the VF can be safely released: the VMM

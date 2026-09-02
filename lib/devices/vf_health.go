@@ -93,8 +93,8 @@ var (
 		syncDirFunc: syncDir,
 	}
 	// vendorVFIOMu is acquired before vfHealth.mu. It serializes quarantine
-	// mutations with vendor-VFIO create, destroy, and reconciliation so
-	// placement cannot select a VF while it is being quarantined.
+	// mutations with vendor-VFIO configure and destroy so a VF cannot be
+	// configured for a new claim while it is being quarantined.
 	vendorVFIOMu sync.Mutex
 )
 
@@ -222,6 +222,12 @@ func (s *vfHealthStore) checkedAddresses() (map[string]struct{}, error) {
 		}
 	}
 	return addresses, nil
+}
+
+// QuarantinedVFAddresses returns the PCI addresses of quarantined VFs. It
+// fails while the health store is unavailable so placement fails closed.
+func QuarantinedVFAddresses() (map[string]struct{}, error) {
+	return vfHealth.checkedAddresses()
 }
 
 // VGPUAvailability returns free allocatable and quarantined VF counts.
