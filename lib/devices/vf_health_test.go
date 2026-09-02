@@ -327,6 +327,51 @@ func TestReportVFInitSuccessRescindsQuarantineTriggeredByAssignment(t *testing.T
 	assert.Empty(t, quarantinedVFs())
 }
 
+func TestReportVFInitSuccessForOlderAssignmentKeepsQuarantine(t *testing.T) {
+	path := resetVFHealthStore(t)
+	vf := "0000:e3:00.4"
+	older := VFInitFailureReport{
+		VFAddress:  vf,
+		InstanceID: "instance-1",
+		AssignedAt: "2026-08-20T14:00:00Z",
+	}
+	_, err := ReportVFInitFailure(older)
+	require.NoError(t, err)
+	trigger := VFInitFailureReport{
+		VFAddress:  vf,
+		InstanceID: "instance-2",
+		AssignedAt: "2026-08-20T15:00:00Z",
+	}
+	result, err := ReportVFInitFailure(trigger)
+	require.NoError(t, err)
+	require.Equal(t, VFReportQuarantined, result.Outcome)
+
+	success, err := ReportVFInitSuccess(VFInitSuccessReport{
+		VFAddress:  older.VFAddress,
+		InstanceID: older.InstanceID,
+		AssignedAt: older.AssignedAt,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, success.Cleared)
+	assert.False(t, success.Rescinded)
+
+	require.NoError(t, InitVFHealth(path, defaultVFQuarantineThreshold))
+	quarantined := quarantinedVFs()
+	require.Len(t, quarantined, 1)
+	require.Len(t, quarantined[0].Failures, 1)
+	assert.Equal(t, trigger.InstanceID, quarantined[0].Failures[0].InstanceID)
+
+	success, err = ReportVFInitSuccess(VFInitSuccessReport{
+		VFAddress:  trigger.VFAddress,
+		InstanceID: trigger.InstanceID,
+		AssignedAt: trigger.AssignedAt,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, success.Cleared)
+	assert.True(t, success.Rescinded)
+	assert.Empty(t, quarantinedVFs())
+}
+
 func TestReportVFInitSuccessWithoutMatchingFailureClearsNothing(t *testing.T) {
 	resetVFHealthStore(t)
 	_, err := ReportVFInitFailure(VFInitFailureReport{

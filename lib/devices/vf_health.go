@@ -408,15 +408,15 @@ func (s *vfHealthStore) reportSuccess(report VFInitSuccessReport) (VFSuccessResu
 			break
 		}
 	}
-	// Only the newest failure can rescind a quarantine; see VFInitSuccessReport.
-	if match < 0 || (previous.QuarantinedAt != nil && match != len(previous.Failures)-1) {
+	if match < 0 {
 		return VFSuccessResult{}, nil
 	}
 
+	// Only the newest failure can rescind a quarantine; see VFInitSuccessReport.
 	remaining := append([]vfInitFailure(nil), previous.Failures[match+1:]...)
 	result := VFSuccessResult{
 		Cleared:   len(previous.Failures) - len(remaining),
-		Rescinded: previous.QuarantinedAt != nil,
+		Rescinded: previous.QuarantinedAt != nil && len(remaining) == 0,
 	}
 	if len(remaining) == 0 {
 		delete(s.records, report.VFAddress)
