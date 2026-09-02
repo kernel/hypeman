@@ -528,3 +528,23 @@
   - Run 1: `356s`
   - Run 2: `423s`
   - Run 3: `458s`
+
+## 2026-09-02 - Overlay disk cleanup deletion flake
+
+### Flake signature
+- PR CI failed `TestOverlayDiskCleanupOnDelete` during `manager.DeleteInstance`.
+- The delete path returned `kill hypervisor: hypervisor pid ... did not exit after SIGKILL` after the process teardown budget elapsed, leaving the instance metadata in place for a retry.
+
+### Root cause
+- The test made one direct delete call even though the delete contract intentionally retains metadata when hypervisor death cannot be confirmed and supports a safe retry.
+
+### Fix
+- Changed the test to use the existing `deleteInstanceEventually` helper, which retries deletion until the retained instance metadata can be removed.
+
+### Validation
+- Targeted `TestOverlayDiskCleanupOnDelete` passed 5 times on the Linux KVM runner.
+- Full no-cache Linux suite passed three consecutive times after the change:
+  - Run 4: `269s`
+  - Run 5: `488s`
+  - Run 6: `421s`
+- An earlier post-change full run failed on the separate, reproducible `TestSocketCacheKeyChangesWhenSocketIsRecreated` test; that issue is outside this change.

@@ -299,9 +299,9 @@ func TestOverlayDiskCleanupOnDelete(t *testing.T) {
 	_, err = os.Stat(overlayDisk)
 	require.NoError(t, err, "overlay disk file should exist after instance creation")
 
-	// Delete the instance
-	err = manager.DeleteInstance(ctx, inst.Id)
-	require.NoError(t, err)
+	// Delete the instance. Hypervisor teardown can outlast the first delete
+	// attempt on a busy CI host.
+	deleteInstanceEventually(t, ctx, manager, inst.Id)
 
 	// Verify instance directory is removed (which includes vol-overlays/)
 	instanceDir := p.InstanceDir(inst.Id)
