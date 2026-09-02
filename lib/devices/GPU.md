@@ -301,8 +301,10 @@ placement. A reported init success clears failures only when that exact
 assignment has a recorded failure, removing the match and older tallies; if
 that assignment crossed the threshold, its later success also rescinds the
 quarantine. If the state file exists but cannot be loaded, or the last write
-to it failed, placement and advertised availability fail closed until a load
-or write succeeds. Recorded tallies are re-evaluated against the configured
+to it failed, placement and advertised availability fail closed; the load or
+write is retried on the next placement or `/resources` read, so the store
+recovers on its own once the file is repaired or the disk is writable again.
+Recorded tallies are re-evaluated against the configured
 threshold at load, so lowering `gpu.vf_quarantine_threshold` quarantines VFs
 whose persisted failures already meet the new value.
 

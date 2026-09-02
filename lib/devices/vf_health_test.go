@@ -127,6 +127,35 @@ func TestVGPUAvailabilityFailsClosedAfterPersistFailure(t *testing.T) {
 	assert.Equal(t, 1, quarantined)
 }
 
+func TestCheckedAddressesRetriesFailedPersist(t *testing.T) {
+	path := resetVFHealthStore(t)
+	SetVFQuarantineThreshold(1)
+	_, err := ReportVFInitFailure(VFInitFailureReport{VFAddress: "0000:e3:00.4", InstanceID: "instance-1"})
+	require.NoError(t, err)
+
+	vfHealth.syncDirFunc = func(string) error { return errors.New("injected sync failure") }
+	_, err = ReportVFInitFailure(VFInitFailureReport{VFAddress: "0000:e3:00.5", InstanceID: "instance-2"})
+	require.Error(t, err)
+	assert.True(t, vfHealthStoreUnavailable())
+	_, _, err = VGPUAvailability(VGPUFrameworkVendorVFIO, nil)
+	require.ErrorContains(t, err, "last write failed")
+
+	// No report arrives while placement is closed; a read alone must clear the latch.
+	vfHealth.syncDirFunc = syncDir
+	available, quarantined, err := VGPUAvailability(VGPUFrameworkVendorVFIO, []VirtualFunction{{PCIAddress: "0000:e3:00.4"}, {PCIAddress: "0000:e3:00.5"}})
+	require.NoError(t, err)
+	assert.False(t, vfHealthStoreUnavailable())
+	assert.Equal(t, 1, available)
+	assert.Equal(t, 1, quarantined)
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	var state vfHealthFile
+	require.NoError(t, json.Unmarshal(data, &state))
+	require.Len(t, state.Records, 1, "the retried write must persist the rolled-back in-memory state")
+	assert.Equal(t, "0000:e3:00.4", state.Records[0].VFAddress)
+}
+
 func TestSetVFQuarantineThresholdReevaluatesRecordedFailures(t *testing.T) {
 	path := resetVFHealthStore(t)
 	SetVFQuarantineThreshold(3)

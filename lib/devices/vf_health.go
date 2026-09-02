@@ -232,8 +232,11 @@ func (s *vfHealthStore) checkedAddresses() (map[string]struct{}, error) {
 	if err := s.ensureLoadedLocked(); err != nil {
 		return nil, fmt.Errorf("VF health state unavailable: %w", err)
 	}
-	if s.persistErr != nil {
-		return nil, fmt.Errorf("VF health state unavailable: last write failed: %w", s.persistErr)
+	// A failed write closes placement, which stops the guest reports that
+	// would otherwise retry it. Retrying here lets the store recover on the
+	// next placement or /resources read once the disk is writable again.
+	if err := s.retryPersistLocked(); err != nil {
+		return nil, fmt.Errorf("VF health state unavailable: last write failed: %w", err)
 	}
 	addresses := make(map[string]struct{}, len(s.records))
 	for address, record := range s.records {
@@ -422,7 +425,7 @@ func (s *vfHealthStore) retryPersistLocked() error {
 }
 
 // persistLocked writes the current records to disk. A failure is latched and
-// fails placement closed until a later write succeeds. The returned boolean
+// fails placement closed until a retry succeeds. The returned boolean
 // reports whether the rename made the new state visible.
 func (s *vfHealthStore) persistLocked() (bool, error) {
 	if s.path == "" {
