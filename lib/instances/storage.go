@@ -187,8 +187,15 @@ func removeAllWithRetry(path string, removeAll func(string) error, sleep func(ti
 	}
 }
 
-// listMetadataFiles returns paths to all instance metadata files
 func (m *manager) listMetadataFiles() ([]string, error) {
+	return m.walkMetadataFiles(false)
+}
+
+func (m *manager) listMetadataFilesStrict() ([]string, error) {
+	return m.walkMetadataFiles(true)
+}
+
+func (m *manager) walkMetadataFiles(failOnStatError bool) ([]string, error) {
 	guestsDir := m.paths.GuestsDir()
 
 	// Ensure guests directory exists
@@ -210,6 +217,8 @@ func (m *manager) listMetadataFiles() ([]string, error) {
 		metaPath := filepath.Join(guestsDir, entry.Name(), "metadata.json")
 		if _, err := os.Stat(metaPath); err == nil {
 			metaFiles = append(metaFiles, metaPath)
+		} else if failOnStatError && !os.IsNotExist(err) {
+			return nil, fmt.Errorf("stat metadata for instance %s: %w", entry.Name(), err)
 		}
 	}
 

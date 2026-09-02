@@ -73,6 +73,13 @@ type lifecycleEventDropReason string
 
 const lifecycleEventDropReasonBufferFull lifecycleEventDropReason = "buffer_full"
 
+type vgpuReconcileStage string
+
+const (
+	vgpuReconcileStageListInstances    vgpuReconcileStage = "list_instances"
+	vgpuReconcileStageReconcileDevices vgpuReconcileStage = "reconcile_devices"
+)
+
 // Metrics holds the metrics instruments for instance operations.
 type Metrics struct {
 	createDuration                       metric.Float64Histogram
@@ -94,6 +101,8 @@ type Metrics struct {
 	lifecycleEventsDroppedTotal          metric.Int64Counter
 	forkMemFileShareFallbacksTotal       metric.Int64Counter
 	ttlReaperDeletionsTotal              metric.Int64Counter
+	vgpuReconcileFailuresTotal           metric.Int64Counter
+	vgpuStaleReleaseFailuresTotal        metric.Int64Counter
 	tracer                               trace.Tracer
 }
 
@@ -265,6 +274,22 @@ func newInstanceMetrics(meter metric.Meter, tracer trace.Tracer, m *manager) (*M
 	ttlReaperDeletionsTotal, err := meter.Int64Counter(
 		"hypeman_instances_ttl_reaper_deletions_total",
 		metric.WithDescription("Total number of instance TTL reaper deletion attempts"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	vgpuReconcileFailuresTotal, err := meter.Int64Counter(
+		"hypeman_instances_vgpu_reconcile_failures_total",
+		metric.WithDescription("Total number of vGPU reconcile pass stages that failed, leaving stale assignments or device leftovers allocated while /resources still advertises the capacity"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	vgpuStaleReleaseFailuresTotal, err := meter.Int64Counter(
+		"hypeman_instances_vgpu_stale_release_failures_total",
+		metric.WithDescription("Total number of stale vGPU assignment releases that failed, keeping the VF allocated until a later reconcile pass succeeds"),
 	)
 	if err != nil {
 		return nil, err
@@ -464,6 +489,8 @@ func newInstanceMetrics(meter metric.Meter, tracer trace.Tracer, m *manager) (*M
 		lifecycleEventsDroppedTotal:          lifecycleEventsDroppedTotal,
 		forkMemFileShareFallbacksTotal:       forkMemFileShareFallbacksTotal,
 		ttlReaperDeletionsTotal:              ttlReaperDeletionsTotal,
+		vgpuReconcileFailuresTotal:           vgpuReconcileFailuresTotal,
+		vgpuStaleReleaseFailuresTotal:        vgpuStaleReleaseFailuresTotal,
 		tracer:                               tracer,
 	}, nil
 }
@@ -561,6 +588,22 @@ func (m *manager) recordTimeToRunning(ctx context.Context, stored *StoredMetadat
 		attrs = append(attrs, attribute.String("hypervisor", string(stored.HypervisorType)))
 	}
 	m.metrics.timeToRunning.Record(ctx, duration, metric.WithAttributes(attrs...))
+}
+
+func (m *manager) recordVGPUReconcileFailure(ctx context.Context, stage vgpuReconcileStage) {
+	if m.metrics == nil {
+		return
+	}
+	m.metrics.vgpuReconcileFailuresTotal.Add(ctx, 1, metric.WithAttributes(
+		attribute.String("stage", string(stage)),
+	))
+}
+
+func (m *manager) recordVGPUStaleReleaseFailure(ctx context.Context) {
+	if m.metrics == nil {
+		return
+	}
+	m.metrics.vgpuStaleReleaseFailuresTotal.Add(ctx, 1)
 }
 
 // recordStateTransition records a state transition with hypervisor label.

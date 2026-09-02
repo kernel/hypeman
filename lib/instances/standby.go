@@ -376,7 +376,7 @@ func (m *manager) shutdownHypervisor(ctx context.Context, inst *Instance) error 
 			// alive; teardown is committed, so kill it rather than report a
 			// completed shutdown for a VMM that is still running.
 			log.WarnContext(ctx, "could not connect to hypervisor, force killing resolved owner", "instance_id", inst.Id, "pid", pid, "error", err)
-			if err := killProcessAndWait(pid); err != nil {
+			if err := m.terminateThenKill(ctx, inst, pid); err != nil {
 				return err
 			}
 		}
@@ -405,13 +405,13 @@ func (m *manager) shutdownHypervisor(ctx context.Context, inst *Instance) error 
 				log.DebugContext(ctx, "hypervisor shutdown gracefully", "instance_id", inst.Id, "pid", pid)
 			} else {
 				log.WarnContext(ctx, "hypervisor did not exit gracefully in time, force killing process", "instance_id", inst.Id, "pid", pid)
-				if err := killProcessAndWait(pid); err != nil {
+				if err := m.terminateThenKill(ctx, inst, pid); err != nil {
 					return err
 				}
 			}
 		} else {
 			log.DebugContext(ctx, "skipping graceful exit wait; force killing hypervisor process", "instance_id", inst.Id, "pid", pid)
-			if err := killProcessAndWait(pid); err != nil {
+			if err := m.terminateThenKill(ctx, inst, pid); err != nil {
 				return err
 			}
 		}

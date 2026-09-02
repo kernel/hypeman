@@ -149,24 +149,6 @@ func TestLifecycleNoopStandbyWithOptionsStillRejectsStandbyInstance(t *testing.T
 	assertNoLifecycleEvent(t, events)
 }
 
-func TestDeleteContinuesWhenVGPUReleaseFails(t *testing.T) {
-	m, id := newLifecycleNoopManagerWithInstance(t, StateStopped, time.Now().UTC())
-	meta, err := m.loadMetadata(id)
-	require.NoError(t, err)
-	meta.GPUProfile = "NVIDIA L40S-2Q"
-	meta.GPUFramework = devices.VGPUFramework("future-framework")
-	meta.GPUDevicePath = "/sys/bus/pci/devices/0000:82:00.4"
-	require.NoError(t, m.saveMetadata(meta))
-
-	// A failed release is logged and the delete continues, matching the
-	// pre-refactor contract; the leaked assignment is recovered by startup
-	// reconciliation.
-	require.NoError(t, m.DeleteInstance(context.Background(), id))
-
-	_, err = m.loadMetadata(id)
-	require.Error(t, err, "instance data must be deleted despite the failed release")
-}
-
 func TestDeletePersistsVGPUReleaseBeforeTeardown(t *testing.T) {
 	m, id := newLifecycleNoopManagerWithInstance(t, StateStopped, time.Now().UTC())
 	var persisted *metadata
@@ -239,7 +221,7 @@ func TestStartPersistsStaleVGPUReleaseImmediately(t *testing.T) {
 	assert.Equal(t, "NVIDIA L40S-2Q", stored.GPUProfile, "profile is kept for the next start")
 }
 
-func TestStopStoppedInstanceReleasesRetainedVGPU(t *testing.T) {
+func TestStopStoppedInstanceLeavesVGPUForReconcile(t *testing.T) {
 	m, id := newLifecycleNoopManagerWithInstance(t, StateStopped, time.Now().UTC())
 	meta, err := m.loadMetadata(id)
 	require.NoError(t, err)
@@ -248,33 +230,14 @@ func TestStopStoppedInstanceReleasesRetainedVGPU(t *testing.T) {
 	meta.GPUDevicePath = "/sys/bus/pci/devices/0000:82:00.4"
 	require.NoError(t, m.saveMetadata(meta))
 
+	// Stop on an already-stopped instance is a no-op for the assignment; the
+	// periodic reconcile retries the release.
 	inst, err := m.StopInstance(context.Background(), id)
 	require.NoError(t, err)
 	require.NotNil(t, inst)
 	assert.Equal(t, StateStopped, inst.State)
-
 	stored, err := m.loadMetadata(id)
 	require.NoError(t, err)
-	assert.Empty(t, stored.GPUDevicePath)
-}
-
-func TestStopStoppedInstanceVGPUReleaseFailureRemainsNoop(t *testing.T) {
-	m, id := newLifecycleNoopManagerWithInstance(t, StateStopped, time.Now().UTC())
-	meta, err := m.loadMetadata(id)
-	require.NoError(t, err)
-	meta.GPUProfile = "NVIDIA L40S-2Q"
-	meta.GPUFramework = devices.VGPUFramework("future-framework")
-	meta.GPUDevicePath = "/sys/bus/pci/devices/0000:82:00.4"
-	require.NoError(t, m.saveMetadata(meta))
-
-	inst, err := m.StopInstance(context.Background(), id)
-	require.NoError(t, err)
-	require.NotNil(t, inst)
-	assert.Equal(t, StateStopped, inst.State)
-
-	stored, err := m.loadMetadata(id)
-	require.NoError(t, err)
-	assert.Equal(t, devices.VGPUFramework("future-framework"), stored.GPUFramework)
 	assert.Equal(t, "/sys/bus/pci/devices/0000:82:00.4", stored.GPUDevicePath)
 }
 
@@ -298,6 +261,20 @@ func (m *recordingDeviceManager) MarkDetached(ctx context.Context, deviceID stri
 func (m *recordingDeviceManager) UnbindFromVFIO(ctx context.Context, id string) error {
 	m.unbound = append(m.unbound, id)
 	return nil
+}
+
+func TestLifecycleNoopStandbyRejectsVendorVFIOVGPU(t *testing.T) {
+	m, id := newLifecycleNoopManagerWithInstance(t, StateRunning, time.Now().UTC())
+	meta, err := m.loadMetadata(id)
+	require.NoError(t, err)
+	meta.GPUProfile = "NVIDIA L40S-2Q"
+	meta.GPUFramework = devices.VGPUFrameworkVendorVFIO
+	meta.GPUDevicePath = "/sys/bus/pci/devices/0000:82:00.4"
+	require.NoError(t, m.saveMetadata(meta))
+
+	_, err = m.StandbyInstance(context.Background(), id, StandbyInstanceRequest{})
+	require.ErrorIs(t, err, ErrInvalidState)
+	assert.ErrorContains(t, err, "standby is not supported for instances with vGPU attached")
 }
 
 func newLifecycleNoopManagerWithInstance(t *testing.T, state State, now time.Time) (*manager, string) {

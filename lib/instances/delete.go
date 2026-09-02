@@ -140,23 +140,13 @@ func (m *manager) deleteInstanceWithOptions(
 	}
 	m.closeFirecrackerUFFDSession(ctx, stored)
 
-	// 5b. Release the vGPU assignment if present, before any network, device,
-	// or volume teardown. Release failure is logged and the delete continues,
-	// matching the pre-refactor contract: the VMM is already confirmed dead,
-	// the guards inside the release never destroy a device they cannot prove
-	// is unowned, and a skipped release is recovered by startup
-	// reconciliation.
+	// Release before deleting metadata so a failed release can be retried safely.
 	hadVGPUAssignment := storedVGPUDevicePath(stored) != ""
 	if hadVGPUAssignment {
 		log.InfoContext(ctx, "destroying vGPU", "instance_id", id, "uuid", stored.GPUMdevUUID)
 	}
-	if err := releaseStoredVGPU(ctx, stored); err != nil {
-		// Log error but continue with cleanup.
-		log.WarnContext(ctx, "failed to destroy vGPU, continuing with cleanup", "instance_id", id, "uuid", stored.GPUMdevUUID, "error", err)
-	} else if hadVGPUAssignment {
-		if err := m.saveMetadata(meta); err != nil {
-			log.WarnContext(ctx, "failed to save metadata after vGPU release", "instance_id", id, "error", err)
-		}
+	if err := m.releaseStoredVGPUPersisted(ctx, meta); err != nil {
+		log.WarnContext(ctx, "failed to destroy vGPU, continuing with cleanup; the next allocation repairs the VF before reuse", "instance_id", id, "uuid", stored.GPUMdevUUID, "error", err)
 	}
 
 	// 6. Release network allocation
@@ -240,7 +230,7 @@ func (m *manager) killHypervisor(ctx context.Context, inst *Instance) error {
 				"instance_id", inst.Id, "stored_pid", *inst.HypervisorPID, "owner_pid", pid)
 		}
 		log.DebugContext(ctx, "killing hypervisor process", "instance_id", inst.Id, "pid", pid)
-		if err := killProcessAndWait(pid); err != nil {
+		if err := m.terminateThenKill(ctx, inst, pid); err != nil {
 			return err
 		}
 	}

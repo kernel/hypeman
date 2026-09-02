@@ -14,6 +14,67 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestListMetadataForReconcileFailsOnInvalidMetadata(t *testing.T) {
+	m := &manager{paths: paths.New(t.TempDir())}
+
+	require.NoError(t, m.ensureDirectories("valid"))
+	require.NoError(t, m.saveMetadata(&metadata{StoredMetadata: StoredMetadata{
+		Id:        "valid",
+		Name:      "valid",
+		CreatedAt: time.Now(),
+		DataDir:   m.paths.InstanceDir("valid"),
+	}}))
+	require.NoError(t, m.ensureDirectories("invalid"))
+	require.NoError(t, os.WriteFile(m.paths.InstanceMetadata("invalid"), []byte("{"), 0644))
+
+	listed, err := m.ListInstances(context.Background(), nil)
+	require.NoError(t, err)
+	require.Len(t, listed, 1)
+
+	_, err = m.listMetadataForReconcile()
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "load metadata for instance invalid")
+
+	require.NoError(t, os.Remove(m.paths.InstanceMetadata("invalid")))
+	metadata, err := m.listMetadataForReconcile()
+	require.NoError(t, err)
+	require.Len(t, metadata, 1)
+	assert.Equal(t, "valid", metadata[0].Id)
+}
+
+func TestListMetadataForReconcileSkipsInstanceDeletedDuringListing(t *testing.T) {
+	m := &manager{paths: paths.New(t.TempDir())}
+
+	for _, id := range []string{"aaa-ghost", "zzz-live"} {
+		require.NoError(t, m.ensureDirectories(id))
+		require.NoError(t, m.saveMetadata(&metadata{StoredMetadata: StoredMetadata{
+			Id:        id,
+			Name:      id,
+			CreatedAt: time.Now(),
+			DataDir:   m.paths.InstanceDir(id),
+		}}))
+	}
+
+	unlock := hypervisor.LockSnapshotSourceAliasMutation()
+	type result struct {
+		metadata []StoredMetadata
+		err      error
+	}
+	done := make(chan result, 1)
+	go func() {
+		metadata, err := m.listMetadataForReconcile()
+		done <- result{metadata, err}
+	}()
+	time.Sleep(100 * time.Millisecond)
+	require.NoError(t, os.Remove(m.paths.InstanceMetadata("aaa-ghost")))
+	unlock()
+
+	res := <-done
+	require.NoError(t, res.err)
+	require.Len(t, res.metadata, 1)
+	assert.Equal(t, "zzz-live", res.metadata[0].Id)
+}
+
 func TestParseExitSentinelLine(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

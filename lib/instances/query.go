@@ -784,7 +784,7 @@ func parseSentinelTimestamp(line, sentinelPrefix string) (time.Time, bool) {
 	return time.Time{}, false
 }
 
-// listInstances returns all instances
+// listInstances returns all instances, skipping metadata files that cannot be loaded.
 func (m *manager) listInstances(ctx context.Context) ([]Instance, error) {
 	ctx, span := m.tracerOrDefault().Start(ctx, "instances.list_metadata")
 	defer span.End()
