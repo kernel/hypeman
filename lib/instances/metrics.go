@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	mw "github.com/kernel/hypeman/lib/middleware"
 	hypotel "github.com/kernel/hypeman/lib/otel"
@@ -103,6 +104,7 @@ type Metrics struct {
 	ttlReaperDeletionsTotal              metric.Int64Counter
 	vgpuReconcileFailuresTotal           metric.Int64Counter
 	vgpuStaleReleaseFailuresTotal        metric.Int64Counter
+	vgpuLivenessUncertainTotal           metric.Int64Counter
 	tracer                               trace.Tracer
 }
 
@@ -290,6 +292,47 @@ func newInstanceMetrics(meter metric.Meter, tracer trace.Tracer, m *manager) (*M
 	vgpuStaleReleaseFailuresTotal, err := meter.Int64Counter(
 		"hypeman_instances_vgpu_stale_release_failures_total",
 		metric.WithDescription("Total number of stale vGPU assignment releases that failed, keeping the VF allocated until a later reconcile pass succeeds"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	vgpuLivenessUncertainTotal, err := meter.Int64Counter(
+		"hypeman_instances_vgpu_liveness_uncertain_total",
+		metric.WithDescription("Total vGPU release checks that preserved an assignment because hypervisor liveness was uncertain"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	vgpuQuarantinedVFs, err := meter.Int64ObservableGauge(
+		"hypeman_instances_vgpu_quarantined_vfs",
+		metric.WithDescription("Number of vGPU virtual functions currently quarantined"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	vgpuVFHealthStoreUnavailable, err := meter.Int64ObservableGauge(
+		"hypeman_instances_vgpu_vf_health_store_unavailable",
+		metric.WithDescription("1 when the persisted VF health state failed to load or persist; quarantine mutations are refused and vGPU placement is disabled until it is repaired"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	_, err = meter.RegisterCallback(
+		func(_ context.Context, o metric.Observer) error {
+			o.ObserveInt64(vgpuQuarantinedVFs, int64(devices.TotalQuarantinedVFs()))
+			unavailable := int64(0)
+			if devices.VFHealthStoreUnavailable() {
+				unavailable = 1
+			}
+			o.ObserveInt64(vgpuVFHealthStoreUnavailable, unavailable)
+			return nil
+		},
+		vgpuQuarantinedVFs,
+		vgpuVFHealthStoreUnavailable,
 	)
 	if err != nil {
 		return nil, err
@@ -491,6 +534,7 @@ func newInstanceMetrics(meter metric.Meter, tracer trace.Tracer, m *manager) (*M
 		ttlReaperDeletionsTotal:              ttlReaperDeletionsTotal,
 		vgpuReconcileFailuresTotal:           vgpuReconcileFailuresTotal,
 		vgpuStaleReleaseFailuresTotal:        vgpuStaleReleaseFailuresTotal,
+		vgpuLivenessUncertainTotal:           vgpuLivenessUncertainTotal,
 		tracer:                               tracer,
 	}, nil
 }
@@ -604,6 +648,13 @@ func (m *manager) recordVGPUStaleReleaseFailure(ctx context.Context) {
 		return
 	}
 	m.metrics.vgpuStaleReleaseFailuresTotal.Add(ctx, 1)
+}
+
+func (m *manager) recordVGPULivenessUncertain(ctx context.Context) {
+	if m.metrics == nil {
+		return
+	}
+	m.metrics.vgpuLivenessUncertainTotal.Add(ctx, 1)
 }
 
 // recordStateTransition records a state transition with hypervisor label.

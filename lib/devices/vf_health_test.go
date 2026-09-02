@@ -126,6 +126,7 @@ func TestVGPUAvailabilityFailsClosedAfterPersistFailure(t *testing.T) {
 	require.ErrorContains(t, err, "last write failed")
 
 	vfHealth.path = goodPath
+	require.NoError(t, RepairVFHealthStore())
 	result, err := ReportVFInitFailure(VFInitFailureReport{VFAddress: "0000:e3:00.4", InstanceID: "instance-1"})
 	require.NoError(t, err)
 	assert.Equal(t, VFReportQuarantined, result.Outcome)
@@ -391,6 +392,103 @@ func TestReportVFInitSuccessWithoutMatchingFailureClearsNothing(t *testing.T) {
 	assert.False(t, result.Rescinded)
 }
 
+func TestReportVFInitFailureNoopDoesNotErrorWhilePersistFailed(t *testing.T) {
+	resetVFHealthStore(t)
+	report := VFInitFailureReport{VFAddress: "0000:e3:00.4", InstanceID: "instance-1"}
+	_, err := ReportVFInitFailure(report)
+	require.NoError(t, err)
+
+	vfHealth.mu.Lock()
+	vfHealth.persistErr = errors.New("injected persist failure")
+	vfHealth.mu.Unlock()
+
+	result, err := ReportVFInitFailure(report)
+	require.NoError(t, err)
+	assert.Equal(t, VFReportUnchanged, result.Outcome, "an already-recorded assignment has nothing to write")
+
+	_, err = ReportVFInitFailure(VFInitFailureReport{VFAddress: "0000:e3:00.4", InstanceID: "instance-2"})
+	require.ErrorContains(t, err, "last write failed")
+}
+
+func TestReportVFInitSuccessNoopDoesNotRetryFailedPersist(t *testing.T) {
+	resetVFHealthStore(t)
+	var syncCalls int
+	vfHealth.mu.Lock()
+	vfHealth.persistErr = errors.New("injected persist failure")
+	vfHealth.syncDirFunc = func(string) error {
+		syncCalls++
+		return nil
+	}
+	vfHealth.mu.Unlock()
+
+	result, err := ReportVFInitSuccess(VFInitSuccessReport{
+		VFAddress:  "0000:e3:00.4",
+		InstanceID: "healthy-instance",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, VFSuccessResult{}, result)
+	assert.Zero(t, syncCalls)
+	assert.True(t, VFHealthStoreUnavailable())
+
+	require.NoError(t, RepairVFHealthStore())
+	assert.Equal(t, 2, syncCalls, "one repair performs one parent and state-directory sync")
+	assert.False(t, VFHealthStoreUnavailable())
+}
+
+// withVendorVFIOMuHeld fails the test if fn blocks on vendorVFIOMu.
+func withVendorVFIOMuHeld(t *testing.T, fn func()) {
+	t.Helper()
+	vendorVFIOMu.Lock()
+	defer vendorVFIOMu.Unlock()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		fn()
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("call blocked on vendorVFIOMu")
+	}
+}
+
+func TestReportVFInitSuccessForHealthyVFSkipsVendorVFIOMu(t *testing.T) {
+	resetVFHealthStore(t)
+	withVendorVFIOMuHeld(t, func() {
+		result, err := ReportVFInitSuccess(VFInitSuccessReport{VFAddress: "0000:e3:00.4", InstanceID: "healthy-instance"})
+		assert.NoError(t, err)
+		assert.Equal(t, VFSuccessResult{}, result)
+	})
+
+	_, err := ReportVFInitFailure(VFInitFailureReport{VFAddress: "0000:e3:00.4", InstanceID: "instance-1"})
+	require.NoError(t, err)
+	result, err := ReportVFInitSuccess(VFInitSuccessReport{VFAddress: "0000:e3:00.4", InstanceID: "instance-1"})
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Cleared, "a VF with tallied failures still takes the full path")
+}
+
+func TestReportVFInitSuccessInvalidAddressStillErrors(t *testing.T) {
+	resetVFHealthStore(t)
+	_, err := ReportVFInitSuccess(VFInitSuccessReport{VFAddress: "not-a-vf", InstanceID: "instance-1"})
+	require.ErrorContains(t, err, "invalid VF address")
+}
+
+func TestRepairVFHealthStoreHealthySkipsVendorVFIOMu(t *testing.T) {
+	resetVFHealthStore(t)
+	var syncCalls int
+	vfHealth.mu.Lock()
+	vfHealth.syncDirFunc = func(string) error {
+		syncCalls++
+		return nil
+	}
+	vfHealth.mu.Unlock()
+
+	withVendorVFIOMuHeld(t, func() {
+		assert.NoError(t, RepairVFHealthStore())
+	})
+	assert.Zero(t, syncCalls, "a healthy store must not be rewritten")
+}
+
 func TestReportVFInitSuccessNeverClearsAnotherAssignmentsQuarantine(t *testing.T) {
 	resetVFHealthStore(t)
 	quarantineVF(t, "0000:e3:00.4")
@@ -456,6 +554,7 @@ func TestReportVFInitFailureRetriesParentSyncAfterFailure(t *testing.T) {
 	require.ErrorContains(t, err, "sync VF health state parent dir")
 	assert.True(t, vfHealthStoreUnavailable())
 
+	require.NoError(t, RepairVFHealthStore())
 	result, err := ReportVFInitFailure(report)
 	require.NoError(t, err)
 	assert.Equal(t, VFReportRecorded, result.Outcome)
@@ -489,6 +588,7 @@ func TestReportVFInitFailureRetainsRenamedStateAfterSyncFailure(t *testing.T) {
 	assert.True(t, vfHealthStoreUnavailable())
 
 	vfHealth.syncDirFunc = syncDir
+	require.NoError(t, RepairVFHealthStore())
 	result, err := ReportVFInitFailure(VFInitFailureReport{VFAddress: "0000:e3:00.5", InstanceID: "other-instance"})
 	require.NoError(t, err)
 	assert.Equal(t, VFReportRecorded, result.Outcome)
@@ -529,6 +629,7 @@ func TestReportRetriesFailedThresholdPersistence(t *testing.T) {
 	assert.True(t, vfHealthStoreUnavailable())
 
 	vfHealth.path = path
+	require.NoError(t, RepairVFHealthStore())
 	result, err := ReportVFInitFailure(VFInitFailureReport{VFAddress: vf, InstanceID: "instance-3"})
 	require.NoError(t, err)
 	assert.Equal(t, VFReportUnchanged, result.Outcome)
@@ -561,6 +662,49 @@ func TestReportVFInitSuccessRollsBackOnPersistFailure(t *testing.T) {
 	vfHealth.mu.Unlock()
 	require.True(t, exists, "a clear whose persist failed must be restored in memory")
 	assert.Len(t, record.Failures, 1)
+}
+
+func TestRepairVFHealthStoreRecoversPostRenameSuccessClearFailure(t *testing.T) {
+	path := resetVFHealthStore(t)
+	report := VFInitFailureReport{
+		VFAddress:  "0000:e3:00.4",
+		InstanceID: "instance-1",
+		AssignedAt: "2026-08-20T15:00:00Z",
+	}
+	_, err := ReportVFInitFailure(report)
+	require.NoError(t, err)
+
+	failed := false
+	vfHealth.syncDirFunc = func(path string) error {
+		if path == filepath.Dir(vfHealth.path) && !failed {
+			failed = true
+			return errors.New("injected sync failure")
+		}
+		return syncDir(path)
+	}
+	_, err = ReportVFInitSuccess(VFInitSuccessReport{
+		VFAddress:  report.VFAddress,
+		InstanceID: report.InstanceID,
+		AssignedAt: report.AssignedAt,
+	})
+	require.ErrorContains(t, err, "sync VF health state dir")
+	assert.True(t, VFHealthStoreUnavailable())
+
+	vfHealth.mu.Lock()
+	_, exists := vfHealth.records[report.VFAddress]
+	vfHealth.mu.Unlock()
+	assert.False(t, exists, "memory must retain the clear renamed into place")
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	var state vfHealthFile
+	require.NoError(t, json.Unmarshal(data, &state))
+	assert.Empty(t, state.Records)
+
+	require.NoError(t, RepairVFHealthStore())
+	assert.False(t, VFHealthStoreUnavailable())
+	_, err = GetVGPUAvailability(VGPUFrameworkVendorVFIO, []VirtualFunction{{PCIAddress: report.VFAddress}})
+	require.NoError(t, err)
 }
 
 func TestCheckedAddressesFailsClosedOnInvalidRecord(t *testing.T) {

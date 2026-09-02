@@ -161,6 +161,27 @@ func TestSnapshotCompressionMetrics_RecordAndObserve(t *testing.T) {
 	assert.Equal(t, "skipped", metricLabel(t, waitDurations.DataPoints[0].Attributes, "outcome"))
 }
 
+func TestVGPULivenessUncertainMetric(t *testing.T) {
+	t.Parallel()
+
+	reader := otelmetric.NewManualReader()
+	provider := otelmetric.NewMeterProvider(otelmetric.WithReader(reader))
+	m := &manager{paths: paths.New(t.TempDir())}
+	metrics, err := newInstanceMetrics(provider.Meter("test"), nil, m)
+	require.NoError(t, err)
+	m.metrics = metrics
+
+	m.recordVGPULivenessUncertain(t.Context())
+
+	var rm metricdata.ResourceMetrics
+	require.NoError(t, reader.Collect(t.Context(), &rm))
+	metricValue := findMetric(t, rm, "hypeman_instances_vgpu_liveness_uncertain_total")
+	uncertain, ok := metricValue.Data.(metricdata.Sum[int64])
+	require.True(t, ok)
+	require.Len(t, uncertain.DataPoints, 1)
+	assert.Equal(t, int64(1), uncertain.DataPoints[0].Value)
+}
+
 func TestLifecycleEventMetrics_ObserveSubscribersQueueDepthAndDrops(t *testing.T) {
 	t.Parallel()
 

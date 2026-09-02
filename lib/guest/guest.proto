@@ -23,6 +23,9 @@ service GuestService {
 
   // ReconfigureNetwork updates the guest network identity without spawning shell commands
   rpc ReconfigureNetwork(ReconfigureNetworkRequest) returns (ReconfigureNetworkResponse);
+
+  // GetGPUInitStatus reports the GPU driver init state observed by the guest agent
+  rpc GetGPUInitStatus(GetGPUInitStatusRequest) returns (GetGPUInitStatusResponse);
 }
 
 // ExecRequest represents messages from client to server
@@ -169,3 +172,20 @@ message ReconfigureNetworkRequest {
 
 // ReconfigureNetworkResponse acknowledges the network reconfiguration request
 message ReconfigureNetworkResponse {}
+
+// GPUInitState is the guest GPU driver init state observed by the guest agent
+enum GPUInitState {
+  GPU_INIT_STATE_UNKNOWN = 0;  // No NVIDIA device, or init has not concluded
+  GPU_INIT_STATE_OK = 1;       // The driver initialized the GPU
+  GPU_INIT_STATE_FAILED = 2;   // The kernel reported an RmInitAdapter failure
+}
+
+// GetGPUInitStatusRequest requests the guest GPU driver init state
+message GetGPUInitStatusRequest {}
+
+// GetGPUInitStatusResponse reports the guest GPU driver init state
+message GetGPUInitStatusResponse {
+  GPUInitState state = 1;
+  // Most recent NVRM init-failure line observed in kmsg; set when state is FAILED
+  string failure_message = 2;
+}
