@@ -426,13 +426,9 @@ func (m *Manager) GetFullStatus(ctx context.Context) (*FullResourceStatus, error
 		}
 	}
 
-	// Get GPU status
-	gpuStatus, gpuStatusErr := currentGPUStatusProvider()(ctx)
-	if gpuStatus != nil && gpuStatusErr != nil {
-		withReason := *gpuStatus
-		withReason.PlacementDisabledReason = gpuStatusErr.Error()
-		gpuStatus = &withReason
-	}
+	// A GPU status error only means vGPU placement is disabled. The status
+	// carries the reason, so it is reported rather than failing the read.
+	gpuStatus, _ := currentGPUStatusProvider()(ctx)
 
 	return &FullResourceStatus{
 		CPU:         *cpuStatus,

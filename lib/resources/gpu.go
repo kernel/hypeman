@@ -25,8 +25,9 @@ type GPUResourceStatus struct {
 }
 
 // GetGPUStatus returns the current GPU resource status and any error that
-// prevents determining allocatable vGPU capacity. It returns nil if no GPU is
-// available or the mode is "none".
+// prevents determining allocatable vGPU capacity. The status is still
+// returned alongside such an error, with PlacementDisabledReason set. It
+// returns nil if no GPU is available or the mode is "none".
 func GetGPUStatus(ctx context.Context) (*GPUResourceStatus, error) {
 	framework, vfs, err := devices.DiscoverVGPU()
 	if err != nil {
@@ -62,7 +63,7 @@ func getVGPUStatus(ctx context.Context, framework devices.VGPUFramework, vfs []d
 	// listing, so a status read touches the store once.
 	availability, err := devices.GetVGPUAvailability(framework, vfs)
 	if err != nil {
-		logger.FromContext(ctx).WarnContext(ctx, "failed to count allocatable vGPU slots; reporting none and no profiles", "framework", framework, "error", err)
+		status.PlacementDisabledReason = err.Error()
 		return status, err
 	}
 	status.AllocatableSlots = availability.AllocatableSlots

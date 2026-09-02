@@ -39,6 +39,7 @@ func TestGetVGPUStatusFailsClosedWhenVFHealthIsUnavailable(t *testing.T) {
 	assert.Zero(t, status.AllocatableSlots)
 	assert.Zero(t, status.QuarantinedSlots)
 	require.ErrorContains(t, err, "VF health state unavailable")
+	assert.Equal(t, err.Error(), status.PlacementDisabledReason)
 }
 
 func TestGetVGPUStatusReportsQuarantinedSlots(t *testing.T) {
@@ -76,8 +77,10 @@ func TestReserveAllocationUsesAllocatableGPUSlots(t *testing.T) {
 	err := mgr.ValidateAllocation(ctx, 0, 0, 0, 0, 0, 0, true)
 	require.ErrorContains(t, err, "no allocatable vgpu slots")
 
+	disabled := *status
+	disabled.PlacementDisabledReason = "VF health state unavailable: read failed"
 	setGPUStatusProvider(func(context.Context) (*GPUResourceStatus, error) {
-		return status, errors.New("VF health state unavailable: read failed")
+		return &disabled, errors.New(disabled.PlacementDisabledReason)
 	})
 	err = mgr.ValidateAllocation(ctx, 0, 0, 0, 0, 0, 0, true)
 	require.ErrorContains(t, err, "vGPU placement is disabled: VF health state unavailable")
