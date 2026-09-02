@@ -23,7 +23,7 @@ func ListGPUProfiles() ([]GPUProfile, error) {
 }
 
 // ListGPUProfilesWithVFs returns an empty list on macOS.
-func ListGPUProfilesWithVFs(framework VGPUFramework, vfs []VirtualFunction) ([]GPUProfile, error) {
+func ListGPUProfilesWithVFs(framework VGPUFramework, vfs []VirtualFunction, quarantined map[string]struct{}) ([]GPUProfile, error) {
 	return []GPUProfile{}, nil
 }
 

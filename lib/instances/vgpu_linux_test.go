@@ -7,6 +7,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/paths"
@@ -70,6 +71,59 @@ func TestConcurrentVGPUClaimsUseDistinctVFs(t *testing.T) {
 		claims[meta.GPUDevicePath] = struct{}{}
 	}
 	assert.Len(t, claims, 2)
+}
+
+func TestVGPUClaimSkipsQuarantinedVF(t *testing.T) {
+	vfs := []devices.VirtualFunction{
+		{PCIAddress: "0000:82:00.4", ParentGPU: "0000:82:00.0"},
+		{PCIAddress: "0000:82:00.5", ParentGPU: "0000:82:00.0"},
+	}
+	m := newVGPUAllocationManager(t, vfs)
+	m.quarantinedVFs = func() (map[string]struct{}, error) {
+		return map[string]struct{}{"0000:82:00.4": {}}, nil
+	}
+	m.pickVFIndex = pickFirst
+	meta := saveTestVGPUInstance(t, m, "new")
+
+	device, err := m.claimVGPU(context.Background(), meta, testVGPUProfile)
+	require.NoError(t, err)
+	assert.Equal(t, "0000:82:00.5", device.VFAddress)
+}
+
+func TestVGPUClaimFailsClosedWhenVFHealthUnavailable(t *testing.T) {
+	vfs := []devices.VirtualFunction{{PCIAddress: "0000:82:00.4", ParentGPU: "0000:82:00.0"}}
+	m := newVGPUAllocationManager(t, vfs)
+	m.quarantinedVFs = func() (map[string]struct{}, error) {
+		return nil, errors.New("VF health state unavailable: read failed")
+	}
+	meta := saveTestVGPUInstance(t, m, "new")
+
+	_, err := m.claimVGPU(context.Background(), meta, testVGPUProfile)
+	require.ErrorContains(t, err, "VF health state unavailable")
+	stored, loadErr := m.loadMetadata("new")
+	require.NoError(t, loadErr)
+	assert.Empty(t, stored.GPUDevicePath, "placement must not claim while quarantine state is unknown")
+}
+
+func TestVGPUClaimRecordsClaimTime(t *testing.T) {
+	vfs := []devices.VirtualFunction{{PCIAddress: "0000:82:00.4", ParentGPU: "0000:82:00.0"}}
+	m := newVGPUAllocationManager(t, vfs)
+	claimedAt := time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC)
+	m.now = func() time.Time { return claimedAt }
+	m.destroyVGPU = func(context.Context, devices.VGPUAssignment) error { return nil }
+	meta := saveTestVGPUInstance(t, m, "new")
+
+	_, err := m.claimVGPU(context.Background(), meta, testVGPUProfile)
+	require.NoError(t, err)
+	stored, err := m.loadMetadata("new")
+	require.NoError(t, err)
+	require.NotNil(t, stored.GPUClaimedAt)
+	assert.True(t, claimedAt.Equal(*stored.GPUClaimedAt))
+
+	require.NoError(t, m.releaseStoredVGPUPersisted(context.Background(), stored))
+	stored, err = m.loadMetadata("new")
+	require.NoError(t, err)
+	assert.Nil(t, stored.GPUClaimedAt, "release must clear the assignment identity with the claim")
 }
 
 func TestVGPUClaimUsesLeastLoadedGPU(t *testing.T) {
@@ -244,6 +298,8 @@ func TestVGPUClaimFallsBackWhenDirtyVFRefusesReset(t *testing.T) {
 		{PCIAddress: "0000:82:00.5", ParentGPU: "0000:82:00.0", Allocated: true, ProfileType: testVFProfileType},
 	}
 	m := newVGPUAllocationManager(t, vfs)
+	// Both VFs are equally ranked; pin the tiebreak so the fallback order is fixed.
+	m.pickVFIndex = pickFirst
 	var resets []string
 	m.destroyVGPU = func(_ context.Context, assignment devices.VGPUAssignment) error {
 		resets = append(resets, assignment.DevicePath)

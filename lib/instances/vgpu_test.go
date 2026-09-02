@@ -120,10 +120,95 @@ func TestSelectVendorVFIOVFFailsClosedOnClaimedVF(t *testing.T) {
 	profiles := map[string][]devices.VGPUProfileType{
 		"0000:82:00.4": {{TypeName: testVFProfileType, Name: testVGPUProfile, FramebufferMB: 2048}},
 	}
-	_, _, err := selectVendorVFIOVF(vfs, profiles, []StoredMetadata{{
-		GPUDevicePath: testVFDevicePath,
-	}}, testVGPUProfile)
+	_, _, err := selectVendorVFIOVF(vendorVFIOCandidates{
+		vfs:          vfs,
+		profilesByVF: profiles,
+		claims:       []StoredMetadata{{GPUDevicePath: testVFDevicePath}},
+	}, testVGPUProfile, nil)
 	require.ErrorContains(t, err, "no available VF")
+}
+
+func testVFProfiles(addresses ...string) map[string][]devices.VGPUProfileType {
+	profiles := make(map[string][]devices.VGPUProfileType, len(addresses))
+	for _, address := range addresses {
+		profiles[address] = []devices.VGPUProfileType{{TypeName: testVFProfileType, Name: testVGPUProfile, FramebufferMB: 2048}}
+	}
+	return profiles
+}
+
+func pickFirst(int) int { return 0 }
+
+func pickLast(n int) int { return n - 1 }
+
+func TestSelectVendorVFIOVFSkipsQuarantinedVF(t *testing.T) {
+	vfs := []devices.VirtualFunction{
+		{PCIAddress: "0000:82:00.4", ParentGPU: "0000:82:00.0"},
+		{PCIAddress: "0000:82:00.5", ParentGPU: "0000:82:00.0"},
+	}
+	quarantined := map[string]struct{}{"0000:82:00.4": {}}
+
+	vf, _, err := selectVendorVFIOVF(vendorVFIOCandidates{vfs: vfs, profilesByVF: testVFProfiles("0000:82:00.4", "0000:82:00.5"), quarantined: quarantined}, testVGPUProfile, pickFirst)
+	require.NoError(t, err)
+	assert.Equal(t, "0000:82:00.5", vf)
+
+	_, _, err = selectVendorVFIOVF(vendorVFIOCandidates{vfs: vfs[:1], profilesByVF: testVFProfiles("0000:82:00.4"), quarantined: quarantined}, testVGPUProfile, pickFirst)
+	require.ErrorContains(t, err, "no available VF")
+}
+
+func TestSelectVendorVFIOVFAvoidsGPUWithQuarantinedVF(t *testing.T) {
+	// Both GPUs are idle; GPU 82 sorts first by name but carries a
+	// quarantined VF, so the clean card wins.
+	vfs := []devices.VirtualFunction{
+		{PCIAddress: "0000:82:00.4", ParentGPU: "0000:82:00.0"},
+		{PCIAddress: "0000:82:00.5", ParentGPU: "0000:82:00.0"},
+		{PCIAddress: "0000:e3:00.4", ParentGPU: "0000:e3:00.0"},
+	}
+	quarantined := map[string]struct{}{"0000:82:00.4": {}}
+
+	vf, _, err := selectVendorVFIOVF(vendorVFIOCandidates{vfs: vfs, profilesByVF: testVFProfiles("0000:82:00.4", "0000:82:00.5", "0000:e3:00.4"), quarantined: quarantined}, testVGPUProfile, pickFirst)
+	require.NoError(t, err)
+	assert.Equal(t, "0000:e3:00.4", vf)
+}
+
+func TestSelectVendorVFIOVFPicksAmongEquivalentFreeVFs(t *testing.T) {
+	vfs := []devices.VirtualFunction{
+		{PCIAddress: "0000:82:00.4", ParentGPU: "0000:82:00.0"},
+		{PCIAddress: "0000:82:00.5", ParentGPU: "0000:82:00.0"},
+	}
+	var offered int
+	pick := func(n int) int {
+		offered = n
+		return n - 1
+	}
+
+	vf, _, err := selectVendorVFIOVF(vendorVFIOCandidates{vfs: vfs, profilesByVF: testVFProfiles("0000:82:00.4", "0000:82:00.5")}, testVGPUProfile, pick)
+	require.NoError(t, err)
+	assert.Equal(t, 2, offered)
+	assert.Equal(t, "0000:82:00.5", vf)
+}
+
+func TestSelectVendorVFIOVFRandomizesOnlyAmongCleanVFs(t *testing.T) {
+	// The dirty VF is still a candidate of last resort but must never be
+	// offered to the tiebreak while a clean sibling exists.
+	vfs := []devices.VirtualFunction{
+		{PCIAddress: "0000:82:00.4", ParentGPU: "0000:82:00.0", Allocated: true, ProfileType: testVFProfileType},
+		{PCIAddress: "0000:82:00.5", ParentGPU: "0000:82:00.0"},
+		{PCIAddress: "0000:82:00.6", ParentGPU: "0000:82:00.0"},
+	}
+	var offered int
+	pick := func(n int) int {
+		offered = n
+		return n - 1
+	}
+
+	vf, _, err := selectVendorVFIOVF(vendorVFIOCandidates{vfs: vfs, profilesByVF: testVFProfiles("0000:82:00.5", "0000:82:00.6")}, testVGPUProfile, pick)
+	require.NoError(t, err)
+	assert.Equal(t, 2, offered)
+	assert.Equal(t, "0000:82:00.6", vf)
+
+	vf, _, err = selectVendorVFIOVF(vendorVFIOCandidates{vfs: vfs[:1], profilesByVF: testVFProfiles("0000:82:00.4")}, testVGPUProfile, pickLast)
+	require.NoError(t, err)
+	assert.Equal(t, "0000:82:00.4", vf)
 }
 
 func TestSelectVendorVFIOVFPrefersGPUWithKnownLoad(t *testing.T) {
@@ -146,13 +231,13 @@ func TestSelectVendorVFIOVFPrefersGPUWithKnownLoad(t *testing.T) {
 		{GPUProfile: testVGPUProfile, GPUDevicePath: "/sys/bus/pci/devices/0000:e3:00.4"},
 	}
 
-	vf, profileType, err := selectVendorVFIOVF(vfs, profiles, claims, testVGPUProfile)
+	vf, profileType, err := selectVendorVFIOVF(vendorVFIOCandidates{vfs: vfs, profilesByVF: profiles, claims: claims}, testVGPUProfile, nil)
 	require.NoError(t, err)
 	assert.Equal(t, "0000:e3:00.5", vf)
 	assert.Equal(t, testVFProfileType, profileType)
 
 	// With no alternative, the GPU with unknown load is still used.
-	vf, _, err = selectVendorVFIOVF(vfs[:2], profiles, claims[:1], testVGPUProfile)
+	vf, _, err = selectVendorVFIOVF(vendorVFIOCandidates{vfs: vfs[:2], profilesByVF: profiles, claims: claims[:1]}, testVGPUProfile, nil)
 	require.NoError(t, err)
 	assert.Equal(t, "0000:82:00.5", vf)
 }

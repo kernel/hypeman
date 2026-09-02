@@ -37,13 +37,13 @@ var (
 	gpuStatusProvider   = GetGPUStatus
 )
 
-func currentGPUStatusProvider() func(context.Context) *GPUResourceStatus {
+func currentGPUStatusProvider() func(context.Context) (*GPUResourceStatus, error) {
 	gpuStatusProviderMu.RLock()
 	defer gpuStatusProviderMu.RUnlock()
 	return gpuStatusProvider
 }
 
-func setGPUStatusProvider(fn func(context.Context) *GPUResourceStatus) {
+func setGPUStatusProvider(fn func(context.Context) (*GPUResourceStatus, error)) {
 	if fn == nil {
 		fn = GetGPUStatus
 	}
@@ -426,8 +426,9 @@ func (m *Manager) GetFullStatus(ctx context.Context) (*FullResourceStatus, error
 		}
 	}
 
-	// Get GPU status
-	gpuStatus := currentGPUStatusProvider()(ctx)
+	// A GPU status error only means vGPU placement is disabled. The status
+	// carries the reason, so it is reported rather than failing the read.
+	gpuStatus, _ := currentGPUStatusProvider()(ctx)
 
 	return &FullResourceStatus{
 		CPU:         *cpuStatus,
@@ -620,7 +621,23 @@ func (m *Manager) admissionStatusLocked(rt ResourceType, visibleAllocated int64,
 	return status, nil
 }
 
-func (m *Manager) validateAllocationLocked(ctx context.Context, excludeID string, req pendingAllocation) error {
+// gpuAdmission is the GPU status an admission check consumes. It is read
+// before the manager lock is taken: the provider walks sysfs and may retry a
+// failed VF health write, and neither should stall CPU or memory admission.
+type gpuAdmission struct {
+	status *GPUResourceStatus
+	err    error
+}
+
+func (m *Manager) gpuAdmissionFor(ctx context.Context, req pendingAllocation) gpuAdmission {
+	if req.GPUSlots == 0 {
+		return gpuAdmission{}
+	}
+	status, err := currentGPUStatusProvider()(ctx)
+	return gpuAdmission{status: status, err: err}
+}
+
+func (m *Manager) validateAllocationLocked(ctx context.Context, excludeID string, req pendingAllocation, gpu gpuAdmission) error {
 	usage, err := m.collectAdmissionUsageLocked(ctx)
 	if err != nil {
 		return err
@@ -691,15 +708,18 @@ func (m *Manager) validateAllocationLocked(ctx context.Context, excludeID string
 
 	// Check GPU if needed
 	if req.GPUSlots > 0 {
-		gpuStatus := currentGPUStatusProvider()(ctx)
+		gpuStatus, gpuStatusErr := gpu.status, gpu.err
 		if gpuStatus == nil {
 			return fmt.Errorf("insufficient GPU: no GPU available on this host")
 		}
-		availableSlots := gpuStatus.TotalSlots - gpuStatus.UsedSlots - pending.GPUSlots
+		availableSlots := gpuStatus.AllocatableSlots - pending.GPUSlots
 		if availableSlots < req.GPUSlots {
+			if gpuStatusErr != nil {
+				return fmt.Errorf("insufficient GPU: vGPU placement is disabled: %w", gpuStatusErr)
+			}
 			if availableSlots <= 0 {
-				return fmt.Errorf("insufficient GPU: all %d %s slots are in use",
-					gpuStatus.TotalSlots, gpuStatus.Mode)
+				return fmt.Errorf("insufficient GPU: no allocatable %s slots available (%d total, %d in use)",
+					gpuStatus.Mode, gpuStatus.TotalSlots, gpuStatus.UsedSlots)
 			}
 			return fmt.Errorf("insufficient GPU: requested %d %s slot(s), but only %d available",
 				req.GPUSlots, gpuStatus.Mode, availableSlots)
@@ -713,20 +733,22 @@ func (m *Manager) validateAllocationLocked(ctx context.Context, excludeID string
 // Returns nil if allocation is allowed, or a detailed error describing
 // which resource is insufficient and the current capacity/usage.
 func (m *Manager) ValidateAllocation(ctx context.Context, vcpus int, memoryBytes int64, networkDownloadBps int64, networkUploadBps int64, diskIOBps int64, diskBytes int64, needsGPU bool) error {
+	req := newPendingAllocation(vcpus, memoryBytes, networkDownloadBps, networkUploadBps, diskIOBps, diskBytes, needsGPU)
+	gpu := m.gpuAdmissionFor(ctx, req)
+
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-
-	req := newPendingAllocation(vcpus, memoryBytes, networkDownloadBps, networkUploadBps, diskIOBps, diskBytes, needsGPU)
-	return m.validateAllocationLocked(ctx, "", req)
+	return m.validateAllocationLocked(ctx, "", req, gpu)
 }
 
 // ReserveAllocation tentatively reserves resources for an in-flight operation.
 func (m *Manager) ReserveAllocation(ctx context.Context, instanceID string, vcpus int, memoryBytes int64, networkDownloadBps int64, networkUploadBps int64, diskIOBps int64, diskBytes int64, needsGPU bool) error {
+	req := newPendingAllocation(vcpus, memoryBytes, networkDownloadBps, networkUploadBps, diskIOBps, diskBytes, needsGPU)
+	gpu := m.gpuAdmissionFor(ctx, req)
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
-	req := newPendingAllocation(vcpus, memoryBytes, networkDownloadBps, networkUploadBps, diskIOBps, diskBytes, needsGPU)
-	if err := m.validateAllocationLocked(ctx, instanceID, req); err != nil {
+	if err := m.validateAllocationLocked(ctx, instanceID, req, gpu); err != nil {
 		return err
 	}
 	if existing, ok := m.pending[instanceID]; ok {

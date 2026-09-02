@@ -638,6 +638,10 @@ func cloneStoredMetadata(src StoredMetadata) StoredMetadata {
 		guestAgentReadyAt := *src.GuestAgentReadyAt
 		dst.GuestAgentReadyAt = &guestAgentReadyAt
 	}
+	if src.GPUClaimedAt != nil {
+		gpuClaimedAt := *src.GPUClaimedAt
+		dst.GPUClaimedAt = &gpuClaimedAt
+	}
 	if src.ExitCode != nil {
 		exitCode := *src.ExitCode
 		dst.ExitCode = &exitCode

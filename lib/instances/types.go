@@ -154,7 +154,8 @@ type StoredMetadata struct {
 	GPUProfile    string // vGPU profile name (e.g., "L40S-1Q")
 	GPUFramework  devices.VGPUFramework
 	GPUDevicePath string
-	GPUMdevUUID   string // populated for mdev-backed vGPUs
+	GPUMdevUUID   string     // populated for mdev-backed vGPUs
+	GPUClaimedAt  *time.Time // when the vendor VFIO claim was persisted; identifies this assignment in VF health reports
 
 	// Command overrides (like docker run <image> <command>)
 	Entrypoint []string // Override image entrypoint (nil = use image default)

@@ -269,7 +269,8 @@ type SnapshotConfig struct {
 
 // GPUConfig holds GPU-related settings.
 type GPUConfig struct {
-	ProfileCacheTTL string `koanf:"profile_cache_ttl"`
+	ProfileCacheTTL       string `koanf:"profile_cache_ttl"`
+	VFQuarantineThreshold int    `koanf:"vf_quarantine_threshold"`
 }
 
 // Config is the top-level Hypeman server configuration.
@@ -494,7 +495,8 @@ func defaultConfig() *Config {
 		},
 
 		GPU: GPUConfig{
-			ProfileCacheTTL: "30m",
+			ProfileCacheTTL:       "30m",
+			VFQuarantineThreshold: 2,
 		},
 	}
 }
@@ -646,6 +648,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Build.MaxConcurrentSourceBuilds <= 0 {
 		return fmt.Errorf("build.max_concurrent_source_builds must be positive, got %d", c.Build.MaxConcurrentSourceBuilds)
+	}
+	if c.GPU.VFQuarantineThreshold < 1 {
+		return fmt.Errorf("gpu.vf_quarantine_threshold must be >= 1, got %d", c.GPU.VFQuarantineThreshold)
 	}
 	if c.Limits.MaxConcurrentPushes <= 0 {
 		return fmt.Errorf("limits.max_concurrent_pushes must be positive, got %d", c.Limits.MaxConcurrentPushes)

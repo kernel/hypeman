@@ -1809,7 +1809,7 @@ components:
       type: object
       description: GPU resource status. Null if no GPUs available.
       nullable: true
-      required: [mode, total_slots, used_slots]
+      required: [mode, total_slots, used_slots, allocatable_slots, quarantined_slots]
       properties:
         mode:
           type: string
@@ -1822,8 +1822,20 @@ components:
           example: 64
         used_slots:
           type: integer
-          description: Slots currently in use
+          description: Slots currently in use. Includes quarantined VFs that are still assigned, so this can overlap quarantined_slots.
           example: 5
+        allocatable_slots:
+          type: integer
+          description: Free slots eligible for placement, matching admission control (excludes quarantined VFs; 0 while VF health state is unavailable)
+          example: 57
+        quarantined_slots:
+          type: integer
+          description: VFs quarantined after guest driver init failures (vGPU mode only). May overlap used_slots until the affected instance releases its VF.
+          example: 2
+        placement_disabled_reason:
+          type: string
+          description: Present when allocatable_slots is 0 because the VF health state could not be read or written rather than because the host is full. vGPU placement is refused until the state file is repaired or the next write succeeds.
+          example: "VF health state unavailable: unmarshal VF health state: invalid character 'x'"
         profiles:
           type: array
           description: Available vGPU profiles (only in vGPU mode)

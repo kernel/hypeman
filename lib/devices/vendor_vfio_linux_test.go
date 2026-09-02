@@ -49,7 +49,7 @@ func TestVendorVFIOListProfilesCountsFreeVFs(t *testing.T) {
 
 	vfs, err := sysfs.discoverVFs()
 	require.NoError(t, err)
-	profiles, err := sysfs.listProfiles(vfs)
+	profiles, err := sysfs.listProfiles(vfs, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 1, profileAvailability(profiles, "NVIDIA L40S-2Q"))
 }
@@ -177,4 +177,48 @@ func assertFileValue(t *testing.T, path, expected string) {
 	value, err := os.ReadFile(path)
 	require.NoError(t, err)
 	assert.Equal(t, expected, string(value))
+}
+
+func TestVendorVFIOConfigureRefusesQuarantinedVF(t *testing.T) {
+	resetVFHealthStore(t)
+	quarantineVF(t, "0000:82:00.4")
+
+	sysfs := newTestVendorVFIOSysfs(t)
+	const vfAddress = "0000:82:00.4"
+	sysfs.addVF(t, "0000:82:00.0", vfAddress, "42", "0", testCreatableTypes)
+
+	err := sysfs.configure(context.Background(), vfAddress, "1148")
+	require.ErrorContains(t, err, "is quarantined")
+	assertFileValue(t, filepath.Join(sysfs.pciDevicesPath, vfAddress, "nvidia", "current_vgpu_type"), "0")
+}
+
+func TestVendorVFIOConfigureFailsClosedWhenVFHealthUnavailable(t *testing.T) {
+	path := resetVFHealthStore(t)
+	require.NoError(t, os.WriteFile(path, []byte("not json"), 0644))
+	require.Error(t, InitVFHealth(path, defaultVFQuarantineThreshold))
+
+	sysfs := newTestVendorVFIOSysfs(t)
+	const vfAddress = "0000:82:00.4"
+	sysfs.addVF(t, "0000:82:00.0", vfAddress, "42", "0", testCreatableTypes)
+
+	err := sysfs.configure(context.Background(), vfAddress, "1148")
+	require.ErrorContains(t, err, "VF health state unavailable")
+	assertFileValue(t, filepath.Join(sysfs.pciDevicesPath, vfAddress, "nvidia", "current_vgpu_type"), "0")
+}
+
+func TestVendorVFIOListProfilesExcludesQuarantinedFromAvailability(t *testing.T) {
+	resetVFHealthStore(t)
+	quarantineVF(t, "0000:82:00.4")
+
+	sysfs := newTestVendorVFIOSysfs(t)
+	sysfs.addVF(t, "0000:82:00.0", "0000:82:00.4", "42", "0", testCreatableTypes)
+	sysfs.addVF(t, "0000:82:00.0", "0000:82:00.5", "43", "0", testCreatableTypes)
+
+	vfs, err := sysfs.discoverVFs()
+	require.NoError(t, err)
+	availability, err := GetVGPUAvailability(VGPUFrameworkVendorVFIO, vfs)
+	require.NoError(t, err)
+	profiles, err := sysfs.listProfiles(vfs, availability.Quarantined)
+	require.NoError(t, err)
+	assert.Equal(t, 1, profileAvailability(profiles, "NVIDIA L40S-1Q"))
 }

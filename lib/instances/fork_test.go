@@ -711,6 +711,7 @@ func TestCloneStoredMetadataForFork_DeepCopiesReferenceFields(t *testing.T) {
 	t.Parallel()
 	startedAt := time.Now().Add(-2 * time.Minute)
 	stoppedAt := time.Now().Add(-1 * time.Minute)
+	gpuClaimedAt := time.Now().Add(-3 * time.Minute)
 	expiresAt := time.Now().Add(time.Hour)
 	notBefore := time.Now().Add(5 * time.Minute)
 	pid := 1234
@@ -731,6 +732,7 @@ func TestCloneStoredMetadataForFork_DeepCopiesReferenceFields(t *testing.T) {
 		ExpiresAt:                 &expiresAt,
 		StartedAt:                 &startedAt,
 		StoppedAt:                 &stoppedAt,
+		GPUClaimedAt:              &gpuClaimedAt,
 		HypervisorProcessIdentity: HypervisorProcessIdentity{HypervisorPID: &pid},
 		ExitCode:                  &exitCode,
 		AutoStandby: &autostandby.Policy{
@@ -786,6 +788,7 @@ func TestCloneStoredMetadataForFork_DeepCopiesReferenceFields(t *testing.T) {
 	*cloned.ExpiresAt = now
 	*cloned.StartedAt = now
 	*cloned.StoppedAt = now
+	*cloned.GPUClaimedAt = now
 
 	require.Equal(t, "1", src.Env["A"])
 	require.Equal(t, "x", src.Tags["m"])
@@ -806,6 +809,7 @@ func TestCloneStoredMetadataForFork_DeepCopiesReferenceFields(t *testing.T) {
 	require.Equal(t, expiresAt, *src.ExpiresAt)
 	require.Equal(t, startedAt, *src.StartedAt)
 	require.Equal(t, stoppedAt, *src.StoppedAt)
+	require.Equal(t, gpuClaimedAt, *src.GPUClaimedAt)
 }
 
 func TestCloneStoredMetadataWithoutPendingStandbyCompression_ClearsPendingPlan(t *testing.T) {

@@ -311,6 +311,7 @@ func (m *manager) restoreSnapshot(ctx context.Context, id string, snapshotID str
 	restored.GPUFramework = sourceMeta.GPUFramework
 	restored.GPUDevicePath = sourceMeta.GPUDevicePath
 	restored.GPUMdevUUID = sourceMeta.GPUMdevUUID
+	restored.GPUClaimedAt = sourceMeta.GPUClaimedAt
 	restored.HypervisorType = targetHypervisor
 	restored.HypervisorVersion = targetHypervisorVersion
 	restored.SocketPath = m.paths.InstanceSocket(id, starter.SocketName())

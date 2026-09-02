@@ -191,7 +191,7 @@ func newMonitoringMetrics(meter metric.Meter, mgr *Manager) error {
 
 	gpuSlots, err := meter.Int64ObservableGauge(
 		"hypeman_resources_gpu_slots",
-		metric.WithDescription("Total and used GPU slots"),
+		metric.WithDescription("Total, used, allocatable, and quarantined GPU slots"),
 	)
 	if err != nil {
 		return err
@@ -200,6 +200,14 @@ func newMonitoringMetrics(meter metric.Meter, mgr *Manager) error {
 	gpuProfileSlots, err := meter.Int64ObservableGauge(
 		"hypeman_resources_gpu_profile_slots",
 		metric.WithDescription("Virtual functions able to create each vGPU profile (best-effort snapshot)"),
+	)
+	if err != nil {
+		return err
+	}
+
+	gpuPlacementDisabled, err := meter.Int64ObservableGauge(
+		"hypeman_resources_gpu_placement_disabled",
+		metric.WithDescription("1 while vGPU placement is refused because the VF health state is unavailable, otherwise 0"),
 	)
 	if err != nil {
 		return err
@@ -242,6 +250,13 @@ func newMonitoringMetrics(meter metric.Meter, mgr *Manager) error {
 		if snapshot.status.GPU != nil {
 			o.ObserveInt64(gpuSlots, int64(snapshot.status.GPU.UsedSlots), metric.WithAttributes(attribute.String("kind", "used")))
 			o.ObserveInt64(gpuSlots, int64(snapshot.status.GPU.TotalSlots), metric.WithAttributes(attribute.String("kind", "total")))
+			o.ObserveInt64(gpuSlots, int64(snapshot.status.GPU.AllocatableSlots), metric.WithAttributes(attribute.String("kind", "allocatable")))
+			o.ObserveInt64(gpuSlots, int64(snapshot.status.GPU.QuarantinedSlots), metric.WithAttributes(attribute.String("kind", "quarantined")))
+			var placementDisabled int64
+			if snapshot.status.GPU.PlacementDisabledReason != "" {
+				placementDisabled = 1
+			}
+			o.ObserveInt64(gpuPlacementDisabled, placementDisabled)
 			for _, profile := range snapshot.status.GPU.Profiles {
 				o.ObserveInt64(gpuProfileSlots, int64(profile.Available),
 					metric.WithAttributes(
@@ -253,7 +268,7 @@ func newMonitoringMetrics(meter metric.Meter, mgr *Manager) error {
 		}
 
 		return nil
-	}, capacity, effectiveLimit, allocated, oversubRatio, diskBreakdown, diskUtilization, imageStorage, gpuSlots, gpuProfileSlots); err != nil {
+	}, capacity, effectiveLimit, allocated, oversubRatio, diskBreakdown, diskUtilization, imageStorage, gpuSlots, gpuProfileSlots, gpuPlacementDisabled); err != nil {
 		return err
 	}
 
