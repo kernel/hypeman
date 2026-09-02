@@ -128,6 +128,7 @@ type qemuImageInfo struct {
 	VirtualSize       int64  `json:"virtual-size"`
 	BackingFilename   string `json:"backing-filename"`
 	BackingFileFormat string `json:"backing-filename-format"`
+	Encrypted         bool   `json:"encrypted"`
 	FormatSpecific    struct {
 		Type string                     `json:"type"`
 		Data map[string]json.RawMessage `json:"data"`
@@ -147,6 +148,9 @@ func inspectQEMUImage(path, format string) (qemuImageInfo, error) {
 }
 
 func validateMachineSource(info qemuImageInfo, allowBacking bool) error {
+	if info.Encrypted {
+		return fmt.Errorf("machine image source is encrypted")
+	}
 	if !allowBacking && info.BackingFilename != "" {
 		return fmt.Errorf("machine image source must not reference a backing file")
 	}
@@ -302,7 +306,7 @@ func (m *manager) recordMachineDependency(ref *ResolvedRef, machine *MachineImag
 	return nil
 }
 
-func (m *manager) ensureNoMachineDependents(repository, digestHex string) error {
+func (m *manager) ensureNoMachineDependents(digestHex string) error {
 	metas, err := listAllMetadata(m.paths)
 	if err != nil {
 		return err
@@ -312,7 +316,7 @@ func (m *manager) ensureNoMachineDependents(repository, digestHex string) error 
 			continue
 		}
 		base, err := ParseNormalizedRef(meta.Machine.Base)
-		if err == nil && base.Repository() == repository && base.DigestHex() == digestHex {
+		if err == nil && base.DigestHex() == digestHex {
 			return fmt.Errorf("cannot delete Windows base while image %s depends on it", meta.Name)
 		}
 	}

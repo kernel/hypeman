@@ -28,7 +28,8 @@ func resolveImageForCreate(ctx context.Context, imageManager createImageResolver
 		// host-native; an empty/unknown platform (e.g. a legacy record) is not
 		// assumed to be the host and falls through to host-pinned resolution.
 		if img, err := imageManager.GetImage(ctx, imageName); err == nil {
-			if strings.TrimSpace(img.Platform) == images.HostPlatformString() {
+			cachedPlatform, parseErr := images.ParsePlatform(img.Platform)
+			if parseErr == nil && cachedPlatform.OS == "linux" && !images.ImageNeedsHostEmulation(img.Platform) {
 				return img, nil
 			}
 		} else if !errors.Is(err, images.ErrNotFound) {

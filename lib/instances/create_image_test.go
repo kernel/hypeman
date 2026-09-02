@@ -175,6 +175,29 @@ func TestResolveImageForCreateWithoutPlatformUsesHostCachedImage(t *testing.T) {
 	}
 }
 
+func TestResolveImageForCreateWithoutPlatformUsesHostCachedVariant(t *testing.T) {
+	t.Parallel()
+
+	cached := &images.Image{Platform: images.HostPlatformString() + "/v8", Status: images.StatusReady}
+	resolver := createImageResolverFake{
+		getImage: func(context.Context, string) (*images.Image, error) {
+			return cached, nil
+		},
+		createImage: func(context.Context, images.CreateImageRequest) (*images.Image, error) {
+			t.Fatal("host-native cached variant should not trigger registry resolution")
+			return nil, nil
+		},
+	}
+
+	img, err := resolveImageForCreate(context.Background(), resolver, "docker.io/library/alpine:3.19", "", slog.Default())
+	if err != nil {
+		t.Fatalf("resolve image: %v", err)
+	}
+	if img != cached {
+		t.Fatal("expected cached host variant")
+	}
+}
+
 // A no-platform create must NOT fast-path a cached image whose recorded platform
 // is empty/unknown (a legacy record written before platform tracking): empty is
 // not assumed to be the host, so it re-resolves and pins the host variant rather

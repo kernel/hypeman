@@ -845,7 +845,7 @@ func (m *manager) DeleteImage(ctx context.Context, name string) error {
 		if _, err := readMetadata(m.paths, repository, digestHex); err != nil {
 			return err
 		}
-		if err := m.ensureNoMachineDependents(repository, digestHex); err != nil {
+		if err := m.ensureNoMachineDependents(digestHex); err != nil {
 			return err
 		}
 		if err := deleteTagsForDigest(m.paths, repository, digestHex); err != nil {
@@ -872,7 +872,7 @@ func (m *manager) DeleteImage(ctx context.Context, name string) error {
 		return fmt.Errorf("count tags for digest %s: %w", digestHex, err)
 	}
 	if count == 1 {
-		if err := m.ensureNoMachineDependents(repository, digestHex); err != nil {
+		if err := m.ensureNoMachineDependents(digestHex); err != nil {
 			return err
 		}
 	}

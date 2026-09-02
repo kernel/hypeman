@@ -74,6 +74,11 @@ func TestMachineArtifactDiskRejectsSymlinkEscape(t *testing.T) {
 	assert.ErrorContains(t, err, "escapes artifact root")
 }
 
+func TestValidateMachineSourceRejectsEncryptedDisk(t *testing.T) {
+	err := validateMachineSource(qemuImageInfo{Encrypted: true}, true)
+	assert.ErrorContains(t, err, "encrypted")
+}
+
 func TestMaterializeRejectsExternalDiskReferences(t *testing.T) {
 	requireQEMUImg(t)
 
@@ -187,6 +192,39 @@ func TestPendingWindowsImageBlocksBaseDeletion(t *testing.T) {
 	assert.DirExists(t, p.ImageContentDir(baseDigest))
 }
 
+func TestCrossRepositoryWindowsDependencyBlocksSharedBaseDeletion(t *testing.T) {
+	p := paths.New(t.TempDir())
+	m := &manager{paths: p, tagGenerations: make(map[string]uint64)}
+	baseDigest := strings.Repeat("c", 64)
+	imageDigest := strings.Repeat("d", 64)
+	baseRepository := "registry.example/windows/base-b"
+	baseName := baseRepository + ":latest"
+
+	require.NoError(t, writeMetadata(p, baseRepository, baseDigest, &imageMetadata{
+		Name:     baseName,
+		Digest:   "sha256:" + baseDigest,
+		Platform: "windows/amd64",
+		Status:   StatusReady,
+		Machine:  &MachineImage{Kind: MachineImageWindowsBase},
+	}))
+	require.NoError(t, os.WriteFile(machineDiskPath(p, baseRepository, baseDigest, MachineImageWindowsBase), []byte("base"), 0444))
+	require.NoError(t, createTagSymlink(p, baseRepository, "latest", baseDigest))
+	require.NoError(t, writeMetadata(p, "registry.example/windows/image", imageDigest, &imageMetadata{
+		Name:     "registry.example/windows/image@sha256:" + imageDigest,
+		Digest:   "sha256:" + imageDigest,
+		Platform: "windows/amd64",
+		Status:   StatusPending,
+		Machine: &MachineImage{
+			Kind: MachineImageWindowsImage,
+			Base: "registry.example/windows/base-a@sha256:" + baseDigest,
+		},
+	}))
+
+	err := m.DeleteImage(t.Context(), baseName)
+	assert.ErrorContains(t, err, "depends on it")
+	assert.FileExists(t, machineDiskPath(p, baseRepository, baseDigest, MachineImageWindowsBase))
+}
+
 func TestMaterializeWindowsBaseAndImage(t *testing.T) {
 	requireQEMUImg(t)
 
@@ -252,7 +290,7 @@ func TestMaterializeWindowsBaseAndImage(t *testing.T) {
 		SizeBytes: info.VirtualSize,
 	}
 	require.NoError(t, writeMetadata(p, imageRef.Repository(), imageDigest, imageMeta))
-	assert.ErrorContains(t, m.ensureNoMachineDependents(baseRef.Repository(), baseDigest), "depends on it")
+	assert.ErrorContains(t, m.ensureNoMachineDependents(baseDigest), "depends on it")
 	assert.ErrorContains(t, m.DeleteImage(t.Context(), baseRef.String()), "depends on it")
 	assert.DirExists(t, p.ImageContentDir(baseDigest))
 	assert.Equal(t, MachineImageWindowsBase, baseMeta.toImage().Machine.Kind)
