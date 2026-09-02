@@ -204,10 +204,7 @@ func run() error {
 
 	// Configure GPU profile cache TTL
 	devices.SetGPUProfileCacheTTL(cfg.GPU.ProfileCacheTTL)
-	if err := devices.SetVFQuarantineThreshold(cfg.GPU.VFQuarantineThreshold); err != nil {
-		return fmt.Errorf("configure VF quarantine threshold: %w", err)
-	}
-	if err := devices.InitVFHealth(paths.New(cfg.DataDir).VFHealthState()); err != nil {
+	if err := devices.InitVFHealth(paths.New(cfg.DataDir).VFHealthState(), cfg.GPU.VFQuarantineThreshold); err != nil {
 		slog.Error("failed to initialize VF health state; vGPU placement is disabled until the state file is repaired or the next write succeeds", "error", err)
 	}
 

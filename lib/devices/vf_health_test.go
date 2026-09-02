@@ -15,7 +15,7 @@ import (
 func resetVFHealthStore(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "vf-health.json")
-	require.NoError(t, InitVFHealth(path))
+	require.NoError(t, InitVFHealth(path, defaultVFQuarantineThreshold))
 	t.Cleanup(func() {
 		vfHealth.mu.Lock()
 		defer vfHealth.mu.Unlock()
@@ -50,11 +50,11 @@ func quarantinedVFs() []vfHealthRecord {
 
 func quarantineVF(t *testing.T, address string) {
 	t.Helper()
-	require.NoError(t, SetVFQuarantineThreshold(1))
+	require.NoError(t, vfHealth.setThreshold(1))
 	result, err := ReportVFInitFailure(VFInitFailureReport{VFAddress: address, InstanceID: "quarantine-helper"})
 	require.NoError(t, err)
 	require.Equal(t, VFReportQuarantined, result.Outcome)
-	require.NoError(t, SetVFQuarantineThreshold(defaultVFQuarantineThreshold))
+	require.NoError(t, vfHealth.setThreshold(defaultVFQuarantineThreshold))
 }
 
 func TestVGPUAvailability(t *testing.T) {
@@ -83,7 +83,7 @@ func TestVGPUAvailability(t *testing.T) {
 func TestVGPUAvailabilityFailsWhenStoreUnavailable(t *testing.T) {
 	path := resetVFHealthStore(t)
 	require.NoError(t, os.WriteFile(path, []byte("not json"), 0o644))
-	require.Error(t, InitVFHealth(path))
+	require.Error(t, InitVFHealth(path, defaultVFQuarantineThreshold))
 
 	_, err := GetVGPUAvailability(VGPUFrameworkVendorVFIO, []VirtualFunction{{PCIAddress: "0000:82:00.4"}})
 	require.ErrorContains(t, err, "VF health state unavailable")
@@ -103,7 +103,7 @@ func TestVGPUAvailabilityFailsWhenStoreUnavailable(t *testing.T) {
 
 func TestVGPUAvailabilityFailsClosedAfterPersistFailure(t *testing.T) {
 	resetVFHealthStore(t)
-	require.NoError(t, SetVFQuarantineThreshold(1))
+	require.NoError(t, vfHealth.setThreshold(1))
 	blocker := filepath.Join(t.TempDir(), "blocker")
 	require.NoError(t, os.WriteFile(blocker, nil, 0o644))
 	goodPath := vfHealth.path
@@ -129,7 +129,7 @@ func TestVGPUAvailabilityFailsClosedAfterPersistFailure(t *testing.T) {
 
 func TestCheckedAddressesRetriesFailedPersist(t *testing.T) {
 	path := resetVFHealthStore(t)
-	require.NoError(t, SetVFQuarantineThreshold(1))
+	require.NoError(t, vfHealth.setThreshold(1))
 	_, err := ReportVFInitFailure(VFInitFailureReport{VFAddress: "0000:e3:00.4", InstanceID: "instance-1"})
 	require.NoError(t, err)
 
@@ -156,16 +156,16 @@ func TestCheckedAddressesRetriesFailedPersist(t *testing.T) {
 	assert.Equal(t, "0000:e3:00.4", state.Records[0].VFAddress)
 }
 
-func TestSetVFQuarantineThresholdReevaluatesRecordedFailures(t *testing.T) {
+func TestSetThresholdReevaluatesRecordedFailures(t *testing.T) {
 	path := resetVFHealthStore(t)
-	require.NoError(t, SetVFQuarantineThreshold(3))
+	require.NoError(t, vfHealth.setThreshold(3))
 	for _, instance := range []string{"instance-1", "instance-2"} {
 		result, err := ReportVFInitFailure(VFInitFailureReport{VFAddress: "0000:e3:00.4", InstanceID: instance})
 		require.NoError(t, err)
 		require.Equal(t, VFReportRecorded, result.Outcome)
 	}
 
-	require.NoError(t, SetVFQuarantineThreshold(2))
+	require.NoError(t, vfHealth.setThreshold(2))
 
 	records := quarantinedVFs()
 	require.Len(t, records, 1)
@@ -181,20 +181,15 @@ func TestSetVFQuarantineThresholdReevaluatesRecordedFailures(t *testing.T) {
 
 func TestLoadReevaluatesTalliesAgainstConfiguredThreshold(t *testing.T) {
 	path := resetVFHealthStore(t)
-	require.NoError(t, SetVFQuarantineThreshold(3))
+	require.NoError(t, vfHealth.setThreshold(3))
 	for _, instance := range []string{"instance-1", "instance-2"} {
 		result, err := ReportVFInitFailure(VFInitFailureReport{VFAddress: "0000:e3:00.4", InstanceID: instance})
 		require.NoError(t, err)
 		require.Equal(t, VFReportRecorded, result.Outcome)
 	}
 
-	// Simulate a restart where the threshold is configured lower before the
-	// persisted tallies are loaded.
-	vfHealth.mu.Lock()
-	vfHealth.records = make(map[string]vfHealthRecord)
-	vfHealth.threshold = 2
-	vfHealth.mu.Unlock()
-	require.NoError(t, InitVFHealth(path))
+	// Simulate a restart with a lower configured threshold.
+	require.NoError(t, InitVFHealth(path, 2))
 
 	records := quarantinedVFs()
 	require.Len(t, records, 1)
@@ -235,7 +230,7 @@ func TestReportVFInitFailureQuarantinesAtThreshold(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, VFReportUnchanged, result.Outcome)
 
-	require.NoError(t, InitVFHealth(path))
+	require.NoError(t, InitVFHealth(path, defaultVFQuarantineThreshold))
 	reloaded := quarantinedVFs()
 	require.Len(t, reloaded, 1)
 	assert.Equal(t, "0000:e3:00.4", reloaded[0].VFAddress)
@@ -286,7 +281,7 @@ func TestReportVFInitSuccessClearsFailureTally(t *testing.T) {
 	require.NoError(t, err)
 	assert.Zero(t, successResult.Cleared)
 
-	require.NoError(t, InitVFHealth(path))
+	require.NoError(t, InitVFHealth(path, defaultVFQuarantineThreshold))
 	result, err := ReportVFInitFailure(VFInitFailureReport{VFAddress: report.VFAddress, InstanceID: "instance-3"})
 	require.NoError(t, err)
 	assert.Equal(t, VFReportRecorded, result.Outcome)
@@ -466,7 +461,7 @@ func TestReportVFInitFailureRetainsRenamedStateAfterSyncFailure(t *testing.T) {
 func TestReportRetriesFailedThresholdPersistence(t *testing.T) {
 	path := resetVFHealthStore(t)
 	vf := "0000:e3:00.4"
-	require.NoError(t, SetVFQuarantineThreshold(3))
+	require.NoError(t, vfHealth.setThreshold(3))
 	for _, instance := range []string{"instance-1", "instance-2"} {
 		_, err := ReportVFInitFailure(VFInitFailureReport{VFAddress: vf, InstanceID: instance})
 		require.NoError(t, err)
@@ -475,7 +470,7 @@ func TestReportRetriesFailedThresholdPersistence(t *testing.T) {
 	blocker := filepath.Join(t.TempDir(), "blocker")
 	require.NoError(t, os.WriteFile(blocker, nil, 0644))
 	vfHealth.path = filepath.Join(blocker, "vf-health.json")
-	require.Error(t, SetVFQuarantineThreshold(2))
+	require.Error(t, vfHealth.setThreshold(2))
 	assert.True(t, vfHealthStoreUnavailable())
 
 	vfHealth.path = path
@@ -547,7 +542,7 @@ func TestCheckedAddressesFailsClosedOnInvalidRecord(t *testing.T) {
 		{
 			name:    "duplicate assignment",
 			state:   `{"version":1,"records":[{"vf_address":"0000:e3:00.4","failures":[{"instance_id":"instance-1","assigned_at":"a","reported_at":"2026-08-20T00:00:00Z"},{"instance_id":"instance-1","assigned_at":"a","reported_at":"2026-08-21T00:00:00Z"}]}]}`,
-			wantErr: "duplicate failure for assignment",
+			wantErr: `duplicate failure for instance "instance-1" assigned at "a"`,
 		},
 		{
 			name:    "duplicate address",
@@ -560,7 +555,7 @@ func TestCheckedAddressesFailsClosedOnInvalidRecord(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			path := resetVFHealthStore(t)
 			require.NoError(t, os.WriteFile(path, []byte(tt.state), 0644))
-			require.ErrorContains(t, InitVFHealth(path), tt.wantErr)
+			require.ErrorContains(t, InitVFHealth(path, defaultVFQuarantineThreshold), tt.wantErr)
 			assert.True(t, vfHealthStoreUnavailable())
 			assert.Empty(t, quarantinedVFs())
 
@@ -575,7 +570,7 @@ func TestReportVFInitFailureRefusesToClobberUnloadedState(t *testing.T) {
 	quarantineVF(t, "0000:e3:00.4")
 
 	require.NoError(t, os.WriteFile(path, []byte("not json"), 0644))
-	require.Error(t, InitVFHealth(path))
+	require.Error(t, InitVFHealth(path, defaultVFQuarantineThreshold))
 
 	_, err := ReportVFInitFailure(VFInitFailureReport{VFAddress: "0000:e3:00.5"})
 	require.Error(t, err)
@@ -603,7 +598,7 @@ func TestInitVFHealthFailsWhenReevaluatedQuarantineCannotPersist(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte(state), 0o644))
 	vfHealth.syncDirFunc = func(string) error { return errors.New("injected sync failure") }
 
-	err := InitVFHealth(path)
+	err := InitVFHealth(path, defaultVFQuarantineThreshold)
 	require.ErrorContains(t, err, "injected sync failure")
 	require.Len(t, quarantinedVFs(), 1, "the re-evaluated quarantine must stay in effect in memory")
 	assert.True(t, vfHealthStoreUnavailable())

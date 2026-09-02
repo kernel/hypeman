@@ -195,7 +195,7 @@ func TestVendorVFIOConfigureRefusesQuarantinedVF(t *testing.T) {
 func TestVendorVFIOConfigureFailsClosedWhenVFHealthUnavailable(t *testing.T) {
 	path := resetVFHealthStore(t)
 	require.NoError(t, os.WriteFile(path, []byte("not json"), 0644))
-	require.Error(t, InitVFHealth(path))
+	require.Error(t, InitVFHealth(path, defaultVFQuarantineThreshold))
 
 	sysfs := newTestVendorVFIOSysfs(t)
 	const vfAddress = "0000:82:00.4"

@@ -118,27 +118,27 @@ var (
 	vendorVFIOMu sync.Mutex
 )
 
-// InitVFHealth loads persisted VF health state from path. Call it after
-// SetVFQuarantineThreshold so loaded tallies are evaluated against the
-// configured threshold. An error leaves the store unavailable, which fails
-// vGPU placement closed until a later load or write succeeds.
-func InitVFHealth(path string) error {
+// InitVFHealth loads persisted VF health state from path and evaluates the
+// loaded tallies against threshold, the number of failed assignments that
+// quarantine a VF. A lowered threshold therefore applies to failures
+// persisted before the change. An error leaves the store unavailable, which
+// fails vGPU placement closed until a later load or write succeeds. An empty
+// path keeps state in memory only.
+func InitVFHealth(path string, threshold int) error {
 	vfHealth.mu.Lock()
 	defer vfHealth.mu.Unlock()
 	vfHealth.path = path
+	vfHealth.threshold = threshold
 	return vfHealth.loadLocked()
 }
 
-// SetVFQuarantineThreshold configures the number of failed assignments
-// required to quarantine a VF. Already-recorded tallies are re-evaluated so a
-// lowered threshold applies to failures persisted before the change. An
-// error means the re-evaluated quarantines could not be persisted; they stay
-// in effect and placement fails closed until a write succeeds.
-func SetVFQuarantineThreshold(n int) error {
-	vfHealth.mu.Lock()
-	defer vfHealth.mu.Unlock()
-	vfHealth.threshold = n
-	return vfHealth.requarantineLocked()
+// setThreshold changes the quarantine threshold on a loaded store and
+// re-evaluates recorded tallies against it.
+func (s *vfHealthStore) setThreshold(n int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.threshold = n
+	return s.requarantineLocked()
 }
 
 // requarantineLocked quarantines records whose failure tallies meet the
@@ -170,6 +170,9 @@ func (s *vfHealthStore) loadLocked() error {
 	s.records = make(map[string]vfHealthRecord)
 	s.loadErr = nil
 	s.persistErr = nil
+	if s.path == "" {
+		return nil
+	}
 
 	data, err := os.ReadFile(s.path)
 	if err != nil {
@@ -214,7 +217,7 @@ func (s *vfHealthStore) loadLocked() error {
 			}
 			key := failure.InstanceID + "\x00" + failure.AssignedAt
 			if _, exists := assignments[key]; exists {
-				s.loadErr = fmt.Errorf("validate VF health state record %d: duplicate failure for assignment %q", i, failure.InstanceID)
+				s.loadErr = fmt.Errorf("validate VF health state record %d: duplicate failure for instance %q assigned at %q", i, failure.InstanceID, failure.AssignedAt)
 				return s.loadErr
 			}
 			assignments[key] = struct{}{}
