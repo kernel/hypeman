@@ -175,6 +175,29 @@ func TestResolveImageForCreateWithoutPlatformUsesHostCachedImage(t *testing.T) {
 	}
 }
 
+func TestResolveImageForCreateWithoutPlatformUsesHostCachedVariant(t *testing.T) {
+	t.Parallel()
+
+	cached := &images.Image{Platform: images.HostPlatformString() + "/v8", Status: images.StatusReady}
+	resolver := createImageResolverFake{
+		getImage: func(context.Context, string) (*images.Image, error) {
+			return cached, nil
+		},
+		createImage: func(context.Context, images.CreateImageRequest) (*images.Image, error) {
+			t.Fatal("host-native cached variant should not trigger registry resolution")
+			return nil, nil
+		},
+	}
+
+	img, err := resolveImageForCreate(context.Background(), resolver, "docker.io/library/alpine:3.19", "", slog.Default())
+	if err != nil {
+		t.Fatalf("resolve image: %v", err)
+	}
+	if img != cached {
+		t.Fatal("expected cached host variant")
+	}
+}
+
 // A no-platform create must NOT fast-path a cached image whose recorded platform
 // is empty/unknown (a legacy record written before platform tracking): empty is
 // not assumed to be the host, so it re-resolves and pins the host variant rather
@@ -211,6 +234,29 @@ func TestResolveImageForCreateWithoutPlatformLegacyEmptyForcesHostResolve(t *tes
 	}
 	if img.Platform != images.HostPlatformString() {
 		t.Fatalf("expected host image, got %s", img.Platform)
+	}
+}
+
+func TestResolveImageForCreateWithoutPlatformIgnoresCachedWindowsImage(t *testing.T) {
+	t.Parallel()
+
+	createPlatform := ""
+	resolver := createImageResolverFake{
+		getImage: func(context.Context, string) (*images.Image, error) {
+			return &images.Image{Platform: "windows/amd64", Status: images.StatusReady}, nil
+		},
+		createImage: func(_ context.Context, req images.CreateImageRequest) (*images.Image, error) {
+			createPlatform = req.Platform
+			return &images.Image{Name: req.Name, Digest: "sha256:linux", Platform: images.HostPlatformString(), Status: images.StatusReady}, nil
+		},
+	}
+
+	_, err := resolveImageForCreate(context.Background(), resolver, "registry.example/desktop:test", "", slog.Default())
+	if err != nil {
+		t.Fatalf("resolve image: %v", err)
+	}
+	if createPlatform != images.HostPlatformString() {
+		t.Fatalf("cached Windows image must not satisfy an implicit host-platform create; got %q", createPlatform)
 	}
 }
 

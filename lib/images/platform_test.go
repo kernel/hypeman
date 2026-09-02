@@ -19,7 +19,8 @@ func TestParsePlatform(t *testing.T) {
 		{name: "x86_64 alias", in: "x86_64", want: Platform{OS: "linux", Architecture: "amd64"}},
 		{name: "aarch64 alias", in: "linux/aarch64", want: Platform{OS: "linux", Architecture: "arm64"}},
 		{name: "uppercase normalized", in: "LINUX/AMD64", want: Platform{OS: "linux", Architecture: "amd64"}},
-		{name: "non-linux os rejected", in: "windows/amd64", wantErr: true},
+		{name: "windows amd64 machine platform", in: "windows/amd64", want: Platform{OS: "windows", Architecture: "amd64"}},
+		{name: "windows arm64 rejected", in: "windows/arm64", wantErr: true},
 		{name: "unknown arch rejected", in: "linux/riscv64", wantErr: true},
 		{name: "empty rejected", in: "", wantErr: true},
 		{name: "too many parts", in: "a/b/c/d", wantErr: true},
@@ -145,9 +146,10 @@ func TestResolveManifestPlatform(t *testing.T) {
 		t.Fatalf("expected ErrInvalidPlatform for mismatch, got %v", err)
 	}
 
-	// An unsupported manifest os fails validation.
-	if _, err := resolveManifestPlatform(&containerMetadata{OS: "windows", Architecture: "amd64"}, ""); err == nil {
-		t.Fatal("expected error for non-linux manifest")
+	// A Windows machine manifest records its platform.
+	got, err = resolveManifestPlatform(&containerMetadata{OS: "windows", Architecture: "amd64"}, "")
+	if err != nil || got.String() != "windows/amd64" {
+		t.Fatalf("Windows manifest = %s, %v", got, err)
 	}
 
 	// A manifest with no declared architecture (locally built/synthetic image)

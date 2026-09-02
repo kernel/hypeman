@@ -63,6 +63,9 @@ func (m *manager) createSnapshot(ctx context.Context, id string, req CreateSnaps
 	if err != nil {
 		return nil, err
 	}
+	if err := rejectWindowsSnapshotLifecycle(meta.Platform, "snapshot creation"); err != nil {
+		return nil, err
+	}
 	inst := m.toInstance(ctx, meta)
 	stored := &meta.StoredMetadata
 
@@ -251,6 +254,9 @@ func (m *manager) restoreSnapshot(ctx context.Context, id string, snapshotID str
 	if err != nil {
 		return nil, err
 	}
+	if err := rejectWindowsSnapshotLifecycle(rec.StoredMetadata.Platform, "snapshot restore"); err != nil {
+		return nil, err
+	}
 	if rec.Snapshot.SourceInstanceID != id {
 		return nil, fmt.Errorf("%w: snapshot %s belongs to instance %s", ErrInvalidRequest, snapshotID, rec.Snapshot.SourceInstanceID)
 	}
@@ -375,6 +381,9 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 
 	rec, err := m.loadSnapshotRecord(snapshotID)
 	if err != nil {
+		return nil, err
+	}
+	if err := rejectWindowsSnapshotLifecycle(rec.StoredMetadata.Platform, "snapshot fork"); err != nil {
 		return nil, err
 	}
 	if err := validateForkVolumeSafety(rec.StoredMetadata.Volumes); err != nil {

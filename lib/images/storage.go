@@ -27,6 +27,7 @@ type imageMetadata struct {
 	Labels               map[string]string    `json:"labels,omitempty"`
 	Tags                 tags.Tags            `json:"tags,omitempty"`
 	WorkingDir           string               `json:"working_dir,omitempty"`
+	Machine              *MachineImage        `json:"machine,omitempty"`
 	CreatedAt            time.Time            `json:"created_at"`
 	BorrowedAuth         bool                 `json:"borrowed_auth,omitempty"`
 	BuildID              string               `json:"build_id,omitempty"`
@@ -113,6 +114,10 @@ func (m *imageMetadata) toImage() *Image {
 	}
 	if m.WorkingDir != "" {
 		img.WorkingDir = m.WorkingDir
+	}
+	if m.Machine != nil {
+		machine := *m.Machine
+		img.Machine = &machine
 	}
 
 	return img
@@ -286,9 +291,13 @@ func readMetadataAt(layout imageLayout) (*imageMetadata, error) {
 	}
 
 	if meta.Status == StatusReady {
-		if _, err := os.Stat(layout.disk); err != nil {
+		diskPath := layout.disk
+		if meta.Machine != nil {
+			diskPath = machineDiskPathInDir(layout.dir, meta.Machine.Kind)
+		}
+		if _, err := os.Stat(diskPath); err != nil {
 			if os.IsNotExist(err) {
-				return nil, fmt.Errorf("disk image missing: %s", layout.disk)
+				return nil, fmt.Errorf("disk image missing: %s", diskPath)
 			}
 			return nil, fmt.Errorf("stat disk image: %w", err)
 		}

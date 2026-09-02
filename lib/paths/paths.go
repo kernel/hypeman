@@ -228,6 +228,26 @@ func (p *Paths) InstanceConfigDisk(id string) string {
 	return filepath.Join(p.InstanceDir(id), "config.ext4")
 }
 
+func (p *Paths) InstanceWindowsDisk(id string) string {
+	return filepath.Join(p.InstanceDir(id), "windows.qcow2")
+}
+
+func (p *Paths) InstanceOVMFCode(id string) string {
+	return filepath.Join(p.InstanceDir(id), "OVMF_CODE.fd")
+}
+
+func (p *Paths) InstanceOVMFVars(id string) string {
+	return filepath.Join(p.InstanceDir(id), "OVMF_VARS.fd")
+}
+
+func (p *Paths) InstanceTPMDir(id string) string {
+	return filepath.Join(p.InstanceDir(id), "tpm")
+}
+
+func (p *Paths) InstanceTPMSocket(id string) string {
+	return filepath.Join(p.InstanceDir(id), "swtpm.sock")
+}
+
 // InstanceVolumeOverlay returns the path to a volume's overlay disk for an instance.
 func (p *Paths) InstanceVolumeOverlay(instanceID, volumeID string) string {
 	return filepath.Join(p.InstanceDir(instanceID), "vol-overlays", volumeID+".raw")
