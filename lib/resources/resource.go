@@ -625,7 +625,23 @@ func (m *Manager) admissionStatusLocked(rt ResourceType, visibleAllocated int64,
 	return status, nil
 }
 
-func (m *Manager) validateAllocationLocked(ctx context.Context, excludeID string, req pendingAllocation) error {
+// gpuAdmission is the GPU status an admission check consumes. It is read
+// before the manager lock is taken: the provider walks sysfs and may retry a
+// failed VF health write, and neither should stall CPU or memory admission.
+type gpuAdmission struct {
+	status *GPUResourceStatus
+	err    error
+}
+
+func (m *Manager) gpuAdmissionFor(ctx context.Context, req pendingAllocation) gpuAdmission {
+	if req.GPUSlots == 0 {
+		return gpuAdmission{}
+	}
+	status, err := currentGPUStatusProvider()(ctx)
+	return gpuAdmission{status: status, err: err}
+}
+
+func (m *Manager) validateAllocationLocked(ctx context.Context, excludeID string, req pendingAllocation, gpu gpuAdmission) error {
 	usage, err := m.collectAdmissionUsageLocked(ctx)
 	if err != nil {
 		return err
@@ -696,7 +712,7 @@ func (m *Manager) validateAllocationLocked(ctx context.Context, excludeID string
 
 	// Check GPU if needed
 	if req.GPUSlots > 0 {
-		gpuStatus, gpuStatusErr := currentGPUStatusProvider()(ctx)
+		gpuStatus, gpuStatusErr := gpu.status, gpu.err
 		if gpuStatus == nil {
 			return fmt.Errorf("insufficient GPU: no GPU available on this host")
 		}
@@ -721,20 +737,22 @@ func (m *Manager) validateAllocationLocked(ctx context.Context, excludeID string
 // Returns nil if allocation is allowed, or a detailed error describing
 // which resource is insufficient and the current capacity/usage.
 func (m *Manager) ValidateAllocation(ctx context.Context, vcpus int, memoryBytes int64, networkDownloadBps int64, networkUploadBps int64, diskIOBps int64, diskBytes int64, needsGPU bool) error {
+	req := newPendingAllocation(vcpus, memoryBytes, networkDownloadBps, networkUploadBps, diskIOBps, diskBytes, needsGPU)
+	gpu := m.gpuAdmissionFor(ctx, req)
+
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-
-	req := newPendingAllocation(vcpus, memoryBytes, networkDownloadBps, networkUploadBps, diskIOBps, diskBytes, needsGPU)
-	return m.validateAllocationLocked(ctx, "", req)
+	return m.validateAllocationLocked(ctx, "", req, gpu)
 }
 
 // ReserveAllocation tentatively reserves resources for an in-flight operation.
 func (m *Manager) ReserveAllocation(ctx context.Context, instanceID string, vcpus int, memoryBytes int64, networkDownloadBps int64, networkUploadBps int64, diskIOBps int64, diskBytes int64, needsGPU bool) error {
+	req := newPendingAllocation(vcpus, memoryBytes, networkDownloadBps, networkUploadBps, diskIOBps, diskBytes, needsGPU)
+	gpu := m.gpuAdmissionFor(ctx, req)
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
-	req := newPendingAllocation(vcpus, memoryBytes, networkDownloadBps, networkUploadBps, diskIOBps, diskBytes, needsGPU)
-	if err := m.validateAllocationLocked(ctx, instanceID, req); err != nil {
+	if err := m.validateAllocationLocked(ctx, instanceID, req, gpu); err != nil {
 		return err
 	}
 	if existing, ok := m.pending[instanceID]; ok {
