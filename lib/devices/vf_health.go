@@ -334,9 +334,13 @@ func (s *vfHealthStore) hasFailures(address string) bool {
 	return ok && len(record.Failures) > 0
 }
 
-// RepairVFHealthStore retries a failed load or persist. It serializes with
-// vendor-VFIO configure, destroy, and health mutations, and returns without
-// taking those locks while the store is healthy.
+// RepairVFHealthStore retries a failed load or persist so the store recovers
+// without waiting for a placement or /resources read to do it. It takes
+// vendorVFIOMu like the report paths, so a reload that changes the quarantine
+// set cannot interleave with a vendor-VFIO configure. The same retry also
+// runs from checkedAddresses under only s.mu; there, configure's own re-check
+// under vendorVFIOMu covers the selection-to-configure window instead. It
+// returns without taking either lock while the store is healthy.
 func RepairVFHealthStore() error {
 	if !VFHealthStoreUnavailable() {
 		return nil

@@ -59,6 +59,10 @@ type VGPUSentinelController struct {
 	initFailures       metric.Int64Counter
 	quarantines        metric.Int64Counter
 	checks             metric.Int64Counter
+
+	// repairErrLoggedAt throttles the repair warning while the store stays
+	// unavailable; the gauge carries the condition between log lines.
+	repairErrLoggedAt time.Time
 }
 
 func NewVGPUSentinelController(manager Manager, meter metric.Meter, log *slog.Logger) (*VGPUSentinelController, error) {
@@ -169,8 +173,9 @@ func (c *VGPUSentinelController) probeVendorVFIO() (bool, error) {
 }
 
 func (c *VGPUSentinelController) pollOnce(ctx context.Context) {
-	if err := c.repairHealthStore(); err != nil {
+	if err := c.repairHealthStore(); err != nil && time.Since(c.repairErrLoggedAt) >= time.Minute {
 		c.log.WarnContext(ctx, "vGPU sentinel failed to repair VF health state", "error", err)
+		c.repairErrLoggedAt = time.Now()
 	}
 	targets, err := c.store.listVGPUSentinelTargets(ctx)
 	if err != nil {
@@ -345,7 +350,7 @@ func (m *manager) getVGPUSentinelTarget(_ context.Context, instanceID string) (v
 	}
 	assignedAt := ""
 	if meta.GPUClaimedAt != nil {
-		assignedAt = meta.GPUClaimedAt.UTC().Format(time.RFC3339Nano)
+		assignedAt = devices.FormatVFAssignedAt(*meta.GPUClaimedAt)
 	}
 	return vgpuSentinelTarget{
 		instanceID:     instanceID,

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -167,6 +168,23 @@ func TestVGPUSentinelControllerRepairsHealthStoreOncePerPoll(t *testing.T) {
 
 	c.pollOnce(context.Background())
 	assert.Equal(t, 1, repairs)
+}
+
+func TestVGPUSentinelControllerThrottlesRepairWarning(t *testing.T) {
+	t.Parallel()
+
+	c, _ := newTestSentinelController(t, &fakeSentinelStore{})
+	var logs bytes.Buffer
+	c.log = slog.New(slog.NewTextHandler(&logs, nil))
+	c.repairHealthStore = func() error { return errors.New("persist failed") }
+
+	c.pollOnce(context.Background())
+	c.pollOnce(context.Background())
+	assert.Equal(t, 1, strings.Count(logs.String(), "failed to repair VF health state"))
+
+	c.repairErrLoggedAt = time.Now().Add(-2 * time.Minute)
+	c.pollOnce(context.Background())
+	assert.Equal(t, 2, strings.Count(logs.String(), "failed to repair VF health state"))
 }
 
 func TestVGPUSentinelControllerRecordsCheckResults(t *testing.T) {
@@ -375,7 +393,7 @@ func TestGetVGPUSentinelTargetMapsClaimAndRequiresControlSocket(t *testing.T) {
 	assert.Equal(t, vgpuSentinelTarget{
 		instanceID:     instanceID,
 		vfAddress:      "0000:e3:00.4",
-		assignedAt:     claimed.Format(time.RFC3339Nano),
+		assignedAt:     devices.FormatVFAssignedAt(claimed),
 		hypervisorType: "cloud-hypervisor",
 		vsockSocket:    "/run/vsock.sock",
 		vsockCID:       42,
