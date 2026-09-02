@@ -67,6 +67,9 @@ func startSWTPM(config *hypervisor.TPMConfig, instanceDir string) (*startedProce
 	cmd.Stderr = logFile
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
+	if !time.Now().Before(deadline) {
+		return nil, fmt.Errorf("timeout before starting swtpm")
+	}
 	proc, err := startManagedProcess(cmd, config.SocketPath)
 	if err != nil {
 		return nil, fmt.Errorf("start swtpm: %w", err)
@@ -122,6 +125,9 @@ func waitForSWTPMExit(record swtpmProcessRecord, recordPath string, deadline tim
 			return fmt.Errorf("inspect previous swtpm process %d: %w", record.pid, err)
 		}
 		if !alive || identity != record.identity {
+			if !time.Now().Before(deadline) {
+				return fmt.Errorf("timeout waiting for previous swtpm process %d", record.pid)
+			}
 			_ = os.Remove(recordPath)
 			return nil
 		}
