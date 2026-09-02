@@ -427,7 +427,12 @@ func (m *Manager) GetFullStatus(ctx context.Context) (*FullResourceStatus, error
 	}
 
 	// Get GPU status
-	gpuStatus, _ := currentGPUStatusProvider()(ctx)
+	gpuStatus, gpuStatusErr := currentGPUStatusProvider()(ctx)
+	if gpuStatus != nil && gpuStatusErr != nil {
+		withReason := *gpuStatus
+		withReason.PlacementDisabledReason = gpuStatusErr.Error()
+		gpuStatus = &withReason
+	}
 
 	return &FullResourceStatus{
 		CPU:         *cpuStatus,

@@ -17,6 +17,11 @@ type GPUResourceStatus struct {
 	QuarantinedSlots int                         `json:"quarantined_slots"`  // Quarantined VFs; may overlap UsedSlots
 	Profiles         []devices.GPUProfile        `json:"profiles,omitempty"` // vGPU mode only
 	Devices          []devices.PassthroughDevice `json:"devices,omitempty"`  // passthrough mode only
+
+	// PlacementDisabledReason is set when AllocatableSlots is 0 because the
+	// VF health state could not be read or written, not because the host is
+	// full.
+	PlacementDisabledReason string `json:"placement_disabled_reason,omitempty"`
 }
 
 // GetGPUStatus returns the current GPU resource status and any error that

@@ -200,9 +200,11 @@ func TestStartMonitoringPublishesGPUMetrics(t *testing.T) {
 	originalProvider := currentGPUStatusProvider()
 	setGPUStatusProvider(func(context.Context) (*GPUResourceStatus, error) {
 		return &GPUResourceStatus{
-			Mode:       "vgpu",
-			TotalSlots: 8,
-			UsedSlots:  3,
+			Mode:             "vgpu",
+			TotalSlots:       8,
+			UsedSlots:        3,
+			AllocatableSlots: 4,
+			QuarantinedSlots: 1,
 			Profiles: []devices.GPUProfile{
 				{Name: "L40S-1Q", Available: 5},
 				{Name: "L40S-2Q", Available: 2},
@@ -225,6 +227,8 @@ func TestStartMonitoringPublishesGPUMetrics(t *testing.T) {
 	rm := collectMonitoringMetrics(t, reader)
 	require.Equal(t, int64(3), int64GaugeValue(t, rm, "hypeman_resources_gpu_slots", map[string]string{"kind": "used"}))
 	require.Equal(t, int64(8), int64GaugeValue(t, rm, "hypeman_resources_gpu_slots", map[string]string{"kind": "total"}))
+	require.Equal(t, int64(4), int64GaugeValue(t, rm, "hypeman_resources_gpu_slots", map[string]string{"kind": "allocatable"}))
+	require.Equal(t, int64(1), int64GaugeValue(t, rm, "hypeman_resources_gpu_slots", map[string]string{"kind": "quarantined"}))
 	require.Equal(t, int64(5), int64GaugeValue(t, rm, "hypeman_resources_gpu_profile_slots", map[string]string{"profile": "L40S-1Q", "kind": "available"}))
 	require.Equal(t, int64(2), int64GaugeValue(t, rm, "hypeman_resources_gpu_profile_slots", map[string]string{"profile": "L40S-2Q", "kind": "available"}))
 }

@@ -14,6 +14,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const testVFQuarantineThreshold = 2
+
+// initVFHealthForTest points the VF health store at a state file for one test
+// and detaches it from disk again afterwards.
 func initVFHealthForTest(t *testing.T, state []byte) {
 	t.Helper()
 	path := paths.New(t.TempDir()).VFHealthState()
@@ -21,11 +25,11 @@ func initVFHealthForTest(t *testing.T, state []byte) {
 		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
 		require.NoError(t, os.WriteFile(path, state, 0o644))
 	}
-	err := devices.InitVFHealth(path)
+	err := devices.InitVFHealth(path, testVFQuarantineThreshold)
 	if state == nil {
 		require.NoError(t, err)
 	}
-	t.Cleanup(func() { require.NoError(t, devices.InitVFHealth(paths.New(t.TempDir()).VFHealthState())) })
+	t.Cleanup(func() { require.NoError(t, devices.InitVFHealth("", testVFQuarantineThreshold)) })
 }
 
 func TestGetVGPUStatusFailsClosedWhenVFHealthIsUnavailable(t *testing.T) {
@@ -77,7 +81,15 @@ func TestReserveAllocationUsesAllocatableGPUSlots(t *testing.T) {
 	})
 	err = mgr.ValidateAllocation(ctx, 0, 0, 0, 0, 0, 0, true)
 	require.ErrorContains(t, err, "vGPU placement is disabled: VF health state unavailable")
+	statusMgr, _, _ := monitoringTestManager(t)
+	full, err := statusMgr.GetFullStatus(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, full.GPU)
+	assert.Equal(t, "VF health state unavailable: read failed", full.GPU.PlacementDisabledReason)
 	setGPUStatusProvider(func(context.Context) (*GPUResourceStatus, error) { return status, nil })
+	full, err = statusMgr.GetFullStatus(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, full.GPU.PlacementDisabledReason)
 
 	status.AllocatableSlots = 1
 	require.NoError(t, mgr.ReserveAllocation(ctx, "pending-a", 0, 0, 0, 0, 0, 0, true))

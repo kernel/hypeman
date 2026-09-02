@@ -310,7 +310,12 @@ threshold at load, so lowering `gpu.vf_quarantine_threshold` quarantines VFs
 whose persisted failures already meet the new value.
 
 `used_slots` includes quarantined VFs still held by running instances, so it
-can overlap `quarantined_slots`; use `allocatable_slots` for admission.
+can overlap `quarantined_slots`; use `allocatable_slots` for admission. While
+the store is unavailable, `allocatable_slots` is 0 and
+`placement_disabled_reason` carries the load or write error, so a broken
+state file is distinguishable from a full host. The
+`hypeman_resources_gpu_slots` gauge exports the same counts under
+`kind=allocatable` and `kind=quarantined`.
 
 Quarantine only removes capacity — it never touches a running instance.
 

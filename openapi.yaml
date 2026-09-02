@@ -1832,6 +1832,10 @@ components:
           type: integer
           description: VFs quarantined after guest driver init failures (vGPU mode only). May overlap used_slots until the affected instance releases its VF.
           example: 2
+        placement_disabled_reason:
+          type: string
+          description: Present when allocatable_slots is 0 because the VF health state could not be read or written rather than because the host is full. vGPU placement is refused until the state file is repaired or the next write succeeds.
+          example: "VF health state unavailable: unmarshal VF health state: invalid character 'x'"
         profiles:
           type: array
           description: Available vGPU profiles (only in vGPU mode)

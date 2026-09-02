@@ -93,6 +93,9 @@ func convertGPUResourceStatus(gs *resources.GPUResourceStatus) oapi.GPUResourceS
 		AllocatableSlots: gs.AllocatableSlots,
 		QuarantinedSlots: gs.QuarantinedSlots,
 	}
+	if gs.PlacementDisabledReason != "" {
+		result.PlacementDisabledReason = &gs.PlacementDisabledReason
+	}
 
 	// Convert profiles (vGPU mode)
 	if len(gs.Profiles) > 0 {
