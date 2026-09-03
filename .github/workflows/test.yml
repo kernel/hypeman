@@ -57,31 +57,27 @@ jobs:
       # Tests create a bridge and route per VM and clean up on success, but a
       # run that dies mid-test (crash, timeout, superseded-run cancellation)
       # leaks them, and enough leaked routes fail new tests on subnet
-      # conflicts. Each job sweeps before it starts: only interfaces DOWN
-      # with no attached ports across two snapshots are deleted, so anything
-      # a live job is mid-setup on drops out by the second look. Healthy
-      # hosts skip the settle delay, and nothing here ever fails the job.
+      # conflicts. Each job sweeps before it starts. A live bridge can sit
+      # DOWN with no ports for minutes (Initialize creates it, the TAP only
+      # attaches after the rootfs build), so liveness alone cannot identify
+      # a leak; age can: a live bridge waits at most one go-test timeout for
+      # its TAP, while leaks are hours old. The sysfs dir timestamp is the
+      # interface's creation time, and a failed stat spares the interface.
+      # Nothing here ever fails the job.
       - name: Clean leaked test networks
         run: |
-          candidates() {
-            ip -br link show | awk '$1 ~ /^(h[0-9a-f]{8}|hi[0-9a-f]+|hm[0-9a-f]+|hype-[a-z0-9]+)$/ && $2 == "DOWN" {print $1}' |
-            while read -r ifc; do
-              if [ -z "$(ls "/sys/class/net/$ifc/brif" 2>/dev/null)" ]; then echo "$ifc"; fi
-            done
-          }
-          candidates | sort > "$RUNNER_TEMP/net-sweep-a"
-          n=$(wc -l < "$RUNNER_TEMP/net-sweep-a")
-          if [ "$n" -lt 25 ]; then
-            echo "no leak pile ($n candidates); skipping"
-            exit 0
-          fi
-          sleep 10
-          candidates | sort > "$RUNNER_TEMP/net-sweep-b"
-          comm -12 "$RUNNER_TEMP/net-sweep-a" "$RUNNER_TEMP/net-sweep-b" > "$RUNNER_TEMP/net-sweep-dead"
+          cutoff=$(( $(date +%s) - 3600 ))
+          ip -br link show | awk '$1 ~ /^(h[0-9a-f]{8}|hi[0-9a-f]+|hm[0-9a-f]+|hype-[a-z0-9]+)$/ && $2 == "DOWN" {print $1}' |
+          while read -r ifc; do
+            if [ -z "$(ls "/sys/class/net/$ifc/brif" 2>/dev/null)" ] \
+               && [ "$(stat -c %Y "/sys/class/net/$ifc" 2>/dev/null || echo "$cutoff")" -lt "$cutoff" ]; then
+              echo "$ifc"
+            fi
+          done > "$RUNNER_TEMP/net-sweep-dead"
           while read -r ifc; do
             sudo ip link del "$ifc" 2>/dev/null || true
           done < "$RUNNER_TEMP/net-sweep-dead"
-          echo "swept $(wc -l < "$RUNNER_TEMP/net-sweep-dead") leaked interfaces"
+          echo "swept $(wc -l < "$RUNNER_TEMP/net-sweep-dead") interfaces (DOWN, portless, older than 1h)"
 
       - name: Set up Go
         uses: actions/setup-go@v6
