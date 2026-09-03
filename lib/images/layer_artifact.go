@@ -206,10 +206,10 @@ func (m *manager) materializeLayerArtifactOnce(ctx context.Context, desc layerDe
 	if err != nil {
 		return nil, err
 	}
-	return m.installLayerArtifact(ctx, desc, layerHex, unpackDir, stats)
+	return m.installLayerArtifact(desc, layerHex, unpackDir, stats)
 }
 
-func (m *manager) installLayerArtifact(ctx context.Context, desc layerDescriptor, layerHex, unpackDir string, stats *unpackStats) (*layerArtifact, error) {
+func (m *manager) installLayerArtifact(desc layerDescriptor, layerHex, unpackDir string, stats *unpackStats) (*layerArtifact, error) {
 	record := &layerArtifact{
 		SchemaVersion: layerRecordSchemaVersion,
 		Digest:        desc.Digest,
@@ -220,15 +220,9 @@ func (m *manager) installLayerArtifact(ctx context.Context, desc layerDescriptor
 	}
 
 	if err := installAtomically(layerArtifactPath(m.paths, layerHex), func(path string) error {
-		var size int64
-		var convErr error
-		if DefaultImageFormat == FormatErofs {
-			size, convErr = convertToErofsContext(ctx, unpackDir, path)
-		} else {
-			size, convErr = ExportRootfs(unpackDir, path, DefaultImageFormat)
-		}
-		if convErr != nil {
-			return convErr
+		size, err := ExportRootfs(unpackDir, path, DefaultImageFormat)
+		if err != nil {
+			return err
 		}
 		record.SizeBytes = size
 		return nil
@@ -250,6 +244,20 @@ func (m *manager) installLayerArtifact(ctx context.Context, desc layerDescriptor
 type unpackStats struct {
 	unpackedBytes int64
 	diffID        string
+}
+
+// contextReader fails reads once ctx is done so a cancelled caller stops a
+// long extraction instead of running it to completion.
+type contextReader struct {
+	ctx    context.Context
+	reader io.Reader
+}
+
+func (r contextReader) Read(p []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return r.reader.Read(p)
 }
 
 // unpackCachedLayer locates desc's blob in the shared OCI cache, unpacks it
