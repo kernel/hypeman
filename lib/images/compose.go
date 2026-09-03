@@ -29,7 +29,7 @@ func (c *ociClient) composeRootfsContext(ctx context.Context, dest, layoutTag st
 	defer os.RemoveAll(staging)
 
 	for i, desc := range model.Layers {
-		if err := c.applyLayerToDir(ctx, staging, desc); err != nil {
+		if _, err := unpackCachedLayer(ctx, c.cacheDir, desc, staging, composeOnDiskFormat()); err != nil {
 			return fmt.Errorf("apply layer %d (%s): %w", i, desc.Digest, err)
 		}
 	}
@@ -38,23 +38,6 @@ func (c *ociClient) composeRootfsContext(ctx context.Context, dest, layoutTag st
 	}
 	if err := os.Rename(staging, dest); err != nil {
 		return fmt.Errorf("install compose directory: %w", err)
-	}
-	return nil
-}
-
-func (c *ociClient) applyLayerToDir(ctx context.Context, dest string, desc layerDescriptor) error {
-	layerDir, err := os.MkdirTemp(filepath.Dir(dest), ".layer-*")
-	if err != nil {
-		return fmt.Errorf("create layer staging directory: %w", err)
-	}
-	defer os.RemoveAll(layerDir)
-
-	stats, err := unpackCachedLayer(ctx, c.cacheDir, desc, layerDir)
-	if err != nil {
-		return err
-	}
-	if err := applyLayerTree(layerDir, dest, stats.explicitDirs); err != nil {
-		return fmt.Errorf("apply layer tree: %w", err)
 	}
 	return nil
 }
