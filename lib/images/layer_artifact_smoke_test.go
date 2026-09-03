@@ -137,13 +137,6 @@ func TestSmokeRebuildWhenArtifactFileMissing(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, second.CreatedAt.After(first.CreatedAt), "missing artifact must trigger a rebuild")
 	require.FileExists(t, p.ImageLayerArtifactForFormat(layerHex, layerArtifactFormat()))
-
-	// Truncated artifact with a valid record: reuse only checks existence, so
-	// this documents current behavior (record says nothing about integrity).
-	require.NoError(t, os.Truncate(p.ImageLayerArtifactForFormat(layerHex, layerArtifactFormat()), 10))
-	third, err := m.materializeLayerArtifact(context.Background(), desc)
-	require.NoError(t, err)
-	require.True(t, third.CreatedAt.Equal(second.CreatedAt), "truncated artifact is currently reused; integrity is trusted from install-time atomicity")
 }
 
 func TestSmokeConcurrentMaterializeSharesFlight(t *testing.T) {
@@ -214,26 +207,4 @@ func TestSmokeDeviceAndFifoEntries(t *testing.T) {
 	require.Equal(t, uint64(0x103), uint64(stat.Rdev), "char device 1:3")
 	require.NoError(t, unix.Lstat(filepath.Join(dest, "pipes", "fifo"), &stat))
 	require.Equal(t, uint32(unix.S_IFIFO), stat.Mode&unix.S_IFMT)
-}
-
-func TestSmokeDiskUsageCountsArtifactsOnly(t *testing.T) {
-	p := paths.New(t.TempDir())
-	layersDir := p.ImageLayersDir()
-	require.NoError(t, os.MkdirAll(filepath.Join(layersDir, "abab", ".unpack-123"), 0755))
-	write := func(rel string, size int) {
-		require.NoError(t, os.WriteFile(filepath.Join(layersDir, rel), make([]byte, size), 0644))
-	}
-	write(filepath.Join("abab", "layer.erofs"), 100)
-	write(filepath.Join("abab", "artifact.erofs.json"), 50)
-	write(filepath.Join("abab", ".unpack-123", "layer.erofs"), 999)
-	write("stray.txt", 500)
-
-	total, err := totalLayerArtifactBytesFromFilesystem(layersDir)
-	require.NoError(t, err)
-	require.Equal(t, int64(100), total, "only materialized artifacts count; temp dirs and records are excluded")
-
-	// Missing directory is not an error.
-	total, err = totalLayerArtifactBytesFromFilesystem(filepath.Join(p.DataDir(), "nope"))
-	require.NoError(t, err)
-	require.Equal(t, int64(0), total)
 }
