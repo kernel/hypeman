@@ -76,7 +76,7 @@ func validateManifestModel(digestHex string, model *imageManifestModel) error {
 	if model.Digest != digestFromHex(digestHex) {
 		return fmt.Errorf("manifest model digest %q does not match %q", model.Digest, digestFromHex(digestHex))
 	}
-	if model.RootFSType != "" && model.RootFSType != "layers" {
+	if model.RootFSType != "layers" {
 		return fmt.Errorf("unsupported manifest rootfs type: %q", model.RootFSType)
 	}
 	if err := validateManifestConfig(model); err != nil {

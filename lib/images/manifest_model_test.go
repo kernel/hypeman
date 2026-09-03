@@ -1,11 +1,7 @@
 package images
 
 import (
-	"archive/tar"
-	"bytes"
-	"compress/gzip"
 	"context"
-	"io"
 	"os"
 	"strings"
 	"testing"
@@ -15,7 +11,6 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/empty"
 	"github.com/google/go-containerregistry/pkg/v1/layout"
 	"github.com/google/go-containerregistry/pkg/v1/mutate"
-	"github.com/google/go-containerregistry/pkg/v1/tarball"
 	"github.com/google/go-containerregistry/pkg/v1/types"
 	"github.com/kernel/hypeman/lib/paths"
 	"github.com/stretchr/testify/require"
@@ -24,27 +19,7 @@ import (
 // syntheticLayer builds a gzipped tar layer containing one file.
 func syntheticLayer(t *testing.T, name, content string) gcr.Layer {
 	t.Helper()
-
-	var buf bytes.Buffer
-	gzw := gzip.NewWriter(&buf)
-	tw := tar.NewWriter(gzw)
-	require.NoError(t, tw.WriteHeader(&tar.Header{
-		Name:     name,
-		Size:     int64(len(content)),
-		Typeflag: tar.TypeReg,
-		Mode:     0644,
-	}))
-	_, err := tw.Write([]byte(content))
-	require.NoError(t, err)
-	require.NoError(t, tw.Close())
-	require.NoError(t, gzw.Close())
-
-	data := buf.Bytes()
-	layer, err := tarball.LayerFromOpener(func() (io.ReadCloser, error) {
-		return io.NopCloser(bytes.NewReader(data)), nil
-	})
-	require.NoError(t, err)
-	return layer
+	return specLayer(t, []tarEntrySpec{{name: name, content: content, mode: 0644}})
 }
 
 // writeSyntheticLayout writes img into a fresh OCI layout cache tagged with the
@@ -52,16 +27,13 @@ func syntheticLayer(t *testing.T, name, content string) gcr.Layer {
 func writeSyntheticLayout(t *testing.T, img gcr.Image) (*ociClient, string) {
 	t.Helper()
 
-	client, err := newOCIClient(t.TempDir())
-	require.NoError(t, err)
+	p := paths.New(t.TempDir())
+	writeLayerTestLayout(t, p, img)
 
+	client, err := newOCIClient(p.SystemOCICache())
+	require.NoError(t, err)
 	digest, err := img.Digest()
 	require.NoError(t, err)
-	layoutPath, err := layout.Write(client.cacheDir, empty.Index)
-	require.NoError(t, err)
-	require.NoError(t, layoutPath.AppendImage(img, layout.WithAnnotations(map[string]string{
-		"org.opencontainers.image.ref.name": digestToLayoutTag(digest.String()),
-	})))
 	return client, digestToLayoutTag(digest.String())
 }
 
@@ -130,6 +102,7 @@ func TestManifestModelWriteReadRoundtrip(t *testing.T) {
 	model := &imageManifestModel{
 		SchemaVersion: manifestModelSchemaVersion,
 		Digest:        "sha256:" + digestHex,
+		RootFSType:    "layers",
 		Platform:      "linux/amd64",
 		Config: manifestConfigRef{
 			Digest:  "sha256:" + strings.Repeat("c", 64),
@@ -157,7 +130,8 @@ func TestReadManifestModelRejectsInvalidSchema(t *testing.T) {
 	p := paths.New(t.TempDir())
 	digestHex := strings.Repeat("a", 64)
 	require.NoError(t, os.MkdirAll(p.ImageContentDir(digestHex), 0755))
-	require.NoError(t, os.WriteFile(p.ImageContentManifestModel(digestHex), []byte(`{"schema_version":1,"digest":"sha256:`+digestHex+`"}`), 0644))
+	require.NoError(t, os.WriteFile(p.ImageContentManifestModel(digestHex),
+		[]byte(`{"schema_version":1,"digest":"sha256:`+digestHex+`","rootfs_type":"layers"}`), 0644))
 	_, err := readManifestModel(p, digestHex)
 	require.ErrorContains(t, err, "config digest is empty")
 }

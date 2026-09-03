@@ -94,9 +94,8 @@ func layerArtifactRecordPath(p *paths.Paths, layerHex string) string {
 
 // layerMapOptions preserves tar ownership when running as root. Otherwise
 // umoci's rootless mode skips chown and stands in empty files for device nodes.
-// Unlike unpackLayers in oci.go, which maps container root to the current
-// user, this deliberately leaves ownership untouched as root: artifacts must
-// keep the layer's on-disk ownership for later stacking.
+// As root this deliberately leaves ownership untouched: artifacts must keep
+// the layer's on-disk ownership for later stacking.
 func layerMapOptions() layer.MapOptions {
 	return layer.MapOptions{Rootless: os.Geteuid() != 0}
 }
@@ -107,6 +106,14 @@ func layerMapOptions() layer.MapOptions {
 // layer's deletions without a private marker format.
 func layerArtifactOnDiskFormat() layer.OnDiskFormat {
 	return layer.OverlayfsRootfs{MapOptions: layerMapOptions()}
+}
+
+// composeOnDiskFormat applies whiteouts against the tree being composed:
+// deletions execute immediately on the destination instead of becoming
+// overlayfs whiteout inodes, since the composed tree is mounted as a single
+// lower filesystem rather than stacked.
+func composeOnDiskFormat() layer.OnDiskFormat {
+	return layer.DirRootfs{MapOptions: layerMapOptions()}
 }
 
 // readLayerRecord loads the artifact record for a layer digest, if present.
@@ -215,7 +222,7 @@ func (m *manager) materializeLayerArtifactOnce(ctx context.Context, desc layerDe
 		}
 	}()
 
-	stats, err := unpackCachedLayer(ctx, m.paths, desc, unpackDir, layerArtifactOnDiskFormat())
+	stats, err := unpackCachedLayer(ctx, m.paths.OCICacheBlobDir(), desc, unpackDir, layerArtifactOnDiskFormat())
 	if err != nil {
 		return nil, err
 	}
@@ -274,11 +281,12 @@ func (r contextReader) Read(p []byte) (int, error) {
 	return r.reader.Read(p)
 }
 
-// unpackCachedLayer locates desc's blob in the shared OCI cache, unpacks it
-// into dest, and verifies both the blob digest and the diff ID when the
-// descriptor carries one. The caller must have validated desc.Digest.
-func unpackCachedLayer(ctx context.Context, p *paths.Paths, desc layerDescriptor, dest string, onDisk layer.OnDiskFormat) (*unpackStats, error) {
-	blobPath := p.OCICacheBlob(strings.TrimPrefix(desc.Digest, "sha256:"))
+// unpackCachedLayer locates desc's blob under blobDir (the OCI layout's
+// blobs/sha256 directory), unpacks it into dest, and verifies both the blob
+// digest and the diff ID when the descriptor carries one. The caller must
+// have validated desc.Digest.
+func unpackCachedLayer(ctx context.Context, blobDir string, desc layerDescriptor, dest string, onDisk layer.OnDiskFormat) (*unpackStats, error) {
+	blobPath := filepath.Join(blobDir, strings.TrimPrefix(desc.Digest, "sha256:"))
 	if _, err := os.Stat(blobPath); err != nil {
 		if os.IsNotExist(err) {
 			return nil, fmt.Errorf("layer blob missing from oci cache: %s", desc.Digest)

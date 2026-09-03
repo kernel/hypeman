@@ -1,7 +1,7 @@
 package images
 
 import (
-	"io"
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -69,7 +69,7 @@ func TestComposeRootfsWhiteoutsAndOrdering(t *testing.T) {
 	require.Len(t, model.Layers, 2)
 
 	dest := filepath.Join(t.TempDir(), "rootfs")
-	require.NoError(t, client.composeRootfs(dest, tag, model))
+	require.NoError(t, client.composeRootfsContext(context.Background(), dest, tag, model))
 
 	// Whiteout removed the base entry.
 	_, err := os.Lstat(filepath.Join(dest, "etc", "config.txt"))
@@ -113,6 +113,7 @@ func zeroLayerModel() *imageManifestModel {
 	return &imageManifestModel{
 		SchemaVersion: manifestModelSchemaVersion,
 		Digest:        "sha256:" + strings.Repeat("ab", 32),
+		RootFSType:    "layers",
 		Config:        manifestConfigRef{Digest: "sha256:" + strings.Repeat("cd", 32)},
 		Layers:        make([]layerDescriptor, 0),
 	}
@@ -124,7 +125,7 @@ func TestComposeRootfsEmptyLayers(t *testing.T) {
 	require.NoError(t, err)
 	model := zeroLayerModel()
 	dest := filepath.Join(t.TempDir(), "rootfs")
-	require.NoError(t, client.composeRootfs(dest, model.Digest, model))
+	require.NoError(t, client.composeRootfsContext(context.Background(), dest, model.Digest, model))
 	entries, err := os.ReadDir(dest)
 	require.NoError(t, err)
 	require.Empty(t, entries)
@@ -135,7 +136,7 @@ func TestComposeRootfsInvalidModel(t *testing.T) {
 	client, tag, model := composeFixture(t, p)
 
 	model.Config.DiffIDs = model.Config.DiffIDs[:1]
-	err := client.composeRootfs(filepath.Join(t.TempDir(), "rootfs"), tag, model)
+	err := client.composeRootfsContext(context.Background(), filepath.Join(t.TempDir(), "rootfs"), tag, model)
 	require.ErrorContains(t, err, "1 diff ids for 2 layers")
 }
 
@@ -148,6 +149,7 @@ func TestComposeRootfsMissingBlob(t *testing.T) {
 	model := &imageManifestModel{
 		SchemaVersion: manifestModelSchemaVersion,
 		Digest:        digestHex,
+		RootFSType:    "layers",
 		Config: manifestConfigRef{
 			Digest:  "sha256:" + strings.Repeat("cd", 32),
 			DiffIDs: []string{"sha256:" + strings.Repeat("ef", 32)},
@@ -158,7 +160,7 @@ func TestComposeRootfsMissingBlob(t *testing.T) {
 			DiffID:    "sha256:" + strings.Repeat("ef", 32),
 		}},
 	}
-	err = client.composeRootfs(t.TempDir(), digestHex, model)
+	err = client.composeRootfsContext(context.Background(), t.TempDir(), digestHex, model)
 	require.ErrorContains(t, err, "missing from oci cache")
 }
 
@@ -166,17 +168,14 @@ func TestComposeRootfsDiffIDMismatch(t *testing.T) {
 	p := paths.New(t.TempDir())
 	client, tag, model := composeFixture(t, p)
 
-	// Replace the top layer's cached blob with different content so the
-	// unpacked diff id no longer matches the descriptor.
-	other := specLayer(t, []tarEntrySpec{{name: "other.txt", content: "other", mode: 0644}})
-	otherBlob, err := other.Compressed()
-	require.NoError(t, err)
-	data, err := io.ReadAll(otherBlob)
-	require.NoError(t, err)
-	topHex := strings.TrimPrefix(model.Layers[1].Digest, "sha256:")
-	require.NoError(t, os.WriteFile(p.OCICacheBlob(topHex), data, 0644))
+	// Desynchronize the top layer's diff id from its content while keeping the
+	// model internally consistent, so validation passes and the mismatch is
+	// caught against the unpacked stream instead.
+	forged := "sha256:" + strings.Repeat("ff", 32)
+	model.Layers[1].DiffID = forged
+	model.Config.DiffIDs[1] = forged
 
-	err = client.composeRootfs(filepath.Join(t.TempDir(), "rootfs"), tag, model)
+	err := client.composeRootfsContext(context.Background(), filepath.Join(t.TempDir(), "rootfs"), tag, model)
 	require.ErrorContains(t, err, "diff id mismatch")
 }
 
@@ -195,7 +194,7 @@ func TestComposeRootfsExportsValidErofs(t *testing.T) {
 	client, tag, model := composeFixture(t, p)
 
 	staging := filepath.Join(t.TempDir(), "rootfs")
-	require.NoError(t, client.composeRootfs(staging, tag, model))
+	require.NoError(t, client.composeRootfsContext(context.Background(), staging, tag, model))
 
 	diskPath := filepath.Join(t.TempDir(), "rootfs.erofs")
 	size, err := ExportRootfs(staging, diskPath, FormatErofs)
