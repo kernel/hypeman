@@ -262,6 +262,32 @@ type unpackStats struct {
 // whiteout marker files. It intentionally does not use umoci's layer unpacker:
 // umoci consumes whiteouts while this store must retain them for composition.
 // Paths are confined to dest.
+func unpackCachedLayer(cacheDir string, desc layerDescriptor, dest string) (*unpackStats, error) {
+	return unpackCachedLayerContext(context.Background(), cacheDir, desc, dest)
+}
+
+func unpackCachedLayerContext(ctx context.Context, cacheDir string, desc layerDescriptor, dest string) (*unpackStats, error) {
+	layerHex := strings.TrimPrefix(desc.Digest, "sha256:")
+	if err := paths.ValidatePathComponent(layerHex); err != nil {
+		return nil, fmt.Errorf("invalid layer digest: %s", desc.Digest)
+	}
+	blobPath := filepath.Join(cacheDir, "blobs", "sha256", layerHex)
+	if _, err := os.Stat(blobPath); err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("layer blob missing from oci cache: %s", desc.Digest)
+		}
+		return nil, fmt.Errorf("stat layer blob: %w", err)
+	}
+	stats, err := unpackLayerBlobContext(ctx, blobPath, desc.MediaType, dest)
+	if err != nil {
+		return nil, fmt.Errorf("unpack layer %s: %w", desc.Digest, err)
+	}
+	if desc.DiffID != "" && stats.diffID != desc.DiffID {
+		return nil, fmt.Errorf("layer %s diff id mismatch: got %s, want %s", desc.Digest, stats.diffID, desc.DiffID)
+	}
+	return stats, nil
+}
+
 func unpackLayerBlob(blobPath, mediaType, dest string) (*unpackStats, error) {
 	return unpackLayerBlobContext(context.Background(), blobPath, mediaType, dest)
 }
