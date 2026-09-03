@@ -8,11 +8,13 @@ import (
 	"path/filepath"
 )
 
-// composeRootfsContext validates the persisted model and merges its layers
-// into dest in manifest order, reading each layer blob from the shared OCI
-// cache. Whiteout and opaque-directory markers are interpreted as each layer
-// is applied.
-func (c *ociClient) composeRootfsContext(ctx context.Context, dest, layoutTag string, model *imageManifestModel) error {
+// composeRootfs validates the persisted model and merges its layers into
+// dest in manifest order, reading each layer blob from the shared OCI cache.
+// Whiteout and opaque-directory markers are interpreted as each layer is
+// applied. Any previous tree at dest is replaced: callers must not read dest
+// concurrently, and a failure between the remove and the rename leaves dest
+// absent.
+func (c *ociClient) composeRootfs(ctx context.Context, dest, layoutTag string, model *imageManifestModel) error {
 	if err := validateManifestModel(layoutTag, model); err != nil {
 		return fmt.Errorf("validate manifest model: %w", err)
 	}
@@ -31,11 +33,12 @@ func (c *ociClient) composeRootfsContext(ctx context.Context, dest, layoutTag st
 	}()
 
 	for i, desc := range model.Layers {
-		if _, err := unpackCachedLayer(ctx, filepath.Join(c.cacheDir, "blobs", "sha256"), desc, staging, composeOnDiskFormat()); err != nil {
+		if _, err := unpackCachedLayer(ctx, c.cacheBlobDir(), desc, staging, composeOnDiskFormat()); err != nil {
 			return fmt.Errorf("apply layer %d (%s): %w", i, desc.Digest, err)
 		}
 	}
-	// Match the export-directory mode the unpack path used; MkdirTemp is 0700.
+	// The export directory must stay traversable by other readers; MkdirTemp
+	// creates it 0700.
 	if err := os.Chmod(staging, 0755); err != nil {
 		return fmt.Errorf("set compose directory mode: %w", err)
 	}

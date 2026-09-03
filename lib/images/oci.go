@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -71,6 +72,11 @@ func newOCIClient(cacheDir string) (*ociClient, error) {
 		return nil, fmt.Errorf("create cache dir: %w", err)
 	}
 	return &ociClient{cacheDir: cacheDir}, nil
+}
+
+// cacheBlobDir returns the OCI layout's blob directory under the cache root.
+func (c *ociClient) cacheBlobDir() string {
+	return filepath.Join(c.cacheDir, "blobs", "sha256")
 }
 
 // vmPlatform returns the target platform for VM images: a Linux guest on the
@@ -281,9 +287,9 @@ func (c *ociClient) pullAndExportWithPlatformAuth(ctx context.Context, imageRef,
 
 	// Compose the rootfs from the shared layer blobs in manifest order.
 	if err := result.measure("layer_unpack", func() error {
-		return c.composeRootfsContext(ctx, exportDir, layoutTag, bundle.Model)
+		return c.composeRootfs(ctx, exportDir, layoutTag, bundle.Model)
 	}); err != nil {
-		return result, fmt.Errorf("unpack layers: %w", err)
+		return result, fmt.Errorf("compose rootfs: %w", err)
 	}
 
 	return result, nil

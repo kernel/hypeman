@@ -23,7 +23,7 @@ type imageManifestModel struct {
 	MediaType     string            `json:"media_type,omitempty"`
 	Platform      string            `json:"platform"` // os/arch[/variant]
 	Config        manifestConfigRef `json:"config"`
-	RootFSType    string            `json:"rootfs_type,omitempty"`
+	RootFSType    string            `json:"rootfs_type"`
 	Layers        []layerDescriptor `json:"layers"` // manifest order, base layer first
 }
 

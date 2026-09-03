@@ -65,13 +65,12 @@ func TestComposeRootfsFailsOnBuildKitCacheMediatype(t *testing.T) {
 	bundle, err := client.extractOCIImageBundle("test-cache")
 	require.NoError(t, err)
 
-	err = client.composeRootfsContext(context.Background(), filepath.Join(t.TempDir(), "rootfs"), "test-cache", bundle.Model)
+	err = client.composeRootfs(context.Background(), filepath.Join(t.TempDir(), "rootfs"), "test-cache", bundle.Model)
 
-	// The rejection happens during manifest-model validation: the cacheconfig
-	// mediatype is not an OCI image config, and the config blob declares no
-	// layered rootfs, so composition refuses the image.
+	// The cacheconfig config blob declares no layered rootfs, so manifest model
+	// validation rejects it before any blob is read.
 	require.Error(t, err, "compose should fail on BuildKit cache mediatype")
-	assert.Contains(t, err.Error(), "manifest", "error should come from manifest model validation")
+	assert.Contains(t, err.Error(), "rootfs type", "error should be the rootfs type rejection")
 
 	t.Logf("Got expected error: %v", err)
 }
@@ -293,7 +292,7 @@ func createTestDockerImage(t *testing.T) v1.Image {
 
 // TestDockerSaveTarballToOCILayoutRoundtrip tests the exact pipeline used by
 // buildBuilderFromDockerfile: docker save tarball → load via go-containerregistry
-// → write to OCI layout cache → verify existsInLayout + extractMetadata + composeRootfsContext.
+// → write to OCI layout cache → verify existsInLayout + extractMetadata + composeRootfs.
 //
 // This simulates:
 // 1. docker build → docker save (we use go-containerregistry to create the tarball)
@@ -301,7 +300,7 @@ func createTestDockerImage(t *testing.T) v1.Image {
 // 3. layout.AppendImage with digest annotation (write to OCI cache)
 // 4. existsInLayout (cache hit detection)
 // 5. extractOCIMetadata (read config from cache)
-// 6. composeRootfsContext (compose rootfs from cache blobs)
+// 6. composeRootfs (compose rootfs from cache blobs)
 func TestDockerSaveTarballToOCILayoutRoundtrip(t *testing.T) {
 	// Step 1: Create a synthetic Docker image (simulates docker build output)
 	img := createTestDockerImage(t)
@@ -348,9 +347,9 @@ func TestDockerSaveTarballToOCILayoutRoundtrip(t *testing.T) {
 	assert.Equal(t, testImageKernelVersion, meta.Labels["io.kernel.kernel-version"])
 	assert.Equal(t, "6.12.8+", meta.Labels["io.kernel.kernel-release"])
 
-	// Step 7: Verify composeRootfsContext produces correct rootfs
+	// Step 7: Verify composeRootfs produces correct rootfs
 	unpackDir := filepath.Join(t.TempDir(), "unpack")
-	err = client.composeRootfsContext(context.Background(), unpackDir, layoutTag, bundle.Model)
+	err = client.composeRootfs(context.Background(), unpackDir, layoutTag, bundle.Model)
 	require.NoError(t, err)
 
 	// Verify expected files exist in unpacked rootfs
@@ -369,7 +368,7 @@ func TestDockerSaveTarballToOCILayoutRoundtrip(t *testing.T) {
 	require.NoError(t, err, "/app directory should exist")
 	assert.True(t, stat.IsDir())
 
-	t.Log("Full roundtrip verified: docker save tarball → OCI layout → existsInLayout → extractMetadata → composeRootfsContext")
+	t.Log("Full roundtrip verified: docker save tarball → OCI layout → existsInLayout → extractMetadata → composeRootfs")
 }
 
 // TestDockerSaveToOCILayoutCacheHit verifies that pullAndExport correctly

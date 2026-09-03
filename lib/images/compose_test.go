@@ -69,7 +69,7 @@ func TestComposeRootfsWhiteoutsAndOrdering(t *testing.T) {
 	require.Len(t, model.Layers, 2)
 
 	dest := filepath.Join(t.TempDir(), "rootfs")
-	require.NoError(t, client.composeRootfsContext(context.Background(), dest, tag, model))
+	require.NoError(t, client.composeRootfs(context.Background(), dest, tag, model))
 
 	// Whiteout removed the base entry.
 	_, err := os.Lstat(filepath.Join(dest, "etc", "config.txt"))
@@ -108,24 +108,19 @@ func TestComposeRootfsWhiteoutsAndOrdering(t *testing.T) {
 	}))
 }
 
-// zeroLayerModel returns a schema-valid manifest model with no layers.
-func zeroLayerModel() *imageManifestModel {
-	return &imageManifestModel{
+func TestComposeRootfsEmptyLayers(t *testing.T) {
+	p := paths.New(t.TempDir())
+	client, err := newOCIClient(p.SystemOCICache())
+	require.NoError(t, err)
+	model := &imageManifestModel{
 		SchemaVersion: manifestModelSchemaVersion,
 		Digest:        "sha256:" + strings.Repeat("ab", 32),
 		RootFSType:    "layers",
 		Config:        manifestConfigRef{Digest: "sha256:" + strings.Repeat("cd", 32)},
 		Layers:        make([]layerDescriptor, 0),
 	}
-}
-
-func TestComposeRootfsEmptyLayers(t *testing.T) {
-	p := paths.New(t.TempDir())
-	client, err := newOCIClient(p.SystemOCICache())
-	require.NoError(t, err)
-	model := zeroLayerModel()
 	dest := filepath.Join(t.TempDir(), "rootfs")
-	require.NoError(t, client.composeRootfsContext(context.Background(), dest, model.Digest, model))
+	require.NoError(t, client.composeRootfs(context.Background(), dest, model.Digest, model))
 	entries, err := os.ReadDir(dest)
 	require.NoError(t, err)
 	require.Empty(t, entries)
@@ -136,7 +131,7 @@ func TestComposeRootfsInvalidModel(t *testing.T) {
 	client, tag, model := composeFixture(t, p)
 
 	model.Config.DiffIDs = model.Config.DiffIDs[:1]
-	err := client.composeRootfsContext(context.Background(), filepath.Join(t.TempDir(), "rootfs"), tag, model)
+	err := client.composeRootfs(context.Background(), filepath.Join(t.TempDir(), "rootfs"), tag, model)
 	require.ErrorContains(t, err, "1 diff ids for 2 layers")
 }
 
@@ -160,7 +155,7 @@ func TestComposeRootfsMissingBlob(t *testing.T) {
 			DiffID:    "sha256:" + strings.Repeat("ef", 32),
 		}},
 	}
-	err = client.composeRootfsContext(context.Background(), t.TempDir(), digestHex, model)
+	err = client.composeRootfs(context.Background(), t.TempDir(), digestHex, model)
 	require.ErrorContains(t, err, "missing from oci cache")
 }
 
@@ -175,13 +170,12 @@ func TestComposeRootfsDiffIDMismatch(t *testing.T) {
 	model.Layers[1].DiffID = forged
 	model.Config.DiffIDs[1] = forged
 
-	err := client.composeRootfsContext(context.Background(), filepath.Join(t.TempDir(), "rootfs"), tag, model)
+	err := client.composeRootfs(context.Background(), filepath.Join(t.TempDir(), "rootfs"), tag, model)
 	require.ErrorContains(t, err, "diff id mismatch")
 }
 
 // TestComposeRootfsExportsValidErofs composes the fixture image and exports it
-// to erofs, then verifies the filesystem is intact and its contents match the
-// composed tree.
+// to erofs, then verifies the filesystem passes fsck.
 func TestComposeRootfsExportsValidErofs(t *testing.T) {
 	if _, err := exec.LookPath("mkfs.erofs"); err != nil {
 		t.Skip("mkfs.erofs not available")
@@ -193,11 +187,11 @@ func TestComposeRootfsExportsValidErofs(t *testing.T) {
 	p := paths.New(t.TempDir())
 	client, tag, model := composeFixture(t, p)
 
-	staging := filepath.Join(t.TempDir(), "rootfs")
-	require.NoError(t, client.composeRootfsContext(context.Background(), staging, tag, model))
+	dest := filepath.Join(t.TempDir(), "rootfs")
+	require.NoError(t, client.composeRootfs(context.Background(), dest, tag, model))
 
 	diskPath := filepath.Join(t.TempDir(), "rootfs.erofs")
-	size, err := ExportRootfs(staging, diskPath, FormatErofs)
+	size, err := ExportRootfs(dest, diskPath, FormatErofs)
 	require.NoError(t, err)
 	require.Greater(t, size, int64(0))
 

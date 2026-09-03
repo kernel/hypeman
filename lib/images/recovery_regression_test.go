@@ -32,7 +32,7 @@ func TestComposeRootfsCapturedFixtureReturnsErrorInsteadOfPanicking(t *testing.T
 
 	var composeErr error
 	require.NotPanics(t, func() {
-		composeErr = client.composeRootfsContext(context.Background(), filepath.Join(t.TempDir(), "rootfs"), recoveryFixtureTag, bundle.Model)
+		composeErr = client.composeRootfs(context.Background(), filepath.Join(t.TempDir(), "rootfs"), recoveryFixtureTag, bundle.Model)
 	})
 
 	require.Error(t, composeErr)
