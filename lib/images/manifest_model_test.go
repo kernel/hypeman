@@ -22,8 +22,8 @@ func syntheticLayer(t *testing.T, name, content string) gcr.Layer {
 	return specLayer(t, []tarEntrySpec{{name: name, content: content, mode: 0644}})
 }
 
-// writeSyntheticLayout writes img into a fresh OCI layout cache tagged with the
-// image's own digest, mirroring pullToOCILayout.
+// writeSyntheticLayout writes img into a temp-dir-backed paths root and
+// returns a client for its cache plus the image's layout tag.
 func writeSyntheticLayout(t *testing.T, img gcr.Image) (*ociClient, string) {
 	t.Helper()
 
@@ -134,6 +134,21 @@ func TestReadManifestModelRejectsInvalidSchema(t *testing.T) {
 		[]byte(`{"schema_version":1,"digest":"sha256:`+digestHex+`","rootfs_type":"layers"}`), 0644))
 	_, err := readManifestModel(p, digestHex)
 	require.ErrorContains(t, err, "config digest is empty")
+}
+
+func TestValidateManifestModelRejectsNonLayeredRootFS(t *testing.T) {
+	model := &imageManifestModel{
+		SchemaVersion: manifestModelSchemaVersion,
+		Digest:        "sha256:" + strings.Repeat("ab", 32),
+		RootFSType:    "",
+		Config:        manifestConfigRef{Digest: "sha256:" + strings.Repeat("cd", 32)},
+	}
+	err := validateManifestModel(model.Digest, model)
+	require.ErrorContains(t, err, "rootfs type")
+
+	model.RootFSType = "flattened"
+	err = validateManifestModel(model.Digest, model)
+	require.ErrorContains(t, err, "rootfs type")
 }
 
 func TestReadManifestModelMissing(t *testing.T) {

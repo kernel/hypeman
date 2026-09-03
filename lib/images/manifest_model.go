@@ -41,7 +41,7 @@ type layerDescriptor struct {
 	Digest    string `json:"digest"` // compressed blob digest, sha256:...
 	Size      int64  `json:"size"`   // compressed bytes
 	MediaType string `json:"media_type,omitempty"`
-	DiffID    string `json:"diff_id,omitempty"` // uncompressed diff id from the image config
+	DiffID    string `json:"diff_id"` // uncompressed diff id from the image config
 }
 
 // digestFromHex returns the full sha256 digest string for a bare hex value.

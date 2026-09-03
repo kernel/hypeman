@@ -13,7 +13,8 @@ import (
 // Whiteout and opaque-directory markers are interpreted as each layer is
 // applied. Any previous tree at dest is replaced: callers must not read dest
 // concurrently, and a failure between the remove and the rename leaves dest
-// absent.
+// absent. A crash can also strand .compose-* staging directories in dest's
+// parent, the same way .unpack-* directories can strand under layer builds.
 func (c *ociClient) composeRootfs(ctx context.Context, dest, layoutTag string, model *imageManifestModel) error {
 	if err := validateManifestModel(layoutTag, model); err != nil {
 		return fmt.Errorf("validate manifest model: %w", err)
@@ -34,7 +35,7 @@ func (c *ociClient) composeRootfs(ctx context.Context, dest, layoutTag string, m
 
 	for i, desc := range model.Layers {
 		if _, err := unpackCachedLayer(ctx, c.cacheBlobDir(), desc, staging, composeOnDiskFormat()); err != nil {
-			return fmt.Errorf("apply layer %d (%s): %w", i, desc.Digest, err)
+			return fmt.Errorf("apply layer %d: %w", i, err)
 		}
 	}
 	// The export directory must stay traversable by other readers; MkdirTemp

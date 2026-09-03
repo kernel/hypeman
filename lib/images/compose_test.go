@@ -69,10 +69,21 @@ func TestComposeRootfsWhiteoutsAndOrdering(t *testing.T) {
 	require.Len(t, model.Layers, 2)
 
 	dest := filepath.Join(t.TempDir(), "rootfs")
+	// Pre-populate dest and weaken its mode so composition must replace the
+	// whole tree and restore the 0755 export-directory mode.
+	require.NoError(t, os.MkdirAll(filepath.Join(dest, "junk"), 0700))
+	require.NoError(t, os.WriteFile(filepath.Join(dest, "junk", "stale.txt"), []byte("stale"), 0644))
 	require.NoError(t, client.composeRootfs(context.Background(), dest, tag, model))
 
+	// Stale content is gone and the export directory mode is restored.
+	_, err := os.Lstat(filepath.Join(dest, "junk"))
+	require.True(t, os.IsNotExist(err), "composition must replace the previous tree")
+	info, err := os.Stat(dest)
+	require.NoError(t, err)
+	require.Equal(t, os.FileMode(0755), info.Mode().Perm())
+
 	// Whiteout removed the base entry.
-	_, err := os.Lstat(filepath.Join(dest, "etc", "config.txt"))
+	_, err = os.Lstat(filepath.Join(dest, "etc", "config.txt"))
 	require.True(t, os.IsNotExist(err), "whiteout must delete the base entry")
 
 	// Plain replacement.
@@ -88,7 +99,7 @@ func TestComposeRootfsWhiteoutsAndOrdering(t *testing.T) {
 	require.Equal(t, "new", string(data))
 
 	// Directory replaced by a regular file.
-	info, err := os.Lstat(filepath.Join(dest, "replacedir"))
+	info, err = os.Lstat(filepath.Join(dest, "replacedir"))
 	require.NoError(t, err)
 	require.False(t, info.IsDir())
 	data, err = os.ReadFile(filepath.Join(dest, "replacedir"))

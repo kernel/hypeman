@@ -47,10 +47,8 @@ const buildKitCacheConfigMediaType = "application/vnd.buildkit.cacheconfig.v0"
 // the production issue where global cache images exported by BuildKit cannot
 // be pre-pulled by hypeman because they use a non-standard config mediatype.
 //
-// The error occurs because:
-// 1. BuildKit exports cache with --export-cache type=registry,image-manifest=true
-// 2. The exported manifest uses "application/vnd.buildkit.cacheconfig.v0" as config mediatype
-// 3. hypeman's manifest validation expects "application/vnd.oci.image.config.v1+json"
+// The fixture's cacheconfig blob declares no layered rootfs, so manifest
+// model validation rejects the image before any blob is read.
 func TestComposeRootfsFailsOnBuildKitCacheMediatype(t *testing.T) {
 	// Create a temp directory for the OCI layout
 	cacheDir := t.TempDir()
@@ -73,6 +71,70 @@ func TestComposeRootfsFailsOnBuildKitCacheMediatype(t *testing.T) {
 	assert.Contains(t, err.Error(), "rootfs type", "error should be the rootfs type rejection")
 
 	t.Logf("Got expected error: %v", err)
+}
+
+// TestComposeRootfsFailsOnBuildKitCacheConfigMediatype pins the config
+// mediatype rejection specifically: with a layered rootfs declared, the
+// cacheconfig config mediatype itself is what fails validation.
+func TestComposeRootfsFailsOnBuildKitCacheConfigMediatype(t *testing.T) {
+	cacheDir := t.TempDir()
+	blobsDir := filepath.Join(cacheDir, "blobs", "sha256")
+	require.NoError(t, os.MkdirAll(blobsDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(cacheDir, "oci-layout"), []byte(`{"imageLayoutVersion":"1.0.0"}`), 0644))
+
+	layerContent := []byte{
+		0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, // gzip header
+		0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // empty tar
+	}
+	layerDigest := sha256Hash(layerContent)
+	require.NoError(t, os.WriteFile(filepath.Join(blobsDir, layerDigest), layerContent, 0644))
+
+	// BuildKit cacheconfig-shaped config that nonetheless declares a layered
+	// rootfs, so the config mediatype check is the one that fires.
+	configJSON := []byte(`{"rootfs":{"type":"layers","diff_ids":["sha256:` + layerDigest + `"]}}`)
+	configDigest := sha256Hash(configJSON)
+	require.NoError(t, os.WriteFile(filepath.Join(blobsDir, configDigest), configJSON, 0644))
+
+	manifest := map[string]interface{}{
+		"schemaVersion": 2,
+		"mediaType":     "application/vnd.oci.image.manifest.v1+json",
+		"config": map[string]interface{}{
+			"mediaType": buildKitCacheConfigMediaType,
+			"digest":    "sha256:" + configDigest,
+			"size":      len(configJSON),
+		},
+		"layers": []map[string]interface{}{{
+			"mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+			"digest":    "sha256:" + layerDigest,
+			"size":      len(layerContent),
+		}},
+	}
+	manifestBytes, err := json.Marshal(manifest)
+	require.NoError(t, err)
+	manifestDigest := sha256Hash(manifestBytes)
+	require.NoError(t, os.WriteFile(filepath.Join(blobsDir, manifestDigest), manifestBytes, 0644))
+
+	index := map[string]interface{}{
+		"schemaVersion": 2,
+		"manifests": []map[string]interface{}{{
+			"mediaType":   "application/vnd.oci.image.manifest.v1+json",
+			"digest":      "sha256:" + manifestDigest,
+			"size":        len(manifestBytes),
+			"annotations": map[string]string{"org.opencontainers.image.ref.name": "test-cache"},
+		}},
+	}
+	indexBytes, err := json.Marshal(index)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(cacheDir, "index.json"), indexBytes, 0644))
+
+	client, err := newOCIClient(cacheDir)
+	require.NoError(t, err)
+	bundle, err := client.extractOCIImageBundle("test-cache")
+	require.NoError(t, err)
+
+	err = client.composeRootfs(context.Background(), filepath.Join(t.TempDir(), "rootfs"), "test-cache", bundle.Model)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "config media type", "error should be the config mediatype rejection")
 }
 
 // TestExtractMetadataSucceedsOnBuildKitCache verifies that extractOCIImageBundle
