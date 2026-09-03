@@ -19,9 +19,23 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/layout"
 	"github.com/google/go-containerregistry/pkg/v1/mutate"
 	"github.com/kernel/hypeman/lib/paths"
+	"github.com/opencontainers/umoci/oci/layer"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
 )
+
+// whiteoutPrefix marks OCI whiteout entries (".wh.<name>" and ".wh..wh..opq").
+// umoci interprets them during extraction: composeOnDiskFormat applies them
+// against the tree being composed, layerArtifactOnDiskFormat converts them to
+// overlayfs whiteout inodes and opaque xattrs so per-layer artifacts can
+// later be stacked.
+const whiteoutPrefix = ".wh."
+
+// composeOnDiskFormat applies whiteouts against the tree being composed. It
+// belongs to the composition flow and moves to production with that change.
+func composeOnDiskFormat() layer.OnDiskFormat {
+	return layer.DirRootfs{MapOptions: layerMapOptions()}
+}
 
 const testTarGzMediaType = "application/vnd.oci.image.layer.v1.tar+gzip"
 
@@ -222,8 +236,11 @@ func TestMaterializeLayerArtifactOutlivesCancelledCaller(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, err = m.materializeLayerArtifact(ctx, desc)
-	require.ErrorIs(t, err, context.Canceled)
+	// The build usually loses the race against the cancelled context, but a
+	// fast build can finish first; either outcome is valid when detached.
+	if _, buildErr := m.materializeLayerArtifact(ctx, desc); buildErr != nil {
+		require.ErrorIs(t, buildErr, context.Canceled)
+	}
 
 	layerHex := desc.Digest[len("sha256:"):]
 	require.Eventually(t, func() bool {

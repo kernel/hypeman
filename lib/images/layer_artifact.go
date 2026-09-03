@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,15 +20,14 @@ import (
 	"github.com/opencontainers/umoci/oci/layer"
 )
 
-// whiteoutPrefix marks OCI whiteout entries (".wh.<name>" and ".wh..wh..opq").
-// umoci interprets them during extraction: DirRootfs applies them against the
-// tree being composed, OverlayfsRootfs converts them to overlayfs whiteout
-// inodes and opaque xattrs so per-layer artifacts can later be stacked.
-const whiteoutPrefix = ".wh."
-
 const (
 	layerRecordSchemaVersion = 1
 	maxLayerUnpackedBytes    = 100 << 30
+
+	// layerBuildTimeout bounds a shared layer build end to end. Builds are
+	// detached from the initiating request's context, so this deadline is the
+	// only thing that can abort a hung unpack and free the singleflight key.
+	layerBuildTimeout = time.Hour
 )
 
 var errCorruptLayerRecord = errors.New("corrupt layer record")
@@ -64,6 +64,10 @@ func (a *layerArtifact) validate() error {
 	return nil
 }
 
+// matches decides whether the stored record satisfies a lookup. A descriptor
+// without a DiffID (a manifest lookup that did not consult the image config)
+// matches any record: the compressed digest content-addresses the blob, and
+// unpackCachedLayer re-verifies the diff ID whenever one is supplied.
 func (a *layerArtifact) matches(desc layerDescriptor) bool {
 	if a.Digest != desc.Digest || a.Format != layerArtifactFormat() {
 		return false
@@ -90,6 +94,9 @@ func layerArtifactRecordPath(p *paths.Paths, layerHex string) string {
 
 // layerMapOptions preserves tar ownership when running as root. Otherwise
 // umoci's rootless mode skips chown and stands in empty files for device nodes.
+// Unlike unpackLayers in oci.go, which maps container root to the current
+// user, this deliberately leaves ownership untouched as root: artifacts must
+// keep the layer's on-disk ownership for later stacking.
 func layerMapOptions() layer.MapOptions {
 	return layer.MapOptions{Rootless: os.Geteuid() != 0}
 }
@@ -100,11 +107,6 @@ func layerMapOptions() layer.MapOptions {
 // layer's deletions without a private marker format.
 func layerArtifactOnDiskFormat() layer.OnDiskFormat {
 	return layer.OverlayfsRootfs{MapOptions: layerMapOptions()}
-}
-
-// composeOnDiskFormat applies whiteouts against the tree being composed.
-func composeOnDiskFormat() layer.OnDiskFormat {
-	return layer.DirRootfs{MapOptions: layerMapOptions()}
 }
 
 // readLayerRecord loads the artifact record for a layer digest, if present.
@@ -144,8 +146,9 @@ func discardLayerCache(p *paths.Paths, layerHex string) error {
 // by its blob digest, building it from the shared OCI cache blob when absent.
 // The layer is unpacked into an isolated temp directory, converted to the
 // default image format, and installed atomically. Normal failures remove the
-// temp directory; lifecycle reconciliation removes stale temp directories after
-// an interrupted build. No production caller yet: pull integration and
+// temp directory; a crash mid-build can leave a stale .unpack-* directory
+// behind, which reconciliation landing with the pull integration is expected
+// to sweep. No production caller yet: pull integration and
 // composition land in later changes.
 //
 // Concurrent callers share one build. The build itself is detached from the
@@ -154,8 +157,14 @@ func discardLayerCache(p *paths.Paths, layerHex string) error {
 // its own context is done.
 func (m *manager) materializeLayerArtifact(ctx context.Context, desc layerDescriptor) (*layerArtifact, error) {
 	key := desc.Digest + "\x00" + layerArtifactFormat()
-	buildCtx := context.WithoutCancel(ctx)
+	// The build outlives the initiating request, so the deadline below is its
+	// only bound: without it a hung cache-blob read would wedge the
+	// singleflight key, and every future caller for the layer, forever.
+	buildCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), layerBuildTimeout)
 	result := m.layerFlights.DoChan(key, func() (any, error) {
+		// Cancel here, in the flight's frame: the initiating caller may return
+		// long before the detached build finishes.
+		defer cancel()
 		return m.materializeLayerArtifactOnce(buildCtx, desc)
 	})
 	select {
@@ -200,9 +209,13 @@ func (m *manager) materializeLayerArtifactOnce(ctx context.Context, desc layerDe
 	if err != nil {
 		return nil, fmt.Errorf("create unpack directory: %w", err)
 	}
-	defer removePath(unpackDir)
+	defer func() {
+		if err := removePath(unpackDir); err != nil {
+			slog.Warn("failed to remove layer unpack directory", "dir", unpackDir, "error", err)
+		}
+	}()
 
-	stats, err := unpackCachedLayer(ctx, m.paths.SystemOCICache(), desc, unpackDir, layerArtifactOnDiskFormat())
+	stats, err := unpackCachedLayer(ctx, m.paths, desc, unpackDir, layerArtifactOnDiskFormat())
 	if err != nil {
 		return nil, err
 	}
@@ -244,6 +257,7 @@ func (m *manager) installLayerArtifact(desc layerDescriptor, layerHex, unpackDir
 type unpackStats struct {
 	unpackedBytes int64
 	diffID        string
+	blobDigest    string // sha256 of the compressed bytes as read
 }
 
 // contextReader fails reads once ctx is done so a cancelled caller stops a
@@ -261,13 +275,10 @@ func (r contextReader) Read(p []byte) (int, error) {
 }
 
 // unpackCachedLayer locates desc's blob in the shared OCI cache, unpacks it
-// into dest, and verifies the diff ID when the descriptor carries one.
-func unpackCachedLayer(ctx context.Context, cacheDir string, desc layerDescriptor, dest string, onDisk layer.OnDiskFormat) (*unpackStats, error) {
-	layerHex := strings.TrimPrefix(desc.Digest, "sha256:")
-	if err := paths.ValidatePathComponent(layerHex); err != nil {
-		return nil, fmt.Errorf("invalid layer digest: %s", desc.Digest)
-	}
-	blobPath := filepath.Join(cacheDir, "blobs", "sha256", layerHex)
+// into dest, and verifies both the blob digest and the diff ID when the
+// descriptor carries one. The caller must have validated desc.Digest.
+func unpackCachedLayer(ctx context.Context, p *paths.Paths, desc layerDescriptor, dest string, onDisk layer.OnDiskFormat) (*unpackStats, error) {
+	blobPath := p.OCICacheBlob(strings.TrimPrefix(desc.Digest, "sha256:"))
 	if _, err := os.Stat(blobPath); err != nil {
 		if os.IsNotExist(err) {
 			return nil, fmt.Errorf("layer blob missing from oci cache: %s", desc.Digest)
@@ -278,6 +289,9 @@ func unpackCachedLayer(ctx context.Context, cacheDir string, desc layerDescripto
 	if err != nil {
 		return nil, fmt.Errorf("unpack layer %s: %w", desc.Digest, err)
 	}
+	if desc.Digest != "" && stats.blobDigest != desc.Digest {
+		return nil, fmt.Errorf("layer blob digest mismatch: got %s, want %s", stats.blobDigest, desc.Digest)
+	}
 	if desc.DiffID != "" && stats.diffID != desc.DiffID {
 		return nil, fmt.Errorf("layer %s diff id mismatch: got %s, want %s", desc.Digest, stats.diffID, desc.DiffID)
 	}
@@ -286,7 +300,8 @@ func unpackCachedLayer(ctx context.Context, cacheDir string, desc layerDescripto
 
 // unpackLayerBlob extracts one compressed layer blob into dest with umoci,
 // which confines every entry to dest and interprets whiteouts per onDisk.
-// The decompressed stream is hashed for the diff ID and capped in size.
+// The compressed stream is hashed to verify the blob digest, the decompressed
+// stream for the diff ID, and capped in size.
 func unpackLayerBlob(ctx context.Context, blobPath, mediaType, dest string, onDisk layer.OnDiskFormat) (*unpackStats, error) {
 	if err := os.MkdirAll(dest, 0755); err != nil {
 		return nil, fmt.Errorf("create extraction root: %w", err)
@@ -297,7 +312,8 @@ func unpackLayerBlob(ctx context.Context, blobPath, mediaType, dest string, onDi
 	}
 	defer blob.Close()
 
-	reader, closer, err := decompressLayer(blob, mediaType)
+	blobHash := sha256.New()
+	reader, closer, err := decompressLayer(io.TeeReader(blob, blobHash), mediaType)
 	if err != nil {
 		return nil, err
 	}
@@ -318,41 +334,31 @@ func unpackLayerBlob(ctx context.Context, blobPath, mediaType, dest string, onDi
 	return &unpackStats{
 		unpackedBytes: maxLayerUnpackedBytes + 1 - limited.N,
 		diffID:        fmt.Sprintf("sha256:%x", hash.Sum(nil)),
+		blobDigest:    fmt.Sprintf("sha256:%x", blobHash.Sum(nil)),
 	}, nil
 }
 
 // decompressLayer wraps the blob in the reader for its layer media type. Both
 // OCI-style suffixes (+gzip, +zstd) and docker-style media types (tar.gzip,
 // tar.zstd) are matched so neither encoding falls through to the raw path.
-func decompressLayer(blob *os.File, mediaType string) (io.Reader, io.Closer, error) {
+func decompressLayer(r io.Reader, mediaType string) (io.Reader, io.Closer, error) {
 	switch {
 	case strings.HasSuffix(mediaType, "+zstd"), strings.Contains(mediaType, "tar.zstd"):
-		decoder, err := zstd.NewReader(blob)
+		decoder, err := zstd.NewReader(r)
 		if err != nil {
 			return nil, nil, fmt.Errorf("zstd reader: %w", err)
 		}
-		return decoder, multiCloser{decoder.IOReadCloser(), blob}, nil
+		decodeCloser := decoder.IOReadCloser()
+		return decodeCloser, decodeCloser, nil
 	case strings.HasSuffix(mediaType, "+gzip"), strings.Contains(mediaType, "tar.gzip"):
-		gz, err := gzip.NewReader(blob)
+		gz, err := gzip.NewReader(r)
 		if err != nil {
 			return nil, nil, fmt.Errorf("gzip reader: %w", err)
 		}
-		return gz, multiCloser{gz, blob}, nil
+		return gz, gz, nil
 	default:
-		return blob, blob, nil
+		return r, io.NopCloser(r), nil
 	}
-}
-
-type multiCloser []io.Closer
-
-func (c multiCloser) Close() error {
-	var firstErr error
-	for _, closer := range c {
-		if err := closer.Close(); err != nil && firstErr == nil {
-			firstErr = err
-		}
-	}
-	return firstErr
 }
 
 // removePath removes a tree that may contain read-only directories restored
