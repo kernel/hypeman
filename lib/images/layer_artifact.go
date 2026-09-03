@@ -130,9 +130,10 @@ func discardLayerCache(p *paths.Paths, layerHex string) error {
 // materializeLayerArtifact ensures a layer has a materialized artifact keyed
 // by its blob digest, building it from the shared OCI cache blob when absent.
 // The layer is unpacked into an isolated temp directory, converted to the
-// default image format, and installed atomically; an interrupted build leaves
-// only temp files that the next attempt replaces. No production caller yet:
-// pull integration and composition land in later changes.
+// default image format, and installed atomically. Normal failures remove the
+// temp directory; lifecycle reconciliation removes stale temp directories after
+// an interrupted build. No production caller yet: pull integration and
+// composition land in later changes.
 func (m *manager) materializeLayerArtifact(desc layerDescriptor) (*layerArtifact, error) {
 	unlock := m.layerLocks.lock(desc.Digest)
 	defer unlock()

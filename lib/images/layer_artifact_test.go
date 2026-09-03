@@ -200,6 +200,28 @@ func TestMaterializeLayerDoesNotPersistWhiteoutInventory(t *testing.T) {
 	require.NotContains(t, string(data), "whiteouts")
 }
 
+func TestApplyLayerTreeCopiesRestrictiveFiles(t *testing.T) {
+	root := t.TempDir()
+	targetDir := filepath.Join(root, "target")
+	layerDir := filepath.Join(root, "layer")
+	file := filepath.Join(layerDir, "secret.txt")
+
+	require.NoError(t, os.MkdirAll(layerDir, 0755))
+	require.NoError(t, os.WriteFile(file, []byte("secret"), 0644))
+	require.NoError(t, os.Chmod(file, 0000))
+
+	require.NoError(t, applyLayerTree(layerDir, targetDir))
+
+	target := filepath.Join(targetDir, "secret.txt")
+	info, err := os.Stat(target)
+	require.NoError(t, err)
+	require.Equal(t, os.FileMode(0000), info.Mode().Perm())
+	require.NoError(t, os.Chmod(target, 0644))
+	data, err := os.ReadFile(target)
+	require.NoError(t, err)
+	require.Equal(t, "secret", string(data))
+}
+
 func TestApplyLayerTreeWhiteoutSemantics(t *testing.T) {
 	root := t.TempDir()
 	targetDir := filepath.Join(root, "target")
@@ -549,7 +571,7 @@ func TestApplyTarMetadataPreservesSpecialBits(t *testing.T) {
 	require.Equal(t, os.ModeSetuid, info.Mode()&os.ModeSetuid, "setuid bit must be preserved")
 }
 
-func TestApplyLayerTreeSanitizesWhiteouts(t *testing.T) {
+func TestApplyLayerTreeRejectsMalformedWhiteouts(t *testing.T) {
 	root := t.TempDir()
 	targetDir := filepath.Join(root, "target")
 	layerDir := filepath.Join(root, "layer")
@@ -557,18 +579,31 @@ func TestApplyLayerTreeSanitizesWhiteouts(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(targetDir, "parent", "child"), 0755))
 	require.NoError(t, os.WriteFile(filepath.Join(targetDir, "parent", "victim.txt"), []byte("v"), 0644))
 	require.NoError(t, os.MkdirAll(filepath.Join(layerDir, "parent"), 0755))
-	// Malformed whiteouts that must be safely ignored:
+	// Malformed whiteouts must be rejected without deleting lower-layer entries.
 	require.NoError(t, os.WriteFile(filepath.Join(layerDir, "parent", ".wh."), nil, 0644))
 	require.NoError(t, os.WriteFile(filepath.Join(layerDir, "parent", ".wh.."), nil, 0644))
 	require.NoError(t, os.WriteFile(filepath.Join(layerDir, "parent", ".wh..."), nil, 0644))
 
-	require.NoError(t, applyLayerTree(layerDir, targetDir))
+	err := applyLayerTree(layerDir, targetDir)
+	require.ErrorContains(t, err, "invalid whiteout entry")
 
 	// Parent directory must not be deleted by malformed whiteout paths.
 	info, err := os.Stat(filepath.Join(targetDir, "parent"))
 	require.NoError(t, err)
 	require.True(t, info.IsDir())
 	require.FileExists(t, filepath.Join(targetDir, "parent", "victim.txt"))
+}
+
+func TestApplyLayerTreeRejectsEscapingSymlink(t *testing.T) {
+	root := t.TempDir()
+	targetDir := filepath.Join(root, "target")
+	layerDir := filepath.Join(root, "layer")
+	require.NoError(t, os.MkdirAll(targetDir, 0755))
+	require.NoError(t, os.MkdirAll(layerDir, 0755))
+	require.NoError(t, os.Symlink("../../outside", filepath.Join(layerDir, "link")))
+
+	err := applyLayerTree(layerDir, targetDir)
+	require.ErrorContains(t, err, "symlink target escapes root")
 }
 
 func TestApplyLayerTreeRestoresRestrictiveNestedDirModes(t *testing.T) {

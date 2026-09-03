@@ -105,13 +105,13 @@ func applyLayerTree(layerDir, targetDir string) (err error) {
 		}
 		hidden := strings.TrimPrefix(base, whiteoutPrefix)
 		if hidden == "" || hidden == "." || hidden == ".." {
-			return nil
+			return fmt.Errorf("invalid whiteout entry: %s", rel)
 		}
 		target, err := safeJoin(targetDir, filepath.Join(filepath.Dir(rel), hidden))
 		if err != nil {
 			return err
 		}
-		if info, err := os.Lstat(target); err == nil && info.IsDir() && info.Mode()&os.ModeSymlink == 0 {
+		if info, err := os.Lstat(target); err == nil && info.IsDir() {
 			if err := makePathWritable(targetDir, target, originalModes); err != nil {
 				return err
 			}
@@ -160,7 +160,7 @@ func applyLayerTree(layerDir, targetDir string) (err error) {
 			}
 			pendingDirs = append(pendingDirs, dirMeta{src: path, dst: target, info: info})
 		}
-		if err := copyEntryInto(path, target, hardlinks); err != nil {
+		if err := copyEntryInto(path, target, hardlinks, targetDir); err != nil {
 			return err
 		}
 		if entry.IsDir() {
@@ -321,22 +321,18 @@ type hardlinkIdentity struct {
 
 // copyEntryInto copies one filesystem entry from src to dst, replacing any
 // conflicting entry and preserving hardlinks within the layer.
-func copyEntryInto(src, dst string, hardlinks map[hardlinkIdentity]string) error {
+func copyEntryInto(src, dst string, hardlinks map[hardlinkIdentity]string, root string) error {
 	info, err := os.Lstat(src)
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
-		return err
-	}
-
 	switch info.Mode() & fs.ModeType {
 	case 0:
 		return copyRegularEntry(src, dst, info, hardlinks)
 	case fs.ModeDir:
 		return copyDirectoryEntry(src, dst, info)
 	case fs.ModeSymlink:
-		return copySymlinkEntry(src, dst)
+		return copySymlinkEntry(src, dst, root)
 	default:
 		return copySpecialEntry(src, dst, info)
 	}
@@ -368,9 +364,12 @@ func copyDirectoryEntry(src, dst string, info os.FileInfo) error {
 	return os.MkdirAll(dst, info.Mode().Perm())
 }
 
-func copySymlinkEntry(src, dst string) error {
+func copySymlinkEntry(src, dst, root string) error {
 	linkTarget, err := os.Readlink(src)
 	if err != nil {
+		return err
+	}
+	if err := validateSymlinkTarget(root, dst, linkTarget); err != nil {
 		return err
 	}
 	if err := removePath(dst); err != nil {
@@ -459,7 +458,7 @@ func copyEntryMetadata(src, dst string, info os.FileInfo) error {
 		metadata.uid = int(stat.Uid)
 		metadata.gid = int(stat.Gid)
 		metadata.hasOwner = true
-		metadata.atime = time.Unix(stat.Atim.Sec, stat.Atim.Nsec)
+		metadata.atime = statAtime(stat)
 	}
 	if !metadata.symlink {
 		xattrs, err := readXattrs(src)
@@ -501,10 +500,11 @@ func readXattrs(src string) (map[string][]byte, error) {
 			return nil, err
 		}
 		value := make([]byte, size)
-		if _, err := unix.Lgetxattr(src, name, value); err != nil {
+		n, err := unix.Lgetxattr(src, name, value)
+		if err != nil {
 			return nil, err
 		}
-		xattrs[name] = value
+		xattrs[name] = value[:n]
 	}
 	return xattrs, nil
 }
@@ -535,7 +535,23 @@ func applyXattrs(path string, xattrs map[string][]byte) error {
 	return nil
 }
 
-func copyFileContents(src, dst string) error {
+func copyFileContents(src, dst string) (err error) {
+	info, err := os.Lstat(src)
+	if err != nil {
+		return err
+	}
+	sourceMode := info.Mode().Perm() | info.Mode()&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky)
+	if sourceMode&0400 == 0 {
+		if err := os.Chmod(src, sourceMode|0400); err != nil {
+			return err
+		}
+		defer func() {
+			if restoreErr := os.Chmod(src, sourceMode); err == nil {
+				err = restoreErr
+			}
+		}()
+	}
+
 	in, err := os.Open(src)
 	if err != nil {
 		return err
