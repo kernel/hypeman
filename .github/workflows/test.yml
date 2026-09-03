@@ -95,7 +95,7 @@ jobs:
              ! command -v swtpm &> /dev/null || \
              ! test -d /usr/share/OVMF; then
             apt_update_with_retry
-            timeout 300s sudo apt-get install -y erofs-utils e2fsprogs iptables ovmf qemu-system-x86 qemu-utils swtpm
+            timeout 600s sudo apt-get -o DPkg::Lock::Timeout=300 install -y erofs-utils e2fsprogs iptables ovmf qemu-system-x86 qemu-utils swtpm
           fi
           if test -f /usr/share/OVMF/OVMF_CODE_4M.secboot.fd && test -f /usr/share/OVMF/OVMF_VARS_4M.ms.fd; then
             ovmf_code=/usr/share/OVMF/OVMF_CODE_4M.secboot.fd
