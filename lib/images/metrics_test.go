@@ -16,8 +16,10 @@ import (
 func TestImageBuildPhaseMetrics(t *testing.T) {
 	reader := otelmetric.NewManualReader()
 	provider := otelmetric.NewMeterProvider(otelmetric.WithReader(reader))
-	m := newTestManager(paths.New(t.TempDir()))
-	m.queue = queue.New(1)
+	m := &manager{
+		paths: paths.New(t.TempDir()),
+		queue: queue.New(1),
+	}
 
 	metrics, err := newMetrics(provider.Meter("test"), m)
 	require.NoError(t, err)

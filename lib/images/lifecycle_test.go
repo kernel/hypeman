@@ -134,27 +134,35 @@ func TestSharedLayersMaterializeOnceAndEvictWithReferences(t *testing.T) {
 	require.Empty(t, hexes, "unreferenced layer artifacts must be evicted")
 }
 
+func newLifecycleTestManager(p *paths.Paths) *manager {
+	return &manager{
+		paths:             p,
+		inflightPulls:     make(map[string]*inflightImagePull),
+		inflightLayerRefs: make(map[string]int),
+	}
+}
+
 func TestTotalImageBytesIncludesLayerArtifacts(t *testing.T) {
 	p := paths.New(t.TempDir())
-	m := newTestManager(p)
+	m := newLifecycleTestManager(p)
 
 	digestHex := "cd01cd01cd01cd01cd01cd01cd01cd01cd01cd01cd01cd01cd01cd01cd01cd01"
 	require.NoError(t, os.MkdirAll(p.ImageLayerDir(digestHex), 0o755))
 	payload := make([]byte, 4096)
-	require.NoError(t, os.WriteFile(p.ImageLayerArtifact(digestHex), payload, 0o644))
+	require.NoError(t, os.WriteFile(p.ImageLayerArtifactForFormat(digestHex, string(DefaultImageFormat)), payload, 0o644))
 
-	totals, err := m.getDiskUsageTotals()
+	readyBytes, cacheBytes, err := m.getDiskUsageTotals()
 	require.NoError(t, err)
-	require.GreaterOrEqual(t, totals.layerBytes, int64(len(payload)))
+	require.GreaterOrEqual(t, cacheBytes, int64(len(payload)))
 
 	totalBytes, err := m.TotalImageBytes(context.Background())
 	require.NoError(t, err)
-	require.Equal(t, totals.readyImageBytes+totals.layerBytes, totalBytes)
+	require.Equal(t, readyBytes+cacheBytes, totalBytes)
 }
 
 func TestCleanStaleImageTempDirsRemovesOnlyOldDirectories(t *testing.T) {
 	p := paths.New(t.TempDir())
-	m := newTestManager(p)
+	m := newLifecycleTestManager(p)
 	m.layerEvictionGrace = time.Hour
 
 	layersDir := p.ImageLayersDir()
@@ -175,7 +183,7 @@ func TestCleanStaleImageTempDirsRemovesOnlyOldDirectories(t *testing.T) {
 
 func TestEvictionKeepsReferencedAndFreshArtifacts(t *testing.T) {
 	p := paths.New(t.TempDir())
-	m := newTestManager(p)
+	m := newLifecycleTestManager(p)
 	m.layerEvictionGrace = time.Hour
 
 	referencedHex := "ef01ef01ef01ef01ef01ef01ef01ef01ef01ef01ef01ef01ef01ef01ef01ef01"
@@ -193,11 +201,11 @@ func TestEvictionKeepsReferencedAndFreshArtifacts(t *testing.T) {
 	}
 	require.NoError(t, writeManifestModel(p, referencedHex, model))
 	require.NoError(t, os.MkdirAll(p.ImageLayerDir(referencedHex), 0o755))
-	require.NoError(t, os.WriteFile(p.ImageLayerArtifact(referencedHex), []byte("kept"), 0o644))
+	require.NoError(t, os.WriteFile(p.ImageLayerArtifactForFormat(referencedHex, string(DefaultImageFormat)), []byte("kept"), 0o644))
 
 	// An unreferenced but fresh artifact is protected by the grace period.
 	require.NoError(t, os.MkdirAll(p.ImageLayerDir(orphanFreshHex), 0o755))
-	require.NoError(t, os.WriteFile(p.ImageLayerArtifact(orphanFreshHex), []byte("fresh"), 0o644))
+	require.NoError(t, os.WriteFile(p.ImageLayerArtifactForFormat(orphanFreshHex, string(DefaultImageFormat)), []byte("fresh"), 0o644))
 
 	m.reconcileLayerStore()
 

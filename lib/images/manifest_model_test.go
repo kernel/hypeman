@@ -46,8 +46,9 @@ func TestExtractManifestModel(t *testing.T) {
 
 	client, layoutTag := writeSyntheticLayout(t, img)
 
-	model, err := client.extractManifestModel(layoutTag)
+	bundle, err := client.extractOCIImageBundle(layoutTag)
 	require.NoError(t, err)
+	model := bundle.Model
 
 	manifest, err := img.Manifest()
 	require.NoError(t, err)
@@ -88,8 +89,9 @@ func TestExtractManifestModelPlatform(t *testing.T) {
 
 	client, layoutTag := writeSyntheticLayout(t, img)
 
-	model, err := client.extractManifestModel(layoutTag)
+	bundle, err := client.extractOCIImageBundle(layoutTag)
 	require.NoError(t, err)
+	model := bundle.Model
 	require.Equal(t, "linux/amd64", model.Platform)
 }
 

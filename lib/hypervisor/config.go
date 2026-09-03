@@ -24,7 +24,8 @@ type VMConfig struct {
 	VsockSocket string
 
 	// PCI device passthrough (GPU, etc.)
-	PCIDevices []string
+	PCIDevices     []string
+	VGPUDevicePath string
 
 	// Boot configuration. Empty BootMode preserves the existing direct-kernel
 	// behavior for Linux callers.

@@ -2,6 +2,7 @@ package instances
 
 import (
 	"os/exec"
+	"syscall"
 	"testing"
 	"time"
 
@@ -16,6 +17,15 @@ func TestWaitForProcessExit_ReapsZombieChild(t *testing.T) {
 
 	exited := WaitForProcessExit(cmd.Process.Pid, 500*time.Millisecond)
 	require.True(t, exited, "zombie child should be detected/reaped as exited")
+}
+
+func TestWaitForProcessExit_EPERMProcessIsAlive(t *testing.T) {
+	t.Parallel()
+	if syscall.Kill(1, 0) == nil {
+		t.Skip("running as root")
+	}
+
+	assert.False(t, WaitForProcessExit(1, 100*time.Millisecond))
 }
 
 func TestWaitForProcessExit_TimesOutForRunningProcess(t *testing.T) {

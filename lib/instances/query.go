@@ -569,10 +569,6 @@ func (m *manager) toInstanceWithStateDerivation(ctx context.Context, meta *metad
 	return inst
 }
 
-func processExists(pid int) bool {
-	return ProcessExists(pid)
-}
-
 // parseExitSentinel reads the last lines of the serial console log to find the
 // HYPEMAN-EXIT sentinel written by init before shutdown.
 // Returns the exit code, message, and whether a sentinel was found.

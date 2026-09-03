@@ -62,18 +62,6 @@ func (m *manager) startInstance(
 	rollbackMeta := *meta
 	rollbackMeta.Phases = meta.Phases.Clone()
 
-	// A failed stop can retain an mdev UUID. Release it before creating the
-	// replacement and persist the cleared metadata before start can fail again.
-	if stored.GPUMdevUUID != "" {
-		if err := devices.DestroyMdev(ctx, stored.GPUMdevUUID); err != nil {
-			return nil, fmt.Errorf("destroy retained mdev before start: %w", err)
-		}
-		stored.GPUMdevUUID = ""
-		if err := m.saveMetadata(meta); err != nil {
-			return nil, fmt.Errorf("save metadata after mdev cleanup: %w", err)
-		}
-	}
-
 	// 2a. Clear stale exit info from previous run and apply command overrides
 	stored.ExitCode = nil
 	stored.ExitMessage = ""

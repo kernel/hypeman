@@ -298,7 +298,8 @@ func (m *manager) restoreInstance(
 		attribute.String("operation", "restore_from_snapshot"),
 	)
 	log.InfoContext(ctx, "restoring from snapshot", "instance_id", id, "snapshot_dir", snapshotDir, "hypervisor", stored.HypervisorType)
-	pid, hv, err := m.restoreFromSnapshot(restoreCtx, stored, snapshotDir, restoreOptions)
+	// restoreFromSnapshot records the hypervisor process identity on stored.
+	_, hv, err := m.restoreFromSnapshot(restoreCtx, stored, snapshotDir, restoreOptions)
 	restoreSpanEnd(err)
 	if err != nil {
 		log.ErrorContext(ctx, "failed to restore from snapshot", "instance_id", id, "error", err)
@@ -307,9 +308,6 @@ func (m *manager) restoreInstance(
 		releaseNetwork()
 		return nil, err
 	}
-
-	// Store the process identity for later cleanup.
-	stored.HypervisorProcessIdentity.Set(pid)
 
 	// 6. Transition: Paused → Running (resume)
 	resumeCtx, resumeSpanEnd := m.startLifecycleStep(ctx, "resume_vm",

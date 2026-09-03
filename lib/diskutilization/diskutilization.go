@@ -4,7 +4,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strings"
 	"syscall"
 
 	"github.com/kernel/hypeman/lib/paths"
@@ -57,7 +56,7 @@ func Collect(p *paths.Paths) (Breakdown, error) {
 			return false
 		}
 		name := entry.Name()
-		return name == "rootfs.erofs" || name == "rootfs.ext4" || strings.HasPrefix(name, "layer.")
+		return name == "rootfs.erofs" || name == "rootfs.ext4"
 	})
 	if err != nil {
 		return Breakdown{}, err
@@ -179,7 +178,6 @@ func sumDirectChildFileAllocatedBytes(root string, childFile string) (int64, err
 
 func sumMatchingFilesAllocatedBytes(root string, match func(path string, entry fs.DirEntry) bool) (int64, error) {
 	var total int64
-	seen := make(map[fileIdentity]struct{})
 	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			if os.IsNotExist(err) {
@@ -187,24 +185,9 @@ func sumMatchingFilesAllocatedBytes(root string, match func(path string, entry f
 			}
 			return err
 		}
-		if !match(path, entry) {
-			return nil
+		if match(path, entry) {
+			total += allocatedBytesForPath(path)
 		}
-		info, statErr := os.Lstat(path)
-		if statErr != nil {
-			if os.IsNotExist(statErr) {
-				return nil
-			}
-			return statErr
-		}
-		if stat, ok := info.Sys().(*syscall.Stat_t); ok {
-			identity := fileIdentity{dev: uint64(stat.Dev), ino: uint64(stat.Ino)}
-			if _, exists := seen[identity]; exists {
-				return nil
-			}
-			seen[identity] = struct{}{}
-		}
-		total += allocatedBytesForPath(path)
 		return nil
 	})
 	if err != nil {
@@ -259,11 +242,6 @@ func sumSnapshotTreeAllocatedBytes(root string, sharedExtents *sharedExtentTrack
 		return 0, 0, err
 	}
 	return privateTotal, sharedTotal, nil
-}
-
-type fileIdentity struct {
-	dev uint64
-	ino uint64
 }
 
 func allocatedBytesForPath(path string) int64 {

@@ -296,8 +296,7 @@ func TestCreateInstanceWithNetwork(t *testing.T) {
 
 	// Cleanup
 	t.Log("Cleaning up instance...")
-	err = manager.DeleteInstance(ctx, inst.Id)
-	require.NoError(t, err)
+	deleteInstanceEventually(t, ctx, manager, inst.Id)
 
 	// Verify TAP deleted after instance cleanup
 	t.Log("Verifying TAP deleted after cleanup...")

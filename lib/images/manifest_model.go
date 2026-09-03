@@ -66,7 +66,6 @@ func (m *imageManifestModel) blobReferences() []string {
 	return refs
 }
 
-// writeManifestModel persists the manifest model for a digest atomically.
 func validateManifestModel(digestHex string, model *imageManifestModel) error {
 	if model == nil {
 		return fmt.Errorf("manifest model is nil")
@@ -170,28 +169,10 @@ func readManifestModel(p *paths.Paths, digestHex string) (*imageManifestModel, e
 // writeJSONAtomic writes data to path via a temp file in the same directory
 // followed by a rename, so readers never observe a partial document.
 func writeJSONAtomic(path string, data []byte) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		return fmt.Errorf("create directory: %w", err)
-	}
-	tempFile, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
-	if err != nil {
-		return fmt.Errorf("create temp file: %w", err)
-	}
-	tempPath := tempFile.Name()
-	defer os.Remove(tempPath)
-	if err := tempFile.Chmod(0644); err != nil {
-		_ = tempFile.Close()
-		return fmt.Errorf("chmod temp file: %w", err)
-	}
-	if _, err := tempFile.Write(data); err != nil {
-		_ = tempFile.Close()
-		return fmt.Errorf("write temp file: %w", err)
-	}
-	if err := tempFile.Close(); err != nil {
-		return fmt.Errorf("close temp file: %w", err)
-	}
-	if err := os.Rename(tempPath, path); err != nil {
-		return fmt.Errorf("rename into place: %w", err)
+	if err := installAtomically(path, func(tempPath string) error {
+		return os.WriteFile(tempPath, data, 0o644)
+	}); err != nil {
+		return fmt.Errorf("write %s: %w", filepath.Base(path), err)
 	}
 	return nil
 }

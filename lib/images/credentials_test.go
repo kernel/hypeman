@@ -83,8 +83,10 @@ func TestCreateImageRequestCredentialsAreNotPersisted(t *testing.T) {
 }
 
 func TestInflightPullRejectsDifferentCredentials(t *testing.T) {
-	m := newTestManager(nil)
-	m.borrowedCredentialsTimeout = time.Minute
+	m := &manager{
+		inflightPulls:              make(map[string]*inflightImagePull),
+		borrowedCredentialsTimeout: time.Minute,
+	}
 	const digest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	credentials := &authn.AuthConfig{Username: "AWS", Password: "token-a"}
 	inflight := m.registerInflightPull(digest, credentials)
@@ -96,8 +98,10 @@ func TestInflightPullRejectsDifferentCredentials(t *testing.T) {
 }
 
 func TestBorrowedCredentialsExpireWhileQueued(t *testing.T) {
-	m := newTestManager(nil)
-	m.borrowedCredentialsTimeout = time.Millisecond
+	m := &manager{
+		inflightPulls:              make(map[string]*inflightImagePull),
+		borrowedCredentialsTimeout: time.Millisecond,
+	}
 	const digest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	inflight := m.registerInflightPull(digest, &authn.AuthConfig{Username: "AWS", Password: "secret"})
 	defer m.releaseInflightPull(digest, inflight)()
@@ -115,7 +119,7 @@ func TestBorrowedCredentialsExpireWhileQueued(t *testing.T) {
 }
 
 func TestBorrowedAuthRejectsReplacedInflightPull(t *testing.T) {
-	m := newTestManager(nil)
+	m := &manager{inflightPulls: make(map[string]*inflightImagePull)}
 	const digest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	first := m.registerInflightPull(digest, &authn.AuthConfig{Username: "first"})
 	second := m.registerInflightPull(digest, &authn.AuthConfig{Username: "second"})
@@ -170,9 +174,12 @@ func TestRecoverInterruptedCredentialedPullFailsForFreshRetry(t *testing.T) {
 	p := paths.New(t.TempDir())
 	client, err := newOCIClient(p.SystemOCICache())
 	require.NoError(t, err)
-	m := newTestManager(p)
-	m.ociClient = client
-	m.queue = queue.New(1)
+	m := &manager{
+		paths:            p,
+		ociClient:        client,
+		queue:            queue.New(1),
+		readySubscribers: make(map[string][]chan StatusEvent),
+	}
 
 	const repository = "registry.example/private/image"
 	const digest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"

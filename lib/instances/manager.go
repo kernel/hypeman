@@ -662,19 +662,6 @@ func (m *manager) StopInstance(ctx context.Context, id string) (*Instance, error
 		return nil, err
 	}
 	if current.State == StateStopped {
-		if current.GPUMdevUUID != "" {
-			if err := devices.DestroyMdev(ctx, current.GPUMdevUUID); err != nil {
-				return nil, fmt.Errorf("destroy retained mdev %s: %w", current.GPUMdevUUID, err)
-			}
-			meta, err := m.loadMetadata(id)
-			if err != nil {
-				return nil, err
-			}
-			meta.GPUMdevUUID = ""
-			if err := m.saveMetadata(meta); err != nil {
-				return nil, fmt.Errorf("save metadata after mdev cleanup: %w", err)
-			}
-		}
 		if err := m.markRestartManualStopLocked(ctx, id); err != nil {
 			return nil, err
 		}
