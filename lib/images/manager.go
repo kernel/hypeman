@@ -563,7 +563,7 @@ func (m *manager) materializeLayerArtifacts(ctx context.Context, result *pullRes
 		m.layerRefMu.Unlock()
 		m.createMu.Unlock()
 
-		_, err := m.materializeLayerArtifactContext(ctx, desc)
+		_, err := m.materializeLayerArtifact(ctx, desc)
 
 		m.createMu.Lock()
 		m.layerRefMu.Lock()
