@@ -857,11 +857,11 @@ func (m *manager) deleteTaggedImage(repository, tag string) error {
 
 // TotalImageBytes returns the total size of all ready images on disk.
 func (m *manager) TotalImageBytes(ctx context.Context) (int64, error) {
-	readyImageBytes, _, err := m.getDiskUsageTotals()
+	readyImageBytes, cacheBytes, err := m.getDiskUsageTotals()
 	if err != nil {
 		return 0, err
 	}
-	return readyImageBytes, nil
+	return readyImageBytes + cacheBytes, nil
 }
 
 // TotalOCICacheBytes returns the total size of the OCI and materialized layer caches.
