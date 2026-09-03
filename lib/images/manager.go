@@ -77,6 +77,9 @@ type manager struct {
 	queue                      *queue.Queue
 	createMu                   sync.Mutex
 	layerFlights               singleflight.Group
+	layerRefMu                 sync.Mutex
+	inflightLayerRefs          map[string]int
+	layerEvictionGrace         time.Duration
 	diskUsageMu                sync.RWMutex
 	tagGenerations             map[string]uint64
 	requestedTags              map[string]string // newest pull's digest per requested tag
@@ -105,6 +108,8 @@ func NewManager(p *paths.Paths, maxConcurrentBuilds int, meter metric.Meter) (Ma
 		ociClient:                  ociClient,
 		queue:                      queue.New(maxConcurrentBuilds),
 		inflightPulls:              make(map[string]*inflightImagePull),
+		inflightLayerRefs:          make(map[string]int),
+		layerEvictionGrace:         layerEvictionGracePeriod,
 		borrowedCredentialsTimeout: DefaultBorrowedCredentialsTimeout,
 		readySubscribers:           make(map[string][]chan StatusEvent),
 		tagGenerations:             make(map[string]uint64),
@@ -494,6 +499,11 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef, credentials 
 	}
 	m.recordPullMetrics(ctx, "success")
 
+	if err := m.materializeLayerArtifacts(ctx, result); err != nil {
+		m.updateStatusByDigest(ref, StatusFailed, fmt.Errorf("materialize layers: %w", err), buildID)
+		return
+	}
+
 	// Check if this digest already exists and is ready (deduplication)
 	if meta, err := readMetadata(m.paths, ref.Repository(), ref.DigestHex()); err == nil {
 		if meta.Status == StatusReady {
@@ -539,6 +549,35 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef, credentials 
 	}
 
 	buildStatus = "success"
+}
+
+func (m *manager) materializeLayerArtifacts(ctx context.Context, result *pullResult) error {
+	if result == nil || result.Manifest == nil {
+		return nil
+	}
+	for _, desc := range result.Manifest.Layers {
+		digestHex := strings.TrimPrefix(desc.Digest, "sha256:")
+		m.createMu.Lock()
+		m.layerRefMu.Lock()
+		m.inflightLayerRefs[digestHex]++
+		m.layerRefMu.Unlock()
+		m.createMu.Unlock()
+
+		_, err := m.materializeLayerArtifactContext(ctx, desc)
+
+		m.createMu.Lock()
+		m.layerRefMu.Lock()
+		m.inflightLayerRefs[digestHex]--
+		if m.inflightLayerRefs[digestHex] == 0 {
+			delete(m.inflightLayerRefs, digestHex)
+		}
+		m.layerRefMu.Unlock()
+		m.createMu.Unlock()
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, diskSize int64, buildID, diskTempPath string) error {
