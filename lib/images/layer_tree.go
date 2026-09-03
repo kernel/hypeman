@@ -424,7 +424,6 @@ type entryMetadata struct {
 	hasOwner bool
 	mode     fs.FileMode
 	symlink  bool
-	atime    time.Time
 	mtime    time.Time
 	xattrs   map[string][]byte
 }
@@ -445,21 +444,19 @@ func applyEntryMetadata(path string, metadata entryMetadata) error {
 	if err := os.Chmod(path, mode); err != nil {
 		return err
 	}
-	return os.Chtimes(path, metadata.atime, metadata.mtime)
+	return os.Chtimes(path, metadata.mtime, metadata.mtime)
 }
 
 func copyEntryMetadata(src, dst string, info os.FileInfo) error {
 	metadata := entryMetadata{
 		mode:    info.Mode(),
 		symlink: info.Mode()&os.ModeSymlink != 0,
-		atime:   info.ModTime(),
 		mtime:   info.ModTime(),
 	}
 	if stat, ok := info.Sys().(*syscall.Stat_t); ok {
 		metadata.uid = int(stat.Uid)
 		metadata.gid = int(stat.Gid)
 		metadata.hasOwner = true
-		metadata.atime = statAtime(stat)
 	}
 	if !metadata.symlink {
 		xattrs, err := readXattrs(src)

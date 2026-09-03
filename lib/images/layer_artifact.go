@@ -692,17 +692,12 @@ func applyTarMetadata(path string, header *tar.Header) error {
 	if mtime.IsZero() {
 		mtime = time.Now()
 	}
-	atime := header.AccessTime
-	if atime.IsZero() {
-		atime = mtime
-	}
 	return applyEntryMetadata(path, entryMetadata{
 		uid:      header.Uid,
 		gid:      header.Gid,
 		hasOwner: true,
 		mode:     header.FileInfo().Mode(),
 		symlink:  header.Typeflag == tar.TypeSymlink,
-		atime:    atime,
 		mtime:    mtime,
 		xattrs:   tarXattrs(header),
 	})
