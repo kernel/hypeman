@@ -3,6 +3,7 @@ package images
 import (
 	"archive/tar"
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -135,9 +136,26 @@ func discardLayerCache(p *paths.Paths, layerHex string) error {
 // an interrupted build. No production caller yet: pull integration and
 // composition land in later changes.
 func (m *manager) materializeLayerArtifact(desc layerDescriptor) (*layerArtifact, error) {
-	unlock := m.layerLocks.lock(desc.Digest)
-	defer unlock()
+	return m.materializeLayerArtifactContext(context.Background(), desc)
+}
 
+func (m *manager) materializeLayerArtifactContext(ctx context.Context, desc layerDescriptor) (*layerArtifact, error) {
+	key := desc.Digest + "\x00" + layerArtifactFormat()
+	result := m.layerFlights.DoChan(key, func() (any, error) {
+		return m.materializeLayerArtifactOnce(ctx, desc)
+	})
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case shared := <-result:
+		if shared.Err != nil {
+			return nil, shared.Err
+		}
+		return shared.Val.(*layerArtifact), nil
+	}
+}
+
+func (m *manager) materializeLayerArtifactOnce(ctx context.Context, desc layerDescriptor) (*layerArtifact, error) {
 	if layerArtifactFormat() == "" {
 		return nil, fmt.Errorf("unsupported layer artifact format: %s", DefaultImageFormat)
 	}
@@ -178,7 +196,7 @@ func (m *manager) materializeLayerArtifact(desc layerDescriptor) (*layerArtifact
 	}
 	defer removePath(unpackDir)
 
-	stats, err := unpackLayerBlob(blobPath, desc.MediaType, unpackDir)
+	stats, err := unpackLayerBlobContext(ctx, blobPath, desc.MediaType, unpackDir)
 	if err != nil {
 		return nil, fmt.Errorf("unpack layer %s: %w", desc.Digest, err)
 	}
@@ -186,10 +204,14 @@ func (m *manager) materializeLayerArtifact(desc layerDescriptor) (*layerArtifact
 		return nil, fmt.Errorf("layer %s diff id mismatch: got %s, want %s", desc.Digest, stats.diffID, desc.DiffID)
 	}
 
-	return m.installLayerArtifact(desc, layerHex, unpackDir, stats)
+	return m.installLayerArtifactContext(ctx, desc, layerHex, unpackDir, stats)
 }
 
 func (m *manager) installLayerArtifact(desc layerDescriptor, layerHex, unpackDir string, stats *unpackStats) (*layerArtifact, error) {
+	return m.installLayerArtifactContext(context.Background(), desc, layerHex, unpackDir, stats)
+}
+
+func (m *manager) installLayerArtifactContext(ctx context.Context, desc layerDescriptor, layerHex, unpackDir string, stats *unpackStats) (*layerArtifact, error) {
 	record := &layerArtifact{
 		SchemaVersion: layerRecordSchemaVersion,
 		Digest:        desc.Digest,
@@ -203,7 +225,13 @@ func (m *manager) installLayerArtifact(desc layerDescriptor, layerHex, unpackDir
 	if err := installAtomically(layerArtifactPath(m.paths, layerHex), func(path string) error {
 		// The artifact intentionally retains .wh. marker files so
 		// composition can re-derive whiteouts from the tree itself.
-		size, convErr := ExportRootfs(unpackDir, path, DefaultImageFormat)
+		var size int64
+		var convErr error
+		if DefaultImageFormat == FormatErofs {
+			size, convErr = convertToErofsContext(ctx, unpackDir, path)
+		} else {
+			size, convErr = ExportRootfs(unpackDir, path, DefaultImageFormat)
+		}
 		if convErr != nil {
 			return convErr
 		}
@@ -235,6 +263,10 @@ type unpackStats struct {
 // umoci consumes whiteouts while this store must retain them for composition.
 // Paths are confined to dest.
 func unpackLayerBlob(blobPath, mediaType, dest string) (*unpackStats, error) {
+	return unpackLayerBlobContext(context.Background(), blobPath, mediaType, dest)
+}
+
+func unpackLayerBlobContext(ctx context.Context, blobPath, mediaType, dest string) (*unpackStats, error) {
 	if err := os.MkdirAll(dest, 0755); err != nil {
 		return nil, fmt.Errorf("create extraction root: %w", err)
 	}
@@ -249,6 +281,7 @@ func unpackLayerBlob(blobPath, mediaType, dest string) (*unpackStats, error) {
 		return nil, err
 	}
 	defer closer.Close()
+	reader = contextReader{ctx: ctx, reader: reader}
 
 	hash := sha256.New()
 	stats := &unpackStats{}
@@ -336,7 +369,11 @@ func resolveHardlinks(root string, pending []pendingHardlink) error {
 	waiting := make(map[string][]pendingHardlink)
 	ready := make([]pendingHardlink, 0, len(pending))
 	for _, link := range pending {
-		linkTarget, err := safeJoin(root, link.linkname)
+		linkname := filepath.Clean(link.linkname)
+		if filepath.IsAbs(linkname) {
+			linkname = strings.TrimPrefix(linkname, string(filepath.Separator))
+		}
+		linkTarget, err := safeJoin(root, linkname)
 		if err != nil {
 			return err
 		}

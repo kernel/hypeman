@@ -1,6 +1,7 @@
 package images
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -194,6 +195,10 @@ func convertToExt4(rootfsDir, diskPath string) (int64, error) {
 
 // convertToErofs converts a rootfs directory to an erofs disk image using mkfs.erofs
 func convertToErofs(rootfsDir, diskPath string) (int64, error) {
+	return convertToErofsContext(context.Background(), rootfsDir, diskPath)
+}
+
+func convertToErofsContext(ctx context.Context, rootfsDir, diskPath string) (int64, error) {
 	// Ensure parent directory exists
 	if err := os.MkdirAll(filepath.Dir(diskPath), 0755); err != nil {
 		return 0, fmt.Errorf("create disk parent dir: %w", err)
@@ -202,7 +207,7 @@ func convertToErofs(rootfsDir, diskPath string) (int64, error) {
 	// Create erofs image with LZ4 fast compression
 	// -zlz4: LZ4 fast compression (~20-25% space savings, faster builds)
 	// erofs doesn't need pre-allocation, creates file directly
-	cmd := exec.Command("mkfs.erofs", "-zlz4", diskPath, rootfsDir)
+	cmd := exec.CommandContext(ctx, "mkfs.erofs", "-zlz4", diskPath, rootfsDir)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return 0, fmt.Errorf("mkfs.erofs failed: %w, output: %s", err, output)

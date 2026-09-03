@@ -271,7 +271,8 @@ func restoreDirectoryModes(originalModes map[string]fs.FileMode) error {
 	var restoreErr error
 	for _, path := range paths {
 		mode := originalModes[path]
-		if _, err := os.Lstat(path); os.IsNotExist(err) {
+		info, err := os.Lstat(path)
+		if os.IsNotExist(err) || (err == nil && (info.Mode()&os.ModeSymlink != 0 || !info.IsDir())) {
 			continue
 		} else if err != nil {
 			restoreErr = errors.Join(restoreErr, err)
@@ -437,14 +438,14 @@ func applyEntryMetadata(path string, metadata entryMetadata) error {
 	if metadata.symlink {
 		return nil
 	}
+	if err := applyXattrs(path, metadata.xattrs); err != nil {
+		return err
+	}
 	mode := metadata.mode.Perm() | metadata.mode&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky)
 	if err := os.Chmod(path, mode); err != nil {
 		return err
 	}
-	if err := os.Chtimes(path, metadata.atime, metadata.mtime); err != nil {
-		return err
-	}
-	return applyXattrs(path, metadata.xattrs)
+	return os.Chtimes(path, metadata.atime, metadata.mtime)
 }
 
 func copyEntryMetadata(src, dst string, info os.FileInfo) error {

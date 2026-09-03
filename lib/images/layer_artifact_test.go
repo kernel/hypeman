@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -222,6 +223,22 @@ func TestApplyLayerTreeCopiesRestrictiveFiles(t *testing.T) {
 	require.Equal(t, "secret", string(data))
 }
 
+func TestRestoreDirectoryModesSkipsReplacedSymlink(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "dir")
+	target := filepath.Join(root, "target")
+	require.NoError(t, os.Mkdir(dir, 0750))
+	require.NoError(t, os.WriteFile(target, []byte("target"), 0644))
+	require.NoError(t, os.Remove(dir))
+	require.NoError(t, os.Symlink("target", dir))
+
+	require.NoError(t, restoreDirectoryModes(map[string]fs.FileMode{dir: 0750}))
+
+	info, err := os.Stat(target)
+	require.NoError(t, err)
+	require.Equal(t, os.FileMode(0644), info.Mode().Perm())
+}
+
 func TestApplyLayerTreeWhiteoutSemantics(t *testing.T) {
 	root := t.TempDir()
 	targetDir := filepath.Join(root, "target")
@@ -348,6 +365,23 @@ func TestApplyLayerTreeWhiteoutRemovesReadOnlyDirectory(t *testing.T) {
 	require.NoError(t, applyLayerTree(layerDir, targetDir))
 	_, err := os.Lstat(filepath.Join(targetDir, "gone"))
 	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestUnpackLayerBlobContextHonorsCancellation(t *testing.T) {
+	root := t.TempDir()
+	blobPath := filepath.Join(root, "layer.tar")
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	require.NoError(t, tw.WriteHeader(&tar.Header{Name: "file", Typeflag: tar.TypeReg, Mode: 0644, Size: 1}))
+	_, err := tw.Write([]byte("x"))
+	require.NoError(t, err)
+	require.NoError(t, tw.Close())
+	require.NoError(t, os.WriteFile(blobPath, buf.Bytes(), 0644))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = unpackLayerBlobContext(ctx, blobPath, "application/vnd.oci.image.layer.v1.tar", filepath.Join(root, "dest"))
+	require.ErrorIs(t, err, context.Canceled)
 }
 
 func TestUnpackLayerBlobIncludesTrailingTarPaddingInDiffID(t *testing.T) {

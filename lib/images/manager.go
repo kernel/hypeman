@@ -19,6 +19,7 @@ import (
 	"github.com/kernel/hypeman/lib/queue"
 	"github.com/kernel/hypeman/lib/tags"
 	"go.opentelemetry.io/otel/metric"
+	"golang.org/x/sync/singleflight"
 )
 
 var errStaleBuild = errors.New("stale image build")
@@ -75,7 +76,7 @@ type manager struct {
 	ociClient                  *ociClient
 	queue                      *queue.Queue
 	createMu                   sync.Mutex
-	layerLocks                 keyedMutex
+	layerFlights               singleflight.Group
 	diskUsageMu                sync.RWMutex
 	tagGenerations             map[string]uint64
 	requestedTags              map[string]string // newest pull's digest per requested tag
