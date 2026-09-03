@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 
 	gcr "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/empty"
@@ -199,6 +200,37 @@ func TestMaterializeLayerArtifactRecoversCorruptRecord(t *testing.T) {
 	var record layerArtifact
 	require.NoError(t, json.Unmarshal(data, &record))
 	require.NoError(t, record.validate())
+}
+
+// TestMaterializeLayerArtifactOutlivesCancelledCaller checks that a caller
+// abandoning a shared build does not abort the build for everyone else: the
+// artifact still lands even though the initiating context was cancelled.
+func TestMaterializeLayerArtifactOutlivesCancelledCaller(t *testing.T) {
+	if _, err := exec.LookPath("mkfs.ext4"); err != nil {
+		t.Skip("mkfs.ext4 not available")
+	}
+	originalFormat := DefaultImageFormat
+	DefaultImageFormat = FormatExt4
+	t.Cleanup(func() { DefaultImageFormat = originalFormat })
+
+	p := paths.New(t.TempDir())
+	img, err := mutate.AppendLayers(empty.Image, syntheticLayer(t, "base.txt", "base layer content"))
+	require.NoError(t, err)
+	writeLayerTestLayout(t, p, img)
+	desc := layerDescFromImage(t, img, 0)
+	m := &manager{paths: p}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = m.materializeLayerArtifact(ctx, desc)
+	require.ErrorIs(t, err, context.Canceled)
+
+	layerHex := desc.Digest[len("sha256:"):]
+	require.Eventually(t, func() bool {
+		record, err := readLayerRecord(p, layerHex)
+		return err == nil && record != nil
+	}, 30*time.Second, 50*time.Millisecond, "detached build must still install the artifact")
+	require.FileExists(t, p.ImageLayerArtifactForFormat(layerHex, layerArtifactFormat()))
 }
 
 func TestMaterializeLayerArtifactMissingBlob(t *testing.T) {

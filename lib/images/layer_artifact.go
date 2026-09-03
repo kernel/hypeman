@@ -147,10 +147,16 @@ func discardLayerCache(p *paths.Paths, layerHex string) error {
 // temp directory; lifecycle reconciliation removes stale temp directories after
 // an interrupted build. No production caller yet: pull integration and
 // composition land in later changes.
+//
+// Concurrent callers share one build. The build itself is detached from the
+// initiating caller's cancellation so one cancelled pull cannot fail every
+// other pull waiting on the same layer; each caller still returns as soon as
+// its own context is done.
 func (m *manager) materializeLayerArtifact(ctx context.Context, desc layerDescriptor) (*layerArtifact, error) {
 	key := desc.Digest + "\x00" + layerArtifactFormat()
+	buildCtx := context.WithoutCancel(ctx)
 	result := m.layerFlights.DoChan(key, func() (any, error) {
-		return m.materializeLayerArtifactOnce(ctx, desc)
+		return m.materializeLayerArtifactOnce(buildCtx, desc)
 	})
 	select {
 	case <-ctx.Done():
