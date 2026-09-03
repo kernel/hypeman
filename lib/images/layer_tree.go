@@ -59,22 +59,18 @@ func makeTreeWritable(path string) error {
 // whiteout files are interpreted here rather than passed through, because
 // overlayfs does not understand them. No production caller yet; composition
 // lands in a later change.
-func applyLayerTree(layerDir, targetDir string) error {
-	return applyLayerTreeWithExplicitDirs(layerDir, targetDir, nil)
-}
-
-func applyLayerTreeWithExplicitDirs(layerDir, targetDir string, explicitDirs map[string]struct{}) (err error) {
+//
+// explicitDirs, when non-nil, names the directories the layer tar listed
+// explicitly (relative, cleaned); only those have their metadata copied.
+// A nil map treats every directory as explicit.
+func applyLayerTree(layerDir, targetDir string, explicitDirs map[string]struct{}) (err error) {
 	if err := os.MkdirAll(targetDir, 0755); err != nil {
 		return fmt.Errorf("create target directory: %w", err)
 	}
 	originalModes := make(map[string]fs.FileMode)
 	defer func() {
 		if restoreErr := restoreDirectoryModes(originalModes); restoreErr != nil {
-			if err == nil {
-				err = fmt.Errorf("restore directory modes: %w", restoreErr)
-			} else {
-				err = errors.Join(err, fmt.Errorf("restore directory modes: %w", restoreErr))
-			}
+			err = errors.Join(err, fmt.Errorf("restore directory modes: %w", restoreErr))
 		}
 	}()
 
@@ -113,13 +109,6 @@ func applyLayerTreeWithExplicitDirs(layerDir, targetDir string, explicitDirs map
 		}
 		target, err := safeJoinForComposition(targetDir, filepath.Join(filepath.Dir(rel), hidden))
 		if err != nil {
-			return err
-		}
-		if info, err := os.Lstat(target); err == nil && info.IsDir() {
-			if err := makePathWritable(targetDir, target, originalModes); err != nil {
-				return err
-			}
-		} else if err != nil && !os.IsNotExist(err) {
 			return err
 		}
 		return removePath(target)
@@ -163,22 +152,16 @@ func applyLayerTreeWithExplicitDirs(layerDir, targetDir string, explicitDirs map
 		if err := makePathWritable(targetDir, filepath.Dir(target), originalModes); err != nil {
 			return err
 		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
 		if entry.IsDir() {
-			if explicitDirs == nil {
-				info, err := entry.Info()
-				if err != nil {
-					return err
-				}
-				pendingDirs = append(pendingDirs, dirMeta{src: path, dst: target, info: info})
-			} else if _, explicit := explicitDirs[filepath.Clean(rel)]; explicit {
-				info, err := entry.Info()
-				if err != nil {
-					return err
-				}
+			if _, explicit := explicitDirs[filepath.Clean(rel)]; explicitDirs == nil || explicit {
 				pendingDirs = append(pendingDirs, dirMeta{src: path, dst: target, info: info})
 			}
 		}
-		if err := copyEntryInto(path, target, hardlinks, targetDir); err != nil {
+		if err := copyEntryInto(path, target, info, hardlinks, targetDir); err != nil {
 			return err
 		}
 		if entry.IsDir() {
@@ -229,7 +212,7 @@ func prepareLayerDirectories(layerDir, targetDir string, originalModes map[strin
 		if err != nil {
 			return err
 		}
-		if err := copyDirectoryEntry(path, target, info, targetDir); err != nil {
+		if err := copyDirectoryEntry(target, info); err != nil {
 			return err
 		}
 		return makePathWritable(targetDir, target, originalModes)
@@ -239,7 +222,7 @@ func prepareLayerDirectories(layerDir, targetDir string, originalModes map[strin
 func makePathWritable(root, path string, originalModes map[string]fs.FileMode) error {
 	root = filepath.Clean(root)
 	path = filepath.Clean(path)
-	if path != root && !strings.HasPrefix(path, root+string(filepath.Separator)) {
+	if !pathWithinRoot(root, path) {
 		return fmt.Errorf("path is outside target root: %s", path)
 	}
 	rel, err := filepath.Rel(root, path)
@@ -344,18 +327,14 @@ type hardlinkIdentity struct {
 
 // copyEntryInto copies one filesystem entry from src to dst, replacing any
 // conflicting entry and preserving hardlinks within the layer.
-func copyEntryInto(src, dst string, hardlinks map[hardlinkIdentity]string, root string) error {
-	info, err := os.Lstat(src)
-	if err != nil {
-		return err
-	}
+func copyEntryInto(src, dst string, info os.FileInfo, hardlinks map[hardlinkIdentity]string, root string) error {
 	switch info.Mode() & fs.ModeType {
 	case 0:
 		return copyRegularEntry(src, dst, info, hardlinks)
 	case fs.ModeDir:
-		return copyDirectoryEntry(src, dst, info, root)
+		return copyDirectoryEntry(dst, info)
 	case fs.ModeSymlink:
-		return copySymlinkEntry(src, dst, root)
+		return copySymlinkEntry(src, dst, info, root)
 	default:
 		return copySpecialEntry(src, dst, info)
 	}
@@ -372,32 +351,25 @@ func copyRegularEntry(src, dst string, info os.FileInfo, hardlinks map[hardlinkI
 		}
 		hardlinks[identity] = dst
 	}
-	if err := copyFileContents(src, dst); err != nil {
+	if err := copyFileContents(src, dst, info); err != nil {
 		return err
 	}
 	return copyEntryMetadata(src, dst, info)
 }
 
-func copyDirectoryEntry(src, dst string, info os.FileInfo, root string) error {
-	if existing, err := os.Lstat(dst); err == nil {
-		if existing.Mode()&os.ModeSymlink != 0 {
-			resolved, resolveErr := resolveLayerPath(root, dst, 0)
-			if resolveErr == nil && pathWithinRoot(root, resolved) {
-				return nil
-			}
-			if err := removePath(dst); err != nil {
-				return err
-			}
-		} else if !existing.IsDir() {
-			if err := removePath(dst); err != nil {
-				return err
-			}
+// copyDirectoryEntry creates dst as a directory, replacing a conflicting
+// non-directory. Callers resolve dst through resolveCompositionDirTarget
+// first, so dst is never an existing symlink here.
+func copyDirectoryEntry(dst string, info os.FileInfo) error {
+	if existing, err := os.Lstat(dst); err == nil && !existing.IsDir() {
+		if err := removePath(dst); err != nil {
+			return err
 		}
 	}
 	return os.MkdirAll(dst, info.Mode().Perm())
 }
 
-func copySymlinkEntry(src, dst, root string) error {
+func copySymlinkEntry(src, dst string, info os.FileInfo, root string) error {
 	linkTarget, err := os.Readlink(src)
 	if err != nil {
 		return err
@@ -409,10 +381,6 @@ func copySymlinkEntry(src, dst, root string) error {
 		return err
 	}
 	if err := os.Symlink(linkTarget, dst); err != nil {
-		return err
-	}
-	info, err := os.Lstat(src)
-	if err != nil {
 		return err
 	}
 	return copyEntryMetadata(src, dst, info)
@@ -568,11 +536,7 @@ func applyXattrs(path string, xattrs map[string][]byte) error {
 	return nil
 }
 
-func copyFileContents(src, dst string) (err error) {
-	info, err := os.Lstat(src)
-	if err != nil {
-		return err
-	}
+func copyFileContents(src, dst string, info os.FileInfo) (err error) {
 	sourceMode := info.Mode().Perm() | info.Mode()&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky)
 	if sourceMode&0400 == 0 {
 		if err := os.Chmod(src, sourceMode|0400); err != nil {

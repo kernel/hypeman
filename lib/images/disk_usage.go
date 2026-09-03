@@ -110,7 +110,7 @@ func totalLayerArtifactBytesFromFilesystem(layersDir string) (int64, error) {
 		total += info.Size()
 		return nil
 	})
-	if err != nil && !os.IsNotExist(err) {
+	if err != nil {
 		return 0, fmt.Errorf("walk layer artifacts: %w", err)
 	}
 	return total, nil

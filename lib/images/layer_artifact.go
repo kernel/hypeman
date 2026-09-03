@@ -135,11 +135,7 @@ func discardLayerCache(p *paths.Paths, layerHex string) error {
 // temp directory; lifecycle reconciliation removes stale temp directories after
 // an interrupted build. No production caller yet: pull integration and
 // composition land in later changes.
-func (m *manager) materializeLayerArtifact(desc layerDescriptor) (*layerArtifact, error) {
-	return m.materializeLayerArtifactContext(context.Background(), desc)
-}
-
-func (m *manager) materializeLayerArtifactContext(ctx context.Context, desc layerDescriptor) (*layerArtifact, error) {
+func (m *manager) materializeLayerArtifact(ctx context.Context, desc layerDescriptor) (*layerArtifact, error) {
 	key := desc.Digest + "\x00" + layerArtifactFormat()
 	result := m.layerFlights.DoChan(key, func() (any, error) {
 		return m.materializeLayerArtifactOnce(ctx, desc)
@@ -178,14 +174,6 @@ func (m *manager) materializeLayerArtifactOnce(ctx context.Context, desc layerDe
 		// Record without artifact: rebuild below.
 	}
 
-	blobPath := m.paths.OCICacheBlob(layerHex)
-	if _, err := os.Stat(blobPath); err != nil {
-		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("layer blob missing from oci cache: %s", desc.Digest)
-		}
-		return nil, fmt.Errorf("stat layer blob: %w", err)
-	}
-
 	layerDir := m.paths.ImageLayerDir(layerHex)
 	if err := os.MkdirAll(layerDir, 0755); err != nil {
 		return nil, fmt.Errorf("create layer directory: %w", err)
@@ -196,22 +184,14 @@ func (m *manager) materializeLayerArtifactOnce(ctx context.Context, desc layerDe
 	}
 	defer removePath(unpackDir)
 
-	stats, err := unpackLayerBlobContext(ctx, blobPath, desc.MediaType, unpackDir)
+	stats, err := unpackCachedLayer(ctx, m.paths.SystemOCICache(), desc, unpackDir)
 	if err != nil {
-		return nil, fmt.Errorf("unpack layer %s: %w", desc.Digest, err)
+		return nil, err
 	}
-	if desc.DiffID != "" && stats.diffID != desc.DiffID {
-		return nil, fmt.Errorf("layer %s diff id mismatch: got %s, want %s", desc.Digest, stats.diffID, desc.DiffID)
-	}
-
-	return m.installLayerArtifactContext(ctx, desc, layerHex, unpackDir, stats)
+	return m.installLayerArtifact(ctx, desc, layerHex, unpackDir, stats)
 }
 
-func (m *manager) installLayerArtifact(desc layerDescriptor, layerHex, unpackDir string, stats *unpackStats) (*layerArtifact, error) {
-	return m.installLayerArtifactContext(context.Background(), desc, layerHex, unpackDir, stats)
-}
-
-func (m *manager) installLayerArtifactContext(ctx context.Context, desc layerDescriptor, layerHex, unpackDir string, stats *unpackStats) (*layerArtifact, error) {
+func (m *manager) installLayerArtifact(ctx context.Context, desc layerDescriptor, layerHex, unpackDir string, stats *unpackStats) (*layerArtifact, error) {
 	record := &layerArtifact{
 		SchemaVersion: layerRecordSchemaVersion,
 		Digest:        desc.Digest,
@@ -259,15 +239,9 @@ type unpackStats struct {
 	explicitDirs  map[string]struct{}
 }
 
-// unpackLayerBlob extracts one compressed layer blob into dest while preserving
-// whiteout marker files. It intentionally does not use umoci's layer unpacker:
-// umoci consumes whiteouts while this store must retain them for composition.
-// Paths are confined to dest.
-func unpackCachedLayer(cacheDir string, desc layerDescriptor, dest string) (*unpackStats, error) {
-	return unpackCachedLayerContext(context.Background(), cacheDir, desc, dest)
-}
-
-func unpackCachedLayerContext(ctx context.Context, cacheDir string, desc layerDescriptor, dest string) (*unpackStats, error) {
+// unpackCachedLayer locates desc's blob in the shared OCI cache, unpacks it
+// into dest, and verifies the diff ID when the descriptor carries one.
+func unpackCachedLayer(ctx context.Context, cacheDir string, desc layerDescriptor, dest string) (*unpackStats, error) {
 	layerHex := strings.TrimPrefix(desc.Digest, "sha256:")
 	if err := paths.ValidatePathComponent(layerHex); err != nil {
 		return nil, fmt.Errorf("invalid layer digest: %s", desc.Digest)
@@ -279,7 +253,7 @@ func unpackCachedLayerContext(ctx context.Context, cacheDir string, desc layerDe
 		}
 		return nil, fmt.Errorf("stat layer blob: %w", err)
 	}
-	stats, err := unpackLayerBlobContext(ctx, blobPath, desc.MediaType, dest)
+	stats, err := unpackLayerBlob(ctx, blobPath, desc.MediaType, dest)
 	if err != nil {
 		return nil, fmt.Errorf("unpack layer %s: %w", desc.Digest, err)
 	}
@@ -289,11 +263,11 @@ func unpackCachedLayerContext(ctx context.Context, cacheDir string, desc layerDe
 	return stats, nil
 }
 
-func unpackLayerBlob(blobPath, mediaType, dest string) (*unpackStats, error) {
-	return unpackLayerBlobContext(context.Background(), blobPath, mediaType, dest)
-}
-
-func unpackLayerBlobContext(ctx context.Context, blobPath, mediaType, dest string) (*unpackStats, error) {
+// unpackLayerBlob extracts one compressed layer blob into dest while preserving
+// whiteout marker files. It intentionally does not use umoci's layer unpacker:
+// umoci consumes whiteouts while this store must retain them for composition.
+// Paths are confined to dest.
+func unpackLayerBlob(ctx context.Context, blobPath, mediaType, dest string) (*unpackStats, error) {
 	if err := os.MkdirAll(dest, 0755); err != nil {
 		return nil, fmt.Errorf("create extraction root: %w", err)
 	}
@@ -471,17 +445,40 @@ func (c multiCloser) Close() error {
 	return firstErr
 }
 
+// confineToRoot lexically resolves an entry name inside root, rejecting
+// absolute names and parent traversal. root must be an existing directory
+// that is not itself a symlink.
+func confineToRoot(root, name string) (string, error) {
+	root = filepath.Clean(root)
+	rootInfo, err := os.Lstat(root)
+	if err != nil {
+		return "", fmt.Errorf("inspect extraction root: %w", err)
+	}
+	if !rootInfo.IsDir() || rootInfo.Mode()&os.ModeSymlink != 0 {
+		return "", fmt.Errorf("extraction root is not a directory: %s", root)
+	}
+	if filepath.IsAbs(name) {
+		return "", fmt.Errorf("tar entry escapes root: %s", name)
+	}
+	target := filepath.Join(root, name)
+	if !pathWithinRoot(root, target) {
+		return "", fmt.Errorf("tar entry escapes root: %s", name)
+	}
+	return target, nil
+}
+
 // safeJoin resolves a tar entry inside root and rejects symlinked parents
 // while extracting a layer. This prevents one tar entry from changing where
 // a later entry is written.
 func safeJoin(root, name string) (string, error) {
-	resolved, err := safeJoinForComposition(root, name)
+	target, err := confineToRoot(root, name)
 	if err != nil {
 		return "", err
 	}
 	root = filepath.Clean(root)
-	clean := filepath.Clean(name)
-	target := filepath.Join(root, clean)
+	if target == root {
+		return root, nil
+	}
 	for parent := filepath.Dir(target); parent != root; parent = filepath.Dir(parent) {
 		info, err := os.Lstat(parent)
 		if err != nil {
@@ -497,36 +494,21 @@ func safeJoin(root, name string) (string, error) {
 			return "", fmt.Errorf("tar entry parent is not a directory: %s", parent)
 		}
 	}
-	return resolved, nil
+	return target, nil
 }
 
 // safeJoinForComposition resolves an entry through existing parent symlinks,
 // interpreting absolute link targets relative to the image root.
 func safeJoinForComposition(root, name string) (string, error) {
-	root = filepath.Clean(root)
-	rootInfo, err := os.Lstat(root)
+	target, err := confineToRoot(root, name)
 	if err != nil {
-		return "", fmt.Errorf("inspect extraction root: %w", err)
+		return "", err
 	}
-	if !rootInfo.IsDir() || rootInfo.Mode()&os.ModeSymlink != 0 {
-		return "", fmt.Errorf("extraction root is not a directory: %s", root)
-	}
-	if filepath.IsAbs(name) {
-		return "", fmt.Errorf("tar entry escapes root: %s", name)
-	}
-	clean := filepath.Clean(name)
-	if clean == "." {
+	root = filepath.Clean(root)
+	if target == root {
 		return root, nil
 	}
-	if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("tar entry escapes root: %s", name)
-	}
-	target := filepath.Join(root, clean)
-	if !strings.HasPrefix(target, root+string(filepath.Separator)) {
-		return "", fmt.Errorf("tar entry escapes root: %s", name)
-	}
-	parent := filepath.Dir(target)
-	resolvedParent, err := resolveLayerPath(root, parent, 0)
+	resolvedParent, err := resolveLayerPath(root, filepath.Dir(target), 0)
 	if err != nil {
 		return "", fmt.Errorf("inspect tar entry parent: %w", err)
 	}
@@ -610,9 +592,7 @@ func validateSymlinkTarget(root, target, linkname string) error {
 	if filepath.IsAbs(linkname) {
 		return nil
 	}
-	resolved := filepath.Clean(filepath.Join(filepath.Dir(target), linkname))
-	root = filepath.Clean(root)
-	if resolved != root && !strings.HasPrefix(resolved, root+string(filepath.Separator)) {
+	if !pathWithinRoot(root, filepath.Join(filepath.Dir(target), linkname)) {
 		return fmt.Errorf("symlink target escapes root: %s", linkname)
 	}
 	return nil
