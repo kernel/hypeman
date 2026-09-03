@@ -156,6 +156,9 @@ func (m *manager) materializeLayerArtifactContext(ctx context.Context, desc laye
 }
 
 func (m *manager) materializeLayerArtifactOnce(ctx context.Context, desc layerDescriptor) (*layerArtifact, error) {
+	m.layerStoreMu.Lock()
+	defer m.layerStoreMu.Unlock()
+
 	if layerArtifactFormat() == "" {
 		return nil, fmt.Errorf("unsupported layer artifact format: %s", DefaultImageFormat)
 	}
