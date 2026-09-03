@@ -49,10 +49,11 @@ func (c *ociClient) applyLayerToDir(ctx context.Context, dest string, desc layer
 	}
 	defer os.RemoveAll(layerDir)
 
-	if _, err := unpackCachedLayerContext(ctx, c.cacheDir, desc, layerDir); err != nil {
+	stats, err := unpackCachedLayerContext(ctx, c.cacheDir, desc, layerDir)
+	if err != nil {
 		return err
 	}
-	if err := applyLayerTree(layerDir, dest); err != nil {
+	if err := applyLayerTreeWithExplicitDirs(layerDir, dest, stats.explicitDirs); err != nil {
 		return fmt.Errorf("apply layer tree: %w", err)
 	}
 	return nil
