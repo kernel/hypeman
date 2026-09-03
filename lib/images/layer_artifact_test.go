@@ -7,28 +7,22 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
-	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
-	"syscall"
 	"testing"
-	"time"
-
-	"golang.org/x/sys/unix"
 
 	gcr "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/empty"
 	"github.com/google/go-containerregistry/pkg/v1/layout"
 	"github.com/google/go-containerregistry/pkg/v1/mutate"
-	"github.com/google/go-containerregistry/pkg/v1/tarball"
 	"github.com/kernel/hypeman/lib/paths"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sys/unix"
 )
+
+const testTarGzMediaType = "application/vnd.oci.image.layer.v1.tar+gzip"
 
 // writeLayerTestLayout writes img into the shared OCI cache of p tagged with
 // the image's digest, mirroring pullToOCILayout.
@@ -58,6 +52,84 @@ func layerDescFromImage(t *testing.T, img gcr.Image, index int) layerDescriptor 
 	}
 }
 
+// tarGz builds a gzipped tar from the entries written by fn.
+func tarGz(t *testing.T, fn func(tw *tar.Writer)) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	gzw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gzw)
+	fn(tw)
+	require.NoError(t, tw.Close())
+	require.NoError(t, gzw.Close())
+	return buf.Bytes()
+}
+
+func writeTarEntry(t *testing.T, tw *tar.Writer, header *tar.Header, content string) {
+	t.Helper()
+	if header.Typeflag == tar.TypeReg {
+		header.Size = int64(len(content))
+	}
+	require.NoError(t, tw.WriteHeader(header))
+	if content != "" {
+		_, err := tw.Write([]byte(content))
+		require.NoError(t, err)
+	}
+}
+
+func fileEntry(name, content string) func(*testing.T, *tar.Writer) {
+	return func(t *testing.T, tw *tar.Writer) {
+		writeTarEntry(t, tw, &tar.Header{Name: name, Typeflag: tar.TypeReg, Mode: 0644}, content)
+	}
+}
+
+func dirEntry(name string) func(*testing.T, *tar.Writer) {
+	return func(t *testing.T, tw *tar.Writer) {
+		writeTarEntry(t, tw, &tar.Header{Name: name, Typeflag: tar.TypeDir, Mode: 0755}, "")
+	}
+}
+
+func symlinkEntry(name, target string) func(*testing.T, *tar.Writer) {
+	return func(t *testing.T, tw *tar.Writer) {
+		writeTarEntry(t, tw, &tar.Header{Name: name, Typeflag: tar.TypeSymlink, Linkname: target}, "")
+	}
+}
+
+func hardlinkEntry(name, target string) func(*testing.T, *tar.Writer) {
+	return func(t *testing.T, tw *tar.Writer) {
+		writeTarEntry(t, tw, &tar.Header{Name: name, Typeflag: tar.TypeLink, Linkname: target}, "")
+	}
+}
+
+// writeLayerBlob writes a gzipped tar layer to a file and returns its path.
+func writeLayerBlob(t *testing.T, dir, name string, entries ...func(*testing.T, *tar.Writer)) string {
+	t.Helper()
+	data := tarGz(t, func(tw *tar.Writer) {
+		for _, entry := range entries {
+			entry(t, tw)
+		}
+	})
+	path := filepath.Join(dir, name)
+	require.NoError(t, os.WriteFile(path, data, 0644))
+	return path
+}
+
+// unpackInto applies a layer blob onto dest with compose semantics.
+func unpackInto(t *testing.T, blobPath, dest string) *unpackStats {
+	t.Helper()
+	stats, err := unpackLayerBlob(context.Background(), blobPath, testTarGzMediaType, dest, composeOnDiskFormat())
+	require.NoError(t, err)
+	return stats
+}
+
+func requireNoWhiteoutMarkers(t *testing.T, root string) {
+	t.Helper()
+	require.NoError(t, filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		require.NoError(t, err)
+		require.NotContains(t, entry.Name(), whiteoutPrefix, "whiteout marker leaked into tree")
+		return nil
+	}))
+}
+
 func TestMaterializeLayerArtifact(t *testing.T) {
 	if _, err := exec.LookPath("mkfs.erofs"); err != nil {
 		t.Skip("mkfs.erofs not available")
@@ -78,15 +150,12 @@ func TestMaterializeLayerArtifact(t *testing.T) {
 	require.Equal(t, layerArtifactFormat(), record.Format)
 	require.Greater(t, record.SizeBytes, int64(0))
 	require.Greater(t, record.UnpackedBytes, int64(0))
-	require.Greater(t, record.Entries, 0)
 
 	layerHex := desc.Digest[len("sha256:"):]
-	_, err = os.Stat(p.ImageLayerArtifactForFormat(layerHex, layerArtifactFormat()))
+	artifactInfo, err := os.Stat(p.ImageLayerArtifactForFormat(layerHex, layerArtifactFormat()))
 	require.NoError(t, err, "layer.erofs must be installed")
 
 	// A second materialization reuses the existing artifact.
-	artifactInfo, err := os.Stat(p.ImageLayerArtifactForFormat(layerHex, layerArtifactFormat()))
-	require.NoError(t, err)
 	reused, err := m.materializeLayerArtifact(context.Background(), desc)
 	require.NoError(t, err)
 	require.True(t, record.CreatedAt.Equal(reused.CreatedAt), "reuse must return the stored record")
@@ -138,263 +207,155 @@ func TestMaterializeLayerArtifactMissingBlob(t *testing.T) {
 
 	_, err := m.materializeLayerArtifact(context.Background(), layerDescriptor{
 		Digest:    "sha256:abababababababababababababababababababababababababababababababab",
-		MediaType: "application/vnd.oci.image.layer.v1.tar+gzip",
+		MediaType: testTarGzMediaType,
 	})
 	require.ErrorContains(t, err, "missing from oci cache")
 }
 
-// whiteoutLayer builds a gzipped tar layer exercising whiteouts: a plain file,
-// a whiteout marker, an opaque directory marker, and a whiteout+recreate pair.
-func whiteoutLayer(t *testing.T) gcr.Layer {
-	t.Helper()
-
-	var buf bytes.Buffer
-	gzw := gzip.NewWriter(&buf)
-	tw := tar.NewWriter(gzw)
-
-	writeEntry := func(header *tar.Header, content string) {
-		require.NoError(t, tw.WriteHeader(header))
-		if content != "" {
-			_, err := tw.Write([]byte(content))
-			require.NoError(t, err)
-		}
+// TestUnpackLayerBlobArtifactFormatKeepsWhiteouts checks that the artifact
+// extraction format records deletions in overlayfs form: a 0:0 character
+// device for a whiteout and the opaque xattr for an opaque directory.
+func TestUnpackLayerBlobArtifactFormatKeepsWhiteouts(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("overlayfs whiteouts need mknod and trusted xattrs")
 	}
-	writeEntry(&tar.Header{Name: "keep.txt", Typeflag: tar.TypeReg, Mode: 0644, Size: 4}, "keep")
-	writeEntry(&tar.Header{Name: "gone/", Typeflag: tar.TypeDir, Mode: 0755}, "")
-	writeEntry(&tar.Header{Name: "gone/.wh.deleted.txt", Typeflag: tar.TypeReg, Mode: 0644, Size: 0}, "")
-	writeEntry(&tar.Header{Name: "opq/", Typeflag: tar.TypeDir, Mode: 0755}, "")
-	writeEntry(&tar.Header{Name: "opq/.wh..wh..opq", Typeflag: tar.TypeReg, Mode: 0644, Size: 0}, "")
-	writeEntry(&tar.Header{Name: "opq/fresh.txt", Typeflag: tar.TypeReg, Mode: 0644, Size: 5}, "fresh")
-	writeEntry(&tar.Header{Name: "added/", Typeflag: tar.TypeDir, Mode: 0755}, "")
-	writeEntry(&tar.Header{Name: "added/.wh.foo", Typeflag: tar.TypeReg, Mode: 0644, Size: 0}, "")
-	writeEntry(&tar.Header{Name: "added/foo", Typeflag: tar.TypeReg, Mode: 0644, Size: 3}, "new")
-
-	require.NoError(t, tw.Close())
-	require.NoError(t, gzw.Close())
-
-	data := buf.Bytes()
-	layer, err := tarball.LayerFromOpener(func() (io.ReadCloser, error) {
-		return io.NopCloser(bytes.NewReader(data)), nil
-	})
-	require.NoError(t, err)
-	return layer
-}
-
-func TestMaterializeLayerDoesNotPersistWhiteoutInventory(t *testing.T) {
-	if _, err := exec.LookPath("mkfs.erofs"); err != nil {
-		t.Skip("mkfs.erofs not available")
-	}
-
-	p := paths.New(t.TempDir())
-	img, err := mutate.AppendLayers(empty.Image, whiteoutLayer(t))
-	require.NoError(t, err)
-	writeLayerTestLayout(t, p, img)
-
-	desc := layerDescFromImage(t, img, 0)
-	m := &manager{paths: p}
-
-	_, err = m.materializeLayerArtifact(context.Background(), desc)
-	require.NoError(t, err)
-
-	data, err := os.ReadFile(p.ImageLayerRecordForFormat(desc.Digest[len("sha256:"):], layerArtifactFormat()))
-	require.NoError(t, err)
-	require.NotContains(t, string(data), "whiteouts")
-}
-
-func TestApplyLayerTreeCopiesRestrictiveFiles(t *testing.T) {
 	root := t.TempDir()
-	targetDir := filepath.Join(root, "target")
-	layerDir := filepath.Join(root, "layer")
-	file := filepath.Join(layerDir, "secret.txt")
-
-	require.NoError(t, os.MkdirAll(layerDir, 0755))
-	require.NoError(t, os.WriteFile(file, []byte("secret"), 0644))
-	require.NoError(t, os.Chmod(file, 0000))
-
-	require.NoError(t, applyLayerTree(layerDir, targetDir, nil))
-
-	target := filepath.Join(targetDir, "secret.txt")
-	info, err := os.Stat(target)
+	blob := writeLayerBlob(t, root, "layer.tar.gz",
+		fileEntry("keep.txt", "keep"),
+		dirEntry("gone/"),
+		fileEntry("gone/.wh.deleted.txt", ""),
+		dirEntry("opq/"),
+		fileEntry("opq/.wh..wh..opq", ""),
+		fileEntry("opq/fresh.txt", "fresh"),
+	)
+	dest := filepath.Join(root, "dest")
+	_, err := unpackLayerBlob(context.Background(), blob, testTarGzMediaType, dest, layerArtifactOnDiskFormat())
 	require.NoError(t, err)
-	require.Equal(t, os.FileMode(0000), info.Mode().Perm())
-	require.NoError(t, os.Chmod(target, 0644))
-	data, err := os.ReadFile(target)
+
+	var stat unix.Stat_t
+	require.NoError(t, unix.Lstat(filepath.Join(dest, "gone", "deleted.txt"), &stat))
+	require.Equal(t, uint32(unix.S_IFCHR), stat.Mode&unix.S_IFMT, "whiteout must be a character device")
+	require.Equal(t, uint64(0), uint64(stat.Rdev), "whiteout device must be 0:0")
+
+	value := make([]byte, 8)
+	n, err := unix.Lgetxattr(filepath.Join(dest, "opq"), "trusted.overlay.opaque", value)
 	require.NoError(t, err)
-	require.Equal(t, "secret", string(data))
+	require.Equal(t, "y", string(value[:n]))
+	requireNoWhiteoutMarkers(t, dest)
 }
 
-func TestRestoreDirectoryModesSkipsReplacedSymlink(t *testing.T) {
+func TestUnpackLayerBlobAppliesWhiteoutsAcrossLayers(t *testing.T) {
 	root := t.TempDir()
-	dir := filepath.Join(root, "dir")
-	target := filepath.Join(root, "target")
-	require.NoError(t, os.Mkdir(dir, 0750))
-	require.NoError(t, os.WriteFile(target, []byte("target"), 0644))
-	require.NoError(t, os.Remove(dir))
-	require.NoError(t, os.Symlink("target", dir))
+	base := writeLayerBlob(t, root, "base.tar.gz",
+		dirEntry("etc/"),
+		fileEntry("etc/config.txt", "original"),
+		dirEntry("data/"),
+		fileEntry("data/old.txt", "stale"),
+		dirEntry("replacedir/"),
+		fileEntry("replacedir/inner.txt", "inner"),
+		fileEntry("added/foo", "old"),
+	)
+	top := writeLayerBlob(t, root, "top.tar.gz",
+		fileEntry("etc/.wh.config.txt", ""),
+		fileEntry("data/.wh..wh..opq", ""),
+		fileEntry("data/new.txt", "new"),
+		fileEntry("replacedir", "now a file"),
+		fileEntry("added/.wh.foo", ""),
+		fileEntry("added/foo", "new"),
+	)
+	dest := filepath.Join(root, "dest")
+	unpackInto(t, base, dest)
+	unpackInto(t, top, dest)
 
-	require.NoError(t, restoreDirectoryModes(map[string]fs.FileMode{dir: 0750}))
-
-	info, err := os.Stat(target)
-	require.NoError(t, err)
-	require.Equal(t, os.FileMode(0644), info.Mode().Perm())
-}
-
-func TestApplyLayerTreeWhiteoutSemantics(t *testing.T) {
-	root := t.TempDir()
-	targetDir := filepath.Join(root, "target")
-	layerDir := filepath.Join(root, "layer")
-
-	// Lower state contributed by earlier layers.
-	require.NoError(t, os.MkdirAll(filepath.Join(targetDir, "opqdir"), 0755))
-	require.NoError(t, os.MkdirAll(filepath.Join(targetDir, "swapdir"), 0755))
-	require.NoError(t, os.WriteFile(filepath.Join(targetDir, "victim.txt"), []byte("old"), 0644))
-	require.NoError(t, os.MkdirAll(filepath.Join(targetDir, "removedir"), 0755))
-	require.NoError(t, os.WriteFile(filepath.Join(targetDir, "removedir", "inner.txt"), []byte("old"), 0644))
-	require.NoError(t, os.WriteFile(filepath.Join(targetDir, "keep.txt"), []byte("old"), 0644))
-	require.NoError(t, os.WriteFile(filepath.Join(targetDir, "opqdir", "stale.txt"), []byte("stale"), 0644))
-	require.NoError(t, os.WriteFile(filepath.Join(targetDir, "swapdir", "inner.txt"), []byte("inner"), 0644))
-
-	// Layer: whiteout victim.txt, opaque opqdir, replace swapdir with a file,
-	// and whiteout-then-recreate added/foo within the same layer.
-	require.NoError(t, os.MkdirAll(filepath.Join(layerDir, "opqdir"), 0755))
-	require.NoError(t, os.MkdirAll(filepath.Join(layerDir, "added"), 0755))
-	require.NoError(t, os.WriteFile(filepath.Join(layerDir, ".wh.victim.txt"), nil, 0644))
-	require.NoError(t, os.WriteFile(filepath.Join(layerDir, ".wh.removedir"), nil, 0644))
-	require.NoError(t, os.WriteFile(filepath.Join(layerDir, "keep.txt"), []byte("new"), 0644))
-	require.NoError(t, os.WriteFile(filepath.Join(layerDir, "opqdir", ".wh..wh..opq"), nil, 0644))
-	require.NoError(t, os.WriteFile(filepath.Join(layerDir, "opqdir", "fresh.txt"), []byte("fresh"), 0644))
-	require.NoError(t, os.WriteFile(filepath.Join(layerDir, "swapdir"), []byte("now a file"), 0644))
-	require.NoError(t, os.WriteFile(filepath.Join(layerDir, "added", ".wh.foo"), nil, 0644))
-	require.NoError(t, os.WriteFile(filepath.Join(layerDir, "added", "foo"), []byte("new"), 0644))
-
-	require.NoError(t, applyLayerTree(layerDir, targetDir, nil))
-
-	// Whiteout removed the lower entry.
-	_, err := os.Lstat(filepath.Join(targetDir, "victim.txt"))
+	_, err := os.Lstat(filepath.Join(dest, "etc", "config.txt"))
 	require.True(t, os.IsNotExist(err), "whiteout must delete the lower entry")
-	_, err = os.Lstat(filepath.Join(targetDir, "removedir"))
-	require.True(t, os.IsNotExist(err), "directory whiteout must delete the complete lower directory")
-
-	// Regular file replacement.
-	data, err := os.ReadFile(filepath.Join(targetDir, "keep.txt"))
+	_, err = os.Lstat(filepath.Join(dest, "data", "old.txt"))
+	require.True(t, os.IsNotExist(err), "opaque marker must mask lower contents")
+	data, err := os.ReadFile(filepath.Join(dest, "data", "new.txt"))
 	require.NoError(t, err)
 	require.Equal(t, "new", string(data))
-
-	// Opaque directory: stale content gone, layer content present.
-	_, err = os.Lstat(filepath.Join(targetDir, "opqdir", "stale.txt"))
-	require.True(t, os.IsNotExist(err), "opaque dir must hide lower contents")
-	data, err = os.ReadFile(filepath.Join(targetDir, "opqdir", "fresh.txt"))
+	info, err := os.Lstat(filepath.Join(dest, "replacedir"))
 	require.NoError(t, err)
-	require.Equal(t, "fresh", string(data))
-
-	// Directory replaced by a file.
-	info, err := os.Lstat(filepath.Join(targetDir, "swapdir"))
+	require.False(t, info.IsDir(), "file must replace lower directory")
+	data, err = os.ReadFile(filepath.Join(dest, "added", "foo"))
 	require.NoError(t, err)
-	require.False(t, info.IsDir())
-
-	// Whiteout followed by recreate in the same layer keeps the new entry.
-	data, err = os.ReadFile(filepath.Join(targetDir, "added", "foo"))
-	require.NoError(t, err)
-	require.Equal(t, "new", string(data))
-
-	// Whiteout marker files never leak into the composed tree.
-	leaked := make([]string, 0)
-	require.NoError(t, filepath.WalkDir(targetDir, func(path string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if strings.HasPrefix(entry.Name(), whiteoutPrefix) {
-			leaked = append(leaked, path)
-		}
-		return nil
-	}))
-	require.Empty(t, leaked)
+	require.Equal(t, "new", string(data), "whiteout then recreate in one layer keeps the new file")
+	requireNoWhiteoutMarkers(t, dest)
 }
 
-func TestApplyLayerTreeReplacesSymlinkBeforeNestedWhiteout(t *testing.T) {
+// TestUnpackLayerBlobReplacesDirectorySymlink checks the standard runtime
+// behavior: a directory in an upper layer replaces a symlink from a lower one
+// rather than writing through it.
+func TestUnpackLayerBlobReplacesDirectorySymlink(t *testing.T) {
 	root := t.TempDir()
-	targetDir := filepath.Join(root, "target")
-	layerDir := filepath.Join(root, "layer")
-	lowerDir := filepath.Join(root, "lower")
+	base := writeLayerBlob(t, root, "base.tar.gz",
+		dirEntry("usr/"),
+		dirEntry("usr/bin/"),
+		fileEntry("usr/bin/sh", "sh"),
+		symlinkEntry("bin", "usr/bin"),
+	)
+	top := writeLayerBlob(t, root, "top.tar.gz",
+		dirEntry("bin/"),
+		fileEntry("bin/tool", "tool"),
+	)
+	dest := filepath.Join(root, "dest")
+	unpackInto(t, base, dest)
+	unpackInto(t, top, dest)
 
-	require.NoError(t, os.MkdirAll(targetDir, 0755))
-	require.NoError(t, os.MkdirAll(lowerDir, 0755))
-	require.NoError(t, os.WriteFile(filepath.Join(lowerDir, "old.txt"), []byte("old"), 0644))
-	require.NoError(t, os.Symlink("../lower", filepath.Join(targetDir, "replaced")))
-	require.NoError(t, os.MkdirAll(filepath.Join(layerDir, "replaced"), 0755))
-	require.NoError(t, os.WriteFile(filepath.Join(layerDir, "replaced", ".wh.old.txt"), nil, 0644))
-	require.NoError(t, os.WriteFile(filepath.Join(layerDir, "replaced", "new.txt"), []byte("new"), 0644))
-
-	require.NoError(t, applyLayerTree(layerDir, targetDir, nil))
-
-	info, err := os.Lstat(filepath.Join(targetDir, "replaced"))
+	info, err := os.Lstat(filepath.Join(dest, "bin"))
 	require.NoError(t, err)
-	require.True(t, info.IsDir())
-	require.FileExists(t, filepath.Join(targetDir, "replaced", "new.txt"))
-	_, err = os.Lstat(filepath.Join(targetDir, "replaced", "old.txt"))
-	require.ErrorIs(t, err, os.ErrNotExist)
+	require.True(t, info.IsDir(), "upper directory must replace the lower symlink")
+	require.FileExists(t, filepath.Join(dest, "bin", "tool"))
+	require.FileExists(t, filepath.Join(dest, "usr", "bin", "sh"))
+	require.NoFileExists(t, filepath.Join(dest, "usr", "bin", "tool"))
 }
 
-func TestApplyLayerTreePreservesUpperDirectoryMode(t *testing.T) {
+func TestUnpackLayerBlobConfinesSymlinkTraversal(t *testing.T) {
 	root := t.TempDir()
-	targetDir := filepath.Join(root, "target")
-	layerDir := filepath.Join(root, "layer")
+	blob := writeLayerBlob(t, root, "layer.tar.gz",
+		symlinkEntry("link", "../../escape"),
+		fileEntry("link/pwned", "x"),
+	)
+	dest := filepath.Join(root, "dest")
+	unpackInto(t, blob, dest)
 
-	require.NoError(t, os.MkdirAll(filepath.Join(targetDir, "etc"), 0755))
-	require.NoError(t, os.MkdirAll(filepath.Join(layerDir, "etc"), 0750))
-	require.NoError(t, os.WriteFile(filepath.Join(layerDir, "etc", "new.txt"), []byte("new"), 0644))
-
-	require.NoError(t, applyLayerTree(layerDir, targetDir, nil))
-
-	info, err := os.Stat(filepath.Join(targetDir, "etc"))
-	require.NoError(t, err)
-	require.Equal(t, os.FileMode(0750), info.Mode().Perm())
+	require.NoFileExists(t, filepath.Join(root, "escape", "pwned"))
+	require.FileExists(t, filepath.Join(dest, "escape", "pwned"), "escaping link must be resolved inside the root")
 }
 
-func TestApplyLayerTreeWhiteoutRemovesReadOnlyDirectory(t *testing.T) {
+func TestUnpackLayerBlobPreservesHardlinks(t *testing.T) {
 	root := t.TempDir()
-	targetDir := filepath.Join(root, "target")
-	layerDir := filepath.Join(root, "layer")
+	blob := writeLayerBlob(t, root, "layer.tar.gz",
+		fileEntry("a", "shared"),
+		hardlinkEntry("b", "a"),
+	)
+	dest := filepath.Join(root, "dest")
+	unpackInto(t, blob, dest)
 
-	require.NoError(t, os.MkdirAll(filepath.Join(targetDir, "gone"), 0755))
-	require.NoError(t, os.WriteFile(filepath.Join(targetDir, "gone", "inner.txt"), []byte("old"), 0644))
-	require.NoError(t, os.Chmod(filepath.Join(targetDir, "gone"), 0555))
-	require.NoError(t, os.MkdirAll(layerDir, 0755))
-	require.NoError(t, os.WriteFile(filepath.Join(layerDir, ".wh.gone"), nil, 0644))
-
-	require.NoError(t, applyLayerTree(layerDir, targetDir, nil))
-	_, err := os.Lstat(filepath.Join(targetDir, "gone"))
-	require.ErrorIs(t, err, os.ErrNotExist)
+	a, err := os.Stat(filepath.Join(dest, "a"))
+	require.NoError(t, err)
+	b, err := os.Stat(filepath.Join(dest, "b"))
+	require.NoError(t, err)
+	require.True(t, os.SameFile(a, b))
 }
 
 func TestUnpackLayerBlobContextHonorsCancellation(t *testing.T) {
 	root := t.TempDir()
-	blobPath := filepath.Join(root, "layer.tar")
-	var buf bytes.Buffer
-	tw := tar.NewWriter(&buf)
-	require.NoError(t, tw.WriteHeader(&tar.Header{Name: "file", Typeflag: tar.TypeReg, Mode: 0644, Size: 1}))
-	_, err := tw.Write([]byte("x"))
-	require.NoError(t, err)
-	require.NoError(t, tw.Close())
-	require.NoError(t, os.WriteFile(blobPath, buf.Bytes(), 0644))
+	blob := writeLayerBlob(t, root, "layer.tar.gz", fileEntry("file", "x"))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, err = unpackLayerBlob(ctx, blobPath, "application/vnd.oci.image.layer.v1.tar", filepath.Join(root, "dest"))
+	_, err := unpackLayerBlob(ctx, blob, testTarGzMediaType, filepath.Join(root, "dest"), composeOnDiskFormat())
 	require.ErrorIs(t, err, context.Canceled)
 }
 
 func TestUnpackLayerBlobIncludesTrailingTarPaddingInDiffID(t *testing.T) {
 	root := t.TempDir()
-	blobPath := filepath.Join(root, "layer.tar.gz")
-
 	var tarData bytes.Buffer
 	tw := tar.NewWriter(&tarData)
-	require.NoError(t, tw.WriteHeader(&tar.Header{Name: "file", Typeflag: tar.TypeReg, Mode: 0644, Size: 1}))
-	_, err := tw.Write([]byte("x"))
-	require.NoError(t, err)
+	writeTarEntry(t, tw, &tar.Header{Name: "file", Typeflag: tar.TypeReg, Mode: 0644}, "x")
 	require.NoError(t, tw.Close())
-	_, err = tarData.Write(make([]byte, 512))
+	_, err := tarData.Write(make([]byte, 512))
 	require.NoError(t, err)
 
 	var compressed bytes.Buffer
@@ -402,311 +363,11 @@ func TestUnpackLayerBlobIncludesTrailingTarPaddingInDiffID(t *testing.T) {
 	_, err = gzw.Write(tarData.Bytes())
 	require.NoError(t, err)
 	require.NoError(t, gzw.Close())
-	require.NoError(t, os.WriteFile(blobPath, compressed.Bytes(), 0644))
+	blob := filepath.Join(root, "layer.tar.gz")
+	require.NoError(t, os.WriteFile(blob, compressed.Bytes(), 0644))
 
-	stats, err := unpackLayerBlob(context.Background(), blobPath, "application/vnd.oci.image.layer.v1.tar+gzip", filepath.Join(root, "dest"))
-	require.NoError(t, err)
+	stats := unpackInto(t, blob, filepath.Join(root, "dest"))
 	want := sha256.Sum256(tarData.Bytes())
 	require.Equal(t, "sha256:"+fmt.Sprintf("%x", want), stats.diffID)
-}
-
-func TestResolveHardlinksResolvesDependencyChain(t *testing.T) {
-	root := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(root, "source"), []byte("content"), 0644))
-
-	pending := []pendingHardlink{
-		{target: filepath.Join(root, "third"), linkname: "second"},
-		{target: filepath.Join(root, "second"), linkname: "first"},
-		{target: filepath.Join(root, "first"), linkname: "source"},
-	}
-	require.NoError(t, resolveHardlinks(root, pending))
-
-	source, err := os.Stat(filepath.Join(root, "source"))
-	require.NoError(t, err)
-	third, err := os.Stat(filepath.Join(root, "third"))
-	require.NoError(t, err)
-	require.True(t, os.SameFile(source, third))
-}
-
-func TestUnpackLayerBlobRejectsSymlinkTraversal(t *testing.T) {
-	root := t.TempDir()
-	blobPath := filepath.Join(root, "layer.tar.gz")
-	var buf bytes.Buffer
-	gzw := gzip.NewWriter(&buf)
-	tw := tar.NewWriter(gzw)
-	require.NoError(t, tw.WriteHeader(&tar.Header{Name: "link", Typeflag: tar.TypeSymlink, Linkname: "outside"}))
-	require.NoError(t, tw.WriteHeader(&tar.Header{Name: "link/escape", Typeflag: tar.TypeReg, Mode: 0644, Size: 1}))
-	_, err := tw.Write([]byte("x"))
-	require.NoError(t, err)
-	require.NoError(t, tw.Close())
-	require.NoError(t, gzw.Close())
-	require.NoError(t, os.WriteFile(blobPath, buf.Bytes(), 0644))
-
-	_, err = unpackLayerBlob(context.Background(), blobPath, "application/vnd.oci.image.layer.v1.tar+gzip", filepath.Join(root, "dest"))
-	require.ErrorContains(t, err, "symlink")
-}
-
-func TestValidateSymlinkTargetAllowsAbsoluteTargets(t *testing.T) {
-	root := t.TempDir()
-	target := filepath.Join(root, "link")
-	require.NoError(t, validateSymlinkTarget(root, target, "/etc/resolv.conf"))
-}
-
-func TestApplyLayerTreePreservesImplicitDirectoryMetadata(t *testing.T) {
-	root := t.TempDir()
-	targetDir := filepath.Join(root, "target")
-	layerDir := filepath.Join(root, "layer")
-	require.NoError(t, os.MkdirAll(filepath.Join(targetDir, "etc"), 0700))
-	require.NoError(t, os.MkdirAll(filepath.Join(layerDir, "etc"), 0755))
-	require.NoError(t, os.WriteFile(filepath.Join(layerDir, "etc", "app.conf"), []byte("config"), 0644))
-
-	require.NoError(t, applyLayerTree(layerDir, targetDir, map[string]struct{}{}))
-
-	info, err := os.Stat(filepath.Join(targetDir, "etc"))
-	require.NoError(t, err)
-	require.Equal(t, os.FileMode(0700), info.Mode().Perm())
-}
-
-func TestApplyLayerTreeResolvesInRootSymlinkParents(t *testing.T) {
-	root := t.TempDir()
-	targetDir := filepath.Join(root, "target")
-	layerDir := filepath.Join(root, "layer")
-	require.NoError(t, os.MkdirAll(filepath.Join(targetDir, "usr", "bin"), 0755))
-	require.NoError(t, os.Symlink("usr/bin", filepath.Join(targetDir, "bin")))
-	require.NoError(t, os.MkdirAll(filepath.Join(layerDir, "bin"), 0755))
-	require.NoError(t, os.WriteFile(filepath.Join(layerDir, "bin", "tool"), []byte("tool"), 0644))
-
-	require.NoError(t, applyLayerTree(layerDir, targetDir, nil))
-
-	data, err := os.ReadFile(filepath.Join(targetDir, "usr", "bin", "tool"))
-	require.NoError(t, err)
-	require.Equal(t, "tool", string(data))
-	info, err := os.Lstat(filepath.Join(targetDir, "bin"))
-	require.NoError(t, err)
-	require.Equal(t, os.ModeSymlink, info.Mode()&os.ModeSymlink)
-}
-
-func TestApplyLayerTreeSymlinksAndHardlinks(t *testing.T) {
-	root := t.TempDir()
-	targetDir := filepath.Join(root, "target")
-	layerDir := filepath.Join(root, "layer")
-	require.NoError(t, os.MkdirAll(targetDir, 0755))
-	require.NoError(t, os.MkdirAll(layerDir, 0755))
-
-	// A symlink in the lower tree pointing at a file the new layer deletes:
-	// the symlink itself must be removed, never followed.
-	require.NoError(t, os.WriteFile(filepath.Join(targetDir, "real.txt"), []byte("real"), 0644))
-	require.NoError(t, os.Symlink("real.txt", filepath.Join(targetDir, "alias")))
-
-	require.NoError(t, os.WriteFile(filepath.Join(layerDir, ".wh.alias"), nil, 0644))
-	require.NoError(t, os.WriteFile(filepath.Join(layerDir, "a.txt"), []byte("content"), 0644))
-	require.NoError(t, os.Link(filepath.Join(layerDir, "a.txt"), filepath.Join(layerDir, "b.txt")))
-	require.NoError(t, os.Symlink("a.txt", filepath.Join(layerDir, "link-to-a")))
-
-	require.NoError(t, applyLayerTree(layerDir, targetDir, nil))
-
-	_, err := os.Lstat(filepath.Join(targetDir, "alias"))
-	require.True(t, os.IsNotExist(err), "symlink whiteout must remove the link itself")
-	_, err = os.Lstat(filepath.Join(targetDir, "real.txt"))
-	require.NoError(t, err, "symlink target must survive an unrelated whiteout")
-
-	infoA, err := os.Stat(filepath.Join(targetDir, "a.txt"))
-	require.NoError(t, err)
-	infoB, err := os.Stat(filepath.Join(targetDir, "b.txt"))
-	require.NoError(t, err)
-	require.Equal(t, int64(7), infoA.Size())
-	require.True(t, os.SameFile(infoA, infoB), "hardlinks within the layer must stay linked")
-
-	linkTarget, err := os.Readlink(filepath.Join(targetDir, "link-to-a"))
-	require.NoError(t, err)
-	require.Equal(t, "a.txt", linkTarget)
-}
-
-func TestCopyXattrs(t *testing.T) {
-	root := t.TempDir()
-	src := filepath.Join(root, "src")
-	dst := filepath.Join(root, "dst")
-	require.NoError(t, os.WriteFile(src, []byte("payload"), 0644))
-	require.NoError(t, os.WriteFile(dst, []byte("payload"), 0644))
-
-	err := unix.Lsetxattr(src, "user.one", []byte("1"), 0)
-	if errors.Is(err, unix.ENOTSUP) || errors.Is(err, unix.EPERM) {
-		t.Skip("filesystem does not support user xattrs")
-	}
-	require.NoError(t, err)
-	require.NoError(t, unix.Lsetxattr(src, "user.two", []byte("22"), 0))
-
-	xattrs, err := readXattrs(src)
-	require.NoError(t, err)
-	require.NoError(t, applyXattrs(dst, xattrs))
-
-	for name, want := range map[string]string{"user.one": "1", "user.two": "22"} {
-		size, err := unix.Lgetxattr(dst, name, nil)
-		require.NoError(t, err, "xattr %s must be copied", name)
-		value := make([]byte, size)
-		n, err := unix.Lgetxattr(dst, name, value)
-		require.NoError(t, err)
-		require.Equal(t, want, string(value[:n]))
-	}
-}
-
-func TestUnpackLayerBlobPreservesDirMtime(t *testing.T) {
-	root := t.TempDir()
-	blobPath := filepath.Join(root, "layer.tar")
-	dirTime := time.Now().Add(-time.Hour).Truncate(time.Second)
-
-	var buf bytes.Buffer
-	tw := tar.NewWriter(&buf)
-	require.NoError(t, tw.WriteHeader(&tar.Header{Name: "d/", Typeflag: tar.TypeDir, Mode: 0755, ModTime: dirTime}))
-	require.NoError(t, tw.WriteHeader(&tar.Header{Name: "d/file.txt", Typeflag: tar.TypeReg, Mode: 0644, Size: 1}))
-	_, err := tw.Write([]byte("x"))
-	require.NoError(t, err)
-	require.NoError(t, tw.Close())
-	require.NoError(t, os.WriteFile(blobPath, buf.Bytes(), 0644))
-
-	dest := filepath.Join(root, "dest")
-	_, err = unpackLayerBlob(context.Background(), blobPath, "application/vnd.oci.image.layer.v1.tar", dest)
-	require.NoError(t, err)
-
-	info, err := os.Stat(filepath.Join(dest, "d"))
-	require.NoError(t, err)
-	require.True(t, info.ModTime().Equal(dirTime), "dir mtime must come from the tar header")
-}
-
-func TestSpecialFileModeSupportsSockets(t *testing.T) {
-	mode, err := specialFileMode(fs.ModeSocket)
-	require.NoError(t, err)
-	require.Equal(t, uint32(syscall.S_IFSOCK), mode)
-}
-
-func TestApplyLayerTreePreservesDirMtime(t *testing.T) {
-	root := t.TempDir()
-	targetDir := filepath.Join(root, "target")
-	layerDir := filepath.Join(root, "layer")
-
-	old := time.Now().Add(-time.Hour).Truncate(time.Second)
-	require.NoError(t, os.MkdirAll(filepath.Join(layerDir, "d"), 0700))
-	require.NoError(t, os.WriteFile(filepath.Join(layerDir, "d", "file.txt"), []byte("x"), 0644))
-	require.NoError(t, os.Chtimes(filepath.Join(layerDir, "d"), old, old))
-
-	require.NoError(t, applyLayerTree(layerDir, targetDir, nil))
-
-	info, err := os.Stat(filepath.Join(targetDir, "d"))
-	require.NoError(t, err)
-	require.True(t, info.ModTime().Equal(old), "dir mtime must survive the merge")
-}
-
-func TestSpecialFileModeSupportsCharDevice(t *testing.T) {
-	mode, err := specialFileMode(fs.ModeCharDevice | fs.ModeDevice)
-	require.NoError(t, err)
-	require.Equal(t, uint32(syscall.S_IFCHR), mode)
-}
-
-func TestApplyTarMetadataPreservesSpecialBits(t *testing.T) {
-	root := t.TempDir()
-	target := filepath.Join(root, "suid-bin")
-	require.NoError(t, os.WriteFile(target, []byte("bin"), 0755))
-
-	header := &tar.Header{
-		Name:     "suid-bin",
-		Typeflag: tar.TypeReg,
-		Mode:     04755,
-	}
-	require.NoError(t, applyTarMetadata(target, header))
-
-	info, err := os.Stat(target)
-	require.NoError(t, err)
-	require.Equal(t, os.ModeSetuid, info.Mode()&os.ModeSetuid, "setuid bit must be preserved")
-}
-
-func TestApplyLayerTreeRejectsMalformedWhiteouts(t *testing.T) {
-	root := t.TempDir()
-	targetDir := filepath.Join(root, "target")
-	layerDir := filepath.Join(root, "layer")
-
-	require.NoError(t, os.MkdirAll(filepath.Join(targetDir, "parent", "child"), 0755))
-	require.NoError(t, os.WriteFile(filepath.Join(targetDir, "parent", "victim.txt"), []byte("v"), 0644))
-	require.NoError(t, os.MkdirAll(filepath.Join(layerDir, "parent"), 0755))
-	// Malformed whiteouts must be rejected without deleting lower-layer entries.
-	require.NoError(t, os.WriteFile(filepath.Join(layerDir, "parent", ".wh."), nil, 0644))
-	require.NoError(t, os.WriteFile(filepath.Join(layerDir, "parent", ".wh.."), nil, 0644))
-	require.NoError(t, os.WriteFile(filepath.Join(layerDir, "parent", ".wh..."), nil, 0644))
-
-	err := applyLayerTree(layerDir, targetDir, nil)
-	require.ErrorContains(t, err, "invalid whiteout entry")
-
-	// Parent directory must not be deleted by malformed whiteout paths.
-	info, err := os.Stat(filepath.Join(targetDir, "parent"))
-	require.NoError(t, err)
-	require.True(t, info.IsDir())
-	require.FileExists(t, filepath.Join(targetDir, "parent", "victim.txt"))
-}
-
-func TestApplyLayerTreeRejectsEscapingSymlink(t *testing.T) {
-	root := t.TempDir()
-	targetDir := filepath.Join(root, "target")
-	layerDir := filepath.Join(root, "layer")
-	require.NoError(t, os.MkdirAll(targetDir, 0755))
-	require.NoError(t, os.MkdirAll(layerDir, 0755))
-	require.NoError(t, os.Symlink("../../outside", filepath.Join(layerDir, "link")))
-
-	err := applyLayerTree(layerDir, targetDir, nil)
-	require.ErrorContains(t, err, "symlink target escapes root")
-}
-
-func TestApplyLayerTreeRestoresRestrictiveNestedDirModes(t *testing.T) {
-	root := t.TempDir()
-	t.Cleanup(func() { _ = makeTreeWritable(root) })
-	targetDir := filepath.Join(root, "target")
-	layerDir := filepath.Join(root, "layer")
-
-	require.NoError(t, os.MkdirAll(filepath.Join(layerDir, "outer", "inner"), 0755))
-	require.NoError(t, os.WriteFile(filepath.Join(layerDir, "outer", "inner", "file.txt"), []byte("data"), 0644))
-	require.NoError(t, os.Chmod(filepath.Join(layerDir, "outer", "inner"), 0500))
-	require.NoError(t, os.Chmod(filepath.Join(layerDir, "outer"), 0500))
-
-	require.NoError(t, applyLayerTree(layerDir, targetDir, nil))
-
-	infoOuter, err := os.Stat(filepath.Join(targetDir, "outer"))
-	require.NoError(t, err)
-	require.Equal(t, os.FileMode(0500), infoOuter.Mode().Perm())
-
-	infoInner, err := os.Stat(filepath.Join(targetDir, "outer", "inner"))
-	require.NoError(t, err)
-	require.Equal(t, os.FileMode(0500), infoInner.Mode().Perm())
-}
-
-func TestMakePathWritableTopDown(t *testing.T) {
-	root := t.TempDir()
-	t.Cleanup(func() { _ = makeTreeWritable(root) })
-	parent := filepath.Join(root, "restricted")
-	child := filepath.Join(parent, "child")
-	require.NoError(t, os.MkdirAll(child, 0755))
-	require.NoError(t, os.Chmod(parent, 0400)) // read-only, no execute
-
-	originalModes := make(map[string]fs.FileMode)
-	err := makePathWritable(root, child, originalModes)
-	require.NoError(t, err)
-
-	info, err := os.Stat(parent)
-	require.NoError(t, err)
-	require.True(t, info.Mode().Perm()&0700 == 0700)
-
-	require.NoError(t, restoreDirectoryModes(originalModes))
-	infoAfter, err := os.Stat(parent)
-	require.NoError(t, err)
-	require.Equal(t, os.FileMode(0400), infoAfter.Mode().Perm())
-}
-
-func TestSafeJoinCleanRootSymlink(t *testing.T) {
-	root := t.TempDir()
-	realDir := filepath.Join(root, "real")
-	symDir := filepath.Join(root, "sym")
-	require.NoError(t, os.Mkdir(realDir, 0755))
-	require.NoError(t, os.Symlink("real", symDir))
-
-	// Calling safeJoin with trailing slash on symlink root must be rejected as symlink.
-	_, err := safeJoin(symDir+"/", "file.txt")
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "extraction root is not a directory")
+	require.Equal(t, int64(tarData.Len()), stats.unpackedBytes)
 }

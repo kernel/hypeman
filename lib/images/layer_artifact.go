@@ -1,7 +1,6 @@
 package images
 
 import (
-	"archive/tar"
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
@@ -9,30 +8,25 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/kernel/hypeman/lib/paths"
 	"github.com/klauspost/compress/zstd"
-	"golang.org/x/sys/unix"
+	"github.com/opencontainers/umoci/oci/layer"
 )
 
-// OCI whiteout marker files. A ".wh.<name>" entry in directory D removes
-// "<name>" from D as inherited from lower layers; a ".wh..wh..opq" entry marks
-// its directory opaque, hiding everything below it from lower layers. These
-// are tar-level conventions: they do not compose on overlayfs by themselves,
-// so composition must interpret them explicitly (see applyLayerTree).
-const (
-	whiteoutPrefix = ".wh."
-	opaqueWhiteout = ".wh..wh..opq"
-)
+// whiteoutPrefix marks OCI whiteout entries (".wh.<name>" and ".wh..wh..opq").
+// umoci interprets them during extraction: DirRootfs applies them against the
+// tree being composed, OverlayfsRootfs converts them to overlayfs whiteout
+// inodes and opaque xattrs so per-layer artifacts can later be stacked.
+const whiteoutPrefix = ".wh."
 
 const (
 	layerRecordSchemaVersion = 1
-	maxLayerEntries          = 1_000_000
 	maxLayerUnpackedBytes    = 100 << 30
 )
 
@@ -46,9 +40,8 @@ type layerArtifact struct {
 	Digest        string    `json:"digest"` // compressed layer blob digest, sha256:...
 	DiffID        string    `json:"diff_id,omitempty"`
 	Format        string    `json:"format"`
-	SizeBytes     int64     `json:"size_bytes"` // artifact bytes on disk
-	UnpackedBytes int64     `json:"unpacked_bytes"`
-	Entries       int       `json:"entries"`
+	SizeBytes     int64     `json:"size_bytes"`     // artifact bytes on disk
+	UnpackedBytes int64     `json:"unpacked_bytes"` // decompressed tar stream bytes
 	CreatedAt     time.Time `json:"created_at"`
 }
 
@@ -65,8 +58,8 @@ func (a *layerArtifact) validate() error {
 	if a.Format != string(FormatErofs) && a.Format != string(FormatExt4) {
 		return fmt.Errorf("invalid format: %s", a.Format)
 	}
-	if a.SizeBytes < 0 || a.UnpackedBytes < 0 || a.Entries < 0 {
-		return fmt.Errorf("invalid size or entry counts")
+	if a.SizeBytes < 0 || a.UnpackedBytes < 0 {
+		return fmt.Errorf("invalid size")
 	}
 	return nil
 }
@@ -93,6 +86,25 @@ func layerArtifactPath(p *paths.Paths, layerHex string) string {
 
 func layerArtifactRecordPath(p *paths.Paths, layerHex string) string {
 	return p.ImageLayerRecordForFormat(layerHex, layerArtifactFormat())
+}
+
+// layerMapOptions preserves tar ownership when running as root. Otherwise
+// umoci's rootless mode skips chown and stands in empty files for device nodes.
+func layerMapOptions() layer.MapOptions {
+	return layer.MapOptions{Rootless: os.Geteuid() != 0}
+}
+
+// layerArtifactOnDiskFormat is the extraction format for per-layer artifacts.
+// Whiteouts become overlayfs whiteout inodes and opaque xattrs, the form an
+// overlayfs mount of stacked layers understands, so the artifact retains the
+// layer's deletions without a private marker format.
+func layerArtifactOnDiskFormat() layer.OnDiskFormat {
+	return layer.OverlayfsRootfs{MapOptions: layerMapOptions()}
+}
+
+// composeOnDiskFormat applies whiteouts against the tree being composed.
+func composeOnDiskFormat() layer.OnDiskFormat {
+	return layer.DirRootfs{MapOptions: layerMapOptions()}
 }
 
 // readLayerRecord loads the artifact record for a layer digest, if present.
@@ -184,7 +196,7 @@ func (m *manager) materializeLayerArtifactOnce(ctx context.Context, desc layerDe
 	}
 	defer removePath(unpackDir)
 
-	stats, err := unpackCachedLayer(ctx, m.paths.SystemOCICache(), desc, unpackDir)
+	stats, err := unpackCachedLayer(ctx, m.paths.SystemOCICache(), desc, unpackDir, layerArtifactOnDiskFormat())
 	if err != nil {
 		return nil, err
 	}
@@ -198,13 +210,10 @@ func (m *manager) installLayerArtifact(ctx context.Context, desc layerDescriptor
 		DiffID:        stats.diffID,
 		Format:        layerArtifactFormat(),
 		UnpackedBytes: stats.unpackedBytes,
-		Entries:       stats.entries,
 		CreatedAt:     time.Now(),
 	}
 
 	if err := installAtomically(layerArtifactPath(m.paths, layerHex), func(path string) error {
-		// The artifact intentionally retains .wh. marker files so
-		// composition can re-derive whiteouts from the tree itself.
 		var size int64
 		var convErr error
 		if DefaultImageFormat == FormatErofs {
@@ -233,15 +242,13 @@ func (m *manager) installLayerArtifact(ctx context.Context, desc layerDescriptor
 }
 
 type unpackStats struct {
-	entries       int
 	unpackedBytes int64
 	diffID        string
-	explicitDirs  map[string]struct{}
 }
 
 // unpackCachedLayer locates desc's blob in the shared OCI cache, unpacks it
 // into dest, and verifies the diff ID when the descriptor carries one.
-func unpackCachedLayer(ctx context.Context, cacheDir string, desc layerDescriptor, dest string) (*unpackStats, error) {
+func unpackCachedLayer(ctx context.Context, cacheDir string, desc layerDescriptor, dest string, onDisk layer.OnDiskFormat) (*unpackStats, error) {
 	layerHex := strings.TrimPrefix(desc.Digest, "sha256:")
 	if err := paths.ValidatePathComponent(layerHex); err != nil {
 		return nil, fmt.Errorf("invalid layer digest: %s", desc.Digest)
@@ -253,7 +260,7 @@ func unpackCachedLayer(ctx context.Context, cacheDir string, desc layerDescripto
 		}
 		return nil, fmt.Errorf("stat layer blob: %w", err)
 	}
-	stats, err := unpackLayerBlob(ctx, blobPath, desc.MediaType, dest)
+	stats, err := unpackLayerBlob(ctx, blobPath, desc.MediaType, dest, onDisk)
 	if err != nil {
 		return nil, fmt.Errorf("unpack layer %s: %w", desc.Digest, err)
 	}
@@ -263,11 +270,10 @@ func unpackCachedLayer(ctx context.Context, cacheDir string, desc layerDescripto
 	return stats, nil
 }
 
-// unpackLayerBlob extracts one compressed layer blob into dest while preserving
-// whiteout marker files. It intentionally does not use umoci's layer unpacker:
-// umoci consumes whiteouts while this store must retain them for composition.
-// Paths are confined to dest.
-func unpackLayerBlob(ctx context.Context, blobPath, mediaType, dest string) (*unpackStats, error) {
+// unpackLayerBlob extracts one compressed layer blob into dest with umoci,
+// which confines every entry to dest and interprets whiteouts per onDisk.
+// The decompressed stream is hashed for the diff ID and capped in size.
+func unpackLayerBlob(ctx context.Context, blobPath, mediaType, dest string, onDisk layer.OnDiskFormat) (*unpackStats, error) {
 	if err := os.MkdirAll(dest, 0755); err != nil {
 		return nil, fmt.Errorf("create extraction root: %w", err)
 	}
@@ -282,133 +288,23 @@ func unpackLayerBlob(ctx context.Context, blobPath, mediaType, dest string) (*un
 		return nil, err
 	}
 	defer closer.Close()
-	reader = contextReader{ctx: ctx, reader: reader}
 
 	hash := sha256.New()
-	stats := &unpackStats{explicitDirs: make(map[string]struct{})}
-	// Directory metadata is re-applied after extraction, once children
-	// exist, so tar directory mtimes are not overwritten by later writes.
-	pendingDirs := make([]pendingDir, 0)
-	pendingHardlinks := make([]pendingHardlink, 0)
-	limitedReader := &io.LimitedReader{R: reader, N: maxLayerUnpackedBytes + 1}
-	hashedReader := io.TeeReader(limitedReader, hash)
-	tr := tar.NewReader(hashedReader)
-	for {
-		header, err := tr.Next()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return nil, fmt.Errorf("read tar entry: %w", err)
-		}
-
-		target, err := safeJoin(dest, header.Name)
-		if err != nil {
-			return nil, err
-		}
-		if stats.entries >= maxLayerEntries {
-			return nil, fmt.Errorf("layer exceeds maximum entry count of %d", maxLayerEntries)
-		}
-		if header.Size > maxLayerUnpackedBytes-stats.unpackedBytes {
-			return nil, fmt.Errorf("layer exceeds maximum unpacked size of %d bytes", maxLayerUnpackedBytes)
-		}
-		stats.entries++
-
-		base := filepath.Base(header.Name)
-		if strings.HasPrefix(base, whiteoutPrefix) && base != opaqueWhiteout {
-			targetName := strings.TrimPrefix(base, whiteoutPrefix)
-			if targetName == "" || targetName == "." || targetName == ".." {
-				return nil, fmt.Errorf("invalid whiteout entry: %s", header.Name)
-			}
-		}
-
-		if header.Typeflag == tar.TypeDir {
-			stats.explicitDirs[filepath.Clean(header.Name)] = struct{}{}
-			pendingDirs = append(pendingDirs, pendingDir{target: target, header: header})
-		}
-		if header.Typeflag == tar.TypeLink {
-			// Hardlinks may reference entries that appear later in the tar, so
-			// resolve them after extracting all non-link entries.
-			pendingHardlinks = append(pendingHardlinks, pendingHardlink{target: target, linkname: header.Linkname})
-		} else if err := extractTarEntry(tr, header, dest, target); err != nil {
-			return nil, fmt.Errorf("extract %s: %w", header.Name, err)
-		}
-		if header.Typeflag == tar.TypeReg || header.Typeflag == tar.TypeGNUSparse {
-			stats.unpackedBytes += header.Size
-		}
-	}
-	if _, err := io.Copy(io.Discard, hashedReader); err != nil {
-		return nil, fmt.Errorf("drain layer: %w", err)
-	}
-	if limitedReader.N == 0 {
-		return nil, fmt.Errorf("layer exceeds maximum unpacked size of %d bytes", maxLayerUnpackedBytes)
-	}
-	if err := resolveHardlinks(dest, pendingHardlinks); err != nil {
+	limited := &io.LimitedReader{R: contextReader{ctx: ctx, reader: reader}, N: maxLayerUnpackedBytes + 1}
+	hashed := io.TeeReader(limited, hash)
+	if err := layer.UnpackLayer(dest, hashed, &layer.UnpackOptions{OnDiskFormat: onDisk}); err != nil {
 		return nil, err
 	}
-	for i := len(pendingDirs) - 1; i >= 0; i-- {
-		dir := pendingDirs[i]
-		if err := applyTarMetadata(dir.target, dir.header); err != nil {
-			return nil, fmt.Errorf("restore dir metadata %s: %w", dir.target, err)
-		}
+	if _, err := io.Copy(io.Discard, hashed); err != nil {
+		return nil, fmt.Errorf("drain layer: %w", err)
 	}
-	stats.diffID = fmt.Sprintf("sha256:%x", hash.Sum(nil))
-	return stats, nil
-}
-
-type pendingDir struct {
-	target string
-	header *tar.Header
-}
-
-type pendingHardlink struct {
-	target     string
-	linkname   string
-	linkTarget string
-}
-
-func resolveHardlinks(root string, pending []pendingHardlink) error {
-	waiting := make(map[string][]pendingHardlink)
-	ready := make([]pendingHardlink, 0, len(pending))
-	for _, link := range pending {
-		linkname := filepath.Clean(link.linkname)
-		if filepath.IsAbs(linkname) {
-			linkname = strings.TrimPrefix(linkname, string(filepath.Separator))
-		}
-		linkTarget, err := safeJoin(root, linkname)
-		if err != nil {
-			return err
-		}
-		link.linkTarget = linkTarget
-		if _, err := os.Lstat(linkTarget); err == nil {
-			ready = append(ready, link)
-		} else if os.IsNotExist(err) {
-			waiting[linkTarget] = append(waiting[linkTarget], link)
-		} else {
-			return err
-		}
+	if limited.N == 0 {
+		return nil, fmt.Errorf("layer exceeds maximum unpacked size of %d bytes", maxLayerUnpackedBytes)
 	}
-
-	resolved := 0
-	for len(ready) > 0 {
-		link := ready[0]
-		ready = ready[1:]
-		if err := prepareTarTarget(link.target); err != nil {
-			return err
-		}
-		if err := os.Link(link.linkTarget, link.target); err != nil {
-			return fmt.Errorf("create hardlink %s -> %s: %w", link.target, link.linkname, err)
-		}
-		resolved++
-		ready = append(ready, waiting[link.target]...)
-		delete(waiting, link.target)
-	}
-	if resolved != len(pending) {
-		for _, links := range waiting {
-			return fmt.Errorf("hardlink target not found for %s", links[0].linkname)
-		}
-	}
-	return nil
+	return &unpackStats{
+		unpackedBytes: maxLayerUnpackedBytes + 1 - limited.N,
+		diffID:        fmt.Sprintf("sha256:%x", hash.Sum(nil)),
+	}, nil
 }
 
 // decompressLayer wraps the blob in the reader for its layer media type. Both
@@ -445,260 +341,40 @@ func (c multiCloser) Close() error {
 	return firstErr
 }
 
-// confineToRoot lexically resolves an entry name inside root, rejecting
-// absolute names and parent traversal. root must be an existing directory
-// that is not itself a symlink.
-func confineToRoot(root, name string) (string, error) {
-	root = filepath.Clean(root)
-	rootInfo, err := os.Lstat(root)
-	if err != nil {
-		return "", fmt.Errorf("inspect extraction root: %w", err)
+// removePath removes a tree that may contain read-only directories restored
+// from layer metadata.
+func removePath(path string) error {
+	if err := makeTreeWritable(path); err != nil && !os.IsNotExist(err) {
+		return err
 	}
-	if !rootInfo.IsDir() || rootInfo.Mode()&os.ModeSymlink != 0 {
-		return "", fmt.Errorf("extraction root is not a directory: %s", root)
-	}
-	if filepath.IsAbs(name) {
-		return "", fmt.Errorf("tar entry escapes root: %s", name)
-	}
-	target := filepath.Join(root, name)
-	if !pathWithinRoot(root, target) {
-		return "", fmt.Errorf("tar entry escapes root: %s", name)
-	}
-	return target, nil
-}
-
-// safeJoin resolves a tar entry inside root and rejects symlinked parents
-// while extracting a layer. This prevents one tar entry from changing where
-// a later entry is written.
-func safeJoin(root, name string) (string, error) {
-	target, err := confineToRoot(root, name)
-	if err != nil {
-		return "", err
-	}
-	root = filepath.Clean(root)
-	if target == root {
-		return root, nil
-	}
-	for parent := filepath.Dir(target); parent != root; parent = filepath.Dir(parent) {
-		info, err := os.Lstat(parent)
-		if err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
-			return "", fmt.Errorf("inspect tar entry parent: %w", err)
-		}
-		if info.Mode()&os.ModeSymlink != 0 {
-			return "", fmt.Errorf("tar entry traverses symlink: %s", name)
-		}
-		if !info.IsDir() {
-			return "", fmt.Errorf("tar entry parent is not a directory: %s", parent)
-		}
-	}
-	return target, nil
-}
-
-// safeJoinForComposition resolves an entry through existing parent symlinks,
-// interpreting absolute link targets relative to the image root.
-func safeJoinForComposition(root, name string) (string, error) {
-	target, err := confineToRoot(root, name)
-	if err != nil {
-		return "", err
-	}
-	root = filepath.Clean(root)
-	if target == root {
-		return root, nil
-	}
-	resolvedParent, err := resolveLayerPath(root, filepath.Dir(target), 0)
-	if err != nil {
-		return "", fmt.Errorf("inspect tar entry parent: %w", err)
-	}
-	return filepath.Join(resolvedParent, filepath.Base(target)), nil
-}
-
-func resolveLayerPath(root, path string, depth int) (string, error) {
-	if depth > 40 {
-		return "", fmt.Errorf("too many symlinks")
-	}
-	root = filepath.Clean(root)
-	path = filepath.Clean(path)
-	rel, err := filepath.Rel(root, path)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("path escapes root")
-	}
-	if rel == "." {
-		return root, nil
-	}
-	parts := strings.Split(rel, string(filepath.Separator))
-	current := root
-	for i, part := range parts {
-		candidate := filepath.Join(current, part)
-		info, err := os.Lstat(candidate)
-		if err != nil {
-			if os.IsNotExist(err) {
-				return filepath.Join(candidate, filepath.Join(parts[i+1:]...)), nil
-			}
-			return "", err
-		}
-		if info.Mode()&os.ModeSymlink != 0 {
-			link, err := os.Readlink(candidate)
-			if err != nil {
-				return "", err
-			}
-			var linkTarget string
-			if filepath.IsAbs(link) {
-				linkTarget = filepath.Join(root, strings.TrimPrefix(link, string(filepath.Separator)))
-			} else {
-				linkTarget = filepath.Join(filepath.Dir(candidate), link)
-			}
-			linkTarget = filepath.Clean(linkTarget)
-			if !pathWithinRoot(root, linkTarget) {
-				return "", fmt.Errorf("symlink target escapes root")
-			}
-			return resolveLayerPath(root, filepath.Join(linkTarget, filepath.Join(parts[i+1:]...)), depth+1)
-		}
-		if i < len(parts)-1 && !info.IsDir() {
-			return "", fmt.Errorf("path parent is not a directory: %s", candidate)
-		}
-		current = candidate
-	}
-	return current, nil
-}
-
-func pathWithinRoot(root, path string) bool {
-	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(path))
-	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
-}
-
-func resolveCompositionDirTarget(root, target string) (string, error) {
-	resolved, err := resolveLayerPath(root, target, 0)
-	if err == nil {
-		return resolved, nil
-	}
-	info, statErr := os.Lstat(target)
-	if statErr == nil && info.Mode()&os.ModeSymlink != 0 {
-		if removeErr := removePath(target); removeErr != nil {
-			return "", removeErr
-		}
-		return target, nil
-	}
-	return "", err
-}
-
-// validateSymlinkTarget permits absolute targets because OCI images may use
-// them and the image filesystem must preserve their link text. Extraction
-// still rejects symlink traversal for later entries, while composition copies
-// symlink text without following it.
-func validateSymlinkTarget(root, target, linkname string) error {
-	if filepath.IsAbs(linkname) {
-		return nil
-	}
-	if !pathWithinRoot(root, filepath.Join(filepath.Dir(target), linkname)) {
-		return fmt.Errorf("symlink target escapes root: %s", linkname)
+	if err := os.RemoveAll(path); err != nil && !os.IsNotExist(err) {
+		return err
 	}
 	return nil
 }
 
-func extractTarEntry(tr *tar.Reader, header *tar.Header, root, target string) error {
-	switch header.Typeflag {
-	case tar.TypeDir:
-		return extractTarDir(target)
-	case tar.TypeReg, tar.TypeGNUSparse:
-		return extractTarFile(tr, target, header)
-	case tar.TypeSymlink:
-		return extractTarSymlink(root, target, header)
-	case tar.TypeChar, tar.TypeBlock:
-		return extractTarDevice(target, header)
-	case tar.TypeFifo:
-		return extractTarFIFO(target, header)
-	default:
-		return nil
-	}
-}
-
-func prepareTarTarget(target string) error {
-	if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
-		return err
-	}
-	return removePath(target)
-}
-
-func extractTarDir(target string) error {
-	if info, err := os.Lstat(target); err == nil && !info.IsDir() {
-		if err := removePath(target); err != nil {
-			return err
-		}
-	}
-	return os.MkdirAll(target, 0755)
-}
-
-func extractTarFile(tr *tar.Reader, target string, header *tar.Header) error {
-	if err := prepareTarTarget(target); err != nil {
-		return err
-	}
-	file, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC|syscall.O_NOFOLLOW, 0644)
+func makeTreeWritable(path string) error {
+	info, err := os.Lstat(path)
 	if err != nil {
 		return err
 	}
-	if _, err := io.Copy(file, tr); err != nil {
-		_ = file.Close()
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return nil
+	}
+	if err := os.Chmod(path, info.Mode().Perm()|0700); err != nil {
 		return err
 	}
-	if err := file.Close(); err != nil {
-		return err
-	}
-	return applyTarMetadata(target, header)
-}
-
-func extractTarSymlink(root, target string, header *tar.Header) error {
-	if err := validateSymlinkTarget(root, target, header.Linkname); err != nil {
-		return err
-	}
-	if err := prepareTarTarget(target); err != nil {
-		return err
-	}
-	if err := os.Symlink(header.Linkname, target); err != nil {
-		return err
-	}
-	return applyTarMetadata(target, header)
-}
-
-func extractTarDevice(target string, header *tar.Header) error {
-	if err := prepareTarTarget(target); err != nil {
-		return err
-	}
-	mode := uint32(syscall.S_IFCHR)
-	if header.Typeflag == tar.TypeBlock {
-		mode = uint32(syscall.S_IFBLK)
-	}
-	dev := int(unix.Mkdev(uint32(header.Devmajor), uint32(header.Devminor)))
-	if err := mknodWithRootlessFallback(target, mode|uint32(header.FileInfo().Mode().Perm()), dev); err != nil {
-		return err
-	}
-	return applyTarMetadata(target, header)
-}
-
-func extractTarFIFO(target string, header *tar.Header) error {
-	if err := prepareTarTarget(target); err != nil {
-		return err
-	}
-	if err := syscall.Mkfifo(target, uint32(header.FileInfo().Mode().Perm())); err != nil {
-		return err
-	}
-	return applyTarMetadata(target, header)
-}
-
-func applyTarMetadata(path string, header *tar.Header) error {
-	mtime := header.ModTime
-	if mtime.IsZero() {
-		mtime = time.Now()
-	}
-	return applyEntryMetadata(path, entryMetadata{
-		uid:      header.Uid,
-		gid:      header.Gid,
-		hasOwner: true,
-		mode:     header.FileInfo().Mode(),
-		symlink:  header.Typeflag == tar.TypeSymlink,
-		mtime:    mtime,
-		xattrs:   tarXattrs(header),
+	return filepath.WalkDir(path, func(p string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() && entry.Type()&os.ModeSymlink == 0 {
+			info, err := entry.Info()
+			if err != nil {
+				return err
+			}
+			return os.Chmod(p, info.Mode().Perm()|0700)
+		}
+		return nil
 	})
 }
