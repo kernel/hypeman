@@ -59,7 +59,11 @@ func makeTreeWritable(path string) error {
 // whiteout files are interpreted here rather than passed through, because
 // overlayfs does not understand them. No production caller yet; composition
 // lands in a later change.
-func applyLayerTree(layerDir, targetDir string) (err error) {
+func applyLayerTree(layerDir, targetDir string) error {
+	return applyLayerTreeWithExplicitDirs(layerDir, targetDir, nil)
+}
+
+func applyLayerTreeWithExplicitDirs(layerDir, targetDir string, explicitDirs map[string]struct{}) (err error) {
 	if err := os.MkdirAll(targetDir, 0755); err != nil {
 		return fmt.Errorf("create target directory: %w", err)
 	}
@@ -93,7 +97,7 @@ func applyLayerTree(layerDir, targetDir string) (err error) {
 		if err != nil {
 			return err
 		}
-		targetParent, err := safeJoin(targetDir, filepath.Dir(rel))
+		targetParent, err := safeJoinForComposition(targetDir, filepath.Dir(rel))
 		if err != nil {
 			return err
 		}
@@ -107,7 +111,7 @@ func applyLayerTree(layerDir, targetDir string) (err error) {
 		if hidden == "" || hidden == "." || hidden == ".." {
 			return fmt.Errorf("invalid whiteout entry: %s", rel)
 		}
-		target, err := safeJoin(targetDir, filepath.Join(filepath.Dir(rel), hidden))
+		target, err := safeJoinForComposition(targetDir, filepath.Join(filepath.Dir(rel), hidden))
 		if err != nil {
 			return err
 		}
@@ -146,19 +150,33 @@ func applyLayerTree(layerDir, targetDir string) (err error) {
 		if err != nil {
 			return err
 		}
-		target, err := safeJoin(targetDir, rel)
+		target, err := safeJoinForComposition(targetDir, rel)
 		if err != nil {
 			return err
+		}
+		if entry.IsDir() {
+			target, err = resolveCompositionDirTarget(targetDir, target)
+			if err != nil {
+				return err
+			}
 		}
 		if err := makePathWritable(targetDir, filepath.Dir(target), originalModes); err != nil {
 			return err
 		}
 		if entry.IsDir() {
-			info, err := entry.Info()
-			if err != nil {
-				return err
+			if explicitDirs == nil {
+				info, err := entry.Info()
+				if err != nil {
+					return err
+				}
+				pendingDirs = append(pendingDirs, dirMeta{src: path, dst: target, info: info})
+			} else if _, explicit := explicitDirs[filepath.Clean(rel)]; explicit {
+				info, err := entry.Info()
+				if err != nil {
+					return err
+				}
+				pendingDirs = append(pendingDirs, dirMeta{src: path, dst: target, info: info})
 			}
-			pendingDirs = append(pendingDirs, dirMeta{src: path, dst: target, info: info})
 		}
 		if err := copyEntryInto(path, target, hardlinks, targetDir); err != nil {
 			return err
@@ -196,7 +214,11 @@ func prepareLayerDirectories(layerDir, targetDir string, originalModes map[strin
 		if err != nil {
 			return err
 		}
-		target, err := safeJoin(targetDir, rel)
+		target, err := safeJoinForComposition(targetDir, rel)
+		if err != nil {
+			return err
+		}
+		target, err = resolveCompositionDirTarget(targetDir, target)
 		if err != nil {
 			return err
 		}
@@ -207,7 +229,7 @@ func prepareLayerDirectories(layerDir, targetDir string, originalModes map[strin
 		if err != nil {
 			return err
 		}
-		if err := copyDirectoryEntry(path, target, info); err != nil {
+		if err := copyDirectoryEntry(path, target, info, targetDir); err != nil {
 			return err
 		}
 		return makePathWritable(targetDir, target, originalModes)
@@ -331,7 +353,7 @@ func copyEntryInto(src, dst string, hardlinks map[hardlinkIdentity]string, root 
 	case 0:
 		return copyRegularEntry(src, dst, info, hardlinks)
 	case fs.ModeDir:
-		return copyDirectoryEntry(src, dst, info)
+		return copyDirectoryEntry(src, dst, info, root)
 	case fs.ModeSymlink:
 		return copySymlinkEntry(src, dst, root)
 	default:
@@ -356,10 +378,20 @@ func copyRegularEntry(src, dst string, info os.FileInfo, hardlinks map[hardlinkI
 	return copyEntryMetadata(src, dst, info)
 }
 
-func copyDirectoryEntry(src, dst string, info os.FileInfo) error {
-	if existing, err := os.Lstat(dst); err == nil && !existing.IsDir() {
-		if err := removePath(dst); err != nil {
-			return err
+func copyDirectoryEntry(src, dst string, info os.FileInfo, root string) error {
+	if existing, err := os.Lstat(dst); err == nil {
+		if existing.Mode()&os.ModeSymlink != 0 {
+			resolved, resolveErr := resolveLayerPath(root, dst, 0)
+			if resolveErr == nil && pathWithinRoot(root, resolved) {
+				return nil
+			}
+			if err := removePath(dst); err != nil {
+				return err
+			}
+		} else if !existing.IsDir() {
+			if err := removePath(dst); err != nil {
+				return err
+			}
 		}
 	}
 	return os.MkdirAll(dst, info.Mode().Perm())

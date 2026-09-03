@@ -259,6 +259,7 @@ type unpackStats struct {
 	entries       int
 	unpackedBytes int64
 	diffID        string
+	explicitDirs  map[string]struct{}
 }
 
 // unpackLayerBlob extracts one compressed layer blob into dest while preserving
@@ -313,7 +314,7 @@ func unpackLayerBlobContext(ctx context.Context, blobPath, mediaType, dest strin
 	reader = contextReader{ctx: ctx, reader: reader}
 
 	hash := sha256.New()
-	stats := &unpackStats{}
+	stats := &unpackStats{explicitDirs: make(map[string]struct{})}
 	// Directory metadata is re-applied after extraction, once children
 	// exist, so tar directory mtimes are not overwritten by later writes.
 	pendingDirs := make([]pendingDir, 0)
@@ -351,6 +352,7 @@ func unpackLayerBlobContext(ctx context.Context, blobPath, mediaType, dest strin
 		}
 
 		if header.Typeflag == tar.TypeDir {
+			stats.explicitDirs[filepath.Clean(header.Name)] = struct{}{}
 			pendingDirs = append(pendingDirs, pendingDir{target: target, header: header})
 		}
 		if header.Typeflag == tar.TypeLink {
@@ -472,13 +474,38 @@ func (c multiCloser) Close() error {
 	return firstErr
 }
 
-// safeJoin resolves a tar entry name inside root and rejects symlinked
-// parents: extraction must never create an entry through a symlink an earlier
-// tar entry planted, so existing parents are Lstat-walked and rejected rather
-// than resolved. Symlink entries themselves may legitimately name paths that
-// do not exist yet, so their targets are checked by
-// validateSymlinkTarget instead.
+// safeJoin resolves a tar entry inside root and rejects symlinked parents
+// while extracting a layer. This prevents one tar entry from changing where
+// a later entry is written.
 func safeJoin(root, name string) (string, error) {
+	resolved, err := safeJoinForComposition(root, name)
+	if err != nil {
+		return "", err
+	}
+	root = filepath.Clean(root)
+	clean := filepath.Clean(name)
+	target := filepath.Join(root, clean)
+	for parent := filepath.Dir(target); parent != root; parent = filepath.Dir(parent) {
+		info, err := os.Lstat(parent)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return "", fmt.Errorf("inspect tar entry parent: %w", err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return "", fmt.Errorf("tar entry traverses symlink: %s", name)
+		}
+		if !info.IsDir() {
+			return "", fmt.Errorf("tar entry parent is not a directory: %s", parent)
+		}
+	}
+	return resolved, nil
+}
+
+// safeJoinForComposition resolves an entry through existing parent symlinks,
+// interpreting absolute link targets relative to the image root.
+func safeJoinForComposition(root, name string) (string, error) {
 	root = filepath.Clean(root)
 	rootInfo, err := os.Lstat(root)
 	if err != nil {
@@ -498,28 +525,84 @@ func safeJoin(root, name string) (string, error) {
 		return "", fmt.Errorf("tar entry escapes root: %s", name)
 	}
 	target := filepath.Join(root, clean)
-	if target == root {
-		return target, nil
-	}
 	if !strings.HasPrefix(target, root+string(filepath.Separator)) {
 		return "", fmt.Errorf("tar entry escapes root: %s", name)
 	}
-	for parent := filepath.Dir(target); parent != root; parent = filepath.Dir(parent) {
-		info, err := os.Lstat(parent)
+	parent := filepath.Dir(target)
+	resolvedParent, err := resolveLayerPath(root, parent, 0)
+	if err != nil {
+		return "", fmt.Errorf("inspect tar entry parent: %w", err)
+	}
+	return filepath.Join(resolvedParent, filepath.Base(target)), nil
+}
+
+func resolveLayerPath(root, path string, depth int) (string, error) {
+	if depth > 40 {
+		return "", fmt.Errorf("too many symlinks")
+	}
+	root = filepath.Clean(root)
+	path = filepath.Clean(path)
+	rel, err := filepath.Rel(root, path)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("path escapes root")
+	}
+	if rel == "." {
+		return root, nil
+	}
+	parts := strings.Split(rel, string(filepath.Separator))
+	current := root
+	for i, part := range parts {
+		candidate := filepath.Join(current, part)
+		info, err := os.Lstat(candidate)
 		if err != nil {
 			if os.IsNotExist(err) {
-				continue
+				return filepath.Join(candidate, filepath.Join(parts[i+1:]...)), nil
 			}
-			return "", fmt.Errorf("inspect tar entry parent: %w", err)
+			return "", err
 		}
 		if info.Mode()&os.ModeSymlink != 0 {
-			return "", fmt.Errorf("tar entry traverses symlink: %s", name)
+			link, err := os.Readlink(candidate)
+			if err != nil {
+				return "", err
+			}
+			var linkTarget string
+			if filepath.IsAbs(link) {
+				linkTarget = filepath.Join(root, strings.TrimPrefix(link, string(filepath.Separator)))
+			} else {
+				linkTarget = filepath.Join(filepath.Dir(candidate), link)
+			}
+			linkTarget = filepath.Clean(linkTarget)
+			if !pathWithinRoot(root, linkTarget) {
+				return "", fmt.Errorf("symlink target escapes root")
+			}
+			return resolveLayerPath(root, filepath.Join(linkTarget, filepath.Join(parts[i+1:]...)), depth+1)
 		}
-		if !info.IsDir() {
-			return "", fmt.Errorf("tar entry parent is not a directory: %s", parent)
+		if i < len(parts)-1 && !info.IsDir() {
+			return "", fmt.Errorf("path parent is not a directory: %s", candidate)
 		}
+		current = candidate
 	}
-	return target, nil
+	return current, nil
+}
+
+func pathWithinRoot(root, path string) bool {
+	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(path))
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+func resolveCompositionDirTarget(root, target string) (string, error) {
+	resolved, err := resolveLayerPath(root, target, 0)
+	if err == nil {
+		return resolved, nil
+	}
+	info, statErr := os.Lstat(target)
+	if statErr == nil && info.Mode()&os.ModeSymlink != 0 {
+		if removeErr := removePath(target); removeErr != nil {
+			return "", removeErr
+		}
+		return target, nil
+	}
+	return "", err
 }
 
 // validateSymlinkTarget permits absolute targets because OCI images may use

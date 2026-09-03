@@ -452,6 +452,25 @@ func TestValidateSymlinkTargetAllowsAbsoluteTargets(t *testing.T) {
 	require.NoError(t, validateSymlinkTarget(root, target, "/etc/resolv.conf"))
 }
 
+func TestApplyLayerTreeResolvesInRootSymlinkParents(t *testing.T) {
+	root := t.TempDir()
+	targetDir := filepath.Join(root, "target")
+	layerDir := filepath.Join(root, "layer")
+	require.NoError(t, os.MkdirAll(filepath.Join(targetDir, "usr", "bin"), 0755))
+	require.NoError(t, os.Symlink("usr/bin", filepath.Join(targetDir, "bin")))
+	require.NoError(t, os.MkdirAll(filepath.Join(layerDir, "bin"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(layerDir, "bin", "tool"), []byte("tool"), 0644))
+
+	require.NoError(t, applyLayerTree(layerDir, targetDir))
+
+	data, err := os.ReadFile(filepath.Join(targetDir, "usr", "bin", "tool"))
+	require.NoError(t, err)
+	require.Equal(t, "tool", string(data))
+	info, err := os.Lstat(filepath.Join(targetDir, "bin"))
+	require.NoError(t, err)
+	require.Equal(t, os.ModeSymlink, info.Mode()&os.ModeSymlink)
+}
+
 func TestApplyLayerTreeSymlinksAndHardlinks(t *testing.T) {
 	root := t.TempDir()
 	targetDir := filepath.Join(root, "target")
