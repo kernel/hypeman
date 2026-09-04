@@ -79,13 +79,13 @@ func validateManifestModel(digestHex string, model *imageManifestModel) error {
 	if model.RootFSType != "layers" {
 		return fmt.Errorf("unsupported manifest rootfs type: %q", model.RootFSType)
 	}
-	if err := validateManifestConfig(model); err != nil {
+	if err := validateManifestConfig(digestHex, model); err != nil {
 		return err
 	}
 	return validateManifestLayers(model)
 }
 
-func validateManifestConfig(model *imageManifestModel) error {
+func validateManifestConfig(digestHex string, model *imageManifestModel) error {
 	if model.Config.Digest == "" {
 		return fmt.Errorf("manifest model config digest is empty")
 	}
@@ -100,7 +100,7 @@ func validateManifestConfig(model *imageManifestModel) error {
 			"config rootfs.diff_ids has %d entries but manifest has %d layers for %s",
 			len(model.Config.DiffIDs),
 			len(model.Layers),
-			model.Digest,
+			digestHex,
 		)
 	}
 	return nil
