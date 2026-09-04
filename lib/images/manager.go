@@ -77,7 +77,6 @@ type manager struct {
 	queue                      *queue.Queue
 	createMu                   sync.Mutex
 	layerFlights               singleflight.Group
-	layerRefMu                 sync.Mutex
 	inflightLayerRefs          map[string]int
 	layerEvictionGrace         time.Duration
 	diskUsageMu                sync.RWMutex
@@ -126,6 +125,10 @@ func NewManager(p *paths.Paths, maxConcurrentBuilds int, meter metric.Meter) (Ma
 	}
 
 	m.RecoverInterruptedBuilds()
+	// Sweep temp dirs and evict layer orphans an unclean shutdown may have
+	// left behind. Age-gated, so builds re-enqueued above are untouched.
+	m.cleanStaleImageTempDirs()
+	m.reconcileLayerStore()
 	// Keep legacy images readable in their existing layout and promote them only
 	// when an operation needs shared content, such as a cross-repository tag.
 	// Avoiding a startup-wide migration keeps startup bounded and independent of
@@ -499,9 +502,21 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef, credentials 
 	}
 	m.recordPullMetrics(ctx, "success")
 
-	if err := m.materializeLayerArtifacts(ctx, result); err != nil {
+	materialized, err := m.materializeLayerArtifacts(ctx, result)
+	if err != nil {
 		m.updateStatusByDigest(ref, StatusFailed, fmt.Errorf("materialize layers: %w", err), buildID)
 		return
+	}
+	releaseLayerRefs := func() {}
+	if len(materialized) > 0 {
+		// Hold the in-flight references until the manifest model protecting
+		// the layers is durable: on the cache-hit path the artifacts' mtimes
+		// are too old for the eviction grace period to cover the gap.
+		var releaseOnce sync.Once
+		releaseLayerRefs = func() {
+			releaseOnce.Do(func() { m.releaseInflightLayers(materialized) })
+		}
+		defer releaseLayerRefs()
 	}
 
 	// Check if this digest already exists and is ready (deduplication)
@@ -551,36 +566,25 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef, credentials 
 	buildStatus = "success"
 }
 
-func (m *manager) materializeLayerArtifacts(ctx context.Context, result *pullResult) error {
+func (m *manager) materializeLayerArtifacts(ctx context.Context, result *pullResult) ([]string, error) {
 	if result == nil || result.Manifest == nil {
-		return nil
+		return nil, nil
 	}
 	if layerArtifactFormat() == "" {
-		return nil
+		return nil, nil
 	}
+	digestHexes := make([]string, 0, len(result.Manifest.Layers))
 	for _, desc := range result.Manifest.Layers {
-		digestHex := strings.TrimPrefix(desc.Digest, "sha256:")
-		m.createMu.Lock()
-		m.layerRefMu.Lock()
-		m.inflightLayerRefs[digestHex]++
-		m.layerRefMu.Unlock()
-		m.createMu.Unlock()
-
-		_, err := m.materializeLayerArtifact(ctx, desc)
-
-		m.createMu.Lock()
-		m.layerRefMu.Lock()
-		m.inflightLayerRefs[digestHex]--
-		if m.inflightLayerRefs[digestHex] == 0 {
-			delete(m.inflightLayerRefs, digestHex)
-		}
-		m.layerRefMu.Unlock()
-		m.createMu.Unlock()
-		if err != nil {
-			return err
+		digestHexes = append(digestHexes, strings.TrimPrefix(desc.Digest, "sha256:"))
+	}
+	m.retainInflightLayers(digestHexes)
+	for _, desc := range result.Manifest.Layers {
+		if _, err := m.materializeLayerArtifact(ctx, desc); err != nil {
+			m.releaseInflightLayers(digestHexes)
+			return nil, err
 		}
 	}
-	return nil
+	return digestHexes, nil
 }
 
 func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, diskSize int64, buildID, diskTempPath string) error {
@@ -626,6 +630,15 @@ func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, diskSize i
 			return rollbackFinalization(layout, modelPath, diskInstalled, modelWritten, fmt.Errorf("write manifest model: %w", err))
 		}
 		modelWritten = true
+		// The model now protects these layers on disk, so the in-flight refs
+		// can go while still holding createMu: a delete racing the ready
+		// notification then reconciles against durable state. The caller's
+		// deferred release is a no-op after this.
+		layerHexes := make([]string, 0, len(model.Layers))
+		for _, desc := range model.Layers {
+			layerHexes = append(layerHexes, strings.TrimPrefix(desc.Digest, "sha256:"))
+		}
+		m.releaseInflightLayersLocked(layerHexes)
 	}
 
 	meta.Status = StatusReady
@@ -859,7 +872,7 @@ func (m *manager) deleteDigestImage(repository, digestHex string) error {
 		return err
 	}
 	m.clearRequestedDigest(digestHex)
-	m.refreshDiskUsageTotals()
+	m.reconcileLayerStoreLocked()
 	return nil
 }
 
@@ -893,17 +906,19 @@ func (m *manager) deleteTaggedImage(repository, tag string) error {
 	if err := removeDigestIfUnreferenced(m.paths, repository, digestHex, true); err != nil {
 		return fmt.Errorf("delete orphaned digest %s: %w", digestHex, err)
 	}
-	m.refreshDiskUsageTotals()
+	m.reconcileLayerStoreLocked()
 	return nil
 }
 
-// TotalImageBytes returns the total size of all ready images on disk.
+// TotalImageBytes returns the total size of all ready images on disk. Shared
+// layer artifacts are accounted separately via TotalOCICacheBytes so the two
+// totals can be summed without double-counting.
 func (m *manager) TotalImageBytes(ctx context.Context) (int64, error) {
-	readyImageBytes, cacheBytes, err := m.getDiskUsageTotals()
+	readyImageBytes, _, err := m.getDiskUsageTotals()
 	if err != nil {
 		return 0, err
 	}
-	return readyImageBytes + cacheBytes, nil
+	return readyImageBytes, nil
 }
 
 // TotalOCICacheBytes returns the total size of the OCI and materialized layer caches.

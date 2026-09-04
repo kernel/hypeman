@@ -142,7 +142,10 @@ func newLifecycleTestManager(p *paths.Paths) *manager {
 	}
 }
 
-func TestTotalImageBytesIncludesLayerArtifacts(t *testing.T) {
+// TestLayerArtifactsCountedInOneBucket verifies the accounting contract: ready
+// image bytes and the OCI+layer cache total stay disjoint, so consumers summing
+// TotalImageBytes and TotalOCICacheBytes count layer bytes exactly once.
+func TestLayerArtifactsCountedInOneBucket(t *testing.T) {
 	p := paths.New(t.TempDir())
 	m := newLifecycleTestManager(p)
 
@@ -157,7 +160,11 @@ func TestTotalImageBytesIncludesLayerArtifacts(t *testing.T) {
 
 	totalBytes, err := m.TotalImageBytes(context.Background())
 	require.NoError(t, err)
-	require.Equal(t, readyBytes+cacheBytes, totalBytes)
+	require.Equal(t, readyBytes, totalBytes)
+
+	cacheTotal, err := m.TotalOCICacheBytes(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, cacheBytes, cacheTotal)
 }
 
 func TestCleanStaleImageTempDirsRemovesOnlyOldDirectories(t *testing.T) {
