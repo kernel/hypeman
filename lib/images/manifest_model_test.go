@@ -105,8 +105,9 @@ func TestManifestModelWriteReadRoundtrip(t *testing.T) {
 		RootFSType:    "layers",
 		Platform:      "linux/amd64",
 		Config: manifestConfigRef{
-			Digest:  "sha256:" + strings.Repeat("c", 64),
-			DiffIDs: []string{"sha256:" + strings.Repeat("d", 64), "sha256:" + strings.Repeat("e", 64)},
+			Digest:    "sha256:" + strings.Repeat("c", 64),
+			MediaType: "application/vnd.oci.image.config.v1+json",
+			DiffIDs:   []string{"sha256:" + strings.Repeat("d", 64), "sha256:" + strings.Repeat("e", 64)},
 		},
 		Layers: []layerDescriptor{
 			{Digest: "sha256:" + strings.Repeat("f", 64), Size: 10, DiffID: "sha256:" + strings.Repeat("d", 64)},
@@ -141,7 +142,10 @@ func TestValidateManifestModelRejectsNonLayeredRootFS(t *testing.T) {
 		SchemaVersion: manifestModelSchemaVersion,
 		Digest:        "sha256:" + strings.Repeat("ab", 32),
 		RootFSType:    "",
-		Config:        manifestConfigRef{Digest: "sha256:" + strings.Repeat("cd", 32)},
+		Config: manifestConfigRef{
+			Digest:    "sha256:" + strings.Repeat("cd", 32),
+			MediaType: "application/vnd.oci.image.config.v1+json",
+		},
 	}
 	err := validateManifestModel(model.Digest, model)
 	require.ErrorContains(t, err, "rootfs type")

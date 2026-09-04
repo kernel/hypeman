@@ -64,9 +64,6 @@ func TestComposeRootfsFailsOnBuildKitCacheMediatype(t *testing.T) {
 	require.NoError(t, err)
 
 	err = client.composeRootfs(context.Background(), filepath.Join(t.TempDir(), "rootfs"), "test-cache", bundle.Model)
-
-	// The cacheconfig config blob declares no layered rootfs, so manifest model
-	// validation rejects it before any blob is read.
 	require.Error(t, err, "compose should fail on BuildKit cache mediatype")
 	assert.Contains(t, err.Error(), "rootfs type", "error should be the rootfs type rejection")
 

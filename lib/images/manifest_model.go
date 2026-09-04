@@ -92,7 +92,7 @@ func validateManifestConfig(model *imageManifestModel) error {
 	if _, err := parseSHA256Digest(model.Config.Digest); err != nil {
 		return fmt.Errorf("invalid manifest model config digest: %q", model.Config.Digest)
 	}
-	if model.Config.MediaType != "" && convertToOCIMediaType(model.Config.MediaType) != v1.MediaTypeImageConfig {
+	if convertToOCIMediaType(model.Config.MediaType) != v1.MediaTypeImageConfig {
 		return fmt.Errorf("invalid manifest model config media type: %q", model.Config.MediaType)
 	}
 	if len(model.Config.DiffIDs) != len(model.Layers) {

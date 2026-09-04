@@ -127,8 +127,11 @@ func TestComposeRootfsEmptyLayers(t *testing.T) {
 		SchemaVersion: manifestModelSchemaVersion,
 		Digest:        "sha256:" + strings.Repeat("ab", 32),
 		RootFSType:    "layers",
-		Config:        manifestConfigRef{Digest: "sha256:" + strings.Repeat("cd", 32)},
-		Layers:        make([]layerDescriptor, 0),
+		Config: manifestConfigRef{
+			Digest:    "sha256:" + strings.Repeat("cd", 32),
+			MediaType: "application/vnd.oci.image.config.v1+json",
+		},
+		Layers: make([]layerDescriptor, 0),
 	}
 	dest := filepath.Join(t.TempDir(), "rootfs")
 	require.NoError(t, client.composeRootfs(context.Background(), dest, model.Digest, model))
@@ -157,8 +160,9 @@ func TestComposeRootfsMissingBlob(t *testing.T) {
 		Digest:        digestHex,
 		RootFSType:    "layers",
 		Config: manifestConfigRef{
-			Digest:  "sha256:" + strings.Repeat("cd", 32),
-			DiffIDs: []string{"sha256:" + strings.Repeat("ef", 32)},
+			Digest:    "sha256:" + strings.Repeat("cd", 32),
+			MediaType: "application/vnd.oci.image.config.v1+json",
+			DiffIDs:   []string{"sha256:" + strings.Repeat("ef", 32)},
 		},
 		Layers: []layerDescriptor{{
 			Digest:    "sha256:" + strings.Repeat("01", 32),
