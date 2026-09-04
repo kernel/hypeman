@@ -881,6 +881,12 @@ func (m *manager) findInstanceMetadataByNameOrIDPrefix(idOrName string, minPrefi
 		if err != nil {
 			continue
 		}
+		// A fork clones the source directory before writing its own metadata,
+		// so a directory can briefly hold the source's id and name. Ignore it
+		// until it describes itself, or the source resolves as ambiguous.
+		if meta.Id != id {
+			continue
+		}
 
 		if meta.Name == idOrName {
 			nameMatches++
