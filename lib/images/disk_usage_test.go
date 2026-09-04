@@ -64,6 +64,26 @@ func TestTotalReadyImageBytesFromMetadata_DeduplicatesMalformedAliases(t *testin
 	require.Equal(t, int64(len("shared-rootfs")), total)
 }
 
+func TestTotalLayerArtifactBytesFromFilesystem(t *testing.T) {
+	t.Parallel()
+
+	layersDir := t.TempDir()
+	digestDir := filepath.Join(layersDir, "a", "b")
+	require.NoError(t, os.MkdirAll(digestDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(digestDir, "layer.erofs"), []byte("erofs"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(digestDir, "layer.ext4"), []byte("ext4"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(digestDir, "artifact.erofs.json"), []byte("record"), 0o644))
+
+	// In-progress temp dirs should be skipped.
+	unpackDir := filepath.Join(digestDir, ".unpack-tmp")
+	require.NoError(t, os.MkdirAll(unpackDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(unpackDir, "layer.bin"), []byte("unpacked-content"), 0o644))
+
+	total, err := totalLayerArtifactBytesFromFilesystem(layersDir)
+	require.NoError(t, err)
+	require.Equal(t, int64(len("erofs")+len("ext4")), total)
+}
+
 func TestTotalReadyImageBytesFromMetadata_UsesRootfsFallbackForReadyImageWithoutSize(t *testing.T) {
 	t.Parallel()
 

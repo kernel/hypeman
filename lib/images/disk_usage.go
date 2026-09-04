@@ -3,8 +3,10 @@ package images
 import (
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 )
 
@@ -79,6 +81,38 @@ func totalReadyImageBytesFromMetadata(imagesDir string) (int64, error) {
 		return 0, fmt.Errorf("walk images directory: %w", err)
 	}
 
+	return total, nil
+}
+
+// totalLayerArtifactBytesFromFilesystem sums materialized layer artifacts.
+func totalLayerArtifactBytesFromFilesystem(layersDir string) (int64, error) {
+	var total int64
+	err := filepath.WalkDir(layersDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		if d.IsDir() {
+			if strings.HasPrefix(d.Name(), ".") && path != layersDir {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasPrefix(d.Name(), "layer.") {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		total += info.Size()
+		return nil
+	})
+	if err != nil {
+		return 0, fmt.Errorf("walk layer artifacts: %w", err)
+	}
 	return total, nil
 }
 
@@ -158,7 +192,11 @@ func (m *manager) computeDiskUsageTotals() (int64, int64, error) {
 	if err != nil {
 		return 0, 0, err
 	}
-	return readyImageBytes, ociCacheBytes, nil
+	layerArtifactBytes, err := totalLayerArtifactBytesFromFilesystem(m.paths.ImageLayersDir())
+	if err != nil {
+		return 0, 0, err
+	}
+	return readyImageBytes, ociCacheBytes + layerArtifactBytes, nil
 }
 
 func totalRootfsBytesInDigestDir(digestDir string) (int64, error) {

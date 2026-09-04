@@ -19,6 +19,7 @@ import (
 	"github.com/kernel/hypeman/lib/queue"
 	"github.com/kernel/hypeman/lib/tags"
 	"go.opentelemetry.io/otel/metric"
+	"golang.org/x/sync/singleflight"
 )
 
 var errStaleBuild = errors.New("stale image build")
@@ -55,7 +56,7 @@ type Manager interface {
 	// TotalImageBytes returns the total size of all ready images on disk.
 	// Used by the resource manager for disk capacity tracking.
 	TotalImageBytes(ctx context.Context) (int64, error)
-	// TotalOCICacheBytes returns the total size of the OCI layer cache.
+	// TotalOCICacheBytes returns the total size of the OCI and materialized layer caches.
 	// Used by the resource manager for disk capacity tracking.
 	TotalOCICacheBytes(ctx context.Context) (int64, error)
 	// WaitForReady blocks until the image identified by name reaches a terminal
@@ -75,6 +76,7 @@ type manager struct {
 	ociClient                  *ociClient
 	queue                      *queue.Queue
 	createMu                   sync.Mutex
+	layerFlights               singleflight.Group
 	diskUsageMu                sync.RWMutex
 	tagGenerations             map[string]uint64
 	requestedTags              map[string]string // newest pull's digest per requested tag
@@ -854,7 +856,7 @@ func (m *manager) TotalImageBytes(ctx context.Context) (int64, error) {
 	return readyImageBytes, nil
 }
 
-// TotalOCICacheBytes returns the total size of the OCI layer cache.
+// TotalOCICacheBytes returns the total size of the OCI and materialized layer caches.
 func (m *manager) TotalOCICacheBytes(ctx context.Context) (int64, error) {
 	_, ociCacheBytes, err := m.getDiskUsageTotals()
 	if err != nil {

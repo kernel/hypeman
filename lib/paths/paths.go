@@ -177,6 +177,28 @@ func (p *Paths) ImageRepositoryTagSymlink(repository, tag string) string {
 	return filepath.Join(p.ImageRepositoriesDir(), repository, tag)
 }
 
+// ImageLayersDir returns the root directory of the per-layer artifact store.
+// Layer artifacts are content-addressed by the compressed layer blob digest.
+func (p *Paths) ImageLayersDir() string {
+	return filepath.Join(p.dataDir, "images", "layers")
+}
+
+// ImageLayerDir returns the artifact directory for one layer digest.
+func (p *Paths) ImageLayerDir(layerHex string) string {
+	return filepath.Join(p.ImageLayersDir(), layerHex)
+}
+
+// ImageLayerArtifactForFormat returns the path to a materialized layer artifact.
+func (p *Paths) ImageLayerArtifactForFormat(layerHex, format string) string {
+	return filepath.Join(p.ImageLayerDir(layerHex), "layer."+format)
+}
+
+// ImageLayerRecordForFormat returns the path to the artifact record for one
+// materialized layer and format.
+func (p *Paths) ImageLayerRecordForFormat(layerHex, format string) string {
+	return filepath.Join(p.ImageLayerDir(layerHex), "artifact."+format+".json")
+}
+
 // ImageDigestDir returns the directory for a specific image digest.
 func (p *Paths) ImageDigestDir(repository, digestHex string) string {
 	return filepath.Join(p.dataDir, "images", repository, digestHex)
