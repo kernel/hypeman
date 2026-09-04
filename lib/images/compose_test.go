@@ -146,7 +146,7 @@ func TestComposeRootfsInvalidModel(t *testing.T) {
 
 	model.Config.DiffIDs = model.Config.DiffIDs[:1]
 	err := client.composeRootfs(context.Background(), filepath.Join(t.TempDir(), "rootfs"), tag, model)
-	require.ErrorContains(t, err, "1 diff ids for 2 layers")
+	require.ErrorContains(t, err, "config rootfs.diff_ids has 1 entries but manifest has 2 layers")
 }
 
 func TestComposeRootfsMissingBlob(t *testing.T) {

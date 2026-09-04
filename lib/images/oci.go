@@ -289,7 +289,7 @@ func (c *ociClient) pullAndExportWithPlatformAuth(ctx context.Context, imageRef,
 	if err := result.measure("layer_unpack", func() error {
 		return c.composeRootfs(ctx, exportDir, layoutTag, bundle.Model)
 	}); err != nil {
-		return result, fmt.Errorf("compose rootfs: %w", err)
+		return result, fmt.Errorf("unpack layers: %w", err)
 	}
 
 	return result, nil

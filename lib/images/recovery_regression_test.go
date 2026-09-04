@@ -36,7 +36,7 @@ func TestComposeRootfsCapturedFixtureReturnsErrorInsteadOfPanicking(t *testing.T
 	})
 
 	require.Error(t, composeErr)
-	assert.Contains(t, composeErr.Error(), "manifest model has 0 diff ids for 1 layers")
+	assert.Contains(t, composeErr.Error(), "config rootfs.diff_ids has 0 entries but manifest has 1 layers")
 }
 
 func TestRecoverInterruptedBuildsCapturedFixtureMarksBuildFailed(t *testing.T) {
@@ -68,7 +68,7 @@ func TestRecoverInterruptedBuildsCapturedFixtureMarksBuildFailed(t *testing.T) {
 	require.NotNil(t, meta.Error)
 	assert.Equal(t, recoveryFixtureDigest, meta.Digest)
 	assert.Equal(t, StatusFailed, meta.Status)
-	assert.Contains(t, *meta.Error, "manifest model has 0 diff ids for 1 layers")
+	assert.Contains(t, *meta.Error, "config rootfs.diff_ids has 0 entries but manifest has 1 layers")
 }
 
 func copyRecoveryFixture(t *testing.T) string {

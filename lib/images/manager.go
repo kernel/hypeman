@@ -451,7 +451,10 @@ func (m *manager) newPendingImageMetadata(ref *ResolvedRef, req CreateImageReque
 func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef, credentials *authn.AuthConfig, buildID string) {
 	buildStart := time.Now()
 	buildStatus := "failed"
-	buildDir := m.paths.SystemBuild(ref.String())
+	// Key the build directory by digest so two pending builds of the same
+	// ref with different digests never compose into (and delete) the same
+	// rootfs. This matches the queue's digest-based deduplication.
+	buildDir := m.paths.SystemBuild(ref.DigestHex())
 	tempDir := filepath.Join(buildDir, "rootfs")
 	defer func() {
 		m.recordBuildMetrics(ctx, buildStart, buildStatus)

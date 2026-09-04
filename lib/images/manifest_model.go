@@ -96,7 +96,12 @@ func validateManifestConfig(model *imageManifestModel) error {
 		return fmt.Errorf("invalid manifest model config media type: %q", model.Config.MediaType)
 	}
 	if len(model.Config.DiffIDs) != len(model.Layers) {
-		return fmt.Errorf("manifest model has %d diff ids for %d layers", len(model.Config.DiffIDs), len(model.Layers))
+		return fmt.Errorf(
+			"config rootfs.diff_ids has %d entries but manifest has %d layers for %s",
+			len(model.Config.DiffIDs),
+			len(model.Layers),
+			model.Digest,
+		)
 	}
 	return nil
 }
