@@ -555,6 +555,9 @@ func (m *manager) materializeLayerArtifacts(ctx context.Context, result *pullRes
 	if result == nil || result.Manifest == nil {
 		return nil
 	}
+	if layerArtifactFormat() == "" {
+		return nil
+	}
 	for _, desc := range result.Manifest.Layers {
 		digestHex := strings.TrimPrefix(desc.Digest, "sha256:")
 		m.createMu.Lock()

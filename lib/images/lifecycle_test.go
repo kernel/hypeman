@@ -193,9 +193,11 @@ func TestEvictionKeepsReferencedAndFreshArtifacts(t *testing.T) {
 	model := &imageManifestModel{
 		SchemaVersion: manifestModelSchemaVersion,
 		Digest:        "sha256:" + referencedHex,
+		RootFSType:    "layers",
 		Config: manifestConfigRef{
-			Digest:  "sha256:" + strings.Repeat("c", 64),
-			DiffIDs: []string{"sha256:" + referencedHex},
+			Digest:    "sha256:" + strings.Repeat("c", 64),
+			MediaType: "application/vnd.oci.image.config.v1+json",
+			DiffIDs:   []string{"sha256:" + referencedHex},
 		},
 		Layers: []layerDescriptor{{Digest: "sha256:" + referencedHex, DiffID: "sha256:" + referencedHex}},
 	}
