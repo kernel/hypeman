@@ -16,7 +16,8 @@ import (
 // absent. The export root is always 0755 regardless of the last layer's tar
 // root entry, matching the mode the previous unpack path created. A crash
 // can also strand .compose-* staging directories in dest's parent build
-// directory, which the next successful build of the same digest removes.
+// directory; the next compose attempt for the same digest removes stale
+// ones before creating its own.
 func (c *ociClient) composeRootfs(ctx context.Context, dest, layoutTag string, model *imageManifestModel) error {
 	if err := validateManifestModel(layoutTag, model); err != nil {
 		return fmt.Errorf("validate manifest model: %w", err)
@@ -24,6 +25,14 @@ func (c *ociClient) composeRootfs(ctx context.Context, dest, layoutTag string, m
 	parent := filepath.Dir(dest)
 	if err := os.MkdirAll(parent, 0755); err != nil {
 		return fmt.Errorf("create compose parent: %w", err)
+	}
+	// The build directory is digest-keyed, so any leftover .compose-* sibling
+	// is garbage from a crashed build of the same digest.
+	leftovers, _ := filepath.Glob(filepath.Join(parent, ".compose-*"))
+	for _, leftover := range leftovers {
+		if err := removePath(leftover); err != nil {
+			slog.Warn("failed to remove stale compose staging directory", "dir", leftover, "error", err)
+		}
 	}
 	staging, err := os.MkdirTemp(parent, ".compose-*")
 	if err != nil {
