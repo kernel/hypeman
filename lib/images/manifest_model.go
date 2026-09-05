@@ -149,7 +149,13 @@ func writeManifestModelAt(path, digestHex string, model *imageManifestModel) err
 // Missing models return (nil, nil): images converted before the manifest model
 // existed only have a flattened rootfs.
 func readManifestModel(p *paths.Paths, digestHex string) (*imageManifestModel, error) {
-	data, err := os.ReadFile(p.ImageContentManifestModel(digestHex))
+	return readManifestModelAt(p.ImageContentManifestModel(digestHex), digestHex)
+}
+
+// readManifestModelAt loads the manifest model at path, if present. Missing
+// files return (nil, nil).
+func readManifestModelAt(path, digestHex string) (*imageManifestModel, error) {
+	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil

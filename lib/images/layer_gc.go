@@ -45,7 +45,7 @@ func (m *manager) referencedLayerDigests() (map[string]struct{}, error) {
 			return nil
 		}
 		digestHex := filepath.Base(filepath.Dir(path))
-		model, readErr := readManifestModel(m.paths, digestHex)
+		model, readErr := readManifestModelAt(path, digestHex)
 		if readErr != nil {
 			slog.Warn("skipping unreadable manifest model for layer eviction", "digest", digestHex, "error", readErr)
 			return nil
@@ -74,7 +74,11 @@ type inflightLayerRef struct {
 }
 
 func (r *inflightLayerRef) release(m *manager) {
-	r.once.Do(func() { m.releaseInflightLayerRefsLocked(r.digestHexes) })
+	r.once.Do(func() {
+		m.createMu.Lock()
+		defer m.createMu.Unlock()
+		m.releaseInflightLayerRefsLocked(r.digestHexes)
+	})
 }
 
 // releaseLocked is release for callers already holding createMu, such as
@@ -165,14 +169,11 @@ func (m *manager) evictUnreferencedLayerArtifacts() {
 	}
 }
 
-// tryEvictLayerArtifact removes one unreferenced layer artifact if it is still
-// stale and no build is materializing it. Reconciliation holds createMu while
-// scanning and eviction, so builds cannot register or drop references mid-pass
-// and the inflight check below cannot flip between scan and removal.
+// tryEvictLayerArtifact removes one unreferenced layer artifact if it is
+// stale. Reconciliation holds createMu while scanning and eviction, and the
+// reference set already contains the in-flight digests, so no build can
+// register or drop a reference mid-pass.
 func (m *manager) tryEvictLayerArtifact(digestHex, dirPath string, cutoff time.Time) (int64, bool) {
-	if m.inflightLayerRefs[digestHex] > 0 {
-		return 0, false
-	}
 	info, statErr := os.Stat(dirPath)
 	if statErr != nil || info.ModTime().After(cutoff) {
 		return 0, false
