@@ -510,8 +510,8 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef, credentials 
 		// Hold the in-flight references until the manifest model protecting
 		// the layers is durable: on the cache-hit path the artifacts' mtimes
 		// are too old for the eviction grace period to cover the gap.
-		// finalizeImage releases them under createMu; this defer only covers
-		// paths that never reach finalization.
+		// finalizeImage releases them under createMu once the model is
+		// written; this defer covers every path that returns before that.
 		defer materialized.release(m)
 	}
 	if err != nil {
