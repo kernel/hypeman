@@ -23,7 +23,7 @@ type imageManifestModel struct {
 	MediaType     string            `json:"media_type,omitempty"`
 	Platform      string            `json:"platform"` // os/arch[/variant]
 	Config        manifestConfigRef `json:"config"`
-	RootFSType    string            `json:"rootfs_type,omitempty"`
+	RootFSType    string            `json:"rootfs_type"`
 	Layers        []layerDescriptor `json:"layers"` // manifest order, base layer first
 }
 
@@ -41,7 +41,7 @@ type layerDescriptor struct {
 	Digest    string `json:"digest"` // compressed blob digest, sha256:...
 	Size      int64  `json:"size"`   // compressed bytes
 	MediaType string `json:"media_type,omitempty"`
-	DiffID    string `json:"diff_id,omitempty"` // uncompressed diff id from the image config
+	DiffID    string `json:"diff_id"` // uncompressed diff id from the image config
 }
 
 // digestFromHex returns the full sha256 digest string for a bare hex value.
@@ -76,27 +76,32 @@ func validateManifestModel(digestHex string, model *imageManifestModel) error {
 	if model.Digest != digestFromHex(digestHex) {
 		return fmt.Errorf("manifest model digest %q does not match %q", model.Digest, digestFromHex(digestHex))
 	}
-	if model.RootFSType != "" && model.RootFSType != "layers" {
+	if model.RootFSType != "layers" {
 		return fmt.Errorf("unsupported manifest rootfs type: %q", model.RootFSType)
 	}
-	if err := validateManifestConfig(model); err != nil {
+	if err := validateManifestConfig(digestHex, model); err != nil {
 		return err
 	}
 	return validateManifestLayers(model)
 }
 
-func validateManifestConfig(model *imageManifestModel) error {
+func validateManifestConfig(digestHex string, model *imageManifestModel) error {
 	if model.Config.Digest == "" {
 		return fmt.Errorf("manifest model config digest is empty")
 	}
 	if _, err := parseSHA256Digest(model.Config.Digest); err != nil {
 		return fmt.Errorf("invalid manifest model config digest: %q", model.Config.Digest)
 	}
-	if model.Config.MediaType != "" && convertToOCIMediaType(model.Config.MediaType) != v1.MediaTypeImageConfig {
+	if convertToOCIMediaType(model.Config.MediaType) != v1.MediaTypeImageConfig {
 		return fmt.Errorf("invalid manifest model config media type: %q", model.Config.MediaType)
 	}
 	if len(model.Config.DiffIDs) != len(model.Layers) {
-		return fmt.Errorf("manifest model has %d diff ids for %d layers", len(model.Config.DiffIDs), len(model.Layers))
+		return fmt.Errorf(
+			"config rootfs.diff_ids has %d entries but manifest has %d layers for %s",
+			len(model.Config.DiffIDs),
+			len(model.Layers),
+			digestHex,
+		)
 	}
 	return nil
 }

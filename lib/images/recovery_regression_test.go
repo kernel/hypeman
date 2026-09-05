@@ -21,19 +21,22 @@ const (
 	recoveryFixtureDigestHex = "073e2a02f0df492def76940a909b6b79b896fc8907cceeb03452b250697d98fa"
 )
 
-func TestUnpackLayersCapturedFixtureReturnsErrorInsteadOfPanicking(t *testing.T) {
+func TestComposeRootfsCapturedFixtureReturnsErrorInsteadOfPanicking(t *testing.T) {
 	dataDir := copyRecoveryFixture(t)
 
 	client, err := newOCIClient(filepath.Join(dataDir, "system", "oci-cache"))
 	require.NoError(t, err)
 
-	var unpackErr error
+	bundle, err := client.extractOCIImageBundle(recoveryFixtureTag)
+	require.NoError(t, err)
+
+	var composeErr error
 	require.NotPanics(t, func() {
-		unpackErr = client.unpackLayers(context.Background(), recoveryFixtureTag, filepath.Join(t.TempDir(), "rootfs"))
+		composeErr = client.composeRootfs(context.Background(), filepath.Join(t.TempDir(), "rootfs"), recoveryFixtureTag, bundle.Model)
 	})
 
-	require.Error(t, unpackErr)
-	assert.Contains(t, unpackErr.Error(), "config rootfs.diff_ids has 0 entries but manifest has 1 layers")
+	require.Error(t, composeErr)
+	assert.Contains(t, composeErr.Error(), "config rootfs.diff_ids has 0 entries but manifest has 1 layers")
 }
 
 func TestRecoverInterruptedBuildsCapturedFixtureMarksBuildFailed(t *testing.T) {

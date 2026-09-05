@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -13,13 +14,9 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/empty"
 	"github.com/google/go-containerregistry/pkg/v1/layout"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
-	digest "github.com/opencontainers/go-digest"
-	"github.com/opencontainers/image-spec/specs-go"
 	v1 "github.com/opencontainers/image-spec/specs-go/v1"
-	rspec "github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/opencontainers/umoci/oci/cas/dir"
 	"github.com/opencontainers/umoci/oci/casext"
-	"github.com/opencontainers/umoci/oci/layer"
 )
 
 // ociClient handles OCI image operations without requiring Docker daemon
@@ -75,6 +72,11 @@ func newOCIClient(cacheDir string) (*ociClient, error) {
 		return nil, fmt.Errorf("create cache dir: %w", err)
 	}
 	return &ociClient{cacheDir: cacheDir}, nil
+}
+
+// cacheBlobDir returns the OCI layout's blob directory under the cache root.
+func (c *ociClient) cacheBlobDir() string {
+	return filepath.Join(c.cacheDir, "blobs", "sha256")
 }
 
 // vmPlatform returns the target platform for VM images: a Linux guest on the
@@ -283,9 +285,9 @@ func (c *ociClient) pullAndExportWithPlatformAuth(ctx context.Context, imageRef,
 	result.LayerCount = bundle.LayerCount
 	result.CompressedBytes = bundle.CompressedBytes
 
-	// Unpack layers to the export directory
+	// Compose the rootfs from the shared layer blobs in manifest order.
 	if err := result.measure("layer_unpack", func() error {
-		return c.unpackLayers(ctx, layoutTag, exportDir)
+		return c.composeRootfs(ctx, exportDir, layoutTag, bundle.Model)
 	}); err != nil {
 		return result, fmt.Errorf("unpack layers: %w", err)
 	}
@@ -497,139 +499,6 @@ func manifestModelFromImage(layoutTag string, configFile *gcr.ConfigFile, manife
 	return model, compressedBytes
 }
 
-// unpackLayers unpacks all OCI layers to a target directory using umoci
-// Uses go-containerregistry to get the manifest (handles both Docker v2 and OCI v1)
-// then converts it to OCI v1 format for umoci's layer unpacker.
-func (c *ociClient) unpackLayers(ctx context.Context, layoutTag, targetDir string) error {
-	// Open OCI layout using go-containerregistry (handles Docker v2 and OCI v1)
-	path, err := layout.FromPath(c.cacheDir)
-	if err != nil {
-		return fmt.Errorf("open oci layout: %w", err)
-	}
-
-	// Get the image by annotation tag from the layout
-	img, err := imageByAnnotation(path, layoutTag)
-	if err != nil {
-		return fmt.Errorf("find image by tag %s: %w", layoutTag, err)
-	}
-
-	// Get manifest from go-containerregistry
-	gcrManifest, err := img.Manifest()
-	if err != nil {
-		return fmt.Errorf("get manifest: %w", err)
-	}
-
-	configFile, err := img.ConfigFile()
-	if err != nil {
-		return fmt.Errorf("get config file: %w", err)
-	}
-	if err := validateConfigFileForUnpack(layoutTag, gcrManifest, configFile); err != nil {
-		return err
-	}
-
-	// Convert go-containerregistry manifest to OCI v1.Manifest for umoci
-	ociManifest := convertToOCIManifest(gcrManifest)
-
-	// Open the shared OCI layout with umoci for layer unpacking
-	casEngine, err := dir.Open(c.cacheDir)
-	if err != nil {
-		return fmt.Errorf("open oci layout for unpacking: %w", err)
-	}
-	defer casEngine.Close()
-
-	// Pre-create target directory (umoci needs it to exist)
-	if err := os.MkdirAll(targetDir, 0755); err != nil {
-		return fmt.Errorf("create target dir: %w", err)
-	}
-
-	// Unpack layers using umoci's layer package with rootless mode
-	// Map container UIDs to current user's UID (identity mapping)
-	uid := uint32(os.Getuid())
-	gid := uint32(os.Getgid())
-
-	unpackOpts := &layer.UnpackOptions{
-		OnDiskFormat: layer.DirRootfs{
-			MapOptions: layer.MapOptions{
-				Rootless: true, // Don't fail on chown errors
-				UIDMappings: []rspec.LinuxIDMapping{
-					{HostID: uid, ContainerID: 0, Size: 1}, // Map container root to current user
-				},
-				GIDMappings: []rspec.LinuxIDMapping{
-					{HostID: gid, ContainerID: 0, Size: 1}, // Map container root group to current user group
-				},
-			},
-		},
-	}
-
-	err = layer.UnpackRootfs(ctx, casEngine, targetDir, ociManifest, unpackOpts)
-	if err != nil {
-		return fmt.Errorf("unpack rootfs: %w", err)
-	}
-
-	return nil
-}
-
-// validateConfigFileForUnpack rejects malformed image configs before calling
-// umoci. In particular, we verify that the config blob resolves to a real OCI
-// image config, that it declares a layered rootfs, and that rootfs.diff_ids has
-// one entry per manifest layer so umoci won't index past the end of the slice.
-func validateConfigFileForUnpack(layoutTag string, manifest *gcr.Manifest, configFile *gcr.ConfigFile) error {
-	if convertToOCIMediaType(string(manifest.Config.MediaType)) != v1.MediaTypeImageConfig {
-		return fmt.Errorf(
-			"unpack rootfs: config blob is not correct mediatype %s: %s",
-			v1.MediaTypeImageConfig,
-			manifest.Config.MediaType,
-		)
-	}
-	if configFile.RootFS.Type != "layers" {
-		return fmt.Errorf("unpack rootfs: config: unsupported rootfs.type: %s", configFile.RootFS.Type)
-	}
-	if len(configFile.RootFS.DiffIDs) != len(manifest.Layers) {
-		return fmt.Errorf(
-			"unpack rootfs: config rootfs.diff_ids has %d entries but manifest has %d layers for %s",
-			len(configFile.RootFS.DiffIDs),
-			len(manifest.Layers),
-			layoutTag,
-		)
-	}
-	return nil
-}
-
-// convertToOCIManifest converts a go-containerregistry manifest to OCI v1.Manifest
-// This allows us to use go-containerregistry (which handles both Docker v2 and OCI v1)
-// for manifest parsing, while still using umoci for layer unpacking.
-// Docker v2 mediatypes are converted to OCI equivalents since umoci expects OCI format.
-func convertToOCIManifest(gcrManifest *gcr.Manifest) v1.Manifest {
-	// Convert config descriptor with mediatype conversion
-	configDesc := v1.Descriptor{
-		MediaType:   convertToOCIMediaType(string(gcrManifest.Config.MediaType)),
-		Digest:      gcrDigestToOCI(gcrManifest.Config.Digest),
-		Size:        gcrManifest.Config.Size,
-		Annotations: gcrManifest.Config.Annotations,
-	}
-
-	// Convert layer descriptors with mediatype conversion
-	layers := make([]v1.Descriptor, len(gcrManifest.Layers))
-	for i, layer := range gcrManifest.Layers {
-		layers[i] = v1.Descriptor{
-			MediaType:   convertToOCIMediaType(string(layer.MediaType)),
-			Digest:      gcrDigestToOCI(layer.Digest),
-			Size:        layer.Size,
-			Annotations: layer.Annotations,
-		}
-	}
-
-	return v1.Manifest{
-		Versioned: specs.Versioned{
-			SchemaVersion: int(gcrManifest.SchemaVersion),
-		},
-		MediaType:   convertToOCIMediaType(string(gcrManifest.MediaType)),
-		Config:      configDesc,
-		Layers:      layers,
-		Annotations: gcrManifest.Annotations,
-	}
-}
-
 // convertToOCIMediaType converts Docker v2 media types to OCI equivalents.
 // Images from Docker Hub often use Docker-specific mediatypes, but umoci
 // requires OCI-standard mediatypes for layer unpacking.
@@ -647,11 +516,6 @@ func convertToOCIMediaType(mediaType string) string {
 		// If already OCI or unknown, return as-is
 		return mediaType
 	}
-}
-
-// gcrDigestToOCI converts a go-containerregistry digest to OCI digest
-func gcrDigestToOCI(d gcr.Hash) digest.Digest {
-	return digest.NewDigestFromEncoded(digest.Algorithm(d.Algorithm), d.Hex)
 }
 
 type containerMetadata struct {
