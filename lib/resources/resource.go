@@ -889,7 +889,7 @@ func (m *Manager) MaxImageStorageBytes() int64 {
 	return int64(float64(capacity) * fraction)
 }
 
-// CurrentImageStorageBytes returns the current image storage usage (OCI cache + rootfs).
+// CurrentImageStorageBytes returns the current image storage usage (ready rootfs + OCI cache and shared layers).
 func (m *Manager) CurrentImageStorageBytes(ctx context.Context) (int64, error) {
 	if m.imageLister == nil {
 		return 0, nil

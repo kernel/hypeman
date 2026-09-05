@@ -92,7 +92,7 @@ func (m *manager) cleanupReplacedTag(ref *NormalizedRef, previousDigest, digestH
 	if err := removeDigestIfUnreferenced(m.paths, ref.Repository(), previousDigest, true); err != nil {
 		slog.Warn("failed to collect replaced image content", "repository", ref.Repository(), "digest", previousDigest, "error", err)
 	}
-	m.refreshDiskUsageTotals()
+	m.reconcileLayerStoreLocked()
 }
 
 func parseTagReferences(source, target string) (*NormalizedRef, *NormalizedRef, error) {

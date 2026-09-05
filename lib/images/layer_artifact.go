@@ -154,9 +154,8 @@ func discardLayerCache(p *paths.Paths, layerHex string) error {
 // The layer is unpacked into an isolated temp directory, converted to the
 // default image format, and installed atomically. Normal failures remove the
 // temp directory; a crash mid-build can leave a stale .unpack-* directory
-// behind, which reconciliation landing with the pull integration is expected
-// to sweep. No production caller yet: pull integration and
-// composition land in later changes.
+// behind, which the startup sweep in layer_gc.go removes once it ages past
+// the eviction grace period.
 //
 // Concurrent callers share one build. The build itself is detached from the
 // initiating caller's cancellation so one cancelled pull cannot fail every
