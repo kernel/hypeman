@@ -59,7 +59,7 @@ func (m *manager) referencedLayerDigests() (map[string]struct{}, error) {
 		return nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("walk content manifests: %w", err)
+		return nil, fmt.Errorf("walk image manifests: %w", err)
 	}
 	return refs, nil
 }

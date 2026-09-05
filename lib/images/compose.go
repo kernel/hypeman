@@ -15,8 +15,8 @@ import (
 // concurrently, and a failure between the remove and the rename leaves dest
 // absent. The export root is always 0755 regardless of the last layer's tar
 // root entry, matching the mode the previous unpack path created. A crash
-// can also strand .compose-* staging directories in dest's parent, the same
-// way .unpack-* directories can strand under layer builds.
+// can also strand .compose-* staging directories in dest's parent build
+// directory, which the next successful build of the same digest removes.
 func (c *ociClient) composeRootfs(ctx context.Context, dest, layoutTag string, model *imageManifestModel) error {
 	if err := validateManifestModel(layoutTag, model); err != nil {
 		return fmt.Errorf("validate manifest model: %w", err)
