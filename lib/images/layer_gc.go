@@ -231,7 +231,9 @@ func (m *manager) cleanStaleImageTempDirs() {
 		}
 		info, statErr := os.Stat(path)
 		if statErr == nil && info.ModTime().Before(cutoff) {
-			if err := os.RemoveAll(path); err != nil {
+			// removePath clears the read-only directories umoci restores from
+			// layer metadata, which os.RemoveAll cannot unlink through.
+			if err := removePath(path); err != nil {
 				slog.Warn("failed to remove stale image temp dir", "dir", path, "error", err)
 			}
 		}
