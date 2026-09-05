@@ -126,10 +126,9 @@ func NewManager(p *paths.Paths, maxConcurrentBuilds int, meter metric.Meter) (Ma
 
 	m.RecoverInterruptedBuilds()
 	// Sweep temp dirs and evict layer orphans an unclean shutdown may have
-	// left behind. Recovered builds re-enqueued above run concurrently and
-	// hold in-flight references before materializing; artifacts from their
-	// previous attempts are unreferenced garbage and get evicted, to be
-	// re-materialized from the blob cache on demand.
+	// left behind. Recovered builds re-enqueued above run concurrently; they
+	// re-materialize from the blob cache if this pass evicts their previous
+	// attempt's unreferenced artifacts.
 	m.cleanStaleImageTempDirs()
 	m.reconcileLayerStore()
 	// Keep legacy images readable in their existing layout and promote them only
@@ -569,10 +568,7 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef, credentials 
 }
 
 func (m *manager) materializeLayerArtifacts(ctx context.Context, result *pullResult) (*inflightLayerRef, error) {
-	if result.Manifest == nil {
-		return nil, nil
-	}
-	if layerArtifactFormat() == "" {
+	if result.Manifest == nil || layerArtifactFormat() == "" {
 		return nil, nil
 	}
 	digestHexes := make([]string, 0, len(result.Manifest.Layers))

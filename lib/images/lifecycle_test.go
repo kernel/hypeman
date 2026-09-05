@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	gcr "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/empty"
 	"github.com/google/go-containerregistry/pkg/v1/mutate"
 	"github.com/kernel/hypeman/lib/paths"
@@ -26,6 +27,30 @@ func layerStoreHexes(t *testing.T, p *paths.Paths) map[string]struct{} {
 		}
 	}
 	return hexes
+}
+
+func imageDigest(t *testing.T, img gcr.Image) string {
+	t.Helper()
+	digest, err := img.Digest()
+	require.NoError(t, err)
+	return digest.String()
+}
+
+// importAndWait imports an image and blocks until its build reaches ready.
+func importAndWait(t *testing.T, m *manager, ctx context.Context, repo, tag, digest string) {
+	t.Helper()
+	events := make(chan StatusEvent, 2)
+	layoutTag := digestToLayoutTag(digest)
+	m.subscribeToReady(layoutTag, events)
+	defer m.unsubscribeFromReady(layoutTag, events)
+	_, err := m.ImportLocalImage(ctx, repo, tag, digest)
+	require.NoError(t, err)
+	select {
+	case event := <-events:
+		require.Equal(t, StatusReady, event.Status)
+	case <-time.After(30 * time.Second):
+		t.Fatalf("image %s did not become ready", repo)
+	}
 }
 
 // TestSharedLayersMaterializeOnceAndEvictWithReferences is the end-to-end
@@ -53,16 +78,11 @@ func TestSharedLayersMaterializeOnceAndEvictWithReferences(t *testing.T) {
 	require.NoError(t, err)
 
 	writeLayerTestLayout(t, p, imgA, imgB)
-	digestAHash, err := imgA.Digest()
-	require.NoError(t, err)
-	digestBHash, err := imgB.Digest()
-	require.NoError(t, err)
-	digestA, digestB := digestAHash.String(), digestBHash.String()
+	digestA, digestB := imageDigest(t, imgA), imageDigest(t, imgB)
 
 	baseManifest, err := imgA.Manifest()
 	require.NoError(t, err)
-	baseHex := baseManifest.Layers[0].Digest.Hex
-	topAHex := baseManifest.Layers[1].Digest.Hex
+	baseHex, topAHex := baseManifest.Layers[0].Digest.Hex, baseManifest.Layers[1].Digest.Hex
 	topBManifest, err := imgB.Manifest()
 	require.NoError(t, err)
 	topBHex := topBManifest.Layers[1].Digest.Hex
@@ -71,29 +91,8 @@ func TestSharedLayersMaterializeOnceAndEvictWithReferences(t *testing.T) {
 	const repoA = "kernel.local/apps/app-a"
 	const repoB = "kernel.local/apps/app-b"
 
-	eventsA := make(chan StatusEvent, 2)
-	m.subscribeToReady(digestToLayoutTag(digestA), eventsA)
-	defer m.unsubscribeFromReady(digestToLayoutTag(digestA), eventsA)
-	_, err = m.ImportLocalImage(ctx, repoA, "v1", digestA)
-	require.NoError(t, err)
-	select {
-	case event := <-eventsA:
-		require.Equal(t, StatusReady, event.Status)
-	case <-time.After(30 * time.Second):
-		t.Fatal("image A did not become ready")
-	}
-
-	eventsB := make(chan StatusEvent, 2)
-	m.subscribeToReady(digestToLayoutTag(digestB), eventsB)
-	defer m.unsubscribeFromReady(digestToLayoutTag(digestB), eventsB)
-	_, err = m.ImportLocalImage(ctx, repoB, "v1", digestB)
-	require.NoError(t, err)
-	select {
-	case event := <-eventsB:
-		require.Equal(t, StatusReady, event.Status)
-	case <-time.After(30 * time.Second):
-		t.Fatal("image B did not become ready")
-	}
+	importAndWait(t, m, ctx, repoA, "v1", digestA)
+	importAndWait(t, m, ctx, repoB, "v1", digestB)
 
 	// The shared base layer materialized exactly once, alongside the two tops.
 	hexes := layerStoreHexes(t, p)

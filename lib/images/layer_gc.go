@@ -81,8 +81,7 @@ func (r *inflightLayerRef) release(m *manager) {
 	})
 }
 
-// releaseLocked is release for callers already holding createMu, such as
-// finalizeImage.
+// releaseLocked is release for callers already holding createMu.
 func (r *inflightLayerRef) releaseLocked(m *manager) {
 	r.once.Do(func() { m.releaseInflightLayerRefsLocked(r.digestHexes) })
 }
@@ -156,8 +155,19 @@ func (m *manager) evictUnreferencedLayerArtifacts() {
 		if _, referenced := refs[digestHex]; referenced {
 			continue
 		}
-		size, removed := m.tryEvictLayerArtifact(digestHex, filepath.Join(layersDir, digestHex), cutoff)
-		if !removed {
+		dirPath := filepath.Join(layersDir, digestHex)
+		info, statErr := os.Stat(dirPath)
+		if statErr != nil || info.ModTime().After(cutoff) {
+			continue
+		}
+		size, err := dirSize(dirPath)
+		if err != nil {
+			slog.Warn("failed to measure layer artifact size", "digest", digestHex, "error", err)
+		}
+		// removePath clears read-only directories restored from layer
+		// metadata, which os.RemoveAll cannot unlink through.
+		if err := removePath(dirPath); err != nil {
+			slog.Warn("failed to evict unreferenced layer artifact", "digest", digestHex, "error", err)
 			continue
 		}
 		evicted++
@@ -167,28 +177,6 @@ func (m *manager) evictUnreferencedLayerArtifacts() {
 		slog.Info("evicted unreferenced layer artifacts", "count", evicted, "bytes", evictedBytes)
 		m.recordLayerArtifactsEvicted(context.Background(), int64(evicted))
 	}
-}
-
-// tryEvictLayerArtifact removes one unreferenced layer artifact if it is
-// stale. Reconciliation holds createMu while scanning and eviction, and the
-// reference set already contains the in-flight digests, so no build can
-// register or drop a reference mid-pass.
-func (m *manager) tryEvictLayerArtifact(digestHex, dirPath string, cutoff time.Time) (int64, bool) {
-	info, statErr := os.Stat(dirPath)
-	if statErr != nil || info.ModTime().After(cutoff) {
-		return 0, false
-	}
-	size, err := dirSize(dirPath)
-	if err != nil {
-		slog.Warn("failed to measure layer artifact size", "digest", digestHex, "error", err)
-	}
-	// removePath clears read-only directories restored from layer metadata,
-	// which os.RemoveAll cannot unlink through.
-	if err := removePath(dirPath); err != nil {
-		slog.Warn("failed to evict unreferenced layer artifact", "digest", digestHex, "error", err)
-		return 0, false
-	}
-	return size, true
 }
 
 // isStaleTempDirName reports whether a directory name matches the temp
@@ -229,8 +217,7 @@ func (m *manager) cleanStaleImageTempDirs() {
 		if !isStaleTempDirName(name) {
 			return nil
 		}
-		info, statErr := os.Stat(path)
-		if statErr == nil && info.ModTime().Before(cutoff) {
+		if info, err := entry.Info(); err == nil && info.ModTime().Before(cutoff) {
 			// removePath clears the read-only directories umoci restores from
 			// layer metadata, which os.RemoveAll cannot unlink through.
 			if err := removePath(path); err != nil {
