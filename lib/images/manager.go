@@ -126,7 +126,10 @@ func NewManager(p *paths.Paths, maxConcurrentBuilds int, meter metric.Meter) (Ma
 
 	m.RecoverInterruptedBuilds()
 	// Sweep temp dirs and evict layer orphans an unclean shutdown may have
-	// left behind. Age-gated, so builds re-enqueued above are untouched.
+	// left behind. Recovered builds re-enqueued above run concurrently and
+	// hold in-flight references before materializing; artifacts from their
+	// previous attempts are unreferenced garbage and get evicted, to be
+	// re-materialized from the blob cache on demand.
 	m.cleanStaleImageTempDirs()
 	m.reconcileLayerStore()
 	// Keep legacy images readable in their existing layout and promote them only
@@ -503,20 +506,19 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef, credentials 
 	m.recordPullMetrics(ctx, "success")
 
 	materialized, err := m.materializeLayerArtifacts(ctx, result)
-	if err != nil {
-		m.updateStatusByDigest(ref, StatusFailed, fmt.Errorf("materialize layers: %w", err), buildID)
-		return
-	}
-	releaseLayerRefs := func() {}
-	if len(materialized) > 0 {
+	if materialized != nil {
 		// Hold the in-flight references until the manifest model protecting
 		// the layers is durable: on the cache-hit path the artifacts' mtimes
 		// are too old for the eviction grace period to cover the gap.
-		var releaseOnce sync.Once
-		releaseLayerRefs = func() {
-			releaseOnce.Do(func() { m.releaseInflightLayers(materialized) })
-		}
-		defer releaseLayerRefs()
+		// finalizeImage releases them under createMu; this defer only covers
+		// paths that never reach finalization.
+		defer materialized.release(m)
+	}
+	if err != nil {
+		// The rootfs is already composed from blobs, so materialization is
+		// best effort: log and continue with degraded sharing.
+		slog.Warn("layer materialization failed; continuing without shared artifacts",
+			"digest", ref.DigestHex(), "error", err)
 	}
 
 	// Check if this digest already exists and is ready (deduplication)
@@ -553,7 +555,7 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef, credentials 
 	}
 
 	finalizeStart := time.Now()
-	err = m.finalizeImage(ref, result, diskSize, buildID, diskTempPath)
+	err = m.finalizeImage(ref, result, diskSize, buildID, diskTempPath, materialized)
 	m.recordImageBuildPhase(ctx, ref.Digest(), "finalize", time.Since(finalizeStart), phaseStatus(err), "not_applicable")
 	if err != nil {
 		if errors.Is(err, errStaleBuild) {
@@ -566,8 +568,8 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef, credentials 
 	buildStatus = "success"
 }
 
-func (m *manager) materializeLayerArtifacts(ctx context.Context, result *pullResult) ([]string, error) {
-	if result == nil || result.Manifest == nil {
+func (m *manager) materializeLayerArtifacts(ctx context.Context, result *pullResult) (*inflightLayerRef, error) {
+	if result.Manifest == nil {
 		return nil, nil
 	}
 	if layerArtifactFormat() == "" {
@@ -577,17 +579,18 @@ func (m *manager) materializeLayerArtifacts(ctx context.Context, result *pullRes
 	for _, desc := range result.Manifest.Layers {
 		digestHexes = append(digestHexes, strings.TrimPrefix(desc.Digest, "sha256:"))
 	}
-	m.retainInflightLayers(digestHexes)
+	handle := m.retainInflightLayers(digestHexes)
 	for _, desc := range result.Manifest.Layers {
 		if _, err := m.materializeLayerArtifact(ctx, desc); err != nil {
-			m.releaseInflightLayers(digestHexes)
-			return nil, err
+			// The handle's release is idempotent: the caller keeps the partial
+			// set protected until its path finishes with it.
+			return handle, err
 		}
 	}
-	return digestHexes, nil
+	return handle, nil
 }
 
-func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, diskSize int64, buildID, diskTempPath string) error {
+func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, diskSize int64, buildID, diskTempPath string, materialized *inflightLayerRef) error {
 	m.createMu.Lock()
 	defer m.createMu.Unlock()
 
@@ -632,13 +635,11 @@ func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, diskSize i
 		modelWritten = true
 		// The model now protects these layers on disk, so the in-flight refs
 		// can go while still holding createMu: a delete racing the ready
-		// notification then reconciles against durable state. The caller's
+		// notification then reconciles against durable state. The build's
 		// deferred release is a no-op after this.
-		layerHexes := make([]string, 0, len(model.Layers))
-		for _, desc := range model.Layers {
-			layerHexes = append(layerHexes, strings.TrimPrefix(desc.Digest, "sha256:"))
+		if materialized != nil {
+			materialized.releaseLocked(m)
 		}
-		m.releaseInflightLayersLocked(layerHexes)
 	}
 
 	meta.Status = StatusReady

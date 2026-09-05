@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -17,14 +18,21 @@ import (
 const layerEvictionGracePeriod = 10 * time.Minute
 
 // referencedLayerDigests returns the set of layer blob digests referenced by
-// the manifest models of every image in the content layout, plus the digests
-// currently referenced by in-flight builds. Layer artifacts in this set are
-// protected from eviction. Unreadable manifest models are skipped with a
-// warning so one corrupt record cannot disable eviction entirely.
+// the manifest models of every image in the images tree — both content and
+// legacy layouts write their model as a manifest.json with the digest as its
+// parent directory — plus the digests currently referenced by in-flight
+// builds. Layer artifacts in this set are protected from eviction. Unreadable
+// manifest models are skipped with a warning so one corrupt record cannot
+// disable eviction entirely.
+//
+// Callers must hold createMu so the in-flight map read is ordered with model
+// writes during finalization.
 func (m *manager) referencedLayerDigests() (map[string]struct{}, error) {
-	refs := m.inflightLayerRefSnapshot()
-	contentRoot := filepath.Join(m.paths.ImagesDir(), "content")
-	err := filepath.WalkDir(contentRoot, func(path string, entry fs.DirEntry, err error) error {
+	refs := make(map[string]struct{}, len(m.inflightLayerRefs))
+	for digestHex := range m.inflightLayerRefs {
+		refs[digestHex] = struct{}{}
+	}
+	err := filepath.WalkDir(m.paths.ImagesDir(), func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			if os.IsNotExist(err) {
 				return nil
@@ -50,43 +58,43 @@ func (m *manager) referencedLayerDigests() (map[string]struct{}, error) {
 		}
 		return nil
 	})
-	if err != nil && !os.IsNotExist(err) {
+	if err != nil {
 		return nil, fmt.Errorf("walk content manifests: %w", err)
 	}
 	return refs, nil
 }
 
-// inflightLayerRefSnapshot returns the layer digests currently retained by
-// in-flight builds. Callers hold createMu, which guards the map.
-func (m *manager) inflightLayerRefSnapshot() map[string]struct{} {
-	refs := make(map[string]struct{}, len(m.inflightLayerRefs))
-	for digestHex := range m.inflightLayerRefs {
-		refs[digestHex] = struct{}{}
-	}
-	return refs
+// inflightLayerRef is the handle returned by retainInflightLayers. Its
+// release is idempotent: finalization releases the refs as soon as the
+// manifest model is durable, and the build's deferred release becomes a
+// no-op afterwards.
+type inflightLayerRef struct {
+	once        sync.Once
+	digestHexes []string
+}
+
+func (r *inflightLayerRef) release(m *manager) {
+	r.once.Do(func() { m.releaseInflightLayerRefsLocked(r.digestHexes) })
+}
+
+// releaseLocked is release for callers already holding createMu, such as
+// finalizeImage.
+func (r *inflightLayerRef) releaseLocked(m *manager) {
+	r.once.Do(func() { m.releaseInflightLayerRefsLocked(r.digestHexes) })
 }
 
 // retainInflightLayers registers one in-flight reference per digest so
 // reconciliation cannot evict layers a build is materializing.
-func (m *manager) retainInflightLayers(digestHexes []string) {
+func (m *manager) retainInflightLayers(digestHexes []string) *inflightLayerRef {
 	m.createMu.Lock()
 	for _, digestHex := range digestHexes {
 		m.inflightLayerRefs[digestHex]++
 	}
 	m.createMu.Unlock()
+	return &inflightLayerRef{digestHexes: digestHexes}
 }
 
-// releaseInflightLayers drops the in-flight references taken by
-// retainInflightLayers.
-func (m *manager) releaseInflightLayers(digestHexes []string) {
-	m.createMu.Lock()
-	m.releaseInflightLayersLocked(digestHexes)
-	m.createMu.Unlock()
-}
-
-// releaseInflightLayersLocked is releaseInflightLayers for callers already
-// holding createMu, such as finalizeImage.
-func (m *manager) releaseInflightLayersLocked(digestHexes []string) {
+func (m *manager) releaseInflightLayerRefsLocked(digestHexes []string) {
 	for _, digestHex := range digestHexes {
 		if m.inflightLayerRefs[digestHex] <= 1 {
 			delete(m.inflightLayerRefs, digestHex)
@@ -153,9 +161,7 @@ func (m *manager) evictUnreferencedLayerArtifacts() {
 	}
 	if evicted > 0 {
 		slog.Info("evicted unreferenced layer artifacts", "count", evicted, "bytes", evictedBytes)
-		if m.metrics != nil {
-			m.metrics.layerArtifactsEvicted.Add(context.Background(), int64(evicted))
-		}
+		m.recordLayerArtifactsEvicted(context.Background(), int64(evicted))
 	}
 }
 
@@ -184,6 +190,17 @@ func (m *manager) tryEvictLayerArtifact(digestHex, dirPath string, cutoff time.T
 	return size, true
 }
 
+// isStaleTempDirName reports whether a directory name matches the temp
+// prefixes builds use for staging, installs, and tag promotion.
+func isStaleTempDirName(name string) bool {
+	for _, prefix := range []string{".unpack-", ".install-", ".tag-stage-"} {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 // cleanStaleImageTempDirs removes temp directories left behind by builds that
 // were interrupted mid-install, mid-materialization, or mid-tag promotion.
 // The walk covers the whole images tree: layer and content staging dirs plus
@@ -196,35 +213,30 @@ func (m *manager) tryEvictLayerArtifact(digestHex, dirPath string, cutoff time.T
 // the grace period can look stale while actively writing. A periodic sweep
 // would need a heartbeat or a live-build registry first.
 func (m *manager) cleanStaleImageTempDirs() {
-	roots := []string{
-		m.paths.ImagesDir(),
-	}
 	cutoff := time.Now().Add(-m.layerEvictionGrace)
-	for _, root := range roots {
-		err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
-			if err != nil {
-				if os.IsNotExist(err) {
-					return nil
-				}
-				return err
-			}
-			if !entry.IsDir() {
+	err := filepath.WalkDir(m.paths.ImagesDir(), func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			if os.IsNotExist(err) {
 				return nil
 			}
-			name := entry.Name()
-			if !strings.HasPrefix(name, ".unpack-") && !strings.HasPrefix(name, ".install-") && !strings.HasPrefix(name, ".tag-stage-") {
-				return nil
-			}
-			info, statErr := os.Stat(path)
-			if statErr == nil && info.ModTime().Before(cutoff) {
-				if err := os.RemoveAll(path); err != nil {
-					slog.Warn("failed to remove stale image temp dir", "dir", path, "error", err)
-				}
-			}
-			return fs.SkipDir
-		})
-		if err != nil && !os.IsNotExist(err) {
-			slog.Warn("failed to clean stale image temp dirs", "root", root, "error", err)
+			return err
 		}
+		if !entry.IsDir() {
+			return nil
+		}
+		name := entry.Name()
+		if !isStaleTempDirName(name) {
+			return nil
+		}
+		info, statErr := os.Stat(path)
+		if statErr == nil && info.ModTime().Before(cutoff) {
+			if err := os.RemoveAll(path); err != nil {
+				slog.Warn("failed to remove stale image temp dir", "dir", path, "error", err)
+			}
+		}
+		return fs.SkipDir
+	})
+	if err != nil {
+		slog.Warn("failed to clean stale image temp dirs", "root", m.paths.ImagesDir(), "error", err)
 	}
 }

@@ -9,35 +9,13 @@ import (
 	"testing"
 	"time"
 
-	gcr "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/empty"
-	"github.com/google/go-containerregistry/pkg/v1/layout"
 	"github.com/google/go-containerregistry/pkg/v1/mutate"
 	"github.com/kernel/hypeman/lib/paths"
 	"github.com/stretchr/testify/require"
 )
 
-// writeSharedLayout writes several images into one OCI layout cache, each
-// annotated with its own digest tag.
-func writeSharedLayout(t *testing.T, p *paths.Paths, imgs ...gcr.Image) []string {
-	t.Helper()
-
-	layoutPath, err := layout.Write(p.SystemOCICache(), empty.Index)
-	require.NoError(t, err)
-
-	digests := make([]string, 0, len(imgs))
-	for _, img := range imgs {
-		digest, err := img.Digest()
-		require.NoError(t, err)
-		require.NoError(t, layoutPath.AppendImage(img, layout.WithAnnotations(map[string]string{
-			"org.opencontainers.image.ref.name": digestToLayoutTag(digest.String()),
-		})))
-		digests = append(digests, digest.String())
-	}
-	return digests
-}
-
-func layerHexes(t *testing.T, p *paths.Paths) map[string]struct{} {
+func layerStoreHexes(t *testing.T, p *paths.Paths) map[string]struct{} {
 	t.Helper()
 	entries, err := os.ReadDir(p.ImageLayersDir())
 	require.NoError(t, err)
@@ -74,8 +52,12 @@ func TestSharedLayersMaterializeOnceAndEvictWithReferences(t *testing.T) {
 	imgB, err := mutate.AppendLayers(empty.Image, base, topB)
 	require.NoError(t, err)
 
-	digests := writeSharedLayout(t, p, imgA, imgB)
-	digestA, digestB := digests[0], digests[1]
+	writeLayerTestLayout(t, p, imgA, imgB)
+	digestAHash, err := imgA.Digest()
+	require.NoError(t, err)
+	digestBHash, err := imgB.Digest()
+	require.NoError(t, err)
+	digestA, digestB := digestAHash.String(), digestBHash.String()
 
 	baseManifest, err := imgA.Manifest()
 	require.NoError(t, err)
@@ -114,7 +96,7 @@ func TestSharedLayersMaterializeOnceAndEvictWithReferences(t *testing.T) {
 	}
 
 	// The shared base layer materialized exactly once, alongside the two tops.
-	hexes := layerHexes(t, p)
+	hexes := layerStoreHexes(t, p)
 	require.Len(t, hexes, 3)
 	require.Contains(t, hexes, baseHex)
 	require.Contains(t, hexes, topAHex)
@@ -122,7 +104,7 @@ func TestSharedLayersMaterializeOnceAndEvictWithReferences(t *testing.T) {
 
 	// Deleting image A evicts only its unique layer; the shared base survives.
 	require.NoError(t, m.DeleteImage(ctx, repoA+"@"+digestA))
-	hexes = layerHexes(t, p)
+	hexes = layerStoreHexes(t, p)
 	require.Len(t, hexes, 2)
 	require.Contains(t, hexes, baseHex, "shared base must survive while referenced")
 	require.Contains(t, hexes, topBHex)
@@ -130,7 +112,7 @@ func TestSharedLayersMaterializeOnceAndEvictWithReferences(t *testing.T) {
 
 	// Deleting image B removes the last references: everything is evicted.
 	require.NoError(t, m.DeleteImage(ctx, repoB+"@"+digestB))
-	hexes = layerHexes(t, p)
+	hexes = layerStoreHexes(t, p)
 	require.Empty(t, hexes, "unreferenced layer artifacts must be evicted")
 }
 
@@ -218,7 +200,7 @@ func TestEvictionKeepsReferencedAndFreshArtifacts(t *testing.T) {
 
 	m.reconcileLayerStore()
 
-	hexes := layerHexes(t, p)
+	hexes := layerStoreHexes(t, p)
 	require.Contains(t, hexes, referencedHex)
 	require.Contains(t, hexes, orphanFreshHex)
 }

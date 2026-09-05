@@ -179,3 +179,11 @@ func (m *manager) recordOCIImageMetrics(ctx context.Context, layerCount int, com
 	m.metrics.ociLayerCount.Record(ctx, int64(layerCount), attrs)
 	m.metrics.ociCompressedBytes.Record(ctx, compressedBytes, attrs)
 }
+
+// recordLayerArtifactsEvicted counts layer artifacts removed by eviction.
+func (m *manager) recordLayerArtifactsEvicted(ctx context.Context, evicted int64) {
+	if m.metrics == nil {
+		return
+	}
+	m.metrics.layerArtifactsEvicted.Add(ctx, evicted)
+}
