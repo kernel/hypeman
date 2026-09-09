@@ -6,6 +6,9 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"github.com/vishvananda/netlink"
+	"golang.org/x/sys/unix"
 )
 
 func TestParseBridgeFilters(t *testing.T) {
@@ -65,4 +68,21 @@ func TestPlanOrphanedBridgeTCBailsWhenNoRTIIFParses(t *testing.T) {
 	assert.False(t, safe)
 	assert.Nil(t, staleFilters)
 	assert.Nil(t, staleClasses)
+}
+
+func TestGuestFDBEntry(t *testing.T) {
+	entry, err := guestFDBEntry(42, "02:00:00:aa:bb:cc")
+	require.NoError(t, err)
+
+	assert.Equal(t, 42, entry.LinkIndex)
+	assert.Equal(t, unix.AF_BRIDGE, entry.Family)
+	assert.Equal(t, netlink.NUD_PERMANENT, entry.State)
+	assert.Equal(t, netlink.NTF_MASTER, entry.Flags)
+	assert.Equal(t, "02:00:00:aa:bb:cc", entry.HardwareAddr.String())
+	assert.Nil(t, entry.IP)
+}
+
+func TestGuestFDBEntryRejectsBadMAC(t *testing.T) {
+	_, err := guestFDBEntry(42, "not-a-mac")
+	assert.Error(t, err)
 }

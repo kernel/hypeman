@@ -59,7 +59,7 @@ func (m *manager) CreateAllocation(ctx context.Context, req AllocateRequest) (*N
 		attribute.Bool("download_rate_limit", req.DownloadBps > 0),
 		attribute.Bool("upload_rate_limit", req.UploadBps > 0),
 	)
-	err = m.createTAPDevice(tapCtx, netConfig.TAPDevice, network.Bridge, network.Isolated)
+	err = m.createTAPDevice(tapCtx, netConfig.TAPDevice, network.Bridge, netConfig.MAC, network.Isolated)
 	tapSpanEnd(err)
 	if err != nil {
 		cleanupErr := m.deleteTAPDeviceForInstanceSerialized(ctx, req.InstanceID, netConfig.TAPDevice)
@@ -143,7 +143,7 @@ func (m *manager) RecreateAllocation(ctx context.Context, instanceID string, dow
 		attribute.Bool("download_rate_limit", downloadBps > 0),
 		attribute.Bool("upload_rate_limit", uploadBps > 0),
 	)
-	err = m.createTAPDevice(tapCtx, alloc.TAPDevice, network.Bridge, network.Isolated)
+	err = m.createTAPDevice(tapCtx, alloc.TAPDevice, network.Bridge, alloc.MAC, network.Isolated)
 	tapSpanEnd(err)
 	if err != nil {
 		_ = m.deleteTAPDeviceForInstanceSerialized(ctx, instanceID, alloc.TAPDevice)
