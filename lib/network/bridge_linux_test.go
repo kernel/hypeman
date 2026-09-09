@@ -3,6 +3,9 @@
 package network
 
 import (
+	"context"
+	"os"
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -85,4 +88,63 @@ func TestGuestFDBEntry(t *testing.T) {
 func TestGuestFDBEntryRejectsBadMAC(t *testing.T) {
 	_, err := guestFDBEntry(42, "not-a-mac")
 	assert.Error(t, err)
+}
+
+// TestHardenIsolatedPortOnRealBridge exercises the netlink calls against a real
+// bridge, which is the only way to catch a request the kernel rejects.
+func TestHardenIsolatedPortOnRealBridge(t *testing.T) {
+	const mac = "02:00:00:aa:bb:cc"
+	tap := bridgedTAPForTest(t, "brhardn0", "taphardn0")
+
+	require.NoError(t, hardenIsolatedPort(context.Background(), tap, tap.Name, mac))
+
+	protinfo, err := netlink.LinkGetProtinfo(tap)
+	require.NoError(t, err)
+	assert.False(t, protinfo.Flood, "unicast flooding should be off")
+	assert.False(t, protinfo.Learning, "MAC learning should be off")
+
+	entries, err := netlink.NeighList(tap.Attrs().Index, unix.AF_BRIDGE)
+	require.NoError(t, err)
+	pinned := slices.IndexFunc(entries, func(n netlink.Neigh) bool {
+		return n.HardwareAddr.String() == mac
+	})
+	require.NotEqual(t, -1, pinned, "guest MAC should be pinned to the TAP port")
+	assert.Equal(t, netlink.NUD_PERMANENT, entries[pinned].State)
+}
+
+// TestHardenIsolatedPortLeavesPortAloneOnBadMAC covers the case where the
+// allocation carries a MAC we can't parse: the port keeps its defaults rather
+// than ending up with flooding off and nothing pinned to it.
+func TestHardenIsolatedPortLeavesPortAloneOnBadMAC(t *testing.T) {
+	tap := bridgedTAPForTest(t, "brhardn1", "taphardn1")
+
+	require.Error(t, hardenIsolatedPort(context.Background(), tap, tap.Name, ""))
+
+	protinfo, err := netlink.LinkGetProtinfo(tap)
+	require.NoError(t, err)
+	assert.True(t, protinfo.Flood, "flooding should be untouched")
+	assert.True(t, protinfo.Learning, "learning should be untouched")
+}
+
+// bridgedTAPForTest creates a throwaway bridge with one TAP enslaved to it, and
+// skips the test when it can't (creating links needs root).
+func bridgedTAPForTest(t *testing.T, bridgeName, tapName string) *netlink.Tuntap {
+	t.Helper()
+	if os.Getuid() != 0 {
+		t.Skip("Skipping test that requires root")
+	}
+
+	bridge := &netlink.Bridge{LinkAttrs: netlink.LinkAttrs{Name: bridgeName}}
+	require.NoError(t, netlink.LinkAdd(bridge))
+	t.Cleanup(func() { _ = netlink.LinkDel(bridge) })
+
+	tap := &netlink.Tuntap{
+		LinkAttrs: netlink.LinkAttrs{Name: tapName},
+		Mode:      netlink.TUNTAP_MODE_TAP,
+	}
+	require.NoError(t, netlink.LinkAdd(tap))
+	t.Cleanup(func() { _ = netlink.LinkDel(tap) })
+	require.NoError(t, netlink.LinkSetMaster(tap, bridge))
+
+	return tap
 }

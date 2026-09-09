@@ -613,55 +613,65 @@ func (m *manager) createTAPDevice(ctx context.Context, tapName, bridgeName, mac 
 			return fmt.Errorf("set isolation mode: %w", err)
 		}
 
-		// Isolation only stops guest-to-guest forwarding. Frames arriving from
-		// the uplink for a MAC the bridge has forgotten (aged out, or a guest
-		// that was just torn down) are still flooded to every port, so one
-		// guest can sniff traffic addressed to another. Pin the guest MAC to
-		// its port and turn off flooding and learning on the port so delivery
-		// never depends on flooding and a guest can't move FDB entries by
-		// spoofing a source MAC.
-		_, floodEnd := startNetworkStep(ctx, "network.create_tap.set_flood_off",
-			attribute.String("operation", "set_flood_off"),
-			attribute.String("tap", tapName),
-		)
-		err = netlink.LinkSetFlood(tapLink, false)
-		floodEnd(err)
-		if err != nil {
-			return fmt.Errorf("disable unicast flooding: %w", err)
-		}
-
-		_, learningEnd := startNetworkStep(ctx, "network.create_tap.set_learning_off",
-			attribute.String("operation", "set_learning_off"),
-			attribute.String("tap", tapName),
-		)
-		err = netlink.LinkSetLearning(tapLink, false)
-		learningEnd(err)
-		if err != nil {
-			return fmt.Errorf("disable MAC learning: %w", err)
-		}
-
-		var fdbEntry *netlink.Neigh
-		fdbEntry, err = guestFDBEntry(tapLink.Attrs().Index, mac)
-		if err != nil {
+		if err := hardenIsolatedPort(ctx, tapLink, tapName, mac); err != nil {
 			return err
-		}
-		_, fdbEnd := startNetworkStep(ctx, "network.create_tap.add_fdb_entry",
-			attribute.String("operation", "add_fdb_entry"),
-			attribute.String("tap", tapName),
-			attribute.String("mac", mac),
-		)
-		err = netlink.NeighAppend(fdbEntry)
-		fdbEnd(err)
-		if err != nil {
-			return fmt.Errorf("add static FDB entry: %w", err)
 		}
 	}
 
 	return nil
 }
 
+// hardenIsolatedPort keeps an isolated guest from seeing its neighbours'
+// traffic. Isolation only stops guest-to-guest forwarding: frames arriving
+// from the uplink for a MAC the bridge has forgotten (aged out, or a guest
+// that was just torn down) are still flooded to every port. Pinning the guest
+// MAC to its own port makes inbound delivery independent of flooding, so
+// flooding can be turned off; turning learning off then stops a guest from
+// relocating FDB entries by spoofing a source MAC.
+func hardenIsolatedPort(ctx context.Context, tapLink netlink.Link, tapName, mac string) error {
+	// Built before the port is touched so a malformed MAC can't leave the port
+	// with flooding off and nothing pinned to it.
+	fdbEntry, err := guestFDBEntry(tapLink.Attrs().Index, mac)
+	if err != nil {
+		return err
+	}
+
+	_, fdbEnd := startNetworkStep(ctx, "network.create_tap.add_fdb_entry",
+		attribute.String("operation", "add_fdb_entry"),
+		attribute.String("tap", tapName),
+		attribute.String("mac", mac),
+	)
+	err = netlink.NeighSet(fdbEntry)
+	fdbEnd(err)
+	if err != nil {
+		return fmt.Errorf("add static FDB entry: %w", err)
+	}
+
+	_, floodEnd := startNetworkStep(ctx, "network.create_tap.set_flood_off",
+		attribute.String("operation", "set_flood_off"),
+		attribute.String("tap", tapName),
+	)
+	err = netlink.LinkSetFlood(tapLink, false)
+	floodEnd(err)
+	if err != nil {
+		return fmt.Errorf("disable unicast flooding: %w", err)
+	}
+
+	_, learningEnd := startNetworkStep(ctx, "network.create_tap.set_learning_off",
+		attribute.String("operation", "set_learning_off"),
+		attribute.String("tap", tapName),
+	)
+	err = netlink.LinkSetLearning(tapLink, false)
+	learningEnd(err)
+	if err != nil {
+		return fmt.Errorf("disable MAC learning: %w", err)
+	}
+
+	return nil
+}
+
 // guestFDBEntry builds the permanent bridge FDB entry that pins a guest MAC to
-// its TAP port. Equivalent to `bridge fdb add <mac> dev <tap> master permanent`.
+// its TAP port. Equivalent to `bridge fdb replace <mac> dev <tap> master permanent`.
 func guestFDBEntry(tapIndex int, mac string) (*netlink.Neigh, error) {
 	hwAddr, err := net.ParseMAC(mac)
 	if err != nil {
