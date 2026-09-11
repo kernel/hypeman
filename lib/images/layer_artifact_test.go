@@ -34,23 +34,25 @@ const whiteoutPrefix = ".wh."
 
 const testTarGzMediaType = "application/vnd.oci.image.layer.v1.tar+gzip"
 
-// writeLayerTestLayout writes img into the shared OCI cache of p tagged with
-// the image's digest, mirroring pullToOCILayout.
+// writeLayerTestLayout writes images into the shared OCI cache of p tagged
+// with each image's digest, mirroring pullToOCILayout.
 func testLayerArtifactManager(p *paths.Paths) *manager {
 	store := newLayerStore(p, 1)
 	store.artifactsSupported = true
 	return &manager{paths: p, layers: store}
 }
 
-func writeLayerTestLayout(t *testing.T, p *paths.Paths, img gcr.Image) {
+func writeLayerTestLayout(t *testing.T, p *paths.Paths, imgs ...gcr.Image) {
 	t.Helper()
-	digest, err := img.Digest()
-	require.NoError(t, err)
 	layoutPath, err := layout.Write(p.SystemOCICache(), empty.Index)
 	require.NoError(t, err)
-	require.NoError(t, layoutPath.AppendImage(img, layout.WithAnnotations(map[string]string{
-		"org.opencontainers.image.ref.name": digestToLayoutTag(digest.String()),
-	})))
+	for _, img := range imgs {
+		digest, err := img.Digest()
+		require.NoError(t, err)
+		require.NoError(t, layoutPath.AppendImage(img, layout.WithAnnotations(map[string]string{
+			"org.opencontainers.image.ref.name": digestToLayoutTag(digest.String()),
+		})))
+	}
 }
 
 func layerDescFromImage(t *testing.T, img gcr.Image, index int) layerDescriptor {
