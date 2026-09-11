@@ -21,7 +21,6 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/mutate"
 	"github.com/kernel/hypeman/lib/paths"
 	"github.com/klauspost/compress/zstd"
-	"github.com/opencontainers/umoci/oci/layer"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
 )
@@ -32,12 +31,6 @@ import (
 // overlayfs whiteout inodes and opaque xattrs so per-layer artifacts can
 // later be stacked.
 const whiteoutPrefix = ".wh."
-
-// composeOnDiskFormat applies whiteouts against the tree being composed. It
-// belongs to the composition flow and moves to production with that change.
-func composeOnDiskFormat() layer.OnDiskFormat {
-	return layer.DirRootfs{MapOptions: layerMapOptions()}
-}
 
 const testTarGzMediaType = "application/vnd.oci.image.layer.v1.tar+gzip"
 
@@ -356,6 +349,49 @@ func TestUnpackLayerBlobArtifactFormatKeepsWhiteouts(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "y", string(value[:n]))
 	requireNoWhiteoutMarkers(t, dest)
+}
+
+func TestExportedLayerArtifactPreservesWhiteouts(t *testing.T) {
+	if !probeLayerArtifactSupport(t.TempDir()) {
+		t.Skip("exported whiteouts need mknod and trusted xattrs")
+	}
+	if DefaultImageFormat != FormatErofs {
+		t.Skip("round-trip test requires erofs")
+	}
+	if _, err := exec.LookPath("mkfs.erofs"); err != nil {
+		t.Skip("mkfs.erofs not available")
+	}
+	if _, err := exec.LookPath("fsck.erofs"); err != nil {
+		t.Skip("fsck.erofs not available")
+	}
+
+	root := t.TempDir()
+	blob := writeLayerBlob(t, root, "layer.tar.gz",
+		dirEntry("gone/"),
+		fileEntry("gone/.wh.deleted.txt", ""),
+		dirEntry("opq/"),
+		fileEntry("opq/.wh..wh..opq", ""),
+	)
+	dest := filepath.Join(root, "dest")
+	_, err := unpackLayerBlob(context.Background(), blob, testTarGzMediaType, dest, layerArtifactOnDiskFormat())
+	require.NoError(t, err)
+
+	artifact := filepath.Join(root, "layer.erofs")
+	_, err = ExportRootfs(dest, artifact, FormatErofs)
+	require.NoError(t, err)
+
+	extracted := filepath.Join(root, "extracted")
+	output, err := exec.Command("fsck.erofs", "--xattrs", "--extract="+extracted, artifact).CombinedOutput()
+	require.NoError(t, err, string(output))
+
+	var stat unix.Stat_t
+	require.NoError(t, unix.Lstat(filepath.Join(extracted, "gone", "deleted.txt"), &stat))
+	require.Equal(t, uint32(unix.S_IFCHR), stat.Mode&unix.S_IFMT)
+	require.Equal(t, uint64(0), uint64(stat.Rdev))
+	value := make([]byte, 8)
+	n, err := unix.Lgetxattr(filepath.Join(extracted, "opq"), "trusted.overlay.opaque", value)
+	require.NoError(t, err)
+	require.Equal(t, "y", string(value[:n]))
 }
 
 func TestUnpackLayerBlobAppliesWhiteoutsAcrossLayers(t *testing.T) {
