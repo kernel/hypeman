@@ -65,6 +65,10 @@ Content-addressable storage with tag symlinks (similar to Docker/Unikraft):
         rootfs.erofs
       latest -> abc123def456...   # Tag symlink to digest
       3.18 -> def456abc123...     # Another tag
+    layers/                       # Shared materialized layer artifacts
+      abc123def456.../
+        layer.erofs
+        artifact.erofs.json
   system/
     oci-cache/              # Shared OCI layout for all images
       index.json            # Manifest index with digest-based tags
@@ -82,6 +86,7 @@ Content-addressable storage with tag symlinks (similar to Docker/Unikraft):
 - Natural hierarchy: All versions of an image grouped under repository
 - Easy inspection: Clear which digest belongs to which image
 - Layer caching: All images share the same blob storage, layers deduplicated automatically
+- Materialized layer artifacts are reference-protected and reconciled by the layer lifecycle manager; stale temporary trees are age-gated before removal.
 
 **Design:**
 - Images stored by manifest digest (content hash)
@@ -92,6 +97,7 @@ Content-addressable storage with tag symlinks (similar to Docker/Unikraft):
 - Shared blob storage enables automatic layer deduplication across all images
 - Orphaned digests are automatically deleted when the last tag referencing them is removed
 - Symlinks only created after successful build (status: ready)
+- Disk accounting uses logical file sizes, matching image metadata and storage admission rather than filesystem block allocation.
 
 ## Reference Handling (reference.go)
 

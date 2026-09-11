@@ -90,7 +90,7 @@ type AllocationBreakdown struct {
 // DiskBreakdown shows disk usage by category.
 type DiskBreakdown struct {
 	Images   int64 `json:"images_bytes"`    // Exported rootfs disk files
-	OCICache int64 `json:"oci_cache_bytes"` // OCI layer cache (shared blobs)
+	OCICache int64 `json:"oci_cache_bytes"` // OCI blobs and materialized shared layers
 	Volumes  int64 `json:"volumes_bytes"`
 	Overlays int64 `json:"overlays_bytes"` // Rootfs overlays + volume overlays
 }
@@ -132,7 +132,7 @@ type InstanceAllocation struct {
 type ImageLister interface {
 	// TotalImageBytes returns the total size of all images on disk.
 	TotalImageBytes(ctx context.Context) (int64, error)
-	// TotalOCICacheBytes returns the total size of the OCI layer cache.
+	// TotalOCICacheBytes returns the total size of the OCI and materialized layer caches.
 	TotalOCICacheBytes(ctx context.Context) (int64, error)
 }
 

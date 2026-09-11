@@ -1,7 +1,9 @@
 package images
 
 import (
+	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -29,15 +31,20 @@ var DefaultImageFormat = func() ExportFormat {
 	return FormatErofs
 }()
 
-// ExportRootfs exports rootfs directory in specified format (public for system manager)
+// ExportRootfs exports rootfs directory in specified format (public for system manager).
 func ExportRootfs(rootfsDir, outputPath string, format ExportFormat) (int64, error) {
+	return ExportRootfsWithContext(context.Background(), rootfsDir, outputPath, format)
+}
+
+// ExportRootfsWithContext exports rootfs directory and cancels external formatters with ctx.
+func ExportRootfsWithContext(ctx context.Context, rootfsDir, outputPath string, format ExportFormat) (int64, error) {
 	switch format {
 	case FormatExt4:
-		return convertToExt4(rootfsDir, outputPath)
+		return convertToExt4(ctx, rootfsDir, outputPath)
 	case FormatErofs:
-		return convertToErofs(rootfsDir, outputPath)
+		return convertToErofs(ctx, rootfsDir, outputPath)
 	case FormatCpio:
-		return convertToCpio(rootfsDir, outputPath)
+		return convertToCpio(ctx, rootfsDir, outputPath)
 	default:
 		return 0, fmt.Errorf("unsupported export format: %s", format)
 	}
@@ -45,7 +52,7 @@ func ExportRootfs(rootfsDir, outputPath string, format ExportFormat) (int64, err
 
 // convertToCpio packages directory as uncompressed cpio archive (initramfs format)
 // Uses uncompressed format for faster boot (kernel loads directly without decompression)
-func convertToCpio(rootfsDir, outputPath string) (int64, error) {
+func convertToCpio(ctx context.Context, rootfsDir, outputPath string) (int64, error) {
 	// Ensure parent directory exists
 	if err := os.MkdirAll(filepath.Dir(outputPath), 0755); err != nil {
 		return 0, fmt.Errorf("create output dir: %w", err)
@@ -56,7 +63,13 @@ func convertToCpio(rootfsDir, outputPath string) (int64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("create output file: %w", err)
 	}
-	defer outFile.Close()
+	keepOutput := false
+	defer func() {
+		_ = outFile.Close()
+		if !keepOutput {
+			_ = os.Remove(outputPath)
+		}
+	}()
 
 	// Create newc format cpio writer (kernel-compatible format)
 	cpioWriter := cpio.Newc.Writer(outFile)
@@ -66,6 +79,9 @@ func convertToCpio(rootfsDir, outputPath string) (int64, error) {
 
 	// Walk the rootfs directory and add all files
 	err = filepath.Walk(rootfsDir, func(path string, info os.FileInfo, err error) error {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		if err != nil {
 			return err
 		}
@@ -89,6 +105,13 @@ func convertToCpio(rootfsDir, outputPath string) (int64, error) {
 
 		// Set the name to be relative to root
 		rec.Name = relPath
+		if rec.ReaderAt != nil {
+			rec.ReaderAt = &contextReaderAt{
+				ctx:    ctx,
+				reader: rec.ReaderAt,
+				closer: readerCloser(rec.ReaderAt),
+			}
+		}
 
 		// Write the record to the archive
 		if err := cpioWriter.WriteRecord(rec); err != nil {
@@ -113,7 +136,33 @@ func convertToCpio(rootfsDir, outputPath string) (int64, error) {
 		return 0, fmt.Errorf("stat output: %w", err)
 	}
 
+	keepOutput = true
 	return stat.Size(), nil
+}
+
+type contextReaderAt struct {
+	ctx    context.Context
+	reader io.ReaderAt
+	closer io.Closer
+}
+
+func (r *contextReaderAt) ReadAt(p []byte, off int64) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return r.reader.ReadAt(p, off)
+}
+
+func (r *contextReaderAt) Close() error {
+	if r.closer == nil {
+		return nil
+	}
+	return r.closer.Close()
+}
+
+func readerCloser(reader io.ReaderAt) io.Closer {
+	closer, _ := reader.(io.Closer)
+	return closer
 }
 
 // sectorSize is the block size for disk images (required by Virtualization.framework)
@@ -128,9 +177,9 @@ func alignToSector(size int64) int64 {
 }
 
 // convertToExt4 converts a rootfs directory to an ext4 disk image using mkfs.ext4
-func convertToExt4(rootfsDir, diskPath string) (int64, error) {
+func convertToExt4(ctx context.Context, rootfsDir, diskPath string) (int64, error) {
 	// Calculate size of rootfs directory
-	sizeBytes, err := dirSize(rootfsDir)
+	sizeBytes, err := dirSizeWithContext(ctx, rootfsDir)
 	if err != nil {
 		return 0, fmt.Errorf("calculate dir size: %w", err)
 	}
@@ -168,7 +217,7 @@ func convertToExt4(rootfsDir, diskPath string) (int64, error) {
 	// -O ^has_journal: Disable journal (not needed for read-only VM mounts)
 	// -d: Copy directory contents into filesystem
 	// -F: Force creation (file not block device)
-	cmd := exec.Command(mkfsExt4Binary(), "-b", "4096", "-O", "^has_journal", "-d", rootfsDir, "-F", diskPath)
+	cmd := exec.CommandContext(ctx, mkfsExt4Binary(), "-b", "4096", "-O", "^has_journal", "-d", rootfsDir, "-F", diskPath)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return 0, fmt.Errorf("mkfs.ext4 failed: %w, output: %s", err, output)
@@ -193,7 +242,7 @@ func convertToExt4(rootfsDir, diskPath string) (int64, error) {
 }
 
 // convertToErofs converts a rootfs directory to an erofs disk image using mkfs.erofs
-func convertToErofs(rootfsDir, diskPath string) (int64, error) {
+func convertToErofs(ctx context.Context, rootfsDir, diskPath string) (int64, error) {
 	// Ensure parent directory exists
 	if err := os.MkdirAll(filepath.Dir(diskPath), 0755); err != nil {
 		return 0, fmt.Errorf("create disk parent dir: %w", err)
@@ -202,7 +251,7 @@ func convertToErofs(rootfsDir, diskPath string) (int64, error) {
 	// Create erofs image with LZ4 fast compression
 	// -zlz4: LZ4 fast compression (~20-25% space savings, faster builds)
 	// erofs doesn't need pre-allocation, creates file directly
-	cmd := exec.Command("mkfs.erofs", "-zlz4", diskPath, rootfsDir)
+	cmd := exec.CommandContext(ctx, "mkfs.erofs", "-zlz4", diskPath, rootfsDir)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return 0, fmt.Errorf("mkfs.erofs failed: %w, output: %s", err, output)
@@ -226,11 +275,18 @@ func convertToErofs(rootfsDir, diskPath string) (int64, error) {
 	return stat.Size(), nil
 }
 
-// dirSize calculates the total size of a directory
+// dirSize is used by layer-store reconciliation.
 func dirSize(path string) (int64, error) {
+	return dirSizeWithContext(context.Background(), path)
+}
+
+func dirSizeWithContext(ctx context.Context, path string) (int64, error) {
 	var size int64
 	err := filepath.Walk(path, func(_ string, info os.FileInfo, err error) error {
 		if err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
 			return err
 		}
 		if !info.IsDir() {
