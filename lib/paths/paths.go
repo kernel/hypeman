@@ -100,9 +100,10 @@ func (p *Paths) OCICacheLayout() string {
 	return filepath.Join(p.SystemOCICache(), "oci-layout")
 }
 
-// SystemBuild returns the path to a system build directory.
-func (p *Paths) SystemBuild(ref string) string {
-	return filepath.Join(p.dataDir, "system", "builds", ref)
+// SystemBuild returns the path to the system build directory for one
+// manifest digest hex.
+func (p *Paths) SystemBuild(digestHex string) string {
+	return filepath.Join(p.dataDir, "system", "builds", digestHex)
 }
 
 // SystemBinary returns the path to a VMM binary.

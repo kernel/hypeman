@@ -42,17 +42,14 @@ const testImageKernelVersion = "ch-6.12.8-kernel-1.6-202603301"
 // cache with image-manifest=true
 const buildKitCacheConfigMediaType = "application/vnd.buildkit.cacheconfig.v0"
 
-// TestUnpackLayersFailsOnBuildKitCacheMediatype verifies that hypeman's image
-// unpacker fails when encountering BuildKit cache images. This reproduces the
-// production issue where global cache images exported by BuildKit cannot be
-// pre-pulled by hypeman because they use a non-standard config mediatype.
+// TestComposeRootfsFailsOnBuildKitCacheMediatype verifies that rootfs
+// composition fails when encountering BuildKit cache images. This reproduces
+// the production issue where global cache images exported by BuildKit cannot
+// be pre-pulled by hypeman because they use a non-standard config mediatype.
 //
-// The error occurs because:
-// 1. BuildKit exports cache with --export-cache type=registry,image-manifest=true
-// 2. The exported manifest uses "application/vnd.buildkit.cacheconfig.v0" as config mediatype
-// 3. hypeman's unpackLayers expects "application/vnd.oci.image.config.v1+json"
-// 4. umoci.UnpackRootfs fails with "config blob is not correct mediatype"
-func TestUnpackLayersFailsOnBuildKitCacheMediatype(t *testing.T) {
+// The fixture's cacheconfig blob declares no layered rootfs, so manifest
+// model validation rejects the image before any blob is read.
+func TestComposeRootfsFailsOnBuildKitCacheMediatype(t *testing.T) {
 	// Create a temp directory for the OCI layout
 	cacheDir := t.TempDir()
 
@@ -60,24 +57,87 @@ func TestUnpackLayersFailsOnBuildKitCacheMediatype(t *testing.T) {
 	err := createBuildKitCacheLayout(cacheDir, "test-cache")
 	require.NoError(t, err, "failed to create mock BuildKit cache layout")
 
-	// Create OCI client and try to unpack
+	// Create OCI client and extract the bundle
 	client, err := newOCIClient(cacheDir)
 	require.NoError(t, err)
+	bundle, err := client.extractOCIImageBundle("test-cache")
+	require.NoError(t, err)
 
-	targetDir := t.TempDir()
-	err = client.unpackLayers(context.Background(), "test-cache", targetDir)
-
-	// This should fail with a mediatype error
-	require.Error(t, err, "unpackLayers should fail on BuildKit cache mediatype")
-	assert.Contains(t, err.Error(), "config", "error should mention config")
+	err = client.composeRootfs(context.Background(), filepath.Join(t.TempDir(), "rootfs"), "test-cache", bundle.Model)
+	require.Error(t, err, "compose should fail on BuildKit cache mediatype")
+	assert.Contains(t, err.Error(), "rootfs type", "error should be the rootfs type rejection")
 
 	t.Logf("Got expected error: %v", err)
 }
 
-// TestExtractMetadataSucceedsOnBuildKitCache verifies that extractOCIMetadata
+// TestComposeRootfsFailsOnBuildKitCacheConfigMediatype pins the config
+// mediatype rejection specifically: with a layered rootfs declared, the
+// cacheconfig config mediatype itself is what fails validation.
+func TestComposeRootfsFailsOnBuildKitCacheConfigMediatype(t *testing.T) {
+	cacheDir := t.TempDir()
+	blobsDir := filepath.Join(cacheDir, "blobs", "sha256")
+	require.NoError(t, os.MkdirAll(blobsDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(cacheDir, "oci-layout"), []byte(`{"imageLayoutVersion":"1.0.0"}`), 0644))
+
+	layerContent := []byte{
+		0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, // gzip header
+		0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // empty tar
+	}
+	layerDigest := sha256Hash(layerContent)
+	require.NoError(t, os.WriteFile(filepath.Join(blobsDir, layerDigest), layerContent, 0644))
+
+	// BuildKit cacheconfig-shaped config that nonetheless declares a layered
+	// rootfs, so the config mediatype check is the one that fires.
+	configJSON := []byte(`{"rootfs":{"type":"layers","diff_ids":["sha256:` + layerDigest + `"]}}`)
+	configDigest := sha256Hash(configJSON)
+	require.NoError(t, os.WriteFile(filepath.Join(blobsDir, configDigest), configJSON, 0644))
+
+	manifest := map[string]interface{}{
+		"schemaVersion": 2,
+		"mediaType":     "application/vnd.oci.image.manifest.v1+json",
+		"config": map[string]interface{}{
+			"mediaType": buildKitCacheConfigMediaType,
+			"digest":    "sha256:" + configDigest,
+			"size":      len(configJSON),
+		},
+		"layers": []map[string]interface{}{{
+			"mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+			"digest":    "sha256:" + layerDigest,
+			"size":      len(layerContent),
+		}},
+	}
+	manifestBytes, err := json.Marshal(manifest)
+	require.NoError(t, err)
+	manifestDigest := sha256Hash(manifestBytes)
+	require.NoError(t, os.WriteFile(filepath.Join(blobsDir, manifestDigest), manifestBytes, 0644))
+
+	index := map[string]interface{}{
+		"schemaVersion": 2,
+		"manifests": []map[string]interface{}{{
+			"mediaType":   "application/vnd.oci.image.manifest.v1+json",
+			"digest":      "sha256:" + manifestDigest,
+			"size":        len(manifestBytes),
+			"annotations": map[string]string{"org.opencontainers.image.ref.name": "test-cache"},
+		}},
+	}
+	indexBytes, err := json.Marshal(index)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(cacheDir, "index.json"), indexBytes, 0644))
+
+	client, err := newOCIClient(cacheDir)
+	require.NoError(t, err)
+	bundle, err := client.extractOCIImageBundle("test-cache")
+	require.NoError(t, err)
+
+	err = client.composeRootfs(context.Background(), filepath.Join(t.TempDir(), "rootfs"), "test-cache", bundle.Model)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "config media type", "error should be the config mediatype rejection")
+}
+
+// TestExtractMetadataSucceedsOnBuildKitCache verifies that extractOCIImageBundle
 // does NOT fail on BuildKit cache images - it's go-containerregistry which is
-// lenient about mediatypes. The failure only happens during unpackLayers when
-// umoci tries to unpack the rootfs.
+// lenient about mediatypes. The failure only happens during composition when
+// the manifest model is validated.
 func TestExtractMetadataSucceedsOnBuildKitCache(t *testing.T) {
 	cacheDir := t.TempDir()
 
@@ -88,7 +148,6 @@ func TestExtractMetadataSucceedsOnBuildKitCache(t *testing.T) {
 	require.NoError(t, err)
 
 	// This succeeds because go-containerregistry doesn't validate config mediatype
-	// The failure only happens in unpackLayers when umoci validates the config
 	bundle, err := client.extractOCIImageBundle("test-cache")
 	require.NoError(t, err, "extractOCIImageBundle succeeds - go-containerregistry is lenient")
 
@@ -292,7 +351,7 @@ func createTestDockerImage(t *testing.T) v1.Image {
 
 // TestDockerSaveTarballToOCILayoutRoundtrip tests the exact pipeline used by
 // buildBuilderFromDockerfile: docker save tarball → load via go-containerregistry
-// → write to OCI layout cache → verify existsInLayout + extractMetadata + unpackLayers.
+// → write to OCI layout cache → verify existsInLayout + extractMetadata + composeRootfs.
 //
 // This simulates:
 // 1. docker build → docker save (we use go-containerregistry to create the tarball)
@@ -300,7 +359,7 @@ func createTestDockerImage(t *testing.T) v1.Image {
 // 3. layout.AppendImage with digest annotation (write to OCI cache)
 // 4. existsInLayout (cache hit detection)
 // 5. extractOCIMetadata (read config from cache)
-// 6. unpackLayers (unpack rootfs from cache)
+// 6. composeRootfs (compose rootfs from cache blobs)
 func TestDockerSaveTarballToOCILayoutRoundtrip(t *testing.T) {
 	// Step 1: Create a synthetic Docker image (simulates docker build output)
 	img := createTestDockerImage(t)
@@ -347,10 +406,9 @@ func TestDockerSaveTarballToOCILayoutRoundtrip(t *testing.T) {
 	assert.Equal(t, testImageKernelVersion, meta.Labels["io.kernel.kernel-version"])
 	assert.Equal(t, "6.12.8+", meta.Labels["io.kernel.kernel-release"])
 
-	// Step 7: Verify unpackLayers produces correct rootfs
-	// umoci's UnpackRootfs extracts directly into the target directory
+	// Step 7: Verify composeRootfs produces correct rootfs
 	unpackDir := filepath.Join(t.TempDir(), "unpack")
-	err = client.unpackLayers(context.Background(), layoutTag, unpackDir)
+	err = client.composeRootfs(context.Background(), unpackDir, layoutTag, bundle.Model)
 	require.NoError(t, err)
 
 	// Verify expected files exist in unpacked rootfs
@@ -369,7 +427,7 @@ func TestDockerSaveTarballToOCILayoutRoundtrip(t *testing.T) {
 	require.NoError(t, err, "/app directory should exist")
 	assert.True(t, stat.IsDir())
 
-	t.Log("Full roundtrip verified: docker save tarball → OCI layout → existsInLayout → extractMetadata → unpackLayers")
+	t.Log("Full roundtrip verified: docker save tarball → OCI layout → existsInLayout → extractMetadata → composeRootfs")
 }
 
 // TestDockerSaveToOCILayoutCacheHit verifies that pullAndExport correctly
