@@ -736,7 +736,7 @@ func TestDeleteAndRecreateDuringBuildTail(t *testing.T) {
 	m.updateStatusByDigest(staleRef, StatusFailed, errors.New("stale build"), firstMeta.BuildID)
 	staleBundle, err := m.ociClient.extractOCIImageBundle(digestHex)
 	require.NoError(t, err)
-	require.ErrorIs(t, m.finalizeImage(staleRef, &pullResult{Metadata: staleBundle.Meta}, 1, firstMeta.BuildID, ""), errStaleBuild)
+	require.ErrorIs(t, m.finalizeImage(staleRef, &pullResult{Metadata: staleBundle.Meta}, 1, firstMeta.BuildID, "", nil), errStaleBuild)
 	currentMeta, err = readMetadata(p, repo, digestHex)
 	require.NoError(t, err)
 	require.Equal(t, StatusPending, currentMeta.Status)

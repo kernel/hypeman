@@ -11,11 +11,12 @@ import (
 
 // Metrics holds the metrics instruments for image operations.
 type Metrics struct {
-	buildDuration      metric.Float64Histogram
-	buildPhaseDuration metric.Float64Histogram
-	ociLayerCount      metric.Int64Histogram
-	ociCompressedBytes metric.Int64Histogram
-	pullsTotal         metric.Int64Counter
+	buildDuration         metric.Float64Histogram
+	buildPhaseDuration    metric.Float64Histogram
+	ociLayerCount         metric.Int64Histogram
+	ociCompressedBytes    metric.Int64Histogram
+	pullsTotal            metric.Int64Counter
+	layerArtifactsEvicted metric.Int64Counter
 }
 
 // newMetrics creates and registers all image metrics.
@@ -78,6 +79,14 @@ func newMetrics(meter metric.Meter, m *manager) (*Metrics, error) {
 		return nil, err
 	}
 
+	layerArtifactsEvicted, err := meter.Int64Counter(
+		"hypeman_images_layer_artifacts_evicted_total",
+		metric.WithDescription("Total number of shared layer artifacts evicted after their last reference was removed"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
 	// Register observable gauges for queue length and total images
 	buildQueueLength, err := meter.Int64ObservableGauge(
 		"hypeman_images_build_queue_length",
@@ -123,11 +132,12 @@ func newMetrics(meter metric.Meter, m *manager) (*Metrics, error) {
 	}
 
 	return &Metrics{
-		buildDuration:      buildDuration,
-		buildPhaseDuration: buildPhaseDuration,
-		ociLayerCount:      ociLayerCount,
-		ociCompressedBytes: ociCompressedBytes,
-		pullsTotal:         pullsTotal,
+		buildDuration:         buildDuration,
+		buildPhaseDuration:    buildPhaseDuration,
+		ociLayerCount:         ociLayerCount,
+		ociCompressedBytes:    ociCompressedBytes,
+		pullsTotal:            pullsTotal,
+		layerArtifactsEvicted: layerArtifactsEvicted,
 	}, nil
 }
 
@@ -168,4 +178,12 @@ func (m *manager) recordOCIImageMetrics(ctx context.Context, layerCount int, com
 	attrs := metric.WithAttributes(attribute.String("cache_status", cacheStatus))
 	m.metrics.ociLayerCount.Record(ctx, int64(layerCount), attrs)
 	m.metrics.ociCompressedBytes.Record(ctx, compressedBytes, attrs)
+}
+
+// recordLayerArtifactsEvicted counts layer artifacts removed by eviction.
+func (m *manager) recordLayerArtifactsEvicted(ctx context.Context, evicted int64) {
+	if m.metrics == nil {
+		return
+	}
+	m.metrics.layerArtifactsEvicted.Add(ctx, evicted)
 }
