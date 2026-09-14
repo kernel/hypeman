@@ -84,6 +84,33 @@ type caddyLogEntry struct {
 	Error   string  `json:"error,omitempty"`
 	Module  string  `json:"module,omitempty"`
 	Adapter string  `json:"adapter,omitempty"`
+
+	// Present on http.log.access entries only.
+	Request   *caddyLogRequest `json:"request"`
+	Status    int              `json:"status"`
+	Size      int64            `json:"size"`
+	BytesRead int64            `json:"bytes_read"`
+	Duration  float64          `json:"duration"`
+}
+
+// caddyLogRequest is the request block of an access-log entry. Headers are
+// deliberately not parsed: they carry cookies and authorization tokens.
+type caddyLogRequest struct {
+	Method   string `json:"method"`
+	Host     string `json:"host"`
+	URI      string `json:"uri"`
+	Proto    string `json:"proto"`
+	ClientIP string `json:"client_ip"`
+}
+
+// requestPath drops the query string from an access-log URI. Per-session
+// endpoints carry credentials in query parameters, so only the path is
+// recorded.
+func requestPath(uri string) string {
+	if i := strings.IndexByte(uri, '?'); i >= 0 {
+		return uri[:i]
+	}
+	return uri
 }
 
 // forwardLogLine parses a JSON log line and forwards to OTEL logger.
@@ -120,6 +147,19 @@ func (f *CaddyLogForwarder) forwardLogLine(ctx context.Context, line string) {
 	}
 	if entry.Error != "" {
 		attrs = append(attrs, "error", entry.Error)
+	}
+	if entry.Request != nil {
+		attrs = append(attrs,
+			"http_method", entry.Request.Method,
+			"http_host", entry.Request.Host,
+			"http_path", requestPath(entry.Request.URI),
+			"http_proto", entry.Request.Proto,
+			"client_ip", entry.Request.ClientIP,
+			"http_status", entry.Status,
+			"duration_seconds", entry.Duration,
+			"bytes_written", entry.Size,
+			"bytes_read", entry.BytesRead,
+		)
 	}
 
 	// Forward with appropriate level
