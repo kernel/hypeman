@@ -10,7 +10,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/kernel/hypeman/lib/paths"
 )
@@ -139,7 +138,7 @@ func (m *manager) RequiredOverlayBytes(ctx context.Context, image *Image) (int64
 	return alignToSector(record.UnpackedBytes + record.UnpackedBytes/2), nil
 }
 
-func (m *manager) PrepareInstanceOverlay(ctx context.Context, image *Image, overlayPath string, sizeBytes int64) (returnErr error) {
+func (m *manager) PrepareInstanceOverlay(ctx context.Context, image *Image, overlayPath string, sizeBytes int64) error {
 	digestHex := strings.TrimPrefix(image.Digest, "sha256:")
 	model, err := readRuntimeManifestModel(m.paths, image.Name, digestHex)
 	if err != nil {
@@ -179,16 +178,7 @@ func (m *manager) PrepareInstanceOverlay(ctx context.Context, image *Image, over
 	if err := os.Mkdir(work, 0755); err != nil {
 		return fmt.Errorf("create overlay work directory: %w", err)
 	}
-	mounted, err := mountReadOnlyArtifact(ctx, artifactPath)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if err := mounted.unmount(); returnErr == nil && err != nil {
-			returnErr = fmt.Errorf("unmount layer artifact: %w", err)
-		}
-	}()
-	if err := copyArtifactTree(ctx, mounted.path, upper); err != nil {
+	if err := extractLayerArtifact(ctx, artifactPath, upper); err != nil {
 		return fmt.Errorf("copy image layer into overlay: %w", err)
 	}
 
@@ -215,36 +205,10 @@ func readRuntimeManifestModel(p *paths.Paths, imageName, digestHex string) (*ima
 	return readManifestModel(p, digestHex)
 }
 
-type mountedArtifact struct{ path string }
-
-func mountReadOnlyArtifact(ctx context.Context, artifactPath string) (*mountedArtifact, error) {
-	mountpoint, err := os.MkdirTemp("", "hypeman-layer-mount-*")
-	if err != nil {
-		return nil, fmt.Errorf("create artifact mountpoint: %w", err)
-	}
-	cmd := exec.CommandContext(ctx, "/bin/mount", "-o", "loop,ro", artifactPath, mountpoint)
+func extractLayerArtifact(ctx context.Context, artifactPath, dest string) error {
+	cmd := exec.CommandContext(ctx, "fsck.erofs", "--extract="+dest, "--xattrs", "--preserve", artifactPath)
 	if output, err := cmd.CombinedOutput(); err != nil {
-		_ = os.Remove(mountpoint)
-		return nil, fmt.Errorf("mount layer artifact: %w, output: %s", err, output)
-	}
-	return &mountedArtifact{path: mountpoint}, nil
-}
-
-func (m *mountedArtifact) unmount() error {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	cmdErr := exec.CommandContext(ctx, "/bin/umount", m.path).Run()
-	removeErr := os.Remove(m.path)
-	if cmdErr != nil {
-		return cmdErr
-	}
-	return removeErr
-}
-
-func copyArtifactTree(ctx context.Context, source, dest string) error {
-	cmd := exec.CommandContext(ctx, "/bin/cp", "-a", "--preserve=all", source+"/.", dest)
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("copy tree: %w, output: %s", err, output)
+		return fmt.Errorf("extract layer artifact: %w, output: %s", err, output)
 	}
 	return nil
 }

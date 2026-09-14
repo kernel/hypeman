@@ -148,13 +148,7 @@ func probeLayerArtifactSupport(layersDir string) bool {
 	if !supportsLayerArtifacts() || os.MkdirAll(layersDir, 0755) != nil {
 		return false
 	}
-	if _, err := exec.LookPath("mount"); err != nil {
-		return false
-	}
-	if _, err := exec.LookPath("umount"); err != nil {
-		return false
-	}
-	if _, err := exec.LookPath("cp"); err != nil {
+	if _, err := exec.LookPath("fsck.erofs"); err != nil {
 		return false
 	}
 	probeDir, err := os.MkdirTemp(layersDir, ".probe-*")
