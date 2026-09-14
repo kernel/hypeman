@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -458,4 +459,36 @@ func TestBuilderHasBuilds_CountsDiskPendingBeforeRecovery(t *testing.T) {
 	require.NoError(t, deleteBuild(mgr.paths, "build-disk"))
 	mgr.RecoverPendingBuilds()
 	assert.False(t, mgr.BuilderHasBuilds("builder-a"))
+}
+
+// TestCreateBuildConfigVolumeIsUniquePerCall checks that two builds sharing an
+// id never land on one config disk path: with a shared path, one build's
+// cleanup unlinks the disk while another is still formatting it.
+func TestCreateBuildConfigVolumeIsUniquePerCall(t *testing.T) {
+	mgr, _, _, tempDir := setupTestManager(t)
+	defer os.RemoveAll(tempDir)
+
+	prepareBuildOnDisk(t, mgr, "build-1", CreateBuildRequest{Dockerfile: "FROM alpine"})
+
+	const callers = 4
+	diskPaths := make([]string, callers)
+	errs := make([]error, callers)
+	var wg sync.WaitGroup
+	for i := range diskPaths {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			diskPaths[i], errs[i] = mgr.createBuildConfigVolume("build-1")
+		}(i)
+	}
+	wg.Wait()
+
+	seen := make(map[string]struct{}, callers)
+	for i, path := range diskPaths {
+		require.NoError(t, errs[i])
+		require.NotContains(t, seen, path, "config disk paths must be unique per call")
+		seen[path] = struct{}{}
+		require.FileExists(t, path)
+		os.Remove(path)
+	}
 }

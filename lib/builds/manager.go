@@ -837,7 +837,7 @@ func (m *manager) executeBuild(ctx context.Context, id string, req CreateBuildRe
 
 	// Create config volume with build.json for the builder agent
 	configVolID := fmt.Sprintf("build-config-%s", id)
-	configVolPath, err := m.createBuildConfigVolume(id, configVolID)
+	configVolPath, err := m.createBuildConfigVolume(id)
 	if err != nil {
 		return nil, fmt.Errorf("create config volume: %w", err)
 	}
@@ -1614,7 +1614,7 @@ func readFile(path string) ([]byte, error) {
 
 // createBuildConfigVolume creates an ext4 disk containing the build.json config file
 // Returns the path to the disk file
-func (m *manager) createBuildConfigVolume(buildID, volID string) (string, error) {
+func (m *manager) createBuildConfigVolume(buildID string) (string, error) {
 	// Read the build config
 	configPath := m.paths.BuildConfig(buildID)
 	configData, err := os.ReadFile(configPath)
@@ -1644,10 +1644,19 @@ func (m *manager) createBuildConfigVolume(buildID, volID string) (string, error)
 	metadataPath := filepath.Join(tmpDir, "metadata.json")
 	os.WriteFile(metadataPath, metadataData, 0644)
 
-	// Create ext4 disk from the directory
-	diskPath := filepath.Join(os.TempDir(), fmt.Sprintf("build-config-%s.ext4", buildID))
-	_, err = images.ExportRootfs(tmpDir, diskPath, images.FormatExt4)
+	// Create ext4 disk from the directory. The name is unique per call: a
+	// shared path per build id let one build's cleanup unlink the disk while
+	// another was still formatting it.
+	diskFile, err := os.CreateTemp("", fmt.Sprintf("build-config-%s-*.ext4", buildID))
 	if err != nil {
+		return "", fmt.Errorf("create config disk file: %w", err)
+	}
+	diskPath := diskFile.Name()
+	if err := diskFile.Close(); err != nil {
+		return "", fmt.Errorf("close config disk file: %w", err)
+	}
+	if _, err := images.ExportRootfs(tmpDir, diskPath, images.FormatExt4); err != nil {
+		_ = os.Remove(diskPath)
 		return "", fmt.Errorf("create config disk: %w", err)
 	}
 
