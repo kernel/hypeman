@@ -8,26 +8,24 @@ import (
 	"path/filepath"
 )
 
-// composeRootfs validates the persisted model and merges its layers into
-// dest in manifest order, reading each layer blob from the shared OCI cache.
-// Whiteout and opaque-directory markers are interpreted as each layer is
-// applied. Any previous tree at dest is replaced: callers must not read dest
-// concurrently, and a failure between the remove and the rename leaves dest
-// absent. The export root is always 0755 regardless of the last layer's tar
-// root entry, matching the mode the previous unpack path created. A crash
-// can also strand .compose-* staging directories in dest's parent build
-// directory; the next compose attempt for the same digest removes stale
-// ones before creating its own.
+// composeRootfs validates the persisted model and merges its layers into dest
+// in manifest order. Whiteouts are applied to the composed tree.
 func (c *ociClient) composeRootfs(ctx context.Context, dest, layoutTag string, model *imageManifestModel) error {
 	if err := validateManifestModel(layoutTag, model); err != nil {
 		return fmt.Errorf("validate manifest model: %w", err)
 	}
+	return c.composeLayerTree(ctx, dest, model.Layers)
+}
+
+func (c *ociClient) composeLayers(ctx context.Context, dest string, layers []layerDescriptor) error {
+	return c.composeLayerTree(ctx, dest, layers)
+}
+
+func (c *ociClient) composeLayerTree(ctx context.Context, dest string, layers []layerDescriptor) error {
 	parent := filepath.Dir(dest)
 	if err := os.MkdirAll(parent, 0755); err != nil {
 		return fmt.Errorf("create compose parent: %w", err)
 	}
-	// The build directory is digest-keyed, so any leftover .compose-* sibling
-	// is garbage from a crashed build of the same digest.
 	leftovers, _ := filepath.Glob(filepath.Join(parent, ".compose-*"))
 	for _, leftover := range leftovers {
 		if err := removePath(leftover); err != nil {
@@ -43,34 +41,6 @@ func (c *ociClient) composeRootfs(ctx context.Context, dest, layoutTag string, m
 			slog.Warn("failed to remove compose staging directory", "dir", staging, "error", err)
 		}
 	}()
-
-	if err := c.composeLayerList(ctx, staging, model.Layers); err != nil {
-		return err
-	}
-	// The export directory must stay traversable by other readers; MkdirTemp
-	// creates it 0700.
-	if err := os.Chmod(staging, 0755); err != nil {
-		return fmt.Errorf("set compose directory mode: %w", err)
-	}
-	if err := removePath(dest); err != nil {
-		return fmt.Errorf("replace compose directory: %w", err)
-	}
-	if err := os.Rename(staging, dest); err != nil {
-		return fmt.Errorf("install compose directory: %w", err)
-	}
-	return nil
-}
-
-func (c *ociClient) composeLayers(ctx context.Context, dest string, layers []layerDescriptor) error {
-	parent := filepath.Dir(dest)
-	if err := os.MkdirAll(parent, 0755); err != nil {
-		return fmt.Errorf("create compose parent: %w", err)
-	}
-	staging, err := os.MkdirTemp(parent, ".compose-*")
-	if err != nil {
-		return fmt.Errorf("create compose directory: %w", err)
-	}
-	defer removePath(staging)
 	if err := c.composeLayerList(ctx, staging, layers); err != nil {
 		return err
 	}

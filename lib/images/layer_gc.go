@@ -84,6 +84,23 @@ func (r *inflightLayerRef) releaseLocked(m *manager) {
 	r.once.Do(func() { m.releaseInflightLayerRefsLocked(r.digestHexes) })
 }
 
+type inflightBaseRef struct {
+	once      sync.Once
+	digestHex string
+}
+
+func (r *inflightBaseRef) release(m *manager) {
+	r.once.Do(func() {
+		m.createMu.Lock()
+		defer m.createMu.Unlock()
+		m.releaseInflightBaseRefLocked(r.digestHex)
+	})
+}
+
+func (r *inflightBaseRef) releaseLocked(m *manager) {
+	r.once.Do(func() { m.releaseInflightBaseRefLocked(r.digestHex) })
+}
+
 // retainInflightLayers registers one in-flight reference per digest so
 // reconciliation cannot evict layers a build is materializing.
 func (m *manager) retainInflightLayers(digestHexes []string) *inflightLayerRef {
@@ -105,18 +122,57 @@ func (m *manager) releaseInflightLayerRefsLocked(digestHexes []string) {
 	}
 }
 
+func (m *manager) retainInflightBase(digest string) *inflightBaseRef {
+	digestHex := strings.TrimPrefix(digest, "sha256:")
+	m.createMu.Lock()
+	m.inflightBaseRefs[digestHex]++
+	m.createMu.Unlock()
+	return &inflightBaseRef{digestHex: digestHex}
+}
+
+func (m *manager) releaseInflightBaseRefLocked(digestHex string) {
+	if m.inflightBaseRefs[digestHex] <= 1 {
+		delete(m.inflightBaseRefs, digestHex)
+	} else {
+		m.inflightBaseRefs[digestHex]--
+	}
+}
+
 // reconcileLayerStore evicts unreferenced layer artifacts and refreshes the
 // cached disk usage totals so accounting reflects the removals.
 func (m *manager) reconcileLayerStore() {
+	if m.layers == nil {
+		return
+	}
 	m.createMu.Lock()
 	defer m.createMu.Unlock()
 	m.reconcileLayerStoreLocked()
+}
+
+func (m *manager) scheduleLayerReconcile() {
+	if m.layerEvictionGrace <= 0 {
+		return
+	}
+	m.reconcileMu.Lock()
+	defer m.reconcileMu.Unlock()
+	if m.reconcileTimer != nil {
+		return
+	}
+	m.reconcileTimer = time.AfterFunc(m.layerEvictionGrace, func() {
+		m.reconcileMu.Lock()
+		m.reconcileTimer = nil
+		m.reconcileMu.Unlock()
+		m.reconcileLayerStore()
+	})
 }
 
 // reconcileLayerStoreLocked is used by lifecycle operations that already hold
 // createMu. Serializing reconciliation with manifest finalization prevents an
 // eviction scan from racing a newly committed layer reference.
 func (m *manager) reconcileLayerStoreLocked() {
+	if m.layers == nil {
+		return
+	}
 	m.evictUnreferencedLayerArtifacts()
 	m.evictUnreferencedImageBases()
 	m.layers.refreshDiskUsageTotals()
@@ -126,7 +182,10 @@ func (m *manager) reconcileLayerStoreLocked() {
 // manifest model references, deleting the digest directory entirely. Artifacts
 // newer than the grace period are kept so in-flight builds never lose work.
 func (m *manager) evictUnreferencedImageBases() {
-	refs := make(map[string]struct{})
+	refs := make(map[string]struct{}, len(m.inflightBaseRefs))
+	for digestHex := range m.inflightBaseRefs {
+		refs[digestHex] = struct{}{}
+	}
 	if err := filepath.WalkDir(m.paths.ImagesDir(), func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			if os.IsNotExist(err) {

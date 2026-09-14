@@ -292,8 +292,9 @@ func promoteImageToContent(p *paths.Paths, sourceRepository, digestHex string, s
 	if err := writeMetadataFile(p.ImageContentMetadata(digestHex), &pendingMeta); err != nil {
 		return fmt.Errorf("write content metadata: %w", err)
 	}
-	if err := installAtomically(p.ImageContentPath(digestHex), func(path string) error {
-		return os.Link(sourceDiskPath, path)
+	contentDiskPath := p.ImageContentPath(digestHex)
+	if err := installAtomically(contentDiskPath, func(path string) error {
+		return linkImageDisk(sourceDiskPath, path, contentDiskPath)
 	}); err != nil {
 		return fmt.Errorf("link source disk: %w", err)
 	}
@@ -356,6 +357,28 @@ func promoteLegacyTags(p *paths.Paths, repository, digestHex string) error {
 		}
 	}
 	return nil
+}
+
+func linkImageDisk(sourcePath, targetPath, finalTargetPath string) error {
+	info, err := os.Lstat(sourcePath)
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		return os.Link(sourcePath, targetPath)
+	}
+	target, err := os.Readlink(sourcePath)
+	if err != nil {
+		return err
+	}
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(filepath.Dir(sourcePath), target)
+	}
+	relative, err := filepath.Rel(filepath.Dir(finalTargetPath), target)
+	if err != nil {
+		return err
+	}
+	return os.Symlink(relative, targetPath)
 }
 
 func installAtomically(path string, install func(string) error) error {

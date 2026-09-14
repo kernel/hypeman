@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 )
 
@@ -75,11 +76,13 @@ func totalReadyImageBytesFromMetadataWithContext(ctx context.Context, imagesDir 
 			if globErr != nil {
 				return fmt.Errorf("find ready image rootfs for %s: %w", path, globErr)
 			}
+			sharedBase := false
 			for _, rootfsPath := range rootfsPaths {
 				rootfsInfo, statErr := os.Stat(rootfsPath)
 				if statErr != nil {
 					continue
 				}
+				sharedBase = isSharedBaseLink(rootfsPath, filepath.Join(imagesDir, "bases"))
 				if !markUniqueRootfs(rootfsInfo, seenRootfs) {
 					return nil
 				}
@@ -87,6 +90,9 @@ func totalReadyImageBytesFromMetadataWithContext(ctx context.Context, imagesDir 
 			}
 
 			if meta.SizeBytes > 0 {
+				if sharedBase {
+					return nil
+				}
 				total += meta.SizeBytes
 				return nil
 			}
@@ -233,7 +239,11 @@ func (s *layerStore) computeDiskUsageTotals(ctx context.Context) (int64, int64, 
 	if err != nil {
 		return 0, 0, err
 	}
-	return readyImageBytes, ociCacheBytes + layerArtifactBytes, nil
+	baseBytes, err := totalFileBytesWithContext(ctx, s.paths.ImageBasesDir(), "shared image bases")
+	if err != nil {
+		return 0, 0, err
+	}
+	return readyImageBytes + baseBytes, ociCacheBytes + layerArtifactBytes, nil
 }
 
 func totalRootfsBytesInDigestDirWithContext(ctx context.Context, digestDir string, seen map[rootfsIdentity]struct{}) (int64, error) {
@@ -271,6 +281,23 @@ func totalRootfsBytesInDigestDirWithContext(ctx context.Context, digestDir strin
 		return 0, os.ErrNotExist
 	}
 	return total, nil
+}
+
+func isSharedBaseLink(path, basesDir string) bool {
+	info, err := os.Lstat(path)
+	if err != nil || info.Mode()&os.ModeSymlink == 0 {
+		return false
+	}
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return false
+	}
+	canonicalBasesDir, err := filepath.EvalSymlinks(basesDir)
+	if err != nil {
+		return false
+	}
+	relative, err := filepath.Rel(canonicalBasesDir, resolved)
+	return err == nil && relative != "." && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
 }
 
 type rootfsIdentity struct {

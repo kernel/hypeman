@@ -225,7 +225,18 @@ func (m *manager) createInstance(
 		return nil, fmt.Errorf("total memory %d (size + hotplug_size) exceeds maximum allowed %d per instance", totalMemory, m.limits.MaxMemoryPerInstance)
 	}
 
-	diskBytes := requestedDiskReservationBytes(overlaySize, req.Volumes)
+	overlayDiskSize := overlaySize
+	if preparer, ok := m.imageManager.(images.LayeredRuntimeManager); ok {
+		extraOverlayBytes, err := preparer.RequiredOverlayBytes(ctx, imageInfo)
+		if err != nil {
+			return nil, fmt.Errorf("calculate image overlay size: %w", err)
+		}
+		overlayDiskSize += extraOverlayBytes
+		if overlayDiskSize < overlaySize {
+			return nil, fmt.Errorf("image overlay size overflows")
+		}
+	}
+	diskBytes := requestedDiskReservationBytes(overlayDiskSize, req.Volumes)
 	reservedResources := false
 
 	// Reserve aggregate resources for this create while it is in flight.
@@ -341,6 +352,7 @@ func (m *manager) createInstance(
 		Size:                     size,
 		HotplugSize:              hotplugSize,
 		OverlaySize:              overlaySize,
+		OverlayDiskSize:          overlayDiskSize,
 		Vcpus:                    vcpus,
 		NetworkBandwidthDownload: req.NetworkBandwidthDownload, // Will be set by caller if using resource manager
 		NetworkBandwidthUpload:   req.NetworkBandwidthUpload,   // Will be set by caller if using resource manager
@@ -413,13 +425,13 @@ func (m *manager) createInstance(
 	// 13. Create overlay disk with specified size. Layered images populate its
 	// upper directory with the image's final layer; test fakes and legacy images
 	// retain the empty-overlay path.
-	log.DebugContext(ctx, "creating overlay disk", "instance_id", id, "size_bytes", stored.OverlaySize)
+	log.DebugContext(ctx, "creating overlay disk", "instance_id", id, "size_bytes", overlayDiskSize)
 	if preparer, ok := m.imageManager.(images.LayeredRuntimeManager); ok {
-		if err := preparer.PrepareInstanceOverlay(ctx, imageInfo, m.paths.InstanceOverlay(id), stored.OverlaySize); err != nil {
+		if err := preparer.PrepareInstanceOverlay(ctx, imageInfo, m.paths.InstanceOverlay(id), overlayDiskSize); err != nil {
 			log.ErrorContext(ctx, "failed to create layered overlay disk", "instance_id", id, "error", err)
 			return nil, fmt.Errorf("create overlay disk: %w", err)
 		}
-	} else if err := m.createOverlayDisk(id, stored.OverlaySize); err != nil {
+	} else if err := m.createOverlayDisk(id, overlayDiskSize); err != nil {
 		log.ErrorContext(ctx, "failed to create overlay disk", "instance_id", id, "error", err)
 		return nil, fmt.Errorf("create overlay disk: %w", err)
 	}

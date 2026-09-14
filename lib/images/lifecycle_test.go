@@ -145,6 +145,31 @@ func newLifecycleTestManager(p *paths.Paths) *manager {
 	}
 }
 
+func TestSharedBaseBytesCountedOnce(t *testing.T) {
+	p := paths.New(t.TempDir())
+	m := newLifecycleTestManager(p)
+	baseHex := strings.Repeat("a", 64)
+	basePath := p.ImageBasePath(baseHex)
+	require.NoError(t, os.MkdirAll(filepath.Dir(basePath), 0o755))
+	require.NoError(t, os.WriteFile(basePath, []byte("shared-base"), 0o644))
+
+	for _, digestHex := range []string{strings.Repeat("b", 64), strings.Repeat("c", 64)} {
+		contentDir := p.ImageContentDir(digestHex)
+		require.NoError(t, os.MkdirAll(contentDir, 0o755))
+		rootfsPath := p.ImageContentPath(digestHex)
+		relative, err := filepath.Rel(filepath.Dir(rootfsPath), basePath)
+		require.NoError(t, err)
+		require.NoError(t, os.Symlink(relative, rootfsPath))
+		require.NoError(t, writeMetadataFile(p.ImageContentMetadata(digestHex), &imageMetadata{
+			Digest: "sha256:" + digestHex, Status: StatusReady, SizeBytes: int64(len("shared-base")),
+		}))
+	}
+
+	readyBytes, _, err := m.layers.getDiskUsageTotals(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, int64(len("shared-base")), readyBytes)
+}
+
 // TestLayerArtifactsCountedInOneBucket verifies the accounting contract: ready
 // image bytes and the OCI+layer cache total stay disjoint, so consumers summing
 // TotalImageBytes and TotalOCICacheBytes count layer bytes exactly once.

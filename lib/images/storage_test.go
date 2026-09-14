@@ -3,6 +3,7 @@ package images
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -270,6 +271,51 @@ func TestPromoteImageToContentReplacesFailedContent(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, StatusReady, contentMeta.Status)
 	require.FileExists(t, p.ImageContentPath(digest))
+}
+
+func TestPromoteLayeredImageRebasesDiskLink(t *testing.T) {
+	p := paths.New(t.TempDir())
+	repository := "docker.io/library/alpine"
+	digest := strings.Repeat("a", 64)
+	seedLegacy(t, p, repository, "latest", digest)
+
+	model := &imageManifestModel{
+		SchemaVersion:  manifestModelSchemaVersion,
+		Digest:         "sha256:" + digest,
+		RootFSType:     "layers",
+		BaseLayerCount: 1,
+		Config: manifestConfigRef{
+			Digest:    "sha256:" + strings.Repeat("c", 64),
+			MediaType: "application/vnd.oci.image.config.v1+json",
+			DiffIDs:   []string{"sha256:" + strings.Repeat("d", 64), "sha256:" + strings.Repeat("e", 64)},
+		},
+		Layers: []layerDescriptor{
+			{Digest: "sha256:" + strings.Repeat("f", 64), DiffID: "sha256:" + strings.Repeat("d", 64)},
+			{Digest: "sha256:" + strings.Repeat("0", 64), DiffID: "sha256:" + strings.Repeat("e", 64)},
+		},
+	}
+	baseDigest := strings.TrimPrefix(sharedBaseDigest(model), "sha256:")
+	model.BaseDigest = "sha256:" + baseDigest
+	basePath := p.ImageBasePath(baseDigest)
+	require.NoError(t, os.MkdirAll(filepath.Dir(basePath), 0o755))
+	require.NoError(t, os.WriteFile(basePath, []byte("base"), 0o644))
+	legacyDisk := p.ImageDigestPath(repository, digest)
+	require.NoError(t, os.Remove(legacyDisk))
+	relative, err := filepath.Rel(filepath.Dir(legacyDisk), basePath)
+	require.NoError(t, err)
+	require.NoError(t, os.Symlink(relative, legacyDisk))
+	legacyManifest := filepath.Join(p.ImageDigestDir(repository, digest), "manifest.json")
+	require.NoError(t, writeManifestModelAt(legacyManifest, digest, model))
+	legacyMeta, err := readMetadata(p, repository, digest)
+	require.NoError(t, err)
+
+	require.NoError(t, promoteImageToContent(p, repository, digest, legacyMeta))
+	contentDisk := p.ImageContentPath(digest)
+	resolved, err := filepath.EvalSymlinks(contentDisk)
+	require.NoError(t, err)
+	expected, err := filepath.EvalSymlinks(basePath)
+	require.NoError(t, err)
+	require.Equal(t, expected, resolved)
 }
 
 func TestPromoteLegacyTagsRemovesStaleLegacySymlinks(t *testing.T) {

@@ -84,12 +84,18 @@ func validateManifestModel(digestHex string, model *imageManifestModel) error {
 	if model.BaseLayerCount < 0 || model.BaseLayerCount > len(model.Layers) {
 		return fmt.Errorf("invalid base layer count: %d", model.BaseLayerCount)
 	}
+	if (model.BaseDigest == "") != (model.BaseLayerCount == 0) {
+		return fmt.Errorf("base digest and base layer count must be set together")
+	}
 	if model.BaseDigest != "" {
 		if _, err := parseSHA256Digest(model.BaseDigest); err != nil {
 			return fmt.Errorf("invalid base digest: %q", model.BaseDigest)
 		}
 		if model.BaseLayerCount == len(model.Layers) {
 			return fmt.Errorf("base digest must leave an image layer for the overlay")
+		}
+		if model.BaseDigest != sharedBaseDigest(model) {
+			return fmt.Errorf("base digest does not match base layers")
 		}
 	}
 	if err := validateManifestConfig(digestHex, model); err != nil {

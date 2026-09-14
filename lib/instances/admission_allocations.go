@@ -145,7 +145,7 @@ func (m *manager) allocationFromStoredMetadata(stored *StoredMetadata, active bo
 		Name:               stored.Name,
 		Vcpus:              stored.Vcpus,
 		MemoryBytes:        stored.Size + stored.HotplugSize,
-		OverlayBytes:       stored.OverlaySize,
+		OverlayBytes:       effectiveOverlayDiskSize(stored),
 		VolumeOverlayBytes: volumeOverlayBytes,
 		NetworkDownloadBps: stored.NetworkBandwidthDownload,
 		NetworkUploadBps:   stored.NetworkBandwidthUpload,

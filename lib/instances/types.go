@@ -96,7 +96,8 @@ type StoredMetadata struct {
 	// Resources (matching Cloud Hypervisor terminology)
 	Size                     int64 // Base memory in bytes
 	HotplugSize              int64 // Hotplug memory in bytes
-	OverlaySize              int64 // Overlay disk size in bytes
+	OverlaySize              int64 // User-requested writable overlay capacity
+	OverlayDiskSize          int64 `json:"overlay_disk_size,omitempty"` // Physical overlay disk size including image data
 	Vcpus                    int
 	NetworkBandwidthDownload int64 // Download rate limit in bytes/sec (external→VM), 0 = auto
 	NetworkBandwidthUpload   int64 // Upload rate limit in bytes/sec (VM→external), 0 = auto

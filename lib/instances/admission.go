@@ -18,5 +18,12 @@ func storedDiskReservationBytes(stored *StoredMetadata) int64 {
 	if stored == nil {
 		return 0
 	}
-	return requestedDiskReservationBytes(stored.OverlaySize, stored.Volumes)
+	return requestedDiskReservationBytes(effectiveOverlayDiskSize(stored), stored.Volumes)
+}
+
+func effectiveOverlayDiskSize(stored *StoredMetadata) int64 {
+	if stored.OverlayDiskSize > 0 {
+		return stored.OverlayDiskSize
+	}
+	return stored.OverlaySize
 }

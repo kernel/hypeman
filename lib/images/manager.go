@@ -52,7 +52,7 @@ type Manager interface {
 	TagImage(ctx context.Context, source, target string) (*Image, error)
 	DeleteImage(ctx context.Context, name string) error
 	RecoverInterruptedBuilds()
-	// TotalImageBytes returns the total size of all ready images on disk.
+	// TotalImageBytes returns ready rootfs and shared-base bytes on disk.
 	// Used by the resource manager for disk capacity tracking.
 	TotalImageBytes(ctx context.Context) (int64, error)
 	// TotalOCICacheBytes returns the total size of the OCI and materialized layer caches.
@@ -77,7 +77,10 @@ type manager struct {
 	createMu                   sync.Mutex
 	layers                     *layerStore
 	inflightLayerRefs          map[string]int
+	inflightBaseRefs           map[string]int
 	layerEvictionGrace         time.Duration
+	reconcileMu                sync.Mutex
+	reconcileTimer             *time.Timer
 	tagGenerations             map[string]uint64
 	requestedTags              map[string]string // newest pull's digest per requested tag
 	metrics                    *Metrics
@@ -108,6 +111,7 @@ func NewManager(p *paths.Paths, maxConcurrentBuilds int, meter metric.Meter) (Ma
 		queue:                      queue.New(maxConcurrentBuilds),
 		inflightPulls:              make(map[string]*inflightImagePull),
 		inflightLayerRefs:          make(map[string]int),
+		inflightBaseRefs:           make(map[string]int),
 		layerEvictionGrace:         layerEvictionGracePeriod,
 		borrowedCredentialsTimeout: DefaultBorrowedCredentialsTimeout,
 		readySubscribers:           make(map[string][]chan StatusEvent),
@@ -131,6 +135,7 @@ func NewManager(p *paths.Paths, maxConcurrentBuilds int, meter metric.Meter) (Ma
 	// attempt's unreferenced artifacts.
 	m.cleanStaleImageTempDirs()
 	m.reconcileLayerStore()
+	m.scheduleLayerReconcile()
 	// Keep legacy images readable in their existing layout and promote them only
 	// when an operation needs shared content, such as a cross-repository tag.
 	// Avoiding a startup-wide migration keeps startup bounded and independent of
@@ -505,12 +510,17 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef, credentials 
 	m.recordPullMetrics(ctx, "success")
 
 	materialized, materializeErr := m.materializeLayerArtifacts(ctx, result)
-	if materialized != nil {
-		defer func() {
+	var baseLease *inflightBaseRef
+	defer func() {
+		if materialized != nil {
 			materialized.release(m)
-			m.reconcileLayerStore()
-		}()
-	}
+		}
+		if baseLease != nil {
+			baseLease.release(m)
+		}
+		m.reconcileLayerStore()
+		m.scheduleLayerReconcile()
+	}()
 	if materializeErr != nil {
 		slog.Warn("layer materialization failed; using flattened rootfs",
 			"digest", ref.DigestHex(), "error", materializeErr)
@@ -544,6 +554,7 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef, credentials 
 	if layered {
 		result.Manifest.BaseLayerCount = len(result.Manifest.Layers) - 1
 		baseDigest = sharedBaseDigest(result.Manifest)
+		baseLease = m.retainInflightBase(baseDigest)
 		baseStart := time.Now()
 		baseDigest, diskSize, err = m.buildSharedBase(ctx, result.Manifest, buildDir)
 		m.recordImageBuildPhase(ctx, ref.Digest(), "shared_base_export", time.Since(baseStart), phaseStatus(err), "not_applicable")
@@ -564,7 +575,7 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef, credentials 
 	}
 
 	finalizeStart := time.Now()
-	err = m.finalizeImage(ref, result, diskSize, buildID, diskTempPath, materialized, baseDigest)
+	err = m.finalizeImage(ref, result, diskSize, buildID, diskTempPath, materialized, baseLease, baseDigest)
 	m.recordImageBuildPhase(ctx, ref.Digest(), "finalize", time.Since(finalizeStart), phaseStatus(err), "not_applicable")
 	if err != nil {
 		if errors.Is(err, errStaleBuild) {
@@ -592,11 +603,7 @@ func (m *manager) materializeLayerArtifacts(ctx context.Context, result *pullRes
 	return handle, nil
 }
 
-func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, diskSize int64, buildID, diskTempPath string, materialized *inflightLayerRef, baseDigests ...string) error {
-	baseDigest := ""
-	if len(baseDigests) > 0 {
-		baseDigest = baseDigests[0]
-	}
+func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, diskSize int64, buildID, diskTempPath string, materialized *inflightLayerRef, baseLease *inflightBaseRef, baseDigest string) error {
 	m.createMu.Lock()
 	defer m.createMu.Unlock()
 
@@ -662,6 +669,9 @@ func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, diskSize i
 		// deferred release is a no-op after this.
 		if materialized != nil {
 			materialized.releaseLocked(m)
+		}
+		if baseLease != nil {
+			baseLease.releaseLocked(m)
 		}
 	}
 
@@ -897,6 +907,7 @@ func (m *manager) deleteDigestImage(repository, digestHex string) error {
 	}
 	m.clearRequestedDigest(digestHex)
 	m.reconcileLayerStoreLocked()
+	m.scheduleLayerReconcile()
 	return nil
 }
 
@@ -931,12 +942,12 @@ func (m *manager) deleteTaggedImage(repository, tag string) error {
 		return fmt.Errorf("delete orphaned digest %s: %w", digestHex, err)
 	}
 	m.reconcileLayerStoreLocked()
+	m.scheduleLayerReconcile()
 	return nil
 }
 
-// TotalImageBytes returns the total size of all ready images on disk. Shared
-// layer artifacts are accounted separately via TotalOCICacheBytes so the two
-// totals can be summed without double-counting.
+// TotalImageBytes returns ready rootfs and shared-base bytes on disk. Shared
+// layer artifacts are accounted separately via TotalOCICacheBytes.
 func (m *manager) TotalImageBytes(ctx context.Context) (int64, error) {
 	readyImageBytes, _, err := m.layers.getDiskUsageTotals(ctx)
 	if err != nil {
