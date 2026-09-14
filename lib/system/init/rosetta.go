@@ -13,17 +13,17 @@ import (
 )
 
 const (
-	// newRoot is where the overlay rootfs is mounted; both exec and systemd mode
-	// chroot into it before the workload runs.
+	// newRoot is where the overlay rootfs is mounted; init switches root into it
+	// before the workload runs.
 	newRoot = "/overlay/newroot"
 
 	// rosettaShareDir holds the Rosetta interpreter and lives inside the overlay
 	// rootfs (under /opt rather than /run) so it stays reachable at the same
-	// guest-absolute path after the chroot and is not shadowed by a /run tmpfs
-	// that systemd remounts during boot.
+	// guest-absolute path after the root switch and is not shadowed by a /run
+	// tmpfs that systemd remounts during boot.
 	rosettaShareDir = "/opt/hypeman/rosetta"
 
-	// rosettaInterp is the interpreter path as seen from inside the chroot
+	// rosettaInterp is the interpreter path as seen from the image root
 	// (guest-absolute). It is what the binfmt rule and the systemd binfmt.d
 	// drop-in reference.
 	rosettaInterp = rosettaShareDir + "/rosetta"
@@ -44,8 +44,8 @@ const (
 // rosettaBinfmtRule builds the binfmt_misc registration string for x86-64 ELF
 // binaries dispatched through the Rosetta interpreter at interp. The flags are
 // OCF: O preserves argv[0], C applies the target's credentials, and F opens the
-// interpreter at registration and pins the fd so it survives the later chroot
-// into the overlay rootfs.
+// interpreter at registration and pins the fd so it survives the later root
+// switch into the overlay rootfs.
 func rosettaBinfmtRule(interp string) string {
 	return fmt.Sprintf(":rosetta:M::%s:%s:%s:OCF", rosettaELFMagic, rosettaELFMask, interp)
 }
@@ -74,7 +74,7 @@ func setupRosetta(log *Logger, systemdMode bool) error {
 
 	// The F flag opens the interpreter at registration time, relative to init's
 	// root, so the live rule must name the interpreter by its current path under
-	// newRoot; the pinned fd then survives the chroot.
+	// newRoot; the pinned fd then survives the root switch.
 	rule := rosettaBinfmtRule(hostInterp)
 	existed, err := registerBinfmt(rule)
 	if err != nil {
@@ -116,7 +116,7 @@ func alreadyRegistered(err error) bool {
 }
 
 // writeBinfmtdConf drops a systemd binfmt.d config that re-registers Rosetta
-// against its guest-absolute path inside the chroot. systemd-binfmt flushes all
+// against its guest-absolute path in the image root. systemd-binfmt flushes all
 // binfmt_misc rules before applying binfmt.d, so without this the live rule
 // registered above is lost whenever the image ships its own binfmt.d entries.
 func writeBinfmtdConf(log *Logger) error {

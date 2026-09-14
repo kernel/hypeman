@@ -15,7 +15,7 @@ Cloud Hypervisor vsock socket
     ↓
 Guest: guest-agent (lib/system/guest_agent)
     ↓
-Container (chroot /overlay/newroot)
+Container (image rootfs, switched to / by init)
 ```
 
 ## Features
@@ -80,7 +80,7 @@ gRPC streaming RPC with protobuf messages:
 ### 4. Guest Agent (`lib/system/guest_agent/main.go`)
 
 - Embedded binary injected into microVM via initrd
-- **Runs inside container namespace** (chrooted to `/overlay/newroot`) for proper file access
+- **Runs inside the image rootfs** (init switches root into it before starting the agent) for proper file access
 - Listens on vsock port 2222 inside guest
 - Implements gRPC `GuestService` server
 - Executes commands and handles file operations directly

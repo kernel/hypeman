@@ -12,8 +12,7 @@ import (
 )
 
 const (
-	headersWorkerArg      = "--headers-worker"
-	headersWorkerGuestArg = "--headers-worker-guest"
+	headersWorkerArg = "--headers-worker-guest"
 
 	headersStatusPending = "pending"
 	headersStatusRunning = "running"
@@ -28,36 +27,74 @@ type kernelHeadersPaths struct {
 	statusPath    string
 }
 
-var (
-	initrdKernelHeadersPaths = kernelHeadersPaths{
-		libModulesDir: "/overlay/newroot/lib/modules",
-		usrSrcDir:     "/overlay/newroot/usr/src",
-		tarballPath:   "/kernel-headers.tar.gz",
-		statusPath:    "/overlay/newroot/run/hypeman/kernel-headers.status",
-	}
-	guestKernelHeadersPaths = kernelHeadersPaths{
-		libModulesDir: "/lib/modules",
-		usrSrcDir:     "/usr/src",
-		tarballPath:   "/opt/hypeman/kernel-headers.tar.gz",
-		statusPath:    "/run/hypeman/kernel-headers.status",
-	}
+// Paths as seen from the image root. The tarball is bind-mounted in from the
+// initrd by stageKernelHeadersAssets before the root switch.
+var headersPaths = kernelHeadersPaths{
+	libModulesDir: "/lib/modules",
+	usrSrcDir:     "/usr/src",
+	tarballPath:   "/opt/hypeman/kernel-headers.tar.gz",
+	statusPath:    "/run/hypeman/kernel-headers.status",
+}
+
+const (
+	initrdHeadersTarball = "/kernel-headers.tar.gz"
+	guestInitBinary      = "/opt/hypeman/hypeman-init"
 )
 
-func startKernelHeadersWorkerAsync(log *Logger) {
-	if err := writeKernelHeadersStatus(initrdKernelHeadersPaths.statusPath, headersStatusPending); err != nil {
-		log.Info("hypeman-init:headers", "warning: failed to write status file: "+err.Error())
+// stageKernelHeadersAssets makes the headers tarball reachable from the image
+// root and marks the install pending. Runs before the root switch, while the
+// initrd is still addressable. systemd mode also needs a copy of this binary
+// at a real path for its oneshot unit; exec mode re-execs /proc/self/exe.
+func stageKernelHeadersAssets(newroot string, copyInitBinary bool) error {
+	if err := writeKernelHeadersStatus(filepath.Join(newroot, headersPaths.statusPath), headersStatusPending); err != nil {
+		return fmt.Errorf("write status: %w", err)
 	}
 
+	if _, err := os.Stat(initrdHeadersTarball); err != nil {
+		return fmt.Errorf("stat headers tarball: %w", err)
+	}
+	target := filepath.Join(newroot, headersPaths.tarballPath)
+	if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+		return fmt.Errorf("mkdir %s: %w", filepath.Dir(target), err)
+	}
+	if _, err := os.Stat(target); os.IsNotExist(err) {
+		if err := os.WriteFile(target, nil, 0644); err != nil {
+			return fmt.Errorf("create bind target: %w", err)
+		}
+	} else if err != nil {
+		return fmt.Errorf("stat bind target: %w", err)
+	}
+	if err := bindMount(initrdHeadersTarball, target); err != nil {
+		return fmt.Errorf("bind mount headers tarball: %w", err)
+	}
+
+	if !copyInitBinary {
+		return nil
+	}
+	src, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("resolve init binary path: %w", err)
+	}
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return fmt.Errorf("read init binary: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(newroot, guestInitBinary), data, 0755); err != nil {
+		return fmt.Errorf("write init binary: %w", err)
+	}
+	return nil
+}
+
+// startKernelHeadersWorkerAsync runs the headers install in the background.
+// Runs after the root switch; /proc/self/exe still resolves to this binary
+// even though the initrd is no longer reachable by path.
+func startKernelHeadersWorkerAsync(log *Logger) {
 	cmd := exec.Command("/proc/self/exe", headersWorkerArg)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	// The worker addresses the tarball in the initrd and the target under
-	// /overlay/newroot. Give it its own mount namespace so those paths keep
-	// resolving after init moves the overlay onto / in switchRoot.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Unshareflags: syscall.CLONE_NEWNS}
 	if err := cmd.Start(); err != nil {
 		log.Error("hypeman-init:headers", "failed to start async headers worker", err)
-		_ = writeKernelHeadersStatus(initrdKernelHeadersPaths.statusPath, headersStatusFailed)
+		_ = writeKernelHeadersStatus(headersPaths.statusPath, headersStatusFailed)
 		log.Info("hypeman-init:headers", formatHeadersFailedSentinel(err))
 		return
 	}
@@ -140,7 +177,6 @@ func setupKernelHeaders(log *Logger, paths kernelHeadersPaths) error {
 		return nil
 	}
 
-	// Check if headers tarball exists in initrd
 	if _, err := os.Stat(paths.tarballPath); os.IsNotExist(err) {
 		return fmt.Errorf("kernel headers tarball not found at %s", paths.tarballPath)
 	} else if err != nil {
@@ -179,7 +215,6 @@ func setupKernelHeaders(log *Logger, paths kernelHeadersPaths) error {
 	// Create build symlink
 	buildLink := filepath.Join(modulesDir, "build")
 	os.Remove(buildLink) // Remove if exists
-	// Use absolute path for symlink target (will be correct after chroot)
 	symlinkTarget := "/usr/src/linux-headers-" + runningKernel
 	if err := os.Symlink(symlinkTarget, buildLink); err != nil {
 		return fmt.Errorf("create build symlink: %w", err)

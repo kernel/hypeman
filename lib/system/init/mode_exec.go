@@ -19,21 +19,14 @@ const (
 	guestAgentReadyFDEnv    = "HYPEMAN_AGENT_READY_FD"
 )
 
-// runExecMode runs the container in exec mode (default).
+// runExecMode runs the container in exec mode (default). It is entered after
+// the root switch, so all paths are image paths.
 // This is the Docker-like behavior where:
 // - The init binary remains PID 1
 // - Guest-agent runs as a background process
 // - The container entrypoint runs as a child process
 // - After entrypoint exits, init logs exit info and cleanly shuts down the VM
 func runExecMode(log *Logger, cfg *vmconfig.Config) {
-	const newroot = "/overlay/newroot"
-
-	log.Info("hypeman-init:setup", "switching root")
-	if err := switchRoot(newroot); err != nil {
-		log.Error("hypeman-init:setup", "switch root failed", err)
-		dropToShell()
-	}
-
 	if err := installEgressProxyCA(log, cfg); err != nil {
 		log.Error("hypeman-init:egress-proxy", "egress proxy CA certificate setup failed", err)
 		log.Info("hypeman-init:entrypoint", formatExitSentinel(78, fmt.Sprintf("egress proxy CA certificate setup failed: %v", err)))

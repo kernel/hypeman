@@ -21,15 +21,9 @@ import (
 )
 
 func main() {
-	if len(os.Args) > 1 {
-		switch os.Args[1] {
-		case headersWorkerArg:
-			runKernelHeadersWorker(NewLogger(), initrdKernelHeadersPaths)
-			return
-		case headersWorkerGuestArg:
-			runKernelHeadersWorker(NewLogger(), guestKernelHeadersPaths)
-			return
-		}
+	if len(os.Args) > 1 && os.Args[1] == headersWorkerArg {
+		runKernelHeadersWorker(NewLogger(), headersPaths)
+		return
 	}
 
 	log := NewLogger()
@@ -115,16 +109,35 @@ func main() {
 		// Continue anyway - exec will still work, just no remote access
 	}
 
-	// Phase 8: Start async kernel headers setup for exec mode.
-	// In systemd mode, service injection is handled during runSystemdMode.
+	// Phase 8: Stage kernel headers assets into the image while the initrd is
+	// still reachable. The worker itself runs after the root switch.
+	systemdMode := cfg.InitMode == "systemd"
+	headersStaged := false
 	if cfg.SkipKernelHeaders {
 		log.Info("hypeman-init:headers", "skipping kernel headers setup (skip_kernel_headers=true)")
-	} else if cfg.InitMode == "exec" {
+	} else if err := stageKernelHeadersAssets(newRoot, systemdMode); err != nil {
+		log.Error("hypeman-init:headers", "failed to stage kernel headers", err)
+		_ = writeKernelHeadersStatus(filepath.Join(newRoot, headersPaths.statusPath), headersStatusFailed)
+		log.Info("hypeman-init:headers", formatHeadersFailedSentinel(err))
+	} else {
+		headersStaged = true
+	}
+
+	// Phase 9: Switch root. From here on only the image rootfs is visible.
+	log.Info("hypeman-init:setup", "switching root")
+	if err := switchRoot(newRoot); err != nil {
+		log.Error("hypeman-init:setup", "switch root failed", err)
+		dropToShell()
+	}
+
+	// Phase 10: Start async kernel headers setup for exec mode. In systemd
+	// mode a oneshot unit injected by runSystemdMode does this.
+	if headersStaged && !systemdMode {
 		startKernelHeadersWorkerAsync(log)
 	}
 
-	// Phase 9: Mode-specific execution
-	if cfg.InitMode == "systemd" {
+	// Phase 11: Mode-specific execution
+	if systemdMode {
 		log.Info("hypeman-init:mode", "entering systemd mode")
 		runSystemdMode(log, cfg)
 	} else {

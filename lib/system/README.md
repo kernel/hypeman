@@ -73,7 +73,7 @@ It replaces the previous shell-based init script with cleaner logic and structur
 - **Exec mode** (default): Init switches root to the container rootfs, starts guest-agent, and waits on an event-driven readiness signal (pipe FD, 10s timeout) before launching the entrypoint. When the app exits, init logs exit info and cleanly shuts down the VM via `reboot(POWER_OFF)`.
 - **Systemd mode** (auto-detected on host): Init injects systemd units (guest-agent plus async kernel-headers worker), emits handoff marker, then execs /sbin/init so systemd becomes PID 1.
 
-**Root switch:** Both modes move the overlay rootfs onto `/` (`MS_MOVE`, as `switch_root(8)` does) and then chroot into it, so the image rootfs is the mount namespace root rather than the initrd. A plain chroot left the initrd as the namespace root, which broke `setns(2)`-based tools inside the guest such as `docker exec` into a nested container. `pivot_root(2)` is not usable while `/` is the initramfs.
+**Root switch:** After the shared phases (overlay, config, network, volumes, bind mounts, guest-agent copy, kernel-headers staging), `main.go` moves the overlay rootfs onto `/` (`MS_MOVE`, as `switch_root(8)` does) and chroots into it, then dispatches to the mode. Everything from that point on, in either mode, sees only the image rootfs. This makes the image rootfs the mount namespace root rather than the initrd; a plain chroot left the initrd as the namespace root, which broke `setns(2)`-based tools inside the guest such as `docker exec` into a nested container. `pivot_root(2)` is not usable while `/` is the initramfs.
 
 **Boot progress sentinels:** Init and guest-agent emit machine-parseable markers to serial console:
 - `HYPEMAN-PROGRAM-START ts=... mode=...`
@@ -102,7 +102,7 @@ Kernel headers are bundled in the initrd and installed asynchronously after boot
 
 **Why:** Guest images come with headers for their native kernel (e.g., Ubuntu's 5.15), but hypeman VMs run a custom kernel. Without matching headers, DKMS cannot compile drivers.
 
-**How:** The initrd includes `kernel-headers.tar.gz` from the same release as the kernel. A background worker (exec mode) or injected systemd oneshot unit (systemd mode) performs installation:
+**How:** The initrd includes `kernel-headers.tar.gz` from the same release as the kernel. Before the root switch, init bind-mounts it to `/opt/hypeman/kernel-headers.tar.gz` in the image (and, for systemd mode, copies itself to `/opt/hypeman/hypeman-init`). After the switch, a background worker (exec mode, re-execing `/proc/self/exe`) or injected systemd oneshot unit (systemd mode) performs installation from those image paths:
 - writes `/run/hypeman/kernel-headers.status` as `pending|running|ready|failed`
 - fast-path skips extraction when matching headers + build symlink are already valid
 - otherwise extracts headers to `/usr/src/linux-headers-{version}/`, creates `/lib/modules/{version}/build`, and removes mismatched headers from the guest image

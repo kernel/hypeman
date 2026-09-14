@@ -10,16 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kernel/hypeman/cmd/api/config"
-	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/guest"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/instances"
-	"github.com/kernel/hypeman/lib/network"
-	"github.com/kernel/hypeman/lib/paths"
-	"github.com/kernel/hypeman/lib/system"
-	"github.com/kernel/hypeman/lib/volumes"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -34,49 +28,17 @@ import (
 // - Injects and starts the hypeman-agent.service
 func TestSystemdMode(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		t.Skip("skipping integration test in short mode")
-	}
-
-	// Skip if KVM is not available
-	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
-		t.Skip("/dev/kvm not available")
-	}
+	m := newIntegrationManagers(t)
+	p, imageManager, systemManager, instanceManager := m.paths, m.images, m.system, m.instances
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-
-	// Set up test environment
-	tmpDir := t.TempDir()
-	p := paths.New(tmpDir)
-
-	cfg := &config.Config{
-		DataDir: tmpDir,
-		Network: newParallelTestNetworkConfig(t),
-	}
-
-	// Create managers
-	imageManager, err := images.NewManager(p, 1, nil)
-	require.NoError(t, err)
-
-	systemManager := system.NewManager(p)
-	networkManager := network.NewManager(p, cfg, nil)
-	deviceManager := devices.NewManager(p)
-	volumeManager := volumes.NewManager(p, 0, nil)
-
-	limits := instances.ResourceLimits{
-		MaxOverlaySize:       100 * 1024 * 1024 * 1024,
-		MaxVcpusPerInstance:  0,
-		MaxMemoryPerInstance: 0,
-	}
-
-	instanceManager := instances.NewManager(p, imageManager, systemManager, networkManager, deviceManager, volumeManager, limits, "", instances.SnapshotPolicy{}, nil, nil)
 
 	imageName := integrationTestImageRef(t, "docker.io/jrei/systemd-ubuntu:22.04")
 
 	// Pull the systemd image
 	t.Log("Pulling systemd image:", imageName)
-	_, err = imageManager.CreateImage(ctx, images.CreateImageRequest{
+	_, err := imageManager.CreateImage(ctx, images.CreateImageRequest{
 		Name: imageName,
 	})
 	require.NoError(t, err)
@@ -139,6 +101,14 @@ func TestSystemdMode(t *testing.T) {
 		pid1Name := strings.TrimSpace(output)
 		assert.Equal(t, "systemd", pid1Name, "PID 1 should be systemd")
 		t.Logf("PID 1 is: %s", pid1Name)
+	})
+
+	t.Run("RootIsOverlay", func(t *testing.T) {
+		assertGuestRootIsOverlay(t, ctx, inst)
+	})
+
+	t.Run("KernelHeadersReady", func(t *testing.T) {
+		waitForKernelHeadersReady(t, ctx, inst)
 	})
 
 	// Test: Verify guest-agent binary exists

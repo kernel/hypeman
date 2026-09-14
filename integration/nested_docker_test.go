@@ -2,19 +2,13 @@ package integration
 
 import (
 	"context"
-	"os"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/kernel/hypeman/cmd/api/config"
-	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/instances"
-	"github.com/kernel/hypeman/lib/network"
-	"github.com/kernel/hypeman/lib/paths"
-	"github.com/kernel/hypeman/lib/system"
-	"github.com/kernel/hypeman/lib/volumes"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -49,39 +43,18 @@ test "$(cat "/proc/$pid/root/exec-created")" = exec-created
 // rootfs and left the initrd as the mount namespace root.
 func TestNestedDockerExecRoot(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		t.Skip("skipping integration test in short mode")
-	}
-	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
-		t.Skip("/dev/kvm not available")
-	}
+	m := newIntegrationManagers(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	tmpDir := t.TempDir()
-	p := paths.New(tmpDir)
-	cfg := &config.Config{
-		DataDir: tmpDir,
-		Network: newParallelTestNetworkConfig(t),
-	}
-
-	imageManager, err := images.NewManager(p, 1, nil)
-	require.NoError(t, err)
-	systemManager := system.NewManager(p)
-	networkManager := network.NewManager(p, cfg, nil)
-	deviceManager := devices.NewManager(p)
-	volumeManager := volumes.NewManager(p, 0, nil)
-	limits := instances.ResourceLimits{MaxOverlaySize: 100 * 1024 * 1024 * 1024}
-	instanceManager := instances.NewManager(p, imageManager, systemManager, networkManager, deviceManager, volumeManager, limits, "", instances.SnapshotPolicy{}, nil, nil)
-
 	imageName := integrationTestImageRef(t, nestedDockerImage)
-	_, err = imageManager.CreateImage(ctx, images.CreateImageRequest{Name: imageName})
+	_, err := m.images.CreateImage(ctx, images.CreateImageRequest{Name: imageName})
 	require.NoError(t, err)
-	require.NoError(t, imageManager.WaitForReady(ctx, imageName))
-	require.NoError(t, systemManager.EnsureSystemFiles(ctx))
+	require.NoError(t, m.images.WaitForReady(ctx, imageName))
+	require.NoError(t, m.system.EnsureSystemFiles(ctx))
 
-	inst, err := instanceManager.CreateInstance(ctx, instances.CreateInstanceRequest{
+	inst, err := m.instances.CreateInstance(ctx, instances.CreateInstanceRequest{
 		Name:        "nested-docker-test",
 		Image:       imageName,
 		Size:        1024 * 1024 * 1024,
@@ -96,21 +69,30 @@ func TestNestedDockerExecRoot(t *testing.T) {
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cleanupCancel()
-		if err := instanceManager.DeleteInstance(cleanupCtx, inst.Id); err != nil {
+		if err := m.instances.DeleteInstance(cleanupCtx, inst.Id); err != nil {
 			t.Errorf("delete nested docker test instance during cleanup: %v", err)
 		}
 	})
 
-	require.NoError(t, waitForGuestAgent(ctx, instanceManager, inst.Id, 60*time.Second))
+	require.NoError(t, waitForGuestAgent(ctx, m.instances, inst.Id, 60*time.Second))
 
-	var lastOutput string
-	require.Eventually(t, func() bool {
-		output, exitCode, err := execInInstance(ctx, inst, "docker", "info")
-		lastOutput = output
-		return err == nil && exitCode == 0
-	}, 60*time.Second, time.Second, "dockerd did not become ready: %s", lastOutput)
+	t.Run("RootIsOverlay", func(t *testing.T) {
+		assertGuestRootIsOverlay(t, ctx, inst)
+	})
 
-	output, exitCode, err := execInInstance(ctx, inst, "sh", "-c", nestedDockerExecScript)
-	require.NoError(t, err)
-	require.Equalf(t, 0, exitCode, "docker exec did not use the container rootfs:\n%s", strings.TrimSpace(output))
+	t.Run("DockerExecUsesContainerRoot", func(t *testing.T) {
+		require.EventuallyWithT(t, func(collect *assert.CollectT) {
+			output, exitCode, err := execInInstance(ctx, inst, "docker", "info")
+			require.NoError(collect, err)
+			require.Equal(collect, 0, exitCode, "dockerd not ready: %s", output)
+		}, 60*time.Second, time.Second)
+
+		output, exitCode, err := execInInstance(ctx, inst, "sh", "-c", nestedDockerExecScript)
+		require.NoError(t, err)
+		require.Equalf(t, 0, exitCode, "docker exec did not use the container rootfs:\n%s", strings.TrimSpace(output))
+	})
+
+	t.Run("KernelHeadersReady", func(t *testing.T) {
+		waitForKernelHeadersReady(t, ctx, inst)
+	})
 }

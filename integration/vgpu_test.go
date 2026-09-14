@@ -9,16 +9,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kernel/hypeman/cmd/api/config"
 	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/guest"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/instances"
-	"github.com/kernel/hypeman/lib/network"
-	"github.com/kernel/hypeman/lib/paths"
-	"github.com/kernel/hypeman/lib/system"
-	"github.com/kernel/hypeman/lib/volumes"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -57,31 +52,8 @@ func TestVGPU(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	// Set up test environment
-	tmpDir := t.TempDir()
-	p := paths.New(tmpDir)
-
-	cfg := &config.Config{
-		DataDir: tmpDir,
-		Network: newParallelTestNetworkConfig(t),
-	}
-
-	// Create managers
-	imageManager, err := images.NewManager(p, 1, nil)
-	require.NoError(t, err)
-
-	systemManager := system.NewManager(p)
-	networkManager := network.NewManager(p, cfg, nil)
-	deviceManager := devices.NewManager(p)
-	volumeManager := volumes.NewManager(p, 0, nil)
-
-	limits := instances.ResourceLimits{
-		MaxOverlaySize:       100 * 1024 * 1024 * 1024,
-		MaxVcpusPerInstance:  0,
-		MaxMemoryPerInstance: 0,
-	}
-
-	instanceManager := instances.NewManager(p, imageManager, systemManager, networkManager, deviceManager, volumeManager, limits, "", instances.SnapshotPolicy{}, nil, nil)
+	m := newIntegrationManagers(t)
+	imageManager, systemManager, instanceManager := m.images, m.system, m.instances
 
 	// Track instance ID for cleanup
 	var instanceID string
@@ -102,7 +74,7 @@ func TestVGPU(t *testing.T) {
 
 	// Step 1: Ensure system files (kernel, initrd)
 	t.Log("Step 1: Ensuring system files...")
-	err = systemManager.EnsureSystemFiles(ctx)
+	err := systemManager.EnsureSystemFiles(ctx)
 	require.NoError(t, err)
 	t.Log("System files ready")
 
