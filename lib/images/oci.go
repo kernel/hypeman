@@ -641,6 +641,8 @@ func convertToOCIMediaType(mediaType string) string {
 		return v1.MediaTypeImageConfig
 	case "application/vnd.docker.image.rootfs.diff.tar.gzip":
 		return v1.MediaTypeImageLayerGzip
+	case "application/vnd.docker.image.rootfs.diff.tar.zstd":
+		return v1.MediaTypeImageLayerZstd
 	case "application/vnd.docker.image.rootfs.diff.tar":
 		return v1.MediaTypeImageLayer
 	default:

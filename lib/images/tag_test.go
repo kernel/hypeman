@@ -54,7 +54,12 @@ func seedImage(t *testing.T, p *paths.Paths, repository, tag, digestHex string, 
 func newTagTestCase(t *testing.T) (*paths.Paths, *manager, string) {
 	t.Helper()
 	p := paths.New(t.TempDir())
-	return p, &manager{paths: p, tagGenerations: make(map[string]uint64), requestedTags: make(map[string]string)}, "docker.io/library/alpine"
+	return p, &manager{
+		paths:          p,
+		layers:         newLayerStore(p, 1),
+		tagGenerations: make(map[string]uint64),
+		requestedTags:  make(map[string]string),
+	}, "docker.io/library/alpine"
 }
 
 func requireTagResolvesTo(t *testing.T, p *paths.Paths, repository, tag, digest string) {

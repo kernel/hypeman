@@ -55,7 +55,7 @@ type Manager interface {
 	// TotalImageBytes returns the total size of all ready images on disk.
 	// Used by the resource manager for disk capacity tracking.
 	TotalImageBytes(ctx context.Context) (int64, error)
-	// TotalOCICacheBytes returns the total size of the OCI layer cache.
+	// TotalOCICacheBytes returns the total size of the OCI and materialized layer caches.
 	// Used by the resource manager for disk capacity tracking.
 	TotalOCICacheBytes(ctx context.Context) (int64, error)
 	// WaitForReady blocks until the image identified by name reaches a terminal
@@ -75,12 +75,9 @@ type manager struct {
 	ociClient                  *ociClient
 	queue                      *queue.Queue
 	createMu                   sync.Mutex
-	diskUsageMu                sync.RWMutex
+	layers                     *layerStore
 	tagGenerations             map[string]uint64
 	requestedTags              map[string]string // newest pull's digest per requested tag
-	diskUsageLoaded            bool
-	readyImageBytes            int64
-	ociCacheBytes              int64
 	metrics                    *Metrics
 	inflightPulls              map[string]*inflightImagePull // keyed by digest
 	borrowedCredentialsTimeout time.Duration
@@ -98,8 +95,13 @@ func NewManager(p *paths.Paths, maxConcurrentBuilds int, meter metric.Meter) (Ma
 		return nil, fmt.Errorf("create oci client: %w", err)
 	}
 
+	if maxConcurrentBuilds < 1 {
+		maxConcurrentBuilds = 1
+	}
+	layers := newLayerStore(p, maxConcurrentBuilds)
 	m := &manager{
 		paths:                      p,
+		layers:                     layers,
 		ociClient:                  ociClient,
 		queue:                      queue.New(maxConcurrentBuilds),
 		inflightPulls:              make(map[string]*inflightImagePull),
@@ -594,7 +596,7 @@ func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, diskSize i
 	if !m.claimRequestedTags(ref, meta) {
 		m.cleanupUnclaimedImage(ref)
 	}
-	m.refreshDiskUsageTotals()
+	m.layers.refreshDiskUsageTotals()
 	return nil
 }
 
@@ -807,7 +809,7 @@ func (m *manager) deleteDigestImage(repository, digestHex string) error {
 		return err
 	}
 	m.clearRequestedDigest(digestHex)
-	m.refreshDiskUsageTotals()
+	m.layers.refreshDiskUsageTotals()
 	return nil
 }
 
@@ -841,22 +843,22 @@ func (m *manager) deleteTaggedImage(repository, tag string) error {
 	if err := removeDigestIfUnreferenced(m.paths, repository, digestHex, true); err != nil {
 		return fmt.Errorf("delete orphaned digest %s: %w", digestHex, err)
 	}
-	m.refreshDiskUsageTotals()
+	m.layers.refreshDiskUsageTotals()
 	return nil
 }
 
 // TotalImageBytes returns the total size of all ready images on disk.
 func (m *manager) TotalImageBytes(ctx context.Context) (int64, error) {
-	readyImageBytes, _, err := m.getDiskUsageTotals()
+	readyImageBytes, _, err := m.layers.getDiskUsageTotals(ctx)
 	if err != nil {
 		return 0, err
 	}
 	return readyImageBytes, nil
 }
 
-// TotalOCICacheBytes returns the total size of the OCI layer cache.
+// TotalOCICacheBytes returns the total size of the OCI and materialized layer caches.
 func (m *manager) TotalOCICacheBytes(ctx context.Context) (int64, error) {
-	_, ociCacheBytes, err := m.getDiskUsageTotals()
+	_, ociCacheBytes, err := m.layers.getDiskUsageTotals(ctx)
 	if err != nil {
 		return 0, err
 	}
