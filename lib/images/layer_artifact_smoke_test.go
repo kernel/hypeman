@@ -18,10 +18,12 @@ import (
 // entries (root only).
 
 const (
-	ociZstdMediaType     = "application/vnd.oci.image.layer.v1.tar+zstd"
-	dockerZstdMediaType  = "application/vnd.docker.image.rootfs.diff.tar.zstd"
-	dockerGzipMediaType  = "application/vnd.docker.image.rootfs.diff.tar.gzip"
-	ociPlainTarMediaType = "application/vnd.oci.image.layer.v1.tar"
+	ociZstdMediaType                 = "application/vnd.oci.image.layer.v1.tar+zstd"
+	ociNondistributableZstdMediaType = "application/vnd.oci.image.layer.nondistributable.v1.tar+zstd"
+	ociNondistributableGzipMediaType = "application/vnd.oci.image.layer.nondistributable.v1.tar+gzip"
+	dockerZstdMediaType              = "application/vnd.docker.image.rootfs.diff.tar.zstd"
+	dockerGzipMediaType              = "application/vnd.docker.image.rootfs.diff.tar.gzip"
+	ociPlainTarMediaType             = "application/vnd.oci.image.layer.v1.tar"
 )
 
 func TestSmokeUnpackZstdMediaTypes(t *testing.T) {
@@ -30,11 +32,13 @@ func TestSmokeUnpackZstdMediaTypes(t *testing.T) {
 		mediaType string
 		blob      string
 	}{
-		"oci_suffix_zstd":   {ociZstdMediaType, writeZstdTarLayer(t, root, "oci.tar.zst", fileEntry("f.txt", "zstd"))},
-		"docker_tar_zstd":   {dockerZstdMediaType, writeZstdTarLayer(t, root, "docker.tar.zstd", fileEntry("f.txt", "zstd"))},
-		"docker_tar_gzip":   {dockerGzipMediaType, writeLayerBlob(t, root, "docker.tar.gz", fileEntry("f.txt", "gzip"))},
-		"plain_tar":         {ociPlainTarMediaType, writeRawTarLayer(t, root, "plain.tar", fileEntry("f.txt", "raw"))},
-		"unknown_media_raw": {"application/vnd.custom.tar", writeRawTarLayer(t, root, "custom.tar", fileEntry("f.txt", "raw"))},
+		"oci_suffix_zstd":           {ociZstdMediaType, writeZstdTarLayer(t, root, "oci.tar.zst", fileEntry("f.txt", "zstd"))},
+		"oci_nondistributable_zstd": {ociNondistributableZstdMediaType, writeZstdTarLayer(t, root, "oci-nondistributable.tar.zst", fileEntry("f.txt", "zstd"))},
+		"oci_nondistributable_gzip": {ociNondistributableGzipMediaType, writeLayerBlob(t, root, "oci-nondistributable.tar.gz", fileEntry("f.txt", "gzip"))},
+		"docker_tar_zstd":           {dockerZstdMediaType, writeZstdTarLayer(t, root, "docker.tar.zstd", fileEntry("f.txt", "zstd"))},
+		"docker_tar_gzip":           {dockerGzipMediaType, writeLayerBlob(t, root, "docker.tar.gz", fileEntry("f.txt", "gzip"))},
+		"plain_tar":                 {ociPlainTarMediaType, writeRawTarLayer(t, root, "plain.tar", fileEntry("f.txt", "raw"))},
+		"unknown_media_raw":         {"application/vnd.custom.tar", writeRawTarLayer(t, root, "custom.tar", fileEntry("f.txt", "raw"))},
 	} {
 		t.Run(name, func(t *testing.T) {
 			dest := filepath.Join(root, t.Name())

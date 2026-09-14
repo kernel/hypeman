@@ -90,9 +90,13 @@ func (a *layerArtifact) matches(desc layerDescriptor) bool {
 func layerEncoding(mediaType string) string {
 	normalized := convertToOCIMediaType(mediaType)
 	switch {
-	case normalized == v1.MediaTypeImageLayerZstd, strings.HasSuffix(normalized, ".tar.zstd"):
+	case normalized == v1.MediaTypeImageLayerZstd,
+		normalized == v1.MediaTypeImageLayerNonDistributableZstd,
+		strings.HasSuffix(normalized, ".tar.zstd"):
 		return "zstd"
-	case normalized == v1.MediaTypeImageLayerGzip, strings.HasSuffix(normalized, ".tar.gzip"):
+	case normalized == v1.MediaTypeImageLayerGzip,
+		normalized == v1.MediaTypeImageLayerNonDistributableGzip,
+		strings.HasSuffix(normalized, ".tar.gzip"):
 		return "gzip"
 	default:
 		return "raw"
