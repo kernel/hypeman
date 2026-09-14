@@ -51,6 +51,10 @@ func startKernelHeadersWorkerAsync(log *Logger) {
 	cmd := exec.Command("/proc/self/exe", headersWorkerArg)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+	// The worker addresses the tarball in the initrd and the target under
+	// /overlay/newroot. Give it its own mount namespace so those paths keep
+	// resolving after init moves the overlay onto / in switchRoot.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Unshareflags: syscall.CLONE_NEWNS}
 	if err := cmd.Start(); err != nil {
 		log.Error("hypeman-init:headers", "failed to start async headers worker", err)
 		_ = writeKernelHeadersStatus(initrdKernelHeadersPaths.statusPath, headersStatusFailed)

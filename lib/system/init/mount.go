@@ -185,6 +185,29 @@ func bindMountsToNewRoot(log *Logger) error {
 	return nil
 }
 
+// switchRoot makes newroot the root of the mount namespace and of this
+// process. A plain chroot(2) leaves the initrd as the namespace root, which
+// container runtimes running inside the guest observe: setns(2) into a mount
+// namespace resets the caller's root to that namespace's root, so `runc exec`
+// into a nested container landed in the initrd instead of the container
+// rootfs. Moving the overlay onto / is what switch_root(8) does on a normal
+// initramfs boot; pivot_root(2) is not available while / is the initramfs.
+func switchRoot(newroot string) error {
+	if err := os.Chdir(newroot); err != nil {
+		return fmt.Errorf("chdir %s: %w", newroot, err)
+	}
+	if err := syscall.Mount(".", "/", "", syscall.MS_MOVE, ""); err != nil {
+		return fmt.Errorf("move %s to /: %w", newroot, err)
+	}
+	if err := syscall.Chroot("."); err != nil {
+		return fmt.Errorf("chroot: %w", err)
+	}
+	if err := os.Chdir("/"); err != nil {
+		return fmt.Errorf("chdir /: %w", err)
+	}
+	return nil
+}
+
 // mount executes a mount command
 func mount(source, target, fstype, options string) error {
 	args := []string{"-t", fstype}
