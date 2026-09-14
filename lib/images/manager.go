@@ -495,32 +495,25 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef, credentials 
 	// still pulls the architecture its digest identifies. Uses the cache if the
 	// digest is already pulled.
 	pullRef := ref.DigestRef()
-	result, err := m.ociClient.pullAndExportWithAuth(ctx, pullRef, ref.Digest(), tempDir, credentials)
+	result, err := m.ociClient.pullManifestWithPlatformAuth(ctx, pullRef, ref.Digest(), vmPlatform(), credentials)
 	m.recordPullResultMetrics(ctx, ref.Digest(), result)
 	if err != nil {
-		m.updateStatusByDigest(ref, StatusFailed, fmt.Errorf("pull and export: %w", err), buildID)
+		m.updateStatusByDigest(ref, StatusFailed, fmt.Errorf("pull manifest: %w", err), buildID)
 		m.recordPullMetrics(ctx, "failed")
 		return
 	}
 	m.recordPullMetrics(ctx, "success")
 
-	materialized, err := m.materializeLayerArtifacts(ctx, result)
+	materialized, materializeErr := m.materializeLayerArtifacts(ctx, result)
 	if materialized != nil {
-		// Hold the in-flight references until the manifest model protecting
-		// the layers is durable: on the cache-hit path the artifacts' mtimes
-		// are too old for the eviction grace period to cover the gap.
-		// finalizeImage releases them under createMu once the model is
-		// written; this defer covers every path that returns before that.
 		defer func() {
 			materialized.release(m)
 			m.reconcileLayerStore()
 		}()
 	}
-	if err != nil {
-		// The rootfs is already composed from blobs, so materialization is
-		// best effort: log and continue with degraded sharing.
-		slog.Warn("layer materialization failed; continuing without shared artifacts",
-			"digest", ref.DigestHex(), "error", err)
+	if materializeErr != nil {
+		slog.Warn("layer materialization failed; using flattened rootfs",
+			"digest", ref.DigestHex(), "error", materializeErr)
 	}
 
 	// Check if this digest already exists and is ready (deduplication)
@@ -543,21 +536,35 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef, credentials 
 	m.updateStatusByDigest(ref, StatusConverting, nil, buildID)
 
 	diskPath := resolveImageLayout(m.paths, ref.Repository(), ref.DigestHex()).disk
-	// Keep the temporary filesystem beside its final path so finalization stays
-	// atomic even when system/builds and images are on different filesystems.
 	diskTempPath := diskPath + ".tmp-" + buildID
 	defer os.Remove(diskTempPath)
-	// Use default image format (erofs on Linux, ext4 on Darwin)
-	convertStart := time.Now()
-	diskSize, err := ExportRootfs(tempDir, diskTempPath, DefaultImageFormat)
-	m.recordImageBuildPhase(ctx, ref.Digest(), "filesystem_export", time.Since(convertStart), phaseStatus(err), "not_applicable")
+	layered := materializeErr == nil && materialized != nil && m.layerArtifactSupport() && result.Manifest != nil && len(result.Manifest.Layers) > 1
+	var diskSize int64
+	var baseDigest string
+	if layered {
+		result.Manifest.BaseLayerCount = len(result.Manifest.Layers) - 1
+		baseDigest = sharedBaseDigest(result.Manifest)
+		baseStart := time.Now()
+		baseDigest, diskSize, err = m.buildSharedBase(ctx, result.Manifest, buildDir)
+		m.recordImageBuildPhase(ctx, ref.Digest(), "shared_base_export", time.Since(baseStart), phaseStatus(err), "not_applicable")
+	} else {
+		err = result.measure("layer_unpack", func() error {
+			return m.ociClient.composeRootfs(ctx, tempDir, digestToLayoutTag(ref.Digest()), result.Manifest)
+		})
+		m.recordImageBuildPhase(ctx, ref.Digest(), "layer_unpack", result.Phases[len(result.Phases)-1].Duration, phaseStatus(err), "not_applicable")
+		if err == nil {
+			convertStart := time.Now()
+			diskSize, err = ExportRootfsWithContext(ctx, tempDir, diskTempPath, DefaultImageFormat)
+			m.recordImageBuildPhase(ctx, ref.Digest(), "filesystem_export", time.Since(convertStart), phaseStatus(err), "not_applicable")
+		}
+	}
 	if err != nil {
-		m.updateStatusByDigest(ref, StatusFailed, fmt.Errorf("convert to %s: %w", DefaultImageFormat, err), buildID)
+		m.updateStatusByDigest(ref, StatusFailed, fmt.Errorf("prepare image filesystem: %w", err), buildID)
 		return
 	}
 
 	finalizeStart := time.Now()
-	err = m.finalizeImage(ref, result, diskSize, buildID, diskTempPath, materialized)
+	err = m.finalizeImage(ref, result, diskSize, buildID, diskTempPath, materialized, baseDigest)
 	m.recordImageBuildPhase(ctx, ref.Digest(), "finalize", time.Since(finalizeStart), phaseStatus(err), "not_applicable")
 	if err != nil {
 		if errors.Is(err, errStaleBuild) {
@@ -571,25 +578,25 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef, credentials 
 }
 
 func (m *manager) materializeLayerArtifacts(ctx context.Context, result *pullResult) (*inflightLayerRef, error) {
-	if result.Manifest == nil || layerArtifactFormat() == "" || !m.layerArtifactSupport() {
+	if result.Manifest == nil || layerArtifactFormat() == "" || !m.layerArtifactSupport() || len(result.Manifest.Layers) < 2 {
 		return nil, nil
 	}
-	digestHexes := make([]string, 0, len(result.Manifest.Layers))
-	for _, desc := range result.Manifest.Layers {
-		digestHexes = append(digestHexes, strings.TrimPrefix(desc.Digest, "sha256:"))
-	}
-	handle := m.retainInflightLayers(digestHexes)
-	for _, desc := range result.Manifest.Layers {
-		if _, err := m.materializeLayerArtifact(ctx, desc); err != nil {
-			// The handle's release is idempotent: the caller keeps the partial
-			// set protected until its path finishes with it.
-			return handle, err
-		}
+	// The shared base is a composed disk. Only the final layer needs a
+	// materialized overlay representation for instance creation.
+	desc := result.Manifest.Layers[len(result.Manifest.Layers)-1]
+	digestHex := strings.TrimPrefix(desc.Digest, "sha256:")
+	handle := m.retainInflightLayers([]string{digestHex})
+	if _, err := m.materializeLayerArtifact(ctx, desc); err != nil {
+		return handle, err
 	}
 	return handle, nil
 }
 
-func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, diskSize int64, buildID, diskTempPath string, materialized *inflightLayerRef) error {
+func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, diskSize int64, buildID, diskTempPath string, materialized *inflightLayerRef, baseDigests ...string) error {
+	baseDigest := ""
+	if len(baseDigests) > 0 {
+		baseDigest = baseDigests[0]
+	}
 	m.createMu.Lock()
 	defer m.createMu.Unlock()
 
@@ -615,10 +622,23 @@ func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, diskSize i
 	diskInstalled := false
 	modelWritten := false
 
-	if err := installAtomically(layout.disk, func(path string) error {
-		return os.Rename(diskTempPath, path)
-	}); err != nil {
-		return fmt.Errorf("install image disk: %w", err)
+	if baseDigest == "" {
+		if err := installAtomically(layout.disk, func(path string) error {
+			return os.Rename(diskTempPath, path)
+		}); err != nil {
+			return fmt.Errorf("install image disk: %w", err)
+		}
+	} else {
+		basePath := m.paths.ImageBasePath(strings.TrimPrefix(baseDigest, "sha256:"))
+		if err := installAtomically(layout.disk, func(path string) error {
+			relative, err := filepath.Rel(filepath.Dir(layout.disk), basePath)
+			if err != nil {
+				return err
+			}
+			return os.Symlink(relative, path)
+		}); err != nil {
+			return fmt.Errorf("install image base link: %w", err)
+		}
 	}
 	diskInstalled = true
 
@@ -628,6 +648,10 @@ func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, diskSize i
 	if result.Manifest != nil {
 		model := *result.Manifest
 		model.Platform = actualPlatform.String()
+		if baseDigest != "" {
+			model.BaseDigest = baseDigest
+			model.BaseLayerCount = len(model.Layers) - 1
+		}
 		if err := writeManifestModelAt(modelPath, ref.DigestHex(), &model); err != nil {
 			return rollbackFinalization(layout, modelPath, diskInstalled, modelWritten, fmt.Errorf("write manifest model: %w", err))
 		}

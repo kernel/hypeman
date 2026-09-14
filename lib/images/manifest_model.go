@@ -18,13 +18,15 @@ import (
 // manifest digest, the resolved platform, the image config with its diff ids,
 // and the ordered layer descriptors.
 type imageManifestModel struct {
-	SchemaVersion int               `json:"schema_version"`
-	Digest        string            `json:"digest"` // manifest digest, sha256:...
-	MediaType     string            `json:"media_type,omitempty"`
-	Platform      string            `json:"platform"` // os/arch[/variant]
-	Config        manifestConfigRef `json:"config"`
-	RootFSType    string            `json:"rootfs_type"`
-	Layers        []layerDescriptor `json:"layers"` // manifest order, base layer first
+	SchemaVersion  int               `json:"schema_version"`
+	Digest         string            `json:"digest"` // manifest digest, sha256:...
+	MediaType      string            `json:"media_type,omitempty"`
+	Platform       string            `json:"platform"` // os/arch[/variant]
+	Config         manifestConfigRef `json:"config"`
+	RootFSType     string            `json:"rootfs_type"`
+	Layers         []layerDescriptor `json:"layers"` // manifest order, base layer first
+	BaseDigest     string            `json:"base_digest,omitempty"`
+	BaseLayerCount int               `json:"base_layer_count,omitempty"`
 }
 
 const manifestModelSchemaVersion = 1
@@ -78,6 +80,17 @@ func validateManifestModel(digestHex string, model *imageManifestModel) error {
 	}
 	if model.RootFSType != "layers" {
 		return fmt.Errorf("unsupported manifest rootfs type: %q", model.RootFSType)
+	}
+	if model.BaseLayerCount < 0 || model.BaseLayerCount > len(model.Layers) {
+		return fmt.Errorf("invalid base layer count: %d", model.BaseLayerCount)
+	}
+	if model.BaseDigest != "" {
+		if _, err := parseSHA256Digest(model.BaseDigest); err != nil {
+			return fmt.Errorf("invalid base digest: %q", model.BaseDigest)
+		}
+		if model.BaseLayerCount == len(model.Layers) {
+			return fmt.Errorf("base digest must leave an image layer for the overlay")
+		}
 	}
 	if err := validateManifestConfig(digestHex, model); err != nil {
 		return err

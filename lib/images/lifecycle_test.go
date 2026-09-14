@@ -36,6 +36,19 @@ func imageDigest(t *testing.T, img gcr.Image) string {
 	return digest.String()
 }
 
+func imageBaseHexes(t *testing.T, p *paths.Paths) map[string]struct{} {
+	t.Helper()
+	entries, err := os.ReadDir(p.ImageBasesDir())
+	require.NoError(t, err)
+	hexes := make(map[string]struct{})
+	for _, entry := range entries {
+		if entry.IsDir() {
+			hexes[entry.Name()] = struct{}{}
+		}
+	}
+	return hexes
+}
+
 // importAndWait imports an image and blocks until its build reaches ready.
 func importAndWait(t *testing.T, m *manager, ctx context.Context, repo, tag, digest string) {
 	t.Helper()
@@ -54,9 +67,8 @@ func importAndWait(t *testing.T, m *manager, ctx context.Context, repo, tag, dig
 }
 
 // TestSharedLayersMaterializeOnceAndEvictWithReferences is the end-to-end
-// lifecycle: two images share a base layer, the shared artifact is created
-// once, survives the deletion of one image, and is evicted only when its last
-// reference is gone.
+// lifecycle: two images share a composed base, the final-layer artifacts remain
+// independently referenced, and the base is evicted only after both images go.
 func TestSharedLayersMaterializeOnceAndEvictWithReferences(t *testing.T) {
 	if !supportsLayerArtifacts() {
 		t.Skip("native overlayfs layer artifacts are not supported")
@@ -85,7 +97,7 @@ func TestSharedLayersMaterializeOnceAndEvictWithReferences(t *testing.T) {
 
 	baseManifest, err := imgA.Manifest()
 	require.NoError(t, err)
-	baseHex, topAHex := baseManifest.Layers[0].Digest.Hex, baseManifest.Layers[1].Digest.Hex
+	topAHex := baseManifest.Layers[1].Digest.Hex
 	topBManifest, err := imgB.Manifest()
 	require.NoError(t, err)
 	topBHex := topBManifest.Layers[1].Digest.Hex
@@ -97,25 +109,31 @@ func TestSharedLayersMaterializeOnceAndEvictWithReferences(t *testing.T) {
 	importAndWait(t, m, ctx, repoA, "v1", digestA)
 	importAndWait(t, m, ctx, repoB, "v1", digestB)
 
-	// The shared base layer materialized exactly once, alongside the two tops.
+	modelA, err := readManifestModel(p, strings.TrimPrefix(digestA, "sha256:"))
+	require.NoError(t, err)
+	require.Equal(t, 1, modelA.BaseLayerCount)
+	baseHex := strings.TrimPrefix(modelA.BaseDigest, "sha256:")
+
+	// Only final layers are materialized; the composed base is stored once.
 	hexes := layerStoreHexes(t, p)
-	require.Len(t, hexes, 3)
-	require.Contains(t, hexes, baseHex)
+	require.Len(t, hexes, 2)
 	require.Contains(t, hexes, topAHex)
 	require.Contains(t, hexes, topBHex)
+	require.Equal(t, map[string]struct{}{baseHex: {}}, imageBaseHexes(t, p))
 
 	// Deleting image A evicts only its unique layer; the shared base survives.
 	require.NoError(t, m.DeleteImage(ctx, repoA+"@"+digestA))
 	hexes = layerStoreHexes(t, p)
-	require.Len(t, hexes, 2)
-	require.Contains(t, hexes, baseHex, "shared base must survive while referenced")
+	require.Len(t, hexes, 1)
 	require.Contains(t, hexes, topBHex)
 	require.NotContains(t, hexes, topAHex)
+	require.Contains(t, imageBaseHexes(t, p), baseHex, "shared base must survive while referenced")
 
 	// Deleting image B removes the last references: everything is evicted.
 	require.NoError(t, m.DeleteImage(ctx, repoB+"@"+digestB))
 	hexes = layerStoreHexes(t, p)
 	require.Empty(t, hexes, "unreferenced layer artifacts must be evicted")
+	require.Empty(t, imageBaseHexes(t, p), "unreferenced shared bases must be evicted")
 }
 
 func newLifecycleTestManager(p *paths.Paths) *manager {

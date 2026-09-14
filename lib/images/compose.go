@@ -44,10 +44,8 @@ func (c *ociClient) composeRootfs(ctx context.Context, dest, layoutTag string, m
 		}
 	}()
 
-	for i, desc := range model.Layers {
-		if _, err := unpackCachedLayer(ctx, c.cacheBlobDir(), desc, staging, composeOnDiskFormat()); err != nil {
-			return fmt.Errorf("apply layer %d: %w", i, err)
-		}
+	if err := c.composeLayerList(ctx, staging, model.Layers); err != nil {
+		return err
 	}
 	// The export directory must stay traversable by other readers; MkdirTemp
 	// creates it 0700.
@@ -59,6 +57,40 @@ func (c *ociClient) composeRootfs(ctx context.Context, dest, layoutTag string, m
 	}
 	if err := os.Rename(staging, dest); err != nil {
 		return fmt.Errorf("install compose directory: %w", err)
+	}
+	return nil
+}
+
+func (c *ociClient) composeLayers(ctx context.Context, dest string, layers []layerDescriptor) error {
+	parent := filepath.Dir(dest)
+	if err := os.MkdirAll(parent, 0755); err != nil {
+		return fmt.Errorf("create compose parent: %w", err)
+	}
+	staging, err := os.MkdirTemp(parent, ".compose-*")
+	if err != nil {
+		return fmt.Errorf("create compose directory: %w", err)
+	}
+	defer removePath(staging)
+	if err := c.composeLayerList(ctx, staging, layers); err != nil {
+		return err
+	}
+	if err := os.Chmod(staging, 0755); err != nil {
+		return fmt.Errorf("set compose directory mode: %w", err)
+	}
+	if err := removePath(dest); err != nil {
+		return fmt.Errorf("replace compose directory: %w", err)
+	}
+	if err := os.Rename(staging, dest); err != nil {
+		return fmt.Errorf("install compose directory: %w", err)
+	}
+	return nil
+}
+
+func (c *ociClient) composeLayerList(ctx context.Context, dest string, layers []layerDescriptor) error {
+	for i, desc := range layers {
+		if _, err := unpackCachedLayer(ctx, c.cacheBlobDir(), desc, dest, composeOnDiskFormat()); err != nil {
+			return fmt.Errorf("apply layer %d: %w", i, err)
+		}
 	}
 	return nil
 }

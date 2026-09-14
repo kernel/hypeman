@@ -196,40 +196,34 @@ func convertToExt4(ctx context.Context, rootfsDir, diskPath string) (int64, erro
 	// Align to sector boundary (required by macOS Virtualization.framework)
 	diskSizeBytes = alignToSector(diskSizeBytes)
 
-	// Ensure parent directory exists
+	return createExt4Disk(ctx, rootfsDir, diskPath, diskSizeBytes)
+}
+
+func createExt4Disk(ctx context.Context, rootfsDir, diskPath string, diskSizeBytes int64) (int64, error) {
 	if err := os.MkdirAll(filepath.Dir(diskPath), 0755); err != nil {
 		return 0, fmt.Errorf("create disk parent dir: %w", err)
 	}
-
-	// Create sparse file
-	f, err := os.Create(diskPath)
+	file, err := os.OpenFile(diskPath, os.O_CREATE|os.O_TRUNC|os.O_RDWR, 0644)
 	if err != nil {
 		return 0, fmt.Errorf("create disk file: %w", err)
 	}
-	if err := f.Truncate(diskSizeBytes); err != nil {
-		f.Close()
+	if err := file.Truncate(alignToSector(diskSizeBytes)); err != nil {
+		_ = file.Close()
 		return 0, fmt.Errorf("truncate disk file: %w", err)
 	}
-	f.Close()
+	if err := file.Close(); err != nil {
+		return 0, fmt.Errorf("close disk file: %w", err)
+	}
 
-	// Format as ext4 with rootfs contents using mkfs.ext4
-	// -b 4096: 4KB blocks (standard, matches VM page size and sector alignment)
-	// -O ^has_journal: Disable journal (not needed for read-only VM mounts)
-	// -d: Copy directory contents into filesystem
-	// -F: Force creation (file not block device)
 	cmd := exec.CommandContext(ctx, mkfsExt4Binary(), "-b", "4096", "-O", "^has_journal", "-d", rootfsDir, "-F", diskPath)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return 0, fmt.Errorf("mkfs.ext4 failed: %w, output: %s", err, output)
 	}
-
-	// Verify final size is sector-aligned (mkfs.ext4 should preserve our truncated size)
 	stat, err := os.Stat(diskPath)
 	if err != nil {
 		return 0, fmt.Errorf("stat disk: %w", err)
 	}
-
-	// Re-align if mkfs.ext4 changed the size (shouldn't happen with -F on a regular file)
 	if stat.Size()%sectorSize != 0 {
 		alignedSize := alignToSector(stat.Size())
 		if err := os.Truncate(diskPath, alignedSize); err != nil {
@@ -237,8 +231,18 @@ func convertToExt4(ctx context.Context, rootfsDir, diskPath string) (int64, erro
 		}
 		return alignedSize, nil
 	}
-
 	return stat.Size(), nil
+}
+
+// CreateExt4DiskFromRootfs creates a fixed-size ext4 disk populated with a directory tree.
+func CreateExt4DiskFromRootfs(rootfsDir, diskPath string, sizeBytes int64) error {
+	return CreateExt4DiskFromRootfsWithContext(context.Background(), rootfsDir, diskPath, sizeBytes)
+}
+
+// CreateExt4DiskFromRootfsWithContext is the cancellable form of CreateExt4DiskFromRootfs.
+func CreateExt4DiskFromRootfsWithContext(ctx context.Context, rootfsDir, diskPath string, sizeBytes int64) error {
+	_, err := createExt4Disk(ctx, rootfsDir, diskPath, sizeBytes)
+	return err
 }
 
 // convertToErofs converts a rootfs directory to an erofs disk image using mkfs.erofs

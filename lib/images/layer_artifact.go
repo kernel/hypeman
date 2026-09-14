@@ -166,7 +166,7 @@ func probeLayerArtifactSupport(layersDir string) bool {
 }
 
 func (m *manager) layerArtifactSupport() bool {
-	return m.layers.artifactsSupported
+	return m.layers != nil && m.layers.artifactsSupported
 }
 
 func (m *manager) materializeLayerArtifact(ctx context.Context, desc layerDescriptor) (*layerArtifact, error) {

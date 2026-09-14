@@ -118,12 +118,63 @@ func (m *manager) reconcileLayerStore() {
 // eviction scan from racing a newly committed layer reference.
 func (m *manager) reconcileLayerStoreLocked() {
 	m.evictUnreferencedLayerArtifacts()
+	m.evictUnreferencedImageBases()
 	m.layers.refreshDiskUsageTotals()
 }
 
 // evictUnreferencedLayerArtifacts removes layer artifacts that no image
 // manifest model references, deleting the digest directory entirely. Artifacts
 // newer than the grace period are kept so in-flight builds never lose work.
+func (m *manager) evictUnreferencedImageBases() {
+	refs := make(map[string]struct{})
+	if err := filepath.WalkDir(m.paths.ImagesDir(), func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		if entry.IsDir() || entry.Name() != "manifest.json" {
+			return nil
+		}
+		model, err := readManifestModelAt(path, filepath.Base(filepath.Dir(path)))
+		if err != nil {
+			return err
+		}
+		if model != nil && model.BaseDigest != "" {
+			refs[strings.TrimPrefix(model.BaseDigest, "sha256:")] = struct{}{}
+		}
+		return nil
+	}); err != nil {
+		slog.Warn("skipping shared base eviction: incomplete reference scan", "error", err)
+		return
+	}
+	entries, err := os.ReadDir(m.paths.ImageBasesDir())
+	if err != nil {
+		if !os.IsNotExist(err) {
+			slog.Warn("shared base eviction failed to list bases", "error", err)
+		}
+		return
+	}
+	cutoff := time.Now().Add(-m.layerEvictionGrace)
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		if _, ok := refs[entry.Name()]; ok {
+			continue
+		}
+		path := filepath.Join(m.paths.ImageBasesDir(), entry.Name())
+		info, err := os.Stat(path)
+		if err != nil || info.ModTime().After(cutoff) {
+			continue
+		}
+		if err := removePath(path); err != nil {
+			slog.Warn("failed to evict unreferenced shared base", "digest", entry.Name(), "error", err)
+		}
+	}
+}
+
 func (m *manager) evictUnreferencedLayerArtifacts() {
 	refs, err := m.referencedLayerDigests()
 	if err != nil {

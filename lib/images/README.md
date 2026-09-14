@@ -5,7 +5,9 @@ Converts OCI images to bootable erofs disks for Cloud Hypervisor VMs.
 ## Architecture
 
 ```
-OCI Registry → go-containerregistry → OCI Layout → umoci → rootfs/ → mkfs.erofs → disk.erofs
+OCI Registry → go-containerregistry → OCI Layout → umoci
+  native Linux: shared base layers → base.erofs + final layer artifact → VM overlay
+  fallback: all layers → rootfs/ → mkfs.erofs → disk.erofs
 ```
 
 ## Design Decisions
@@ -65,7 +67,10 @@ Content-addressable storage with tag symlinks (similar to Docker/Unikraft):
         rootfs.erofs
       latest -> abc123def456...   # Tag symlink to digest
       3.18 -> def456abc123...     # Another tag
-    layers/                       # Shared materialized layer artifacts
+    bases/                        # Shared composed read-only base disks
+      789abc...
+        rootfs.erofs
+    layers/                       # Materialized final-layer artifacts
       abc123def456.../
         layer.erofs
         artifact.erofs.json
@@ -86,7 +91,8 @@ Content-addressable storage with tag symlinks (similar to Docker/Unikraft):
 - Natural hierarchy: All versions of an image grouped under repository
 - Easy inspection: Clear which digest belongs to which image
 - Layer caching: All images share the same blob storage, layers deduplicated automatically
-- Materialized layer artifacts are reference-protected and reconciled by the layer lifecycle manager; stale temporary trees are age-gated before removal.
+- Native Linux images share a composed base disk; the final layer is copied into each VM's writable overlay at instance creation.
+- Materialized layer artifacts and shared bases are reference-protected and reconciled by the image lifecycle manager; stale temporary trees are age-gated before removal.
 
 **Design:**
 - Images stored by manifest digest (content hash)
@@ -95,6 +101,7 @@ Content-addressable storage with tag symlinks (similar to Docker/Unikraft):
 - Pulling same tag twice updates the symlink if digest changed
 - OCI cache uses digest hex as layout tag for true content-addressable caching
 - Shared blob storage enables automatic layer deduplication across all images
+- Shared base disks avoid exporting and storing a complete rootfs for each image variant
 - Orphaned digests are automatically deleted when the last tag referencing them is removed
 - Symlinks only created after successful build (status: ready)
 - Disk accounting uses logical file sizes, matching image metadata and storage admission rather than filesystem block allocation.

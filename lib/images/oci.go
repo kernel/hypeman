@@ -246,13 +246,21 @@ func (c *ociClient) pullAndExportWithPlatform(ctx context.Context, imageRef, dig
 }
 
 func (c *ociClient) pullAndExportWithPlatformAuth(ctx context.Context, imageRef, digest, exportDir string, platform gcr.Platform, credentials *authn.AuthConfig) (*pullResult, error) {
-	// Use a shared OCI layout for all images to enable automatic layer caching
-	// The cacheDir itself is the OCI layout root with shared blobs/sha256/ directory
-	// The digest is ALWAYS known at this point (from inspectManifest or digest reference)
+	result, err := c.pullManifestWithPlatformAuth(ctx, imageRef, digest, platform, credentials)
+	if err != nil {
+		return result, err
+	}
+	if err := result.measure("layer_unpack", func() error {
+		return c.composeRootfs(ctx, exportDir, digestToLayoutTag(digest), result.Manifest)
+	}); err != nil {
+		return result, fmt.Errorf("unpack layers: %w", err)
+	}
+	return result, nil
+}
+
+func (c *ociClient) pullManifestWithPlatformAuth(ctx context.Context, imageRef, digest string, platform gcr.Platform, credentials *authn.AuthConfig) (*pullResult, error) {
 	layoutTag := digestToLayoutTag(digest)
 	result := &pullResult{Digest: digest}
-
-	// Check if this digest is already cached
 	cacheLookupStart := time.Now()
 	result.CacheHit = c.existsInLayout(layoutTag)
 	result.Phases = append(result.Phases, imageBuildPhaseMeasurement{
@@ -261,37 +269,25 @@ func (c *ociClient) pullAndExportWithPlatformAuth(ctx context.Context, imageRef,
 		Status:   "success",
 	})
 	if !result.CacheHit {
-		// Not cached, pull it using digest-based tag
 		if err := result.measure("registry_pull", func() error {
 			return c.pullToOCILayoutWithPlatformAuth(ctx, imageRef, layoutTag, platform, credentials)
 		}); err != nil {
 			return result, fmt.Errorf("pull to oci layout: %w", err)
 		}
 	}
-	// If cached, we skip the pull entirely
 
-	// Extract metadata (from cache or freshly pulled)
 	var bundle *ociImageBundle
-	err := result.measure("metadata_extract", func() error {
+	if err := result.measure("metadata_extract", func() error {
 		var err error
 		bundle, err = c.extractOCIImageBundle(layoutTag)
 		return err
-	})
-	if err != nil {
+	}); err != nil {
 		return result, fmt.Errorf("extract metadata: %w", err)
 	}
 	result.Metadata = bundle.Meta
 	result.Manifest = bundle.Model
 	result.LayerCount = bundle.LayerCount
 	result.CompressedBytes = bundle.CompressedBytes
-
-	// Compose the rootfs from the shared layer blobs in manifest order.
-	if err := result.measure("layer_unpack", func() error {
-		return c.composeRootfs(ctx, exportDir, layoutTag, bundle.Model)
-	}); err != nil {
-		return result, fmt.Errorf("unpack layers: %w", err)
-	}
-
 	return result, nil
 }
 

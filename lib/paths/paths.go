@@ -178,6 +178,20 @@ func (p *Paths) ImageRepositoryTagSymlink(repository, tag string) string {
 	return filepath.Join(p.ImageRepositoriesDir(), repository, tag)
 }
 
+// ImageBasesDir returns the root directory of shared composed base images.
+func (p *Paths) ImageBasesDir() string {
+	return filepath.Join(p.dataDir, "images", "bases")
+}
+
+// ImageBasePath returns the path to one shared base rootfs disk.
+func (p *Paths) ImageBasePath(digestHex string) string {
+	ext := "erofs"
+	if runtime.GOOS == "darwin" {
+		ext = "ext4"
+	}
+	return filepath.Join(p.ImageBasesDir(), digestHex, "rootfs."+ext)
+}
+
 // ImageLayersDir returns the root directory of the per-layer artifact store.
 // Layer artifacts are content-addressed by the compressed layer blob digest.
 func (p *Paths) ImageLayersDir() string {

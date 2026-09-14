@@ -410,9 +410,16 @@ func (m *manager) createInstance(
 		log.InfoContext(ctx, "configured vGPU", "instance_id", id, "profile", gpuProfile, "uuid", gpuDevice.MdevUUID)
 	}
 
-	// 13. Create overlay disk with specified size
+	// 13. Create overlay disk with specified size. Layered images populate its
+	// upper directory with the image's final layer; test fakes and legacy images
+	// retain the empty-overlay path.
 	log.DebugContext(ctx, "creating overlay disk", "instance_id", id, "size_bytes", stored.OverlaySize)
-	if err := m.createOverlayDisk(id, stored.OverlaySize); err != nil {
+	if preparer, ok := m.imageManager.(images.LayeredRuntimeManager); ok {
+		if err := preparer.PrepareInstanceOverlay(ctx, imageInfo, m.paths.InstanceOverlay(id), stored.OverlaySize); err != nil {
+			log.ErrorContext(ctx, "failed to create layered overlay disk", "instance_id", id, "error", err)
+			return nil, fmt.Errorf("create overlay disk: %w", err)
+		}
+	} else if err := m.createOverlayDisk(id, stored.OverlaySize); err != nil {
 		log.ErrorContext(ctx, "failed to create overlay disk", "instance_id", id, "error", err)
 		return nil, fmt.Errorf("create overlay disk: %w", err)
 	}
