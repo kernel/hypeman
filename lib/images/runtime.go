@@ -181,6 +181,11 @@ func (m *manager) PrepareInstanceOverlay(ctx context.Context, image *Image, over
 	if err := extractLayerArtifact(ctx, artifactPath, upper); err != nil {
 		return fmt.Errorf("copy image layer into overlay: %w", err)
 	}
+	// The merged root inherits the upperdir's mode. fsck.erofs may restore the
+	// extracted layer root's mode, so set it after extraction.
+	if err := os.Chmod(upper, 0755); err != nil {
+		return fmt.Errorf("set overlay upper directory mode: %w", err)
+	}
 
 	tempPath := overlayPath + ".tmp"
 	defer os.Remove(tempPath)
