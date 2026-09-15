@@ -114,4 +114,8 @@ func TestNestedDockerExecRoot(t *testing.T) {
 	output, exitCode, err := execInInstance(ctx, inst, "sh", "-c", nestedDockerExecScript)
 	require.NoError(t, err)
 	require.Equalf(t, 0, exitCode, "docker exec did not use the container rootfs:\n%s", strings.TrimSpace(output))
+
+	// The headers worker is forked before the root switch and relies on its own
+	// mount namespace to keep writing into the image; check it got there.
+	waitForKernelHeadersReady(t, ctx, inst)
 }
