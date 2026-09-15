@@ -22,6 +22,8 @@ import (
 	"github.com/kernel/hypeman/lib/hypervisor/vz/shimconfig"
 )
 
+const controlIdleTimeout = 30 * time.Second
+
 func main() {
 	configJSON := flag.String("config", "", "VM configuration as JSON")
 	flag.Parse()
@@ -96,7 +98,10 @@ func main() {
 	defer vsockListener.Close()
 
 	// Start HTTP server for control API
-	httpServer := &http.Server{Handler: server.Handler()}
+	httpServer := &http.Server{
+		Handler:     server.Handler(),
+		IdleTimeout: controlIdleTimeout,
+	}
 	go func() {
 		slog.Info("control API listening", "socket", config.ControlSocket)
 		if err := httpServer.Serve(controlListener); err != nil && err != http.ErrServerClosed {
