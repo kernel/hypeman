@@ -10,6 +10,10 @@ func dmLinearAvailable(context.Context) bool {
 	return false
 }
 
+func existingDMLinearDevice(context.Context, string, int) (*dmLinearDevice, bool, error) {
+	return nil, false, errFsmergeUnsupported
+}
+
 func createDMLinearDevice(context.Context, string, []string) (*dmLinearDevice, error) {
 	return nil, errFsmergeUnsupported
 }

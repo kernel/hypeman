@@ -72,12 +72,18 @@ func (m *manager) RootfsPath(ctx context.Context, image *Image) (string, error) 
 	}
 
 	name := fsmergeDeviceName(digestHex)
-	device, err := createDMLinearDevice(ctx, name, backingPaths)
+	device, found, err := existingDMLinearDevice(ctx, name, len(backingPaths))
 	if err != nil {
-		if errors.Is(err, errFsmergeUnsupported) {
-			return "", fmt.Errorf("fsmerge rootfs requires device-mapper support")
+		return "", fmt.Errorf("inspect existing fsmerge device: %w", err)
+	}
+	if !found {
+		device, err = createDMLinearDevice(ctx, name, backingPaths)
+		if err != nil {
+			if errors.Is(err, errFsmergeUnsupported) {
+				return "", fmt.Errorf("fsmerge rootfs requires device-mapper support")
+			}
+			return "", err
 		}
-		return "", err
 	}
 	m.fsmergeDevices[digestHex] = device
 	return device.Path(), nil

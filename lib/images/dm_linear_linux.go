@@ -15,10 +15,11 @@ import (
 )
 
 type dmLinearDevice struct {
-	name  string
-	loops []string
-	once  sync.Once
-	err   error
+	name   string
+	loops  []string
+	mu     sync.Mutex
+	closed bool
+	err    error
 }
 
 // createDMLinearDevice exposes regular layer artifacts as one read-only block
@@ -27,6 +28,25 @@ type dmLinearDevice struct {
 func dmLinearAvailable(ctx context.Context) bool {
 	_, err := runCommand(ctx, "dmsetup", "targets")
 	return err == nil
+}
+
+func existingDMLinearDevice(ctx context.Context, name string, backingPathCount int) (*dmLinearDevice, bool, error) {
+	if _, err := runCommand(ctx, "dmsetup", "info", "--noheadings", "--columns", "-o", "name", name); err != nil {
+		if isDMDeviceMissing(err) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+
+	output, err := runCommand(ctx, "dmsetup", "deps", "--noheadings", "--separator=,", "-o", "devname", name)
+	if err != nil {
+		return nil, false, fmt.Errorf("inspect device-mapper dependencies for %s: %w", name, err)
+	}
+	loops := parseDMLinearDependencies(output, backingPathCount)
+	if len(loops) != backingPathCount {
+		return nil, false, fmt.Errorf("device-mapper device %s has %d loop dependencies, want %d", name, len(loops), backingPathCount)
+	}
+	return &dmLinearDevice{name: name, loops: loops}, true, nil
 }
 
 func createDMLinearDevice(ctx context.Context, name string, backingPaths []string) (*dmLinearDevice, error) {
@@ -97,17 +117,45 @@ func (d *dmLinearDevice) Path() string {
 	return filepath.Join("/dev/mapper", d.name)
 }
 
+func parseDMLinearDependencies(output string, capacity int) []string {
+	loops := make([]string, 0, capacity)
+	for _, token := range strings.Fields(output) {
+		loop := strings.Trim(token, "(),")
+		if strings.HasPrefix(loop, "loop") {
+			loops = append(loops, filepath.Join("/dev", loop))
+		}
+	}
+	return loops
+}
+
+func isDMDeviceMissing(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := err.Error()
+	return strings.Contains(message, "No such device") || strings.Contains(message, "does not exist") || strings.Contains(message, "not found")
+}
+
 func (d *dmLinearDevice) Close() error {
-	d.once.Do(func() {
-		if _, err := runCommand(context.Background(), "dmsetup", "remove", "--retry", "--noudevsync", d.name); err != nil && !strings.Contains(err.Error(), "No such device") {
-			d.err = fmt.Errorf("remove device-mapper device %s: %w", d.name, err)
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.closed {
+		return d.err
+	}
+	d.err = nil
+
+	if _, err := runCommand(context.Background(), "dmsetup", "remove", "--retry", "--noudevsync", d.name); err != nil && !isDMDeviceMissing(err) {
+		d.err = fmt.Errorf("remove device-mapper device %s: %w", d.name, err)
+		return d.err
+	}
+	for i := len(d.loops) - 1; i >= 0; i-- {
+		if _, err := runCommand(context.Background(), "losetup", "--detach", d.loops[i]); err != nil && !isDMDeviceMissing(err) && d.err == nil {
+			d.err = fmt.Errorf("detach loop device %s: %w", d.loops[i], err)
 		}
-		for i := len(d.loops) - 1; i >= 0; i-- {
-			if _, err := runCommand(context.Background(), "losetup", "--detach", d.loops[i]); err != nil && d.err == nil {
-				d.err = fmt.Errorf("detach loop device %s: %w", d.loops[i], err)
-			}
-		}
-	})
+	}
+	if d.err == nil {
+		d.closed = true
+	}
 	return d.err
 }
 
