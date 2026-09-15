@@ -21,7 +21,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-const netlinkDumpRetryCount = 3
+const netlinkDumpRetryCount = 10
 const iptablesWaitSeconds = "5"
 
 func newIPTablesCommand(args ...string) *exec.Cmd {
@@ -46,7 +46,7 @@ func listBridgeAddrsWithRetry(link netlink.Link) ([]netlink.Addr, error) {
 			return nil, listErr
 		}
 		err = listErr
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(time.Duration(i+1) * 10 * time.Millisecond)
 	}
 	return nil, err
 }
@@ -62,7 +62,7 @@ func listLinksWithRetry() ([]netlink.Link, error) {
 			return nil, listErr
 		}
 		err = listErr
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(time.Duration(i+1) * 10 * time.Millisecond)
 	}
 	return nil, err
 }
