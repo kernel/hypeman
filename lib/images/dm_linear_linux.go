@@ -24,6 +24,11 @@ type dmLinearDevice struct {
 // createDMLinearDevice exposes regular layer artifacts as one read-only block
 // device. Loop and device-mapper state is host-local and must be released with
 // Close when no VM has the device open.
+func dmLinearAvailable(ctx context.Context) bool {
+	_, err := runCommand(ctx, "dmsetup", "targets")
+	return err == nil
+}
+
 func createDMLinearDevice(ctx context.Context, name string, backingPaths []string) (*dmLinearDevice, error) {
 	if err := validateDMName(name); err != nil {
 		return nil, err

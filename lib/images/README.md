@@ -87,7 +87,7 @@ Content-addressable storage with tag symlinks (similar to Docker/Unikraft):
 - Easy inspection: Clear which digest belongs to which image
 - Layer caching: All images share the same blob storage, layers deduplicated automatically
 - Materialized layer artifacts are reference-protected and reconciled by the layer lifecycle manager; stale temporary trees are age-gated before removal.
-- Linux fsmerge metadata and dm-linear assembly keep layer bytes in their content-addressed artifacts while presenting one read-only block device to a guest. The runtime path is still experimental and falls back to the existing flattened image path until lifecycle wiring is enabled.
+- Linux fsmerge metadata and dm-linear assembly keep layer bytes in their content-addressed artifacts while presenting one shared read-only block device to guests. Unsupported hosts and failed artifact builds use the existing flattened image path.
 
 **Design:**
 - Images stored by manifest digest (content hash)

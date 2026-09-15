@@ -876,6 +876,9 @@ func (m *manager) buildHypervisorConfig(ctx context.Context, inst *Instance, ima
 	// Disk configuration
 	// Get rootfs disk path from image manager
 	rootfsPath, err := images.GetDiskPath(m.paths, imageInfo.Name, imageInfo.Digest)
+	if provider, ok := m.imageManager.(images.RootfsPathProvider); ok {
+		rootfsPath, err = provider.RootfsPath(ctx, imageInfo)
+	}
 	if err != nil {
 		return hypervisor.VMConfig{}, err
 	}

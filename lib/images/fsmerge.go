@@ -24,6 +24,32 @@ const (
 // EROFS layers. The layer bytes remain in their content-addressed artifacts;
 // this output contains the merged inode metadata and references to external
 // device slots.
+func (m *manager) buildFsmergeImage(ctx context.Context, manifest *imageManifestModel, outputPath string) (int64, error) {
+	if manifest == nil || len(manifest.Layers) < 2 {
+		return 0, fmt.Errorf("fsmerge requires at least two layers")
+	}
+	if !m.layerArtifactSupport() {
+		return 0, fmt.Errorf("fsmerge layer artifacts are unsupported on this host")
+	}
+	if !dmLinearAvailable(ctx) {
+		return 0, fmt.Errorf("fsmerge device-mapper support is unavailable on this host")
+	}
+
+	layers := make([]string, 0, len(manifest.Layers))
+	for _, descriptor := range manifest.Layers {
+		artifact, err := m.materializeLayerArtifact(ctx, descriptor)
+		if err != nil {
+			return 0, fmt.Errorf("materialize layer %s: %w", descriptor.Digest, err)
+		}
+		layerHex, err := layerDigestHex(artifact.Digest)
+		if err != nil {
+			return 0, err
+		}
+		layers = append(layers, layerArtifactPath(m.paths, layerHex))
+	}
+	return buildFsmergeMetadata(ctx, outputPath, layers)
+}
+
 func buildFsmergeMetadata(ctx context.Context, outputPath string, layers []string) (int64, error) {
 	if len(layers) == 0 {
 		return 0, fmt.Errorf("fsmerge requires at least one layer")
