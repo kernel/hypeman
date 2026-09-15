@@ -17,15 +17,16 @@ func TestPatchFsmergeDeviceMappings(t *testing.T) {
 		require.NoError(t, os.WriteFile(path, make([]byte, 4096*3), 0644))
 	}
 
-	data := make([]byte, 4096)
+	data := make([]byte, 8192)
 	super := data[erofsSuperOffset:]
 	binary.LittleEndian.PutUint32(super[0:4], erofsMagic)
 	super[erofsBlockBitsOffset-erofsSuperOffset] = 12
 	binary.LittleEndian.PutUint32(super[erofsBlocksOffset-erofsSuperOffset:], 1)
 	binary.LittleEndian.PutUint16(super[erofsExtraDevicesOffset-erofsSuperOffset:], uint16(len(layers)))
-	binary.LittleEndian.PutUint16(super[erofsDeviceTableOffset-erofsSuperOffset:], 1)
+	deviceTableOffset := erofsSuperOffset + 128
+	binary.LittleEndian.PutUint16(super[erofsDeviceTableOffset-erofsSuperOffset:], uint16(deviceTableOffset/erofsDeviceSlotSize))
 	for i := range layers {
-		slot := super[128+int64(i)*erofsDeviceSlotSize:]
+		slot := data[deviceTableOffset+i*erofsDeviceSlotSize:]
 		binary.LittleEndian.PutUint32(slot[erofsDeviceMappedBlockAddressOff:], 0)
 	}
 	require.NoError(t, os.WriteFile(metadata, data, 0644))
@@ -35,12 +36,12 @@ func TestPatchFsmergeDeviceMappings(t *testing.T) {
 	require.NoError(t, err)
 	super = patched[erofsSuperOffset:]
 	for i, want := range []uint32{1, 4} {
-		slot := super[128+int64(i)*erofsDeviceSlotSize:]
+		slot := patched[deviceTableOffset+i*erofsDeviceSlotSize:]
 		require.Equal(t, want, binary.LittleEndian.Uint32(slot[erofsDeviceMappedBlockAddressOff:]))
 	}
 	checksum := binary.LittleEndian.Uint32(super[4:8])
 	binary.LittleEndian.PutUint32(super[4:8], 0)
-	require.Equal(t, checksum, erofsCRC32C(super))
+	require.Equal(t, checksum, erofsCRC32C(super[:4096-erofsSuperOffset]))
 }
 
 func TestPatchFsmergeDeviceMappingsRejectsUnalignedLayer(t *testing.T) {

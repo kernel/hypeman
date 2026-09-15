@@ -107,8 +107,8 @@ func patchFsmergeDeviceMappings(path string, layers []string) error {
 		return fmt.Errorf("metadata has %d device slots, want %d", extraDevices, len(layers))
 	}
 	slotOffset := int64(binary.LittleEndian.Uint16(super[erofsDeviceTableOffset-erofsSuperOffset:])) * 128
-	if slotOffset < 0 || slotOffset+int64(len(layers))*erofsDeviceSlotSize+erofsDeviceMappedBlockAddressOff+4 > int64(len(super)) {
-		return fmt.Errorf("device table is outside the superblock")
+	if slotOffset < 0 || slotOffset+int64(len(layers))*erofsDeviceSlotSize+erofsDeviceMappedBlockAddressOff+4 > int64(len(data)) {
+		return fmt.Errorf("device table is outside the metadata image")
 	}
 	primaryBlocks := int64(binary.LittleEndian.Uint32(super[erofsBlocksOffset-erofsSuperOffset:]))
 	if primaryBlocks == 0 {
@@ -127,13 +127,17 @@ func patchFsmergeDeviceMappings(path string, layers []string) error {
 		if info.Size()%blockSize != 0 {
 			return fmt.Errorf("layer %s is not block aligned", layer)
 		}
-		slot := super[slotOffset+int64(i)*erofsDeviceSlotSize:]
+		slot := data[slotOffset+int64(i)*erofsDeviceSlotSize:]
 		binary.LittleEndian.PutUint32(slot[erofsDeviceMappedBlockAddressOff:], uint32(mappedBlock))
 		mappedBlock += info.Size() / blockSize
 	}
 
+	checksumLen := blockSize - erofsSuperOffset
+	if checksumLen <= 0 || checksumLen > int64(len(super)) {
+		return fmt.Errorf("metadata image is smaller than the EROFS checksum block")
+	}
 	binary.LittleEndian.PutUint32(super[4:8], 0)
-	checksum := erofsCRC32C(super)
+	checksum := erofsCRC32C(super[:checksumLen])
 	binary.LittleEndian.PutUint32(super[4:8], checksum)
 	return os.WriteFile(path, data, 0644)
 }
