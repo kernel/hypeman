@@ -15,6 +15,7 @@ import (
 	"github.com/kernel/hypeman/lib/paths"
 	"github.com/kernel/hypeman/lib/system"
 	"github.com/kernel/hypeman/lib/volumes"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -102,13 +103,13 @@ func TestNestedDockerExecRoot(t *testing.T) {
 	})
 
 	require.NoError(t, waitForGuestAgent(ctx, instanceManager, inst.Id, 60*time.Second))
+	assertGuestRootIsOverlay(t, ctx, inst)
 
-	var lastOutput string
-	require.Eventually(t, func() bool {
+	require.EventuallyWithT(t, func(collect *assert.CollectT) {
 		output, exitCode, err := execInInstance(ctx, inst, "docker", "info")
-		lastOutput = output
-		return err == nil && exitCode == 0
-	}, 60*time.Second, time.Second, "dockerd did not become ready: %s", lastOutput)
+		require.NoError(collect, err)
+		require.Equal(collect, 0, exitCode, "dockerd not ready: %s", output)
+	}, 60*time.Second, time.Second)
 
 	output, exitCode, err := execInInstance(ctx, inst, "sh", "-c", nestedDockerExecScript)
 	require.NoError(t, err)

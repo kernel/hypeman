@@ -192,7 +192,15 @@ func bindMountsToNewRoot(log *Logger) error {
 // into a nested container landed in the initrd instead of the container
 // rootfs. Moving the overlay onto / is what switch_root(8) does on a normal
 // initramfs boot; pivot_root(2) is not available while / is the initramfs.
+//
+// Everything that runs after this sees only the image rootfs; anything that
+// needs the initrd must happen before.
 func switchRoot(newroot string) error {
+	// MS_MOVE refuses a source whose parent is a shared mount. The initrd tree
+	// is private today; make that explicit rather than depend on it.
+	if err := syscall.Mount("", "/", "", syscall.MS_PRIVATE|syscall.MS_REC, ""); err != nil {
+		return fmt.Errorf("make / private: %w", err)
+	}
 	if err := os.Chdir(newroot); err != nil {
 		return fmt.Errorf("chdir %s: %w", newroot, err)
 	}

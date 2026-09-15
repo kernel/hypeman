@@ -14,7 +14,7 @@ import (
 // This is used when the image's CMD is /sbin/init or /lib/systemd/systemd.
 // The init binary:
 // 1. Injects the hypeman-agent.service unit
-// 2. Uses chroot to switch to the container rootfs
+// 2. Switches root into the container rootfs
 // 3. Execs the image's entrypoint/cmd (systemd) which becomes the new PID 1
 func runSystemdMode(log *Logger, cfg *vmconfig.Config) {
 	const newroot = "/overlay/newroot"

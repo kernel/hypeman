@@ -141,6 +141,10 @@ func TestSystemdMode(t *testing.T) {
 		t.Logf("PID 1 is: %s", pid1Name)
 	})
 
+	t.Run("RootIsOverlay", func(t *testing.T) {
+		assertGuestRootIsOverlay(t, ctx, inst)
+	})
+
 	// Test: Verify guest-agent binary exists
 	t.Run("GuestAgentExists", func(t *testing.T) {
 		output, exitCode, err := execInInstance(ctx, inst, "test", "-x", "/opt/hypeman/guest-agent")
