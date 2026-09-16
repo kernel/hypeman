@@ -239,8 +239,7 @@ func (s *layerStore) clearLayerCache(layerHex string) error {
 // default image format, and installed atomically. Normal failures remove the
 // temp directory; a crash mid-build can leave a stale .unpack-* directory
 // behind, which reconciliation landing with the pull integration is expected
-// to sweep. No production caller yet: pull integration and
-// composition land in later changes.
+// to sweep.
 //
 // Concurrent callers share one build. The build itself is detached from the
 // initiating caller's cancellation so one cancelled pull cannot fail every

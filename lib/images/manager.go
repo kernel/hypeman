@@ -520,20 +520,20 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef, credentials 
 	// Prefer a metadata-only fsmerge image when every layer can be materialized
 	// for native overlayfs semantics. If any step is unsupported or fails, keep
 	// the existing flattened image path as the compatibility fallback.
-	runtimeRootfsType := "flat"
+	runtimeRootfsType := runtimeRootfsFlat
 	var diskSize int64
 	if result.Manifest != nil && len(result.Manifest.Layers) > 1 && m.layerArtifactSupport() {
 		fsmergeStart := time.Now()
 		diskSize, err = m.buildFsmergeImage(ctx, result.Manifest, diskTempPath)
 		m.recordImageBuildPhase(ctx, ref.Digest(), "fsmerge_export", time.Since(fsmergeStart), phaseStatus(err), "not_applicable")
 		if err == nil {
-			runtimeRootfsType = "fsmerge"
+			runtimeRootfsType = runtimeRootfsFsmerge
 		} else {
 			slog.WarnContext(ctx, "fsmerge image build failed; using flattened rootfs", "digest", ref.Digest(), "error", err)
 			_ = os.Remove(diskTempPath)
 		}
 	}
-	if runtimeRootfsType == "flat" {
+	if runtimeRootfsType == runtimeRootfsFlat {
 		// Use default image format (erofs on Linux, ext4 on Darwin).
 		convertStart := time.Now()
 		diskSize, err = ExportRootfsWithContext(ctx, tempDir, diskTempPath, DefaultImageFormat)

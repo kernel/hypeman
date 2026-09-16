@@ -26,6 +26,6 @@ func (d *dmLinearDevice) Path() string {
 	return ""
 }
 
-func (d *dmLinearDevice) Close() error {
+func (d *dmLinearDevice) Close(context.Context) error {
 	return nil
 }

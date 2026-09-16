@@ -867,6 +867,14 @@ func resolveRuntimeHypervisorPID(log *slog.Logger, stored *StoredMetadata, fallb
 	return pid
 }
 
+func (m *manager) rootfsPath(ctx context.Context, imageInfo *images.Image) (string, error) {
+	rootfsPath, err := images.GetDiskPath(m.paths, imageInfo.Name, imageInfo.Digest)
+	if provider, ok := m.imageManager.(images.RootfsPathProvider); ok {
+		rootfsPath, err = provider.RootfsPath(ctx, imageInfo)
+	}
+	return rootfsPath, err
+}
+
 // buildHypervisorConfig creates a hypervisor-agnostic VM configuration
 func (m *manager) buildHypervisorConfig(ctx context.Context, inst *Instance, imageInfo *images.Image, netConfig *network.NetworkConfig) (hypervisor.VMConfig, error) {
 	// Get system file paths
@@ -875,10 +883,7 @@ func (m *manager) buildHypervisorConfig(ctx context.Context, inst *Instance, ima
 
 	// Disk configuration
 	// Get rootfs disk path from image manager
-	rootfsPath, err := images.GetDiskPath(m.paths, imageInfo.Name, imageInfo.Digest)
-	if provider, ok := m.imageManager.(images.RootfsPathProvider); ok {
-		rootfsPath, err = provider.RootfsPath(ctx, imageInfo)
-	}
+	rootfsPath, err := m.rootfsPath(ctx, imageInfo)
 	if err != nil {
 		return hypervisor.VMConfig{}, err
 	}

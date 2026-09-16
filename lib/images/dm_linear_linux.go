@@ -10,16 +10,12 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 )
 
 type dmLinearDevice struct {
 	name   string
 	loops  []string
 	ownsDM bool
-	mu     sync.Mutex
-	closed bool
-	err    error
 }
 
 // createDMLinearDevice exposes regular layer artifacts as one read-only block
@@ -65,7 +61,7 @@ func createDMLinearDevice(ctx context.Context, name string, backingPaths []strin
 	cleanup := true
 	defer func() {
 		if cleanup {
-			_ = device.Close()
+			_ = device.Close(context.Background())
 		}
 	}()
 
@@ -112,6 +108,9 @@ func (d *dmLinearDevice) Path() string {
 func listDMDeviceNames(ctx context.Context, prefix string) ([]string, error) {
 	output, err := runCommand(ctx, "dmsetup", "ls", "--noheadings", "--columns", "-o", "name")
 	if err != nil {
+		if errors.Is(err, exec.ErrNotFound) {
+			return nil, errFsmergeUnsupported
+		}
 		return nil, err
 	}
 	names := make([]string, 0)
@@ -143,35 +142,29 @@ func isDMDeviceMissing(err error) bool {
 	return strings.Contains(message, "No such device") || strings.Contains(message, "does not exist") || strings.Contains(message, "not found")
 }
 
-func (d *dmLinearDevice) Close() error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if d.closed {
-		return d.err
+func (d *dmLinearDevice) Close(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	d.err = nil
-
 	if d.ownsDM {
-		if _, err := runCommand(context.Background(), "dmsetup", "remove", "--retry", "--noudevsync", d.name); err != nil && !isDMDeviceMissing(err) {
-			d.err = fmt.Errorf("remove device-mapper device %s: %w", d.name, err)
-			return d.err
+		if _, err := runCommand(ctx, "dmsetup", "remove", "--retry", "--noudevsync", d.name); err != nil && !isDMDeviceMissing(err) {
+			return fmt.Errorf("remove device-mapper device %s: %w", d.name, err)
 		}
 		d.ownsDM = false
 	}
+
+	var closeErr error
 	for i := len(d.loops) - 1; i >= 0; i-- {
 		loop := d.loops[i]
-		if _, err := runCommand(context.Background(), "losetup", "--detach", loop); err != nil && !isDMDeviceMissing(err) {
-			if d.err == nil {
-				d.err = fmt.Errorf("detach loop device %s: %w", loop, err)
+		if _, err := runCommand(ctx, "losetup", "--detach", loop); err != nil && !isDMDeviceMissing(err) {
+			if closeErr == nil {
+				closeErr = fmt.Errorf("detach loop device %s: %w", loop, err)
 			}
 			continue
 		}
 		d.loops = append(d.loops[:i], d.loops[i+1:]...)
 	}
-	if d.err == nil && !d.ownsDM && len(d.loops) == 0 {
-		d.closed = true
-	}
-	return d.err
+	return closeErr
 }
 
 func runCommand(ctx context.Context, name string, args ...string) (string, error) {

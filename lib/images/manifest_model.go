@@ -28,7 +28,11 @@ type imageManifestModel struct {
 	Layers        []layerDescriptor `json:"layers"` // manifest order, base layer first
 }
 
-const manifestModelSchemaVersion = 1
+const (
+	manifestModelSchemaVersion = 1
+	runtimeRootfsFlat          = "flat"
+	runtimeRootfsFsmerge       = "fsmerge"
+)
 
 type manifestConfigRef struct {
 	Digest    string   `json:"digest"` // config blob digest, sha256:...
@@ -80,7 +84,7 @@ func validateManifestModel(digestHex string, model *imageManifestModel) error {
 	if model.RootFSType != "" && model.RootFSType != "layers" {
 		return fmt.Errorf("unsupported manifest rootfs type: %q", model.RootFSType)
 	}
-	if model.RuntimeFSType != "" && model.RuntimeFSType != "flat" && model.RuntimeFSType != "fsmerge" {
+	if model.RuntimeFSType != "" && model.RuntimeFSType != runtimeRootfsFlat && model.RuntimeFSType != runtimeRootfsFsmerge {
 		return fmt.Errorf("unsupported runtime rootfs type: %q", model.RuntimeFSType)
 	}
 	if err := validateManifestConfig(model); err != nil {

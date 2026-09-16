@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -15,13 +14,20 @@ import (
 
 var errFsmergeUnsupported = errors.New("fsmerge is unsupported on this host")
 
-const fsmergeReconcileInterval = time.Minute
+const (
+	fsmergeReconcileInterval = time.Minute
+	fsmergeCleanupTimeout    = 10 * time.Second
+)
 
 func (m *manager) removeDigestIfUnreferenced(repository, digestHex string, preserveDigestOnly bool) error {
-	if err := removeDigestIfUnreferenced(m.paths, repository, digestHex, preserveDigestOnly); err != nil {
+	unreferenced, err := removeDigestIfUnreferenced(m.paths, repository, digestHex, preserveDigestOnly)
+	if err != nil {
 		return err
 	}
-	return m.closeFsmergeDeviceIfUnreferenced(digestHex)
+	if !unreferenced {
+		return nil
+	}
+	return m.closeFsmergeDevice(digestHex)
 }
 
 // RootfsPathProvider supplies the host path for an image's read-only root
@@ -43,7 +49,7 @@ func (m *manager) RootfsPath(ctx context.Context, image *Image) (string, error) 
 	if err != nil {
 		return "", err
 	}
-	if model == nil || model.RuntimeFSType != "fsmerge" {
+	if model == nil || model.RuntimeFSType != runtimeRootfsFsmerge {
 		return fallback, nil
 	}
 
@@ -127,11 +133,7 @@ func readRuntimeManifestModel(p *paths.Paths, imageName, digestHex string) (*ima
 	// The image manager's content layout is authoritative after a successful
 	// build, while legacy images remain on their existing repository layout.
 	layout := resolveImageLayout(p, ref.Repository(), digestHex)
-	modelPath := p.ImageContentManifestModel(digestHex)
-	if !layout.content {
-		modelPath = filepath.Join(layout.dir, "manifest.json")
-	}
-	return readManifestModelAt(modelPath, digestHex)
+	return readManifestModelAt(manifestModelPath(p, layout, digestHex), digestHex)
 }
 
 func (m *manager) StartFsmergeReconciler(ctx context.Context) {
@@ -140,7 +142,6 @@ func (m *manager) StartFsmergeReconciler(ctx context.Context) {
 	}
 	m.fsmergeReconcilerOnce.Do(func() {
 		go func() {
-			m.reconcileFsmergeDevices(ctx)
 			ticker := time.NewTicker(fsmergeReconcileInterval)
 			defer ticker.Stop()
 			for {
@@ -183,16 +184,19 @@ func (m *manager) closeFsmergeDeviceIfUnreferenced(digestHex string) error {
 }
 
 func (m *manager) closeFsmergeDevice(digestHex string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), fsmergeCleanupTimeout)
+	defer cancel()
+
 	m.fsmergeMu.Lock()
 	defer m.fsmergeMu.Unlock()
 	device := m.fsmergeDevices[digestHex]
 	if device == nil {
-		if !dmLinearAvailable(context.Background()) {
+		if !dmLinearAvailable(ctx) {
 			return nil
 		}
 		var found bool
 		var err error
-		device, found, err = existingDMLinearDevice(context.Background(), fsmergeDeviceName(digestHex), -1)
+		device, found, err = existingDMLinearDevice(ctx, fsmergeDeviceName(digestHex), -1)
 		if err != nil {
 			return err
 		}
@@ -200,7 +204,7 @@ func (m *manager) closeFsmergeDevice(digestHex string) error {
 			return nil
 		}
 	}
-	if err := device.Close(); err != nil {
+	if err := device.Close(ctx); err != nil {
 		return err
 	}
 	delete(m.fsmergeDevices, digestHex)

@@ -12,7 +12,6 @@ import (
 
 	"github.com/kernel/hypeman/lib/guest"
 	"github.com/kernel/hypeman/lib/hypervisor"
-	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/logger"
 	"github.com/kernel/hypeman/lib/network"
 	snapshotstore "github.com/kernel/hypeman/lib/snapshot"
@@ -76,10 +75,8 @@ func (m *manager) restoreInstance(
 		log.ErrorContext(ctx, "failed to resolve image for restore", "instance_id", id, "image", bootImageRef(stored), "error", err)
 		return nil, fmt.Errorf("get image: %w", err)
 	}
-	if provider, ok := m.imageManager.(images.RootfsPathProvider); ok {
-		if _, err := provider.RootfsPath(ctx, imageInfo); err != nil {
-			return nil, fmt.Errorf("prepare image rootfs: %w", err)
-		}
+	if _, err := m.rootfsPath(ctx, imageInfo); err != nil {
+		return nil, fmt.Errorf("prepare image rootfs: %w", err)
 	}
 
 	// 2b. Validate aggregate resource limits before allocating resources (if configured)
