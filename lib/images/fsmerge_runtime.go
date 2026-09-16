@@ -187,6 +187,9 @@ func (m *manager) closeFsmergeDevice(digestHex string) error {
 	defer m.fsmergeMu.Unlock()
 	device := m.fsmergeDevices[digestHex]
 	if device == nil {
+		if !dmLinearAvailable(context.Background()) {
+			return nil
+		}
 		var found bool
 		var err error
 		device, found, err = existingDMLinearDevice(context.Background(), fsmergeDeviceName(digestHex), -1)
