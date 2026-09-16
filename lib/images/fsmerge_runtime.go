@@ -4,14 +4,25 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/kernel/hypeman/lib/paths"
 )
 
 var errFsmergeUnsupported = errors.New("fsmerge is unsupported on this host")
+
+const fsmergeReconcileInterval = time.Minute
+
+func (m *manager) removeDigestIfUnreferenced(repository, digestHex string, preserveDigestOnly bool) error {
+	if err := removeDigestIfUnreferenced(m.paths, repository, digestHex, preserveDigestOnly); err != nil {
+		return err
+	}
+	return m.closeFsmergeDeviceIfUnreferenced(digestHex)
+}
 
 // RootfsPathProvider supplies the host path for an image's read-only root
 // disk. Layered images use a shared dm-linear device; legacy and fallback
@@ -38,55 +49,71 @@ func (m *manager) RootfsPath(ctx context.Context, image *Image) (string, error) 
 
 	digestHex := strings.TrimPrefix(image.Digest, "sha256:")
 	m.fsmergeMu.Lock()
-	defer m.fsmergeMu.Unlock()
 	if m.fsmergeDevices == nil {
 		m.fsmergeDevices = make(map[string]*dmLinearDevice)
 	}
-	if device := m.fsmergeDevices[digestHex]; device != nil {
+	device := m.fsmergeDevices[digestHex]
+	m.fsmergeMu.Unlock()
+	if device != nil {
 		return device.Path(), nil
 	}
 
-	backingPaths := make([]string, 0, len(model.Layers)+1)
-	backingPaths = append(backingPaths, fallback)
-	for _, descriptor := range model.Layers {
-		layerHex, err := layerDigestHex(descriptor.Digest)
-		if err != nil {
-			return "", err
+	value, err, _ := m.fsmergeFlights.Do(digestHex, func() (any, error) {
+		m.fsmergeMu.Lock()
+		device := m.fsmergeDevices[digestHex]
+		m.fsmergeMu.Unlock()
+		if device != nil {
+			return device, nil
 		}
-		record, err := readLayerRecord(m.paths, layerHex)
-		if err != nil {
-			return "", err
-		}
-		if record == nil || !record.matches(descriptor) {
-			return "", fmt.Errorf("missing materialized layer artifact %s", descriptor.Digest)
-		}
-		artifactPath := layerArtifactPath(m.paths, layerHex)
-		info, err := os.Stat(artifactPath)
-		if err != nil {
-			return "", fmt.Errorf("stat layer artifact %s: %w", descriptor.Digest, err)
-		}
-		if !info.Mode().IsRegular() || info.Size() != record.SizeBytes {
-			return "", fmt.Errorf("invalid layer artifact %s", descriptor.Digest)
-		}
-		backingPaths = append(backingPaths, artifactPath)
-	}
 
-	name := fsmergeDeviceName(digestHex)
-	device, found, err := existingDMLinearDevice(ctx, name, len(backingPaths))
-	if err != nil {
-		return "", fmt.Errorf("inspect existing fsmerge device: %w", err)
-	}
-	if !found {
-		device, err = createDMLinearDevice(ctx, name, backingPaths)
-		if err != nil {
-			if errors.Is(err, errFsmergeUnsupported) {
-				return "", fmt.Errorf("fsmerge rootfs requires device-mapper support")
+		backingPaths := make([]string, 0, len(model.Layers)+1)
+		backingPaths = append(backingPaths, fallback)
+		for _, descriptor := range model.Layers {
+			layerHex, err := layerDigestHex(descriptor.Digest)
+			if err != nil {
+				return nil, err
 			}
-			return "", err
+			record, err := readLayerRecord(m.paths, layerHex)
+			if err != nil {
+				return nil, err
+			}
+			if record == nil || !record.matches(descriptor) {
+				return nil, fmt.Errorf("missing materialized layer artifact %s", descriptor.Digest)
+			}
+			artifactPath := layerArtifactPath(m.paths, layerHex)
+			info, err := os.Stat(artifactPath)
+			if err != nil {
+				return nil, fmt.Errorf("stat layer artifact %s: %w", descriptor.Digest, err)
+			}
+			if !info.Mode().IsRegular() || info.Size() != record.SizeBytes {
+				return nil, fmt.Errorf("invalid layer artifact %s", descriptor.Digest)
+			}
+			backingPaths = append(backingPaths, artifactPath)
 		}
+
+		name := fsmergeDeviceName(digestHex)
+		device, found, err := existingDMLinearDevice(ctx, name, len(backingPaths))
+		if err != nil {
+			return nil, fmt.Errorf("inspect existing fsmerge device: %w", err)
+		}
+		if !found {
+			device, err = createDMLinearDevice(ctx, name, backingPaths)
+			if err != nil {
+				if errors.Is(err, errFsmergeUnsupported) {
+					return nil, fmt.Errorf("fsmerge rootfs requires device-mapper support")
+				}
+				return nil, err
+			}
+		}
+		m.fsmergeMu.Lock()
+		m.fsmergeDevices[digestHex] = device
+		m.fsmergeMu.Unlock()
+		return device, nil
+	})
+	if err != nil {
+		return "", err
 	}
-	m.fsmergeDevices[digestHex] = device
-	return device.Path(), nil
+	return value.(*dmLinearDevice).Path(), nil
 }
 
 func readRuntimeManifestModel(p *paths.Paths, imageName, digestHex string) (*imageManifestModel, error) {
@@ -107,6 +134,43 @@ func readRuntimeManifestModel(p *paths.Paths, imageName, digestHex string) (*ima
 	return readManifestModelAt(modelPath, digestHex)
 }
 
+func (m *manager) StartFsmergeReconciler(ctx context.Context) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	m.fsmergeReconcilerOnce.Do(func() {
+		go func() {
+			m.reconcileFsmergeDevices(ctx)
+			ticker := time.NewTicker(fsmergeReconcileInterval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					m.reconcileFsmergeDevices(ctx)
+				}
+			}
+		}()
+	})
+}
+
+func (m *manager) reconcileFsmergeDevices(ctx context.Context) {
+	names, err := listDMDeviceNames(ctx, "hypeman-img-")
+	if err != nil {
+		if !errors.Is(err, errFsmergeUnsupported) {
+			slog.WarnContext(ctx, "failed to list fsmerge devices", "error", err)
+		}
+		return
+	}
+	for _, name := range names {
+		digestHex := strings.TrimPrefix(name, "hypeman-img-")
+		if err := m.closeFsmergeDeviceIfUnreferenced(digestHex); err != nil {
+			slog.WarnContext(ctx, "failed to reconcile fsmerge device", "device", name, "error", err)
+		}
+	}
+}
+
 func (m *manager) closeFsmergeDeviceIfUnreferenced(digestHex string) error {
 	count, err := contentTagCount(m.paths, digestHex)
 	if err != nil {
@@ -123,7 +187,18 @@ func (m *manager) closeFsmergeDevice(digestHex string) error {
 	defer m.fsmergeMu.Unlock()
 	device := m.fsmergeDevices[digestHex]
 	if device == nil {
-		return nil
+		if !dmLinearAvailable(context.Background()) {
+			return nil
+		}
+		var found bool
+		var err error
+		device, found, err = existingDMLinearDevice(context.Background(), fsmergeDeviceName(digestHex), -1)
+		if err != nil {
+			return err
+		}
+		if !found {
+			return nil
+		}
 	}
 	if err := device.Close(); err != nil {
 		return err

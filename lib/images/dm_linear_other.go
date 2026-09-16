@@ -14,6 +14,10 @@ func existingDMLinearDevice(context.Context, string, int) (*dmLinearDevice, bool
 	return nil, false, errFsmergeUnsupported
 }
 
+func listDMDeviceNames(context.Context, string) ([]string, error) {
+	return nil, errFsmergeUnsupported
+}
+
 func createDMLinearDevice(context.Context, string, []string) (*dmLinearDevice, error) {
 	return nil, errFsmergeUnsupported
 }

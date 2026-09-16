@@ -17,6 +17,7 @@ import (
 type dmLinearDevice struct {
 	name   string
 	loops  []string
+	ownsDM bool
 	mu     sync.Mutex
 	closed bool
 	err    error
@@ -42,11 +43,15 @@ func existingDMLinearDevice(ctx context.Context, name string, backingPathCount i
 	if err != nil {
 		return nil, false, fmt.Errorf("inspect device-mapper dependencies for %s: %w", name, err)
 	}
-	loops := parseDMLinearDependencies(output, backingPathCount)
-	if len(loops) != backingPathCount {
+	capacity := backingPathCount
+	if capacity < 0 {
+		capacity = 0
+	}
+	loops := parseDMLinearDependencies(output, capacity)
+	if backingPathCount >= 0 && len(loops) != backingPathCount {
 		return nil, false, fmt.Errorf("device-mapper device %s has %d loop dependencies, want %d", name, len(loops), backingPathCount)
 	}
-	return &dmLinearDevice{name: name, loops: loops}, true, nil
+	return &dmLinearDevice{name: name, loops: loops, ownsDM: true}, true, nil
 }
 
 func createDMLinearDevice(ctx context.Context, name string, backingPaths []string) (*dmLinearDevice, error) {
@@ -108,6 +113,7 @@ func createDMLinearDevice(ctx context.Context, name string, backingPaths []strin
 	if _, err := runCommand(ctx, "dmsetup", "create", "--readonly", "--noudevsync", name, tablePath); err != nil {
 		return nil, fmt.Errorf("create device-mapper device %s: %w", name, err)
 	}
+	device.ownsDM = true
 
 	cleanup = false
 	return device, nil
@@ -115,6 +121,21 @@ func createDMLinearDevice(ctx context.Context, name string, backingPaths []strin
 
 func (d *dmLinearDevice) Path() string {
 	return filepath.Join("/dev/mapper", d.name)
+}
+
+func listDMDeviceNames(ctx context.Context, prefix string) ([]string, error) {
+	output, err := runCommand(ctx, "dmsetup", "ls", "--noheadings", "--columns", "-o", "name")
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, 0)
+	for _, line := range strings.Split(output, "\n") {
+		name := strings.TrimSpace(line)
+		if strings.HasPrefix(name, prefix) {
+			names = append(names, name)
+		}
+	}
+	return names, nil
 }
 
 func parseDMLinearDependencies(output string, capacity int) []string {
@@ -144,16 +165,24 @@ func (d *dmLinearDevice) Close() error {
 	}
 	d.err = nil
 
-	if _, err := runCommand(context.Background(), "dmsetup", "remove", "--retry", "--noudevsync", d.name); err != nil && !isDMDeviceMissing(err) {
-		d.err = fmt.Errorf("remove device-mapper device %s: %w", d.name, err)
-		return d.err
+	if d.ownsDM {
+		if _, err := runCommand(context.Background(), "dmsetup", "remove", "--retry", "--noudevsync", d.name); err != nil && !isDMDeviceMissing(err) {
+			d.err = fmt.Errorf("remove device-mapper device %s: %w", d.name, err)
+			return d.err
+		}
+		d.ownsDM = false
 	}
 	for i := len(d.loops) - 1; i >= 0; i-- {
-		if _, err := runCommand(context.Background(), "losetup", "--detach", d.loops[i]); err != nil && !isDMDeviceMissing(err) && d.err == nil {
-			d.err = fmt.Errorf("detach loop device %s: %w", d.loops[i], err)
+		loop := d.loops[i]
+		if _, err := runCommand(context.Background(), "losetup", "--detach", loop); err != nil && !isDMDeviceMissing(err) {
+			if d.err == nil {
+				d.err = fmt.Errorf("detach loop device %s: %w", loop, err)
+			}
+			continue
 		}
+		d.loops = append(d.loops[:i], d.loops[i+1:]...)
 	}
-	if d.err == nil {
+	if d.err == nil && !d.ownsDM && len(d.loops) == 0 {
 		d.closed = true
 	}
 	return d.err

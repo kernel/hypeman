@@ -19,6 +19,7 @@ import (
 	"github.com/kernel/hypeman/lib/queue"
 	"github.com/kernel/hypeman/lib/tags"
 	"go.opentelemetry.io/otel/metric"
+	"golang.org/x/sync/singleflight"
 )
 
 var errStaleBuild = errors.New("stale image build")
@@ -77,6 +78,8 @@ type manager struct {
 	createMu                   sync.Mutex
 	layers                     *layerStore
 	fsmergeMu                  sync.Mutex
+	fsmergeFlights             singleflight.Group
+	fsmergeReconcilerOnce      sync.Once
 	fsmergeDevices             map[string]*dmLinearDevice
 	tagGenerations             map[string]uint64
 	requestedTags              map[string]string // newest pull's digest per requested tag
@@ -124,6 +127,7 @@ func NewManager(p *paths.Paths, maxConcurrentBuilds int, meter metric.Meter) (Ma
 	}
 
 	m.RecoverInterruptedBuilds()
+	m.reconcileFsmergeDevices(context.Background())
 	// Keep legacy images readable in their existing layout and promote them only
 	// when an operation needs shared content, such as a cross-repository tag.
 	// Avoiding a startup-wide migration keeps startup bounded and independent of
@@ -266,7 +270,7 @@ func (m *manager) reuseExistingImage(ref *ResolvedRef, credentials *authn.AuthCo
 		return nil, false, nil
 	}
 	if meta.Status == StatusFailed {
-		if err := removeDigestIfUnreferenced(m.paths, ref.Repository(), ref.DigestHex(), false); err != nil {
+		if err := m.removeDigestIfUnreferenced(ref.Repository(), ref.DigestHex(), false); err != nil {
 			return nil, true, fmt.Errorf("remove failed image: %w", err)
 		}
 		return nil, false, nil
@@ -827,11 +831,8 @@ func (m *manager) deleteDigestImage(repository, digestHex string) error {
 	if err := m.cancelPendingTags(repository, tagsToClean); err != nil {
 		return fmt.Errorf("cancel pending image tags: %w", err)
 	}
-	if err := removeDigestIfUnreferenced(m.paths, repository, digestHex, false); err != nil {
-		return err
-	}
-	if err := m.closeFsmergeDeviceIfUnreferenced(digestHex); err != nil {
-		return fmt.Errorf("close fsmerge rootfs %s: %w", digestHex, err)
+	if err := m.removeDigestIfUnreferenced(repository, digestHex, false); err != nil {
+		return fmt.Errorf("remove fsmerge rootfs %s: %w", digestHex, err)
 	}
 	m.clearRequestedDigest(digestHex)
 	m.layers.refreshDiskUsageTotals()
@@ -865,11 +866,8 @@ func (m *manager) deleteTaggedImage(repository, tag string) error {
 	if count > 0 {
 		return nil
 	}
-	if err := removeDigestIfUnreferenced(m.paths, repository, digestHex, true); err != nil {
+	if err := m.removeDigestIfUnreferenced(repository, digestHex, true); err != nil {
 		return fmt.Errorf("delete orphaned digest %s: %w", digestHex, err)
-	}
-	if err := m.closeFsmergeDeviceIfUnreferenced(digestHex); err != nil {
-		return fmt.Errorf("close fsmerge rootfs %s: %w", digestHex, err)
 	}
 	m.layers.refreshDiskUsageTotals()
 	return nil
