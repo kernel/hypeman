@@ -6,8 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -98,20 +96,7 @@ func createDMLinearDevice(ctx context.Context, name string, backingPaths []strin
 		offset += sectors
 	}
 
-	tableFile, err := os.CreateTemp("", "hypeman-dm-table-*")
-	if err != nil {
-		return nil, fmt.Errorf("create device-mapper table: %w", err)
-	}
-	tablePath := tableFile.Name()
-	defer os.Remove(tablePath)
-	if _, err := tableFile.WriteString(strings.Join(table, "\n") + "\n"); err != nil {
-		tableFile.Close()
-		return nil, fmt.Errorf("write device-mapper table: %w", err)
-	}
-	if err := tableFile.Close(); err != nil {
-		return nil, fmt.Errorf("close device-mapper table: %w", err)
-	}
-	if _, err := runCommand(ctx, "dmsetup", "create", "--readonly", "--noudevsync", name, tablePath); err != nil {
+	if _, err := runCommand(ctx, "dmsetup", "create", "--readonly", "--noudevsync", name, "--table", strings.Join(table, "\n")); err != nil {
 		return nil, fmt.Errorf("create device-mapper device %s: %w", name, err)
 	}
 	device.ownsDM = true
@@ -137,75 +122,6 @@ func listDMDeviceNames(ctx context.Context, prefix string) ([]string, error) {
 		}
 	}
 	return names, nil
-}
-
-func listDMLinearLoopDependencies(ctx context.Context) (map[string]struct{}, error) {
-	names, err := listDMDeviceNames(ctx, "")
-	if err != nil {
-		return nil, err
-	}
-	loops := make(map[string]struct{})
-	for _, name := range names {
-		output, err := runCommand(ctx, "dmsetup", "deps", "--noheadings", "--separator=,", "-o", "devname", name)
-		if err != nil {
-			return nil, fmt.Errorf("inspect device-mapper dependencies for %s: %w", name, err)
-		}
-		for _, loop := range parseDMLinearDependencies(output, 0) {
-			loops[loop] = struct{}{}
-		}
-	}
-	return loops, nil
-}
-
-func (m *manager) reconcileOrphanFsmergeLoops(ctx context.Context) {
-	activeLoops, err := listDMLinearLoopDependencies(ctx)
-	if err != nil {
-		if !errors.Is(err, errFsmergeUnsupported) {
-			slog.WarnContext(ctx, "failed to list fsmerge loop dependencies", "error", err)
-		}
-		return
-	}
-	backings, err := listLoopBackingFiles()
-	if err != nil {
-		slog.WarnContext(ctx, "failed to list loop backing files", "error", err)
-		return
-	}
-	imagesDir := filepath.Clean(m.paths.ImagesDir())
-	for loop, backing := range backings {
-		if _, active := activeLoops[loop]; active || !pathWithin(imagesDir, filepath.Clean(backing)) {
-			continue
-		}
-		if _, err := runCommand(ctx, "losetup", "--detach", loop); err != nil && !isDMDeviceMissing(err) {
-			slog.WarnContext(ctx, "failed to detach orphan fsmerge loop", "loop", loop, "backing", backing, "error", err)
-		}
-	}
-}
-
-func pathWithin(root, path string) bool {
-	rel, err := filepath.Rel(root, path)
-	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
-}
-
-func listLoopBackingFiles() (map[string]string, error) {
-	entries, err := os.ReadDir("/sys/block")
-	if err != nil {
-		return nil, err
-	}
-	backings := make(map[string]string)
-	for _, entry := range entries {
-		if !strings.HasPrefix(entry.Name(), "loop") {
-			continue
-		}
-		data, err := os.ReadFile(filepath.Join("/sys/block", entry.Name(), "loop", "backing_file"))
-		if err != nil {
-			continue
-		}
-		path := strings.TrimSpace(string(data))
-		if path != "" {
-			backings[filepath.Join("/dev", entry.Name())] = path
-		}
-	}
-	return backings, nil
 }
 
 func parseDMLinearDependencies(output string, capacity int) []string {

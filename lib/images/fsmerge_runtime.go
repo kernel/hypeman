@@ -59,9 +59,6 @@ func (m *manager) RootfsPath(ctx context.Context, image *Image) (string, error) 
 	}
 
 	value, err, _ := m.fsmergeFlights.Do(digestHex, func() (any, error) {
-		m.fsmergeSetups.Add(1)
-		defer m.fsmergeSetups.Add(-1)
-
 		m.fsmergeMu.Lock()
 		device := m.fsmergeDevices[digestHex]
 		m.fsmergeMu.Unlock()
@@ -172,12 +169,6 @@ func (m *manager) reconcileFsmergeDevices(ctx context.Context) {
 			}
 		}
 	}
-	if m.fsmergeSetups.Load() == 0 {
-		if err := m.layers.reconcileUnreferencedArtifacts(ctx); err != nil {
-			slog.WarnContext(ctx, "failed to reconcile fsmerge layer artifacts", "error", err)
-		}
-		m.reconcileOrphanFsmergeLoops(ctx)
-	}
 }
 
 func (m *manager) closeFsmergeDeviceIfUnreferenced(digestHex string) error {
@@ -196,9 +187,6 @@ func (m *manager) closeFsmergeDevice(digestHex string) error {
 	defer m.fsmergeMu.Unlock()
 	device := m.fsmergeDevices[digestHex]
 	if device == nil {
-		if !dmLinearAvailable(context.Background()) {
-			return nil
-		}
 		var found bool
 		var err error
 		device, found, err = existingDMLinearDevice(context.Background(), fsmergeDeviceName(digestHex), -1)
