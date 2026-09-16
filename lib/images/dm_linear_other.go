@@ -26,6 +26,8 @@ func listLoopBackingFiles() (map[string]string, error) {
 	return nil, errFsmergeUnsupported
 }
 
+func (m *manager) reconcileOrphanFsmergeLoops(context.Context) {}
+
 func createDMLinearDevice(context.Context, string, []string) (*dmLinearDevice, error) {
 	return nil, errFsmergeUnsupported
 }
