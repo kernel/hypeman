@@ -13,8 +13,9 @@ func TestPatchFsmergeDeviceMappings(t *testing.T) {
 	dir := t.TempDir()
 	metadata := filepath.Join(dir, "fsmeta.erofs")
 	layers := []string{filepath.Join(dir, "layer0.erofs"), filepath.Join(dir, "layer1.erofs")}
-	for _, path := range layers {
-		require.NoError(t, os.WriteFile(path, make([]byte, 4096*3), 0644))
+	layerBlocks := []int64{3, 3}
+	for i, path := range layers {
+		require.NoError(t, os.WriteFile(path, make([]byte, 4096*layerBlocks[i]), 0644))
 	}
 
 	data := make([]byte, 8192)
@@ -35,7 +36,7 @@ func TestPatchFsmergeDeviceMappings(t *testing.T) {
 	patched, err := os.ReadFile(metadata)
 	require.NoError(t, err)
 	super = patched[erofsSuperOffset:]
-	for i, want := range []uint32{1, 4} {
+	for i, want := range []uint32{1, uint32(1 + layerBlocks[0])} {
 		slot := patched[deviceTableOffset+i*erofsDeviceSlotSize:]
 		require.Equal(t, want, binary.LittleEndian.Uint32(slot[erofsDeviceMappedBlockAddressOff:]))
 	}
