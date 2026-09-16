@@ -18,6 +18,14 @@ func listDMDeviceNames(context.Context, string) ([]string, error) {
 	return nil, errFsmergeUnsupported
 }
 
+func listDMLinearLoopDependencies(context.Context) (map[string]struct{}, error) {
+	return nil, errFsmergeUnsupported
+}
+
+func listLoopBackingFiles() (map[string]string, error) {
+	return nil, errFsmergeUnsupported
+}
+
 func createDMLinearDevice(context.Context, string, []string) (*dmLinearDevice, error) {
 	return nil, errFsmergeUnsupported
 }

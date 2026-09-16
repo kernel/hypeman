@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/go-containerregistry/pkg/authn"
@@ -80,6 +81,7 @@ type manager struct {
 	fsmergeMu                  sync.Mutex
 	fsmergeFlights             singleflight.Group
 	fsmergeReconcilerOnce      sync.Once
+	fsmergeSetups              atomic.Int32
 	fsmergeDevices             map[string]*dmLinearDevice
 	tagGenerations             map[string]uint64
 	requestedTags              map[string]string // newest pull's digest per requested tag

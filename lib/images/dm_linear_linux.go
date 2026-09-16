@@ -138,6 +138,46 @@ func listDMDeviceNames(ctx context.Context, prefix string) ([]string, error) {
 	return names, nil
 }
 
+func listDMLinearLoopDependencies(ctx context.Context) (map[string]struct{}, error) {
+	names, err := listDMDeviceNames(ctx, "")
+	if err != nil {
+		return nil, err
+	}
+	loops := make(map[string]struct{})
+	for _, name := range names {
+		output, err := runCommand(ctx, "dmsetup", "deps", "--noheadings", "--separator=,", "-o", "devname", name)
+		if err != nil {
+			return nil, fmt.Errorf("inspect device-mapper dependencies for %s: %w", name, err)
+		}
+		for _, loop := range parseDMLinearDependencies(output, 0) {
+			loops[loop] = struct{}{}
+		}
+	}
+	return loops, nil
+}
+
+func listLoopBackingFiles() (map[string]string, error) {
+	entries, err := os.ReadDir("/sys/block")
+	if err != nil {
+		return nil, err
+	}
+	backings := make(map[string]string)
+	for _, entry := range entries {
+		if !strings.HasPrefix(entry.Name(), "loop") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join("/sys/block", entry.Name(), "loop", "backing_file"))
+		if err != nil {
+			continue
+		}
+		path := strings.TrimSpace(string(data))
+		if path != "" {
+			backings[filepath.Join("/dev", entry.Name())] = path
+		}
+	}
+	return backings, nil
+}
+
 func parseDMLinearDependencies(output string, capacity int) []string {
 	loops := make([]string, 0, capacity)
 	for _, token := range strings.Fields(output) {

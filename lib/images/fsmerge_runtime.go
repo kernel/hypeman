@@ -59,6 +59,9 @@ func (m *manager) RootfsPath(ctx context.Context, image *Image) (string, error) 
 	}
 
 	value, err, _ := m.fsmergeFlights.Do(digestHex, func() (any, error) {
+		m.fsmergeSetups.Add(1)
+		defer m.fsmergeSetups.Add(-1)
+
 		m.fsmergeMu.Lock()
 		device := m.fsmergeDevices[digestHex]
 		m.fsmergeMu.Unlock()
@@ -161,14 +164,49 @@ func (m *manager) reconcileFsmergeDevices(ctx context.Context) {
 		if !errors.Is(err, errFsmergeUnsupported) {
 			slog.WarnContext(ctx, "failed to list fsmerge devices", "error", err)
 		}
-		return
-	}
-	for _, name := range names {
-		digestHex := strings.TrimPrefix(name, "hypeman-img-")
-		if err := m.closeFsmergeDeviceIfUnreferenced(digestHex); err != nil {
-			slog.WarnContext(ctx, "failed to reconcile fsmerge device", "device", name, "error", err)
+	} else {
+		for _, name := range names {
+			digestHex := strings.TrimPrefix(name, "hypeman-img-")
+			if err := m.closeFsmergeDeviceIfUnreferenced(digestHex); err != nil {
+				slog.WarnContext(ctx, "failed to reconcile fsmerge device", "device", name, "error", err)
+			}
 		}
 	}
+	if m.fsmergeSetups.Load() == 0 {
+		if err := m.layers.reconcileUnreferencedArtifacts(ctx); err != nil {
+			slog.WarnContext(ctx, "failed to reconcile fsmerge layer artifacts", "error", err)
+		}
+		m.reconcileOrphanFsmergeLoops(ctx)
+	}
+}
+
+func (m *manager) reconcileOrphanFsmergeLoops(ctx context.Context) {
+	activeLoops, err := listDMLinearLoopDependencies(ctx)
+	if err != nil {
+		if !errors.Is(err, errFsmergeUnsupported) {
+			slog.WarnContext(ctx, "failed to list fsmerge loop dependencies", "error", err)
+		}
+		return
+	}
+	backings, err := listLoopBackingFiles()
+	if err != nil {
+		slog.WarnContext(ctx, "failed to list loop backing files", "error", err)
+		return
+	}
+	imagesDir := filepath.Clean(m.paths.ImagesDir())
+	for loop, backing := range backings {
+		if _, active := activeLoops[loop]; active || !pathWithin(imagesDir, filepath.Clean(backing)) {
+			continue
+		}
+		if _, err := runCommand(ctx, "losetup", "--detach", loop); err != nil && !isDMDeviceMissing(err) {
+			slog.WarnContext(ctx, "failed to detach orphan fsmerge loop", "loop", loop, "backing", backing, "error", err)
+		}
+	}
+}
+
+func pathWithin(root, path string) bool {
+	rel, err := filepath.Rel(root, path)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
 }
 
 func (m *manager) closeFsmergeDeviceIfUnreferenced(digestHex string) error {
