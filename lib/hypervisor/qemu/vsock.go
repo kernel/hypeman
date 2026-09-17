@@ -133,7 +133,11 @@ func (d *VsockDialer) DialVsock(ctx context.Context, port int) (net.Conn, error)
 	slog.DebugContext(ctx, "vsock connection established", "cid", d.cid, "port", port)
 
 	// Wrap the file descriptor in a net.Conn
-	return newVsockConn(fd, d.cid, uint32(port))
+	conn, err := newVsockConn(fd, d.cid, uint32(port))
+	if err != nil {
+		return nil, err
+	}
+	return conn, nil
 }
 
 // vsockConn wraps a vsock file descriptor as a net.Conn. The embedded
