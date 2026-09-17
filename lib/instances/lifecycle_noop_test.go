@@ -223,6 +223,8 @@ func TestDeleteRetainsFailedVGPUReleaseForRetry(t *testing.T) {
 			} else {
 				m.destroyVGPU = func(context.Context, devices.VGPUAssignment) error { return nil }
 			}
+			// In the reconcile case m.destroyVGPU still fails; the retried delete
+			// succeeds because the claim was already cleared on disk.
 			require.NoError(t, m.DeleteInstance(t.Context(), id))
 			assert.Equal(t, []string{"dev-1"}, deviceManager.detached)
 			_, err = m.loadMetadata(id)

@@ -55,7 +55,7 @@ func TestProcessExitWaitsForZombieLeadersTasks(t *testing.T) {
 	require.True(t, ProcessExists(pid), "a zombie leader does not imply its tasks have exited")
 	require.False(t, WaitForProcessExit(pid, 50*time.Millisecond))
 	// A sibling process gets ECHILD from wait4, as the API does after restart.
-	observer := exec.Command(os.Args[0], "-test.run=^TestProcessExitObserver$")
+	observer := exec.Command(os.Args[0], "-test.run=^TestProcessExitObserverHelper$")
 	observer.Env = append(os.Environ(), "HYPEMAN_TEST_WAIT_PID="+strconv.Itoa(pid))
 	output, err := observer.CombinedOutput()
 	require.NoError(t, err, "%s", output)
@@ -65,7 +65,7 @@ func TestProcessExitWaitsForZombieLeadersTasks(t *testing.T) {
 	require.False(t, ProcessExists(pid))
 }
 
-func TestProcessExitObserver(t *testing.T) {
+func TestProcessExitObserverHelper(t *testing.T) {
 	value := os.Getenv("HYPEMAN_TEST_WAIT_PID")
 	if value == "" {
 		return
