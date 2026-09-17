@@ -37,6 +37,9 @@
 
 ### macOS
 **macOS 11.0+** on Apple Silicon. Uses Apple's Virtualization.framework via the `vz` hypervisor.
+
+The full server installer uses a prebuilt macOS artifact when one is available. If not, it builds the server from source; install Xcode Command Line Tools, Go, and Make first. Docker is optional and only needed for build workloads.
+
 Install Rosetta to run `linux/amd64` images on Apple Silicon:
 
 ```bash
