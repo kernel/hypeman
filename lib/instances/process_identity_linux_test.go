@@ -44,8 +44,8 @@ func TestResolveLiveHypervisorPIDWithoutStoredPID(t *testing.T) {
 
 // TestResolveLiveHypervisorPIDReapsZombieChild guards against leaking one
 // zombie per direct-child VMM that exits on its own: ProcessExists treats
-// zombies as dead, so the confirmed-gone paths in stop, delete, and standby
-// never reach the Wait4 in WaitForProcessExit.
+// fully exited zombies as dead, so the confirmed-gone paths in stop, delete,
+// and standby never reach the Wait4 in WaitForProcessExit.
 func TestResolveLiveHypervisorPIDReapsZombieChild(t *testing.T) {
 	child := exec.Command("true")
 	require.NoError(t, child.Start())

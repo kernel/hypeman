@@ -201,7 +201,8 @@ func classifyResolvedHypervisorOwner(socketPath string, stored, resolved int, er
 	return 0, fmt.Errorf("cannot confirm ownership of socket %s: %w", socketPath, err)
 }
 
-// ProcessExists includes exiting processes whose non-leader tasks still hold resources.
+// ProcessExists reports whether pid belongs to a live process. A zombie
+// leader still counts as live while other tasks in its thread group remain.
 func ProcessExists(pid int) bool {
 	if pid <= 0 {
 		return false
