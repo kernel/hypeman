@@ -136,9 +136,10 @@ func (d *VsockDialer) DialVsock(ctx context.Context, port int) (net.Conn, error)
 	return newVsockConn(fd, d.cid, uint32(port))
 }
 
-// vsockConn wraps a vsock file descriptor as a net.Conn
+// vsockConn wraps a vsock file descriptor as a net.Conn. The embedded
+// os.File owns the descriptor: close, in-flight I/O, and deadlines.
 type vsockConn struct {
-	file       *os.File
+	*os.File
 	localCID   uint32
 	localPort  uint32
 	remoteCID  uint32
@@ -146,30 +147,18 @@ type vsockConn struct {
 }
 
 func newVsockConn(fd int, remoteCID, remotePort uint32) (*vsockConn, error) {
-	// A nonblocking socket lets os.File coordinate close, in-flight I/O, and deadlines.
+	// os.NewFile only registers a nonblocking descriptor with the poller.
 	if err := unix.SetNonblock(fd, true); err != nil {
 		unix.Close(fd)
 		return nil, fmt.Errorf("set non-blocking: %w", err)
 	}
 	return &vsockConn{
-		file:       os.NewFile(uintptr(fd), "vsock"),
+		File:       os.NewFile(uintptr(fd), "vsock"),
 		localCID:   unix.VMADDR_CID_HOST,
 		localPort:  0, // ephemeral
 		remoteCID:  remoteCID,
 		remotePort: remotePort,
 	}, nil
-}
-
-func (c *vsockConn) Read(b []byte) (int, error) {
-	return c.file.Read(b)
-}
-
-func (c *vsockConn) Write(b []byte) (int, error) {
-	return c.file.Write(b)
-}
-
-func (c *vsockConn) Close() error {
-	return c.file.Close()
 }
 
 func (c *vsockConn) LocalAddr() net.Addr {
@@ -178,18 +167,6 @@ func (c *vsockConn) LocalAddr() net.Addr {
 
 func (c *vsockConn) RemoteAddr() net.Addr {
 	return &vsockAddr{cid: c.remoteCID, port: c.remotePort}
-}
-
-func (c *vsockConn) SetDeadline(t time.Time) error {
-	return c.file.SetDeadline(t)
-}
-
-func (c *vsockConn) SetReadDeadline(t time.Time) error {
-	return c.file.SetReadDeadline(t)
-}
-
-func (c *vsockConn) SetWriteDeadline(t time.Time) error {
-	return c.file.SetWriteDeadline(t)
 }
 
 // vsockAddr implements net.Addr for vsock addresses
