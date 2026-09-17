@@ -140,9 +140,13 @@ func (m *manager) cloneGuestDirectoryForFork(ctx context.Context, srcDir, dstDir
 		}
 	}
 
-	copyOptions := forkvm.CopyOptions{}
+	// The caller writes the fork's own metadata right after this, so copying
+	// the source's is both pointless and briefly duplicates its name.
+	copyOptions := forkvm.CopyOptions{
+		SkipRelativePaths: map[string]struct{}{instanceMetadataRelPath: {}},
+	}
 	if shareMemFile {
-		copyOptions.SkipRelativePaths = map[string]struct{}{firecrackerSnapshotMemoryRelPath: {}}
+		copyOptions.SkipRelativePaths[firecrackerSnapshotMemoryRelPath] = struct{}{}
 	}
 	if err := forkvm.CopyGuestDirectoryWithOptions(srcDir, dstDir, copyOptions); err != nil {
 		return err
