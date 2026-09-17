@@ -3,9 +3,11 @@ package instances
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -177,25 +179,58 @@ func TestDeletePersistsVGPUReleaseBeforeTeardown(t *testing.T) {
 	assert.Equal(t, restartpolicy.BlockedReasonManualStop, persisted.RestartStatus.BlockedReason)
 }
 
-func TestDeleteContinuesTeardownAfterFailedVGPURelease(t *testing.T) {
-	m, id := newLifecycleNoopManagerWithInstance(t, StateStopped, time.Now().UTC())
-	deviceManager := &recordingDeviceManager{}
-	m.deviceManager = deviceManager
-	meta, err := m.loadMetadata(id)
-	require.NoError(t, err)
-	meta.GPUProfile = "NVIDIA L40S-2Q"
-	meta.GPUFramework = devices.VGPUFramework("future-framework")
-	meta.GPUDevicePath = "/sys/bus/pci/devices/0000:82:00.4"
-	meta.Devices = []string{"dev-1"}
-	require.NoError(t, m.saveMetadata(meta))
+func TestDeleteRetainsFailedVGPUReleaseForRetry(t *testing.T) {
+	for name, releaseErr := range map[string]error{"scan failure": syscall.EBADF, "driver busy": syscall.EPERM} {
+		for _, reconcile := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/reconcile=%t", name, reconcile), func(t *testing.T) {
+				m, id := newLifecycleNoopManagerWithInstance(t, StateStopped, time.Now().UTC())
+				deviceManager := &recordingDeviceManager{}
+				m.deviceManager = deviceManager
+				m.destroyVGPU = func(context.Context, devices.VGPUAssignment) error { return releaseErr }
+				meta, err := m.loadMetadata(id)
+				require.NoError(t, err)
+				meta.RestartPolicy = &restartpolicy.Policy{Policy: restartpolicy.PolicyAlways}
+				meta.GPUProfile = "NVIDIA L40S-2Q"
+				meta.GPUFramework = devices.VGPUFrameworkVendorVFIO
+				meta.GPUDevicePath = "/sys/bus/pci/devices/0000:82:00.4"
+				meta.Devices = []string{"dev-1"}
+				require.NoError(t, m.saveMetadata(meta))
 
-	// The failed release must not block the rest of the teardown: devices
-	// are detached and the instance is fully deleted.
-	require.NoError(t, m.DeleteInstance(context.Background(), id))
-	assert.Equal(t, []string{"dev-1"}, deviceManager.detached)
+				require.ErrorIs(t, m.DeleteInstance(t.Context(), id), releaseErr)
+				assert.Empty(t, deviceManager.detached)
+				retained, err := m.loadMetadata(id)
+				require.NoError(t, err)
+				assert.Equal(t, meta.GPUDevicePath, retained.GPUDevicePath)
+				assert.Equal(t, meta.GPUFramework, retained.GPUFramework)
+				assert.Equal(t, restartpolicy.BlockedReasonManualStop, retained.RestartStatus.BlockedReason)
 
-	_, err = m.loadMetadata(id)
-	require.Error(t, err, "instance data must be deleted despite the failed release")
+				if reconcile {
+					// A new manager must be able to recover the claim from disk.
+					restarted := &manager{
+						paths:                m.paths,
+						destroyVGPU:          m.destroyVGPU,
+						reconcileVGPUDevices: func(context.Context, map[string]struct{}) error { return nil },
+					}
+					restarted.ReconcileVGPUs(t.Context())
+					retained, err = restarted.loadMetadata(id)
+					require.NoError(t, err)
+					assert.Equal(t, meta.GPUDevicePath, retained.GPUDevicePath)
+					restarted.destroyVGPU = func(context.Context, devices.VGPUAssignment) error { return nil }
+					restarted.ReconcileVGPUs(t.Context())
+					retained, err = restarted.loadMetadata(id)
+					require.NoError(t, err)
+					assert.Empty(t, retained.GPUDevicePath)
+					assert.Equal(t, restartpolicy.BlockedReasonManualStop, retained.RestartStatus.BlockedReason)
+				} else {
+					m.destroyVGPU = func(context.Context, devices.VGPUAssignment) error { return nil }
+				}
+				require.NoError(t, m.DeleteInstance(t.Context(), id))
+				assert.Equal(t, []string{"dev-1"}, deviceManager.detached)
+				_, err = m.loadMetadata(id)
+				require.ErrorIs(t, err, ErrNotFound)
+			})
+		}
+	}
 }
 
 // A stale release during start must be persisted immediately: if start fails
