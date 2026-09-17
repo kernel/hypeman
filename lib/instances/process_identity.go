@@ -36,7 +36,7 @@ func (m *manager) vfioTerminationGrace() time.Duration {
 
 // SIGKILL during guest driver init can wedge a VF until the parent GPU is reset.
 func (m *manager) terminateThenKill(ctx context.Context, inst *Instance, pid int) error {
-	if storedVGPUDevicePath(&inst.StoredMetadata) != "" || len(inst.Devices) > 0 {
+	if hasVFIODevices(&inst.StoredMetadata) {
 		if syscall.Kill(pid, syscall.SIGTERM) == nil && WaitForProcessExit(pid, m.vfioTerminationGrace()) {
 			return nil
 		}
