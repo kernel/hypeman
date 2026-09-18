@@ -79,11 +79,20 @@ func TestVsockConnReadWrite(t *testing.T) {
 
 func TestVsockConnCloseInterruptsRead(t *testing.T) {
 	conn, _, _ := vsockPair(t)
+	started := make(chan struct{})
 	result := make(chan error, 1)
 	go func() {
+		close(started)
 		_, err := conn.Read(make([]byte, 1))
 		result <- err
 	}()
+	<-started
+	// Give the reader time to block before closing the connection.
+	select {
+	case err := <-result:
+		t.Fatalf("read returned before close: %v", err)
+	case <-time.After(10 * time.Millisecond):
+	}
 	require.NoError(t, conn.Close())
 	select {
 	case err := <-result:
