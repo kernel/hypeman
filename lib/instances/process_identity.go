@@ -136,7 +136,7 @@ func resolveLiveHypervisorPID(id HypervisorProcessIdentity, socketPath string) (
 		if ProcessExists(*id.HypervisorPID) {
 			stored = *id.HypervisorPID
 		} else {
-			// ProcessExists treats zombies as dead, so a direct-child VMM that
+			// ProcessExists treats fully exited zombies as dead, so a direct-child VMM that
 			// exited on its own never reaches the Wait4 in WaitForProcessExit
 			// and would sit unreaped. Reap it here: WNOHANG leaves a live child
 			// untouched, and a recycled or non-child PID fails with ECHILD.
@@ -201,7 +201,8 @@ func classifyResolvedHypervisorOwner(socketPath string, stored, resolved int, er
 	return 0, fmt.Errorf("cannot confirm ownership of socket %s: %w", socketPath, err)
 }
 
-// ProcessExists reports whether pid belongs to a live, non-zombie process.
+// ProcessExists reports whether pid belongs to a live process. A zombie
+// leader still counts as live while other tasks in its thread group remain.
 func ProcessExists(pid int) bool {
 	if pid <= 0 {
 		return false
@@ -217,7 +218,16 @@ func ProcessExists(pid int) bool {
 	if err != nil {
 		return true
 	}
-	return state != "Z"
+	if state != "Z" {
+		return true
+	}
+	// The leader can be a zombie while a vhost task is still releasing VFIO.
+	// Treat the whole group as alive until only the zombie leader remains.
+	tasks, err := os.ReadDir(filepath.Join("/proc", strconv.Itoa(pid), "task"))
+	if err != nil {
+		return !os.IsNotExist(err)
+	}
+	return len(tasks) > 1
 }
 
 func readLinuxProcessState(pid int) (string, error) {
