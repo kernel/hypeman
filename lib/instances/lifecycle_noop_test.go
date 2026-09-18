@@ -150,6 +150,31 @@ func TestLifecycleNoopStandbyWithOptionsStillRejectsStandbyInstance(t *testing.T
 	assertNoLifecycleEvent(t, events)
 }
 
+func TestDeleteWithoutVGPUDoesNotRewriteMetadata(t *testing.T) {
+	m, id := newLifecycleNoopManagerWithInstance(t, StateStopped, time.Now().UTC())
+	meta, err := m.loadMetadata(id)
+	require.NoError(t, err)
+	meta.Devices = []string{"dev-1"}
+	require.NoError(t, m.saveMetadata(meta))
+	before, err := os.Stat(m.paths.InstanceMetadata(id))
+	require.NoError(t, err)
+
+	deviceManager := &recordingDeviceManager{
+		onMarkDetached: func() {
+			during, err := os.Stat(m.paths.InstanceMetadata(id))
+			require.NoError(t, err)
+			// saveMetadata replaces the file, requiring free space even for deletion.
+			assert.True(t, os.SameFile(before, during), "delete without a vGPU must not rewrite metadata")
+		},
+	}
+	m.deviceManager = deviceManager
+
+	require.NoError(t, m.DeleteInstance(t.Context(), id))
+	assert.Equal(t, []string{"dev-1"}, deviceManager.detached)
+	_, err = m.loadMetadata(id)
+	require.ErrorIs(t, err, ErrNotFound)
+}
+
 func TestDeletePersistsVGPUReleaseBeforeTeardown(t *testing.T) {
 	m, id := newLifecycleNoopManagerWithInstance(t, StateStopped, time.Now().UTC())
 	var persisted *metadata
