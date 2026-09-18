@@ -19,6 +19,7 @@ import (
 	"github.com/kernel/hypeman/lib/queue"
 	"github.com/kernel/hypeman/lib/tags"
 	"go.opentelemetry.io/otel/metric"
+	"golang.org/x/sync/singleflight"
 )
 
 var errStaleBuild = errors.New("stale image build")
@@ -76,6 +77,10 @@ type manager struct {
 	queue                      *queue.Queue
 	createMu                   sync.Mutex
 	layers                     *layerStore
+	fsmergeMu                  sync.Mutex
+	fsmergeFlights             singleflight.Group
+	fsmergeReconcilerOnce      sync.Once
+	fsmergeDevices             map[string]*dmLinearDevice
 	tagGenerations             map[string]uint64
 	requestedTags              map[string]string // newest pull's digest per requested tag
 	metrics                    *Metrics
@@ -102,6 +107,7 @@ func NewManager(p *paths.Paths, maxConcurrentBuilds int, meter metric.Meter) (Ma
 	m := &manager{
 		paths:                      p,
 		layers:                     layers,
+		fsmergeDevices:             make(map[string]*dmLinearDevice),
 		ociClient:                  ociClient,
 		queue:                      queue.New(maxConcurrentBuilds),
 		inflightPulls:              make(map[string]*inflightImagePull),
@@ -121,6 +127,7 @@ func NewManager(p *paths.Paths, maxConcurrentBuilds int, meter metric.Meter) (Ma
 	}
 
 	m.RecoverInterruptedBuilds()
+	m.reconcileFsmergeDevices(context.Background())
 	// Keep legacy images readable in their existing layout and promote them only
 	// when an operation needs shared content, such as a cross-repository tag.
 	// Avoiding a startup-wide migration keeps startup bounded and independent of
@@ -263,7 +270,7 @@ func (m *manager) reuseExistingImage(ref *ResolvedRef, credentials *authn.AuthCo
 		return nil, false, nil
 	}
 	if meta.Status == StatusFailed {
-		if err := removeDigestIfUnreferenced(m.paths, ref.Repository(), ref.DigestHex(), false); err != nil {
+		if err := m.removeDigestIfUnreferenced(ref.Repository(), ref.DigestHex(), false); err != nil {
 			return nil, true, fmt.Errorf("remove failed image: %w", err)
 		}
 		return nil, false, nil
@@ -510,17 +517,35 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef, credentials 
 	// atomic even when system/builds and images are on different filesystems.
 	diskTempPath := diskPath + ".tmp-" + buildID
 	defer os.Remove(diskTempPath)
-	// Use default image format (erofs on Linux, ext4 on Darwin)
-	convertStart := time.Now()
-	diskSize, err := ExportRootfs(tempDir, diskTempPath, DefaultImageFormat)
-	m.recordImageBuildPhase(ctx, ref.Digest(), "filesystem_export", time.Since(convertStart), phaseStatus(err), "not_applicable")
-	if err != nil {
-		m.updateStatusByDigest(ref, StatusFailed, fmt.Errorf("convert to %s: %w", DefaultImageFormat, err), buildID)
-		return
+	// Prefer a metadata-only fsmerge image when every layer can be materialized
+	// for native overlayfs semantics. If any step is unsupported or fails, keep
+	// the existing flattened image path as the compatibility fallback.
+	runtimeRootfsType := runtimeRootfsFlat
+	var diskSize int64
+	if result.Manifest != nil && len(result.Manifest.Layers) > 1 && m.layerArtifactSupport() {
+		fsmergeStart := time.Now()
+		diskSize, err = m.buildFsmergeImage(ctx, result.Manifest, diskTempPath)
+		m.recordImageBuildPhase(ctx, ref.Digest(), "fsmerge_export", time.Since(fsmergeStart), phaseStatus(err), "not_applicable")
+		if err == nil {
+			runtimeRootfsType = runtimeRootfsFsmerge
+		} else {
+			slog.WarnContext(ctx, "fsmerge image build failed; using flattened rootfs", "digest", ref.Digest(), "error", err)
+			_ = os.Remove(diskTempPath)
+		}
+	}
+	if runtimeRootfsType == runtimeRootfsFlat {
+		// Use default image format (erofs on Linux, ext4 on Darwin).
+		convertStart := time.Now()
+		diskSize, err = ExportRootfsWithContext(ctx, tempDir, diskTempPath, DefaultImageFormat)
+		m.recordImageBuildPhase(ctx, ref.Digest(), "filesystem_export", time.Since(convertStart), phaseStatus(err), "not_applicable")
+		if err != nil {
+			m.updateStatusByDigest(ref, StatusFailed, fmt.Errorf("convert to %s: %w", DefaultImageFormat, err), buildID)
+			return
+		}
 	}
 
 	finalizeStart := time.Now()
-	err = m.finalizeImage(ref, result, diskSize, buildID, diskTempPath)
+	err = m.finalizeImage(ref, result, diskSize, buildID, diskTempPath, runtimeRootfsType)
 	m.recordImageBuildPhase(ctx, ref.Digest(), "finalize", time.Since(finalizeStart), phaseStatus(err), "not_applicable")
 	if err != nil {
 		if errors.Is(err, errStaleBuild) {
@@ -533,7 +558,7 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef, credentials 
 	buildStatus = "success"
 }
 
-func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, diskSize int64, buildID, diskTempPath string) error {
+func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, diskSize int64, buildID, diskTempPath, runtimeRootfsType string) error {
 	m.createMu.Lock()
 	defer m.createMu.Unlock()
 
@@ -572,6 +597,7 @@ func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, diskSize i
 	if result.Manifest != nil {
 		model := *result.Manifest
 		model.Platform = actualPlatform.String()
+		model.RuntimeFSType = runtimeRootfsType
 		if err := writeManifestModelAt(modelPath, ref.DigestHex(), &model); err != nil {
 			return rollbackFinalization(layout, modelPath, diskInstalled, modelWritten, fmt.Errorf("write manifest model: %w", err))
 		}
@@ -805,8 +831,8 @@ func (m *manager) deleteDigestImage(repository, digestHex string) error {
 	if err := m.cancelPendingTags(repository, tagsToClean); err != nil {
 		return fmt.Errorf("cancel pending image tags: %w", err)
 	}
-	if err := removeDigestIfUnreferenced(m.paths, repository, digestHex, false); err != nil {
-		return err
+	if err := m.removeDigestIfUnreferenced(repository, digestHex, false); err != nil {
+		return fmt.Errorf("remove fsmerge rootfs %s: %w", digestHex, err)
 	}
 	m.clearRequestedDigest(digestHex)
 	m.layers.refreshDiskUsageTotals()
@@ -840,7 +866,7 @@ func (m *manager) deleteTaggedImage(repository, tag string) error {
 	if count > 0 {
 		return nil
 	}
-	if err := removeDigestIfUnreferenced(m.paths, repository, digestHex, true); err != nil {
+	if err := m.removeDigestIfUnreferenced(repository, digestHex, true); err != nil {
 		return fmt.Errorf("delete orphaned digest %s: %w", digestHex, err)
 	}
 	m.layers.refreshDiskUsageTotals()
