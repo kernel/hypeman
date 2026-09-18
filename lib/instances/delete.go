@@ -145,13 +145,12 @@ func (m *manager) deleteInstanceWithOptions(
 	m.closeFirecrackerUFFDSession(ctx, stored)
 
 	// Release before deleting metadata so a failed release can be retried safely.
-	hadVGPUAssignment := storedVGPUDevicePath(stored) != ""
-	if hadVGPUAssignment {
+	if storedVGPUDevicePath(stored) != "" {
 		log.InfoContext(ctx, "destroying vGPU", "instance_id", id, "uuid", stored.GPUMdevUUID)
-	}
-	if err := m.releaseStoredVGPUPersisted(ctx, meta); err != nil {
-		log.ErrorContext(ctx, "failed to destroy vGPU; retaining instance metadata for retry", "instance_id", id, "uuid", stored.GPUMdevUUID, "error", err)
-		return fmt.Errorf("release vGPU: %w", err)
+		if err := m.releaseStoredVGPUPersisted(ctx, meta); err != nil {
+			log.ErrorContext(ctx, "failed to destroy vGPU; retaining instance metadata for retry", "instance_id", id, "uuid", stored.GPUMdevUUID, "error", err)
+			return fmt.Errorf("release vGPU: %w", err)
+		}
 	}
 
 	// 6. Release network allocation
