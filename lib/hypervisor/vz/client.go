@@ -28,10 +28,16 @@ type Client struct {
 
 // NewClient creates a new vz shim client.
 func NewClient(socketPath string) (*Client, error) {
+	dialer := &net.Dialer{}
 	transport := &http.Transport{
-		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			return net.Dial("unix", socketPath)
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return dialer.DialContext(ctx, "unix", socketPath)
 		},
+		// Callers construct VZ clients for short-lived state and lifecycle
+		// operations. A private keep-alive pool would retain one idle Unix socket
+		// pair after the client becomes unreachable, so close each connection when
+		// its response completes instead of pooling it on this one-shot transport.
+		DisableKeepAlives: true,
 	}
 	httpClient := &http.Client{
 		Transport: transport,
