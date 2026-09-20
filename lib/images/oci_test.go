@@ -89,11 +89,11 @@ func TestExtractMetadataSucceedsOnBuildKitCache(t *testing.T) {
 
 	// This succeeds because go-containerregistry doesn't validate config mediatype
 	// The failure only happens in unpackLayers when umoci validates the config
-	meta, err := client.extractOCIMetadata("test-cache")
-	require.NoError(t, err, "extractOCIMetadata succeeds - go-containerregistry is lenient")
+	bundle, err := client.extractOCIImageBundle("test-cache")
+	require.NoError(t, err, "extractOCIImageBundle succeeds - go-containerregistry is lenient")
 
 	// But the metadata will be empty/invalid since it's not a real OCI config
-	t.Logf("Got metadata (likely empty): %+v", meta)
+	t.Logf("Got metadata (likely empty): %+v", bundle.Meta)
 }
 
 // createBuildKitCacheLayout creates an OCI layout that mimics what BuildKit
@@ -337,9 +337,10 @@ func TestDockerSaveTarballToOCILayoutRoundtrip(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, client.existsInLayout(layoutTag), "image should exist in layout after AppendImage")
 
-	// Step 6: Verify extractOCIMetadata reads correct config
-	meta, err := client.extractOCIMetadata(layoutTag)
+	// Step 6: Verify extractOCIImageBundle reads correct config
+	bundle, err := client.extractOCIImageBundle(layoutTag)
 	require.NoError(t, err)
+	meta := bundle.Meta
 	assert.Equal(t, []string{"/usr/local/bin/guest-agent"}, meta.Entrypoint)
 	assert.Equal(t, "/app", meta.WorkingDir)
 	assert.Contains(t, meta.Env, "PATH")

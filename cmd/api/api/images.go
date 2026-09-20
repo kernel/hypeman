@@ -94,6 +94,39 @@ func (s *ApiService) CreateImage(ctx context.Context, request oapi.CreateImageRe
 	return oapi.CreateImage202JSONResponse(imageToOAPI(*img)), nil
 }
 
+// TagImage handles POST /images/{name}/tag.
+// Note: ResolveResource skips POST /images/{name}/tag, so the source is
+// resolved by ImageManager.TagImage and a missing source gets the specific
+// 404 body below.
+func (s *ApiService) TagImage(ctx context.Context, request oapi.TagImageRequestObject) (oapi.TagImageResponseObject, error) {
+	if request.Body == nil {
+		return oapi.TagImage400JSONResponse{
+			Code:    "invalid_request",
+			Message: "request body is required",
+		}, nil
+	}
+
+	img, err := s.ImageManager.TagImage(ctx, request.Name, request.Body.Target)
+	if err != nil {
+		return tagImageErrorResponse(ctx, err, request.Name, request.Body.Target), nil
+	}
+	return oapi.TagImage200JSONResponse(imageToOAPI(*img)), nil
+}
+
+func tagImageErrorResponse(ctx context.Context, err error, source, target string) oapi.TagImageResponseObject {
+	switch {
+	case errors.Is(err, images.ErrInvalidName):
+		return oapi.TagImage400JSONResponse{Code: "invalid_name", Message: err.Error()}
+	case errors.Is(err, images.ErrNotFound):
+		return oapi.TagImage404JSONResponse{Code: "not_found", Message: "source image not found"}
+	case errors.Is(err, images.ErrImageNotReady):
+		return oapi.TagImage409JSONResponse{Code: "image_not_ready", Message: err.Error()}
+	default:
+		logger.FromContext(ctx).ErrorContext(ctx, "failed to tag image", "error", err, "source", source, "target", target)
+		return oapi.TagImage500JSONResponse{Code: "internal_error", Message: "failed to tag image"}
+	}
+}
+
 // GetImage gets image details by name
 // Note: Resolution is handled by ResolveResource middleware
 func (s *ApiService) GetImage(ctx context.Context, request oapi.GetImageRequestObject) (oapi.GetImageResponseObject, error) {

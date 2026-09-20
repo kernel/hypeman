@@ -97,11 +97,13 @@ resources:
     # [reference]: https://www.stainless.com/docs/reference/config#model
     models:
       image: "#/components/schemas/Image"
+      tag_image_request: "#/components/schemas/TagImageRequest"
     methods:
       list: get /images
       create: post /images
       get: get /images/{name}
       delete: delete /images/{name}
+      tag: post /images/{name}/tag
 
   instances:
     models:

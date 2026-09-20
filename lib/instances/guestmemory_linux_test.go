@@ -211,7 +211,7 @@ func requireHypervisorPID(t *testing.T, ctx context.Context, mgr *manager, insta
 	t.Helper()
 	inst, err := mgr.GetInstance(ctx, instanceID)
 	require.NoError(t, err)
-	if inst.HypervisorPID != nil && processExists(*inst.HypervisorPID) {
+	if inst.HypervisorPID != nil && ProcessExists(*inst.HypervisorPID) {
 		return *inst.HypervisorPID
 	}
 	if pid, err := hypervisor.ResolveProcessPID(inst.SocketPath); err == nil {

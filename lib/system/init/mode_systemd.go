@@ -14,7 +14,7 @@ import (
 // This is used when the image's CMD is /sbin/init or /lib/systemd/systemd.
 // The init binary:
 // 1. Injects the hypeman-agent.service unit
-// 2. Uses chroot to switch to the container rootfs
+// 2. Switches root into the container rootfs
 // 3. Execs the image's entrypoint/cmd (systemd) which becomes the new PID 1
 func runSystemdMode(log *Logger, cfg *vmconfig.Config) {
 	const newroot = "/overlay/newroot"
@@ -41,16 +41,9 @@ func runSystemdMode(log *Logger, cfg *vmconfig.Config) {
 		}
 	}
 
-	// Change root to the new filesystem using chroot
-	log.Info("hypeman-init:systemd", "executing chroot")
-	if err := syscall.Chroot(newroot); err != nil {
-		log.Error("hypeman-init:systemd", "chroot failed", err)
-		dropToShell()
-	}
-
-	// Change to new root directory
-	if err := os.Chdir("/"); err != nil {
-		log.Error("hypeman-init:systemd", "chdir / failed", err)
+	log.Info("hypeman-init:systemd", "switching root")
+	if err := switchRoot(newroot); err != nil {
+		log.Error("hypeman-init:systemd", "switch root failed", err)
 		dropToShell()
 	}
 

@@ -263,7 +263,6 @@ func (m *manager) restoreSnapshot(ctx context.Context, id string, snapshotID str
 	if sourceInst.State == StateRunning {
 		return nil, fmt.Errorf("%w: cannot restore snapshot while source is %s", ErrInvalidState, sourceInst.State)
 	}
-
 	targetState, err := resolveSnapshotTargetState(rec.Snapshot.Kind, req.TargetState)
 	if err != nil {
 		return nil, err
@@ -301,11 +300,18 @@ func (m *manager) restoreSnapshot(ctx context.Context, id string, snapshotID str
 	restored.Name = sourceMeta.Name
 	restored.ExpiresAt = sourceMeta.ExpiresAt
 	restored.DataDir = m.paths.InstanceDir(id)
-	restored.HypervisorPID = nil
+	restored.HypervisorProcessIdentity.Clear()
 	restored.StartedAt = nil
 	restored.StoppedAt = nil
 	restored.ExitCode = nil
 	restored.ExitMessage = ""
+	// vGPU assignments are live host state, not snapshot payload: keep the
+	// instance's current assignment (possibly retained from a failed release)
+	// instead of resurrecting the one embedded in the snapshot.
+	restored.GPUFramework = sourceMeta.GPUFramework
+	restored.GPUDevicePath = sourceMeta.GPUDevicePath
+	restored.GPUMdevUUID = sourceMeta.GPUMdevUUID
+	restored.GPUClaimedAt = sourceMeta.GPUClaimedAt
 	restored.HypervisorType = targetHypervisor
 	restored.HypervisorVersion = targetHypervisorVersion
 	restored.SocketPath = m.paths.InstanceSocket(id, starter.SocketName())
@@ -426,7 +432,7 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 	forkMeta.ExpiresAt = nil
 	forkMeta.StartedAt = nil
 	forkMeta.StoppedAt = nil
-	forkMeta.HypervisorPID = nil
+	forkMeta.HypervisorProcessIdentity.Clear()
 	forkMeta.DataDir = dstDir
 	forkMeta.HypervisorType = targetHypervisor
 	forkMeta.HypervisorVersion = targetHypervisorVersion
@@ -435,6 +441,7 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 	forkMeta.ExitCode = nil
 	forkMeta.ExitMessage = ""
 	forkMeta.RestartStatus = restartpolicy.Status{}
+	clearStoredVGPUDevice(&forkMeta)
 	forkMeta.FirecrackerUFFDSessionID = ""
 	forkMeta.FirecrackerUFFDPagerVersion = ""
 	forkMeta.FirecrackerUseUFFDOnNextRestore = useFirecrackerUFFDOnNextRestore(targetHypervisor, rec.Snapshot.Kind == SnapshotKindStandby, targetState)

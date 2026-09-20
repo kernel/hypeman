@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/egressproxy"
 	"github.com/kernel/hypeman/lib/instances/phasetracking"
 	"github.com/kernel/hypeman/lib/logger"
@@ -48,6 +47,20 @@ func (m *manager) startInstance(
 		log.ErrorContext(ctx, "invalid state for start", "instance_id", id, "state", inst.State)
 		return nil, fmt.Errorf("%w: cannot start from state %s, must be Stopped", ErrInvalidState, inst.State)
 	}
+	// Release any assignment retained by an earlier failed release and
+	// persist the cleared fields immediately, so a failure later in start
+	// cannot leave on-disk metadata pointing at a device that is already
+	// gone.
+	if storedVGPUDevicePath(stored) != "" {
+		if err := m.releaseStoredVGPUPersisted(ctx, meta); err != nil {
+			log.ErrorContext(ctx, "failed to release stale vGPU before start", "instance_id", id, "error", err)
+			return nil, fmt.Errorf("release stale vGPU before start: %w", err)
+		}
+	}
+
+	stored.HypervisorProcessIdentity.Clear()
+	rollbackMeta := *meta
+	rollbackMeta.Phases = meta.Phases.Clone()
 
 	// 2a. Clear stale exit info from previous run and apply command overrides
 	stored.ExitCode = nil
@@ -144,24 +157,28 @@ func (m *manager) startInstance(
 		}
 	}
 
-	// 4b. Recreate vGPU mdev if this instance had a GPU profile
+	// 4b. Recreate the vGPU if this instance had a GPU profile
 	// Note: GPU availability was already validated in step 2b
 	if stored.GPUProfile != "" {
-		log.InfoContext(ctx, "creating vGPU mdev for start", "instance_id", id, "profile", stored.GPUProfile)
-		mdev, err := devices.CreateMdev(ctx, stored.GPUProfile, id)
+		log.InfoContext(ctx, "claiming vGPU for start", "instance_id", id, "profile", stored.GPUProfile)
+		device, err := m.claimVGPU(ctx, meta, stored.GPUProfile)
 		if err != nil {
-			log.ErrorContext(ctx, "failed to create mdev", "instance_id", id, "profile", stored.GPUProfile, "error", err)
-			return nil, fmt.Errorf("create vGPU mdev for profile %s: %w", stored.GPUProfile, err)
+			log.ErrorContext(ctx, "failed to claim vGPU", "instance_id", id, "profile", stored.GPUProfile, "error", err)
+			return nil, fmt.Errorf("claim vGPU for profile %s: %w", stored.GPUProfile, err)
 		}
-		stored.GPUMdevUUID = mdev.UUID
-		log.InfoContext(ctx, "created vGPU mdev", "instance_id", id, "profile", stored.GPUProfile, "uuid", mdev.UUID)
-		// Add mdev cleanup to stack
+		setStoredVGPUDevice(stored, device)
 		cu.Add(func() {
-			log.DebugContext(ctx, "destroying mdev on cleanup", "instance_id", id, "uuid", mdev.UUID)
-			if err := devices.DestroyMdev(ctx, mdev.UUID); err != nil {
-				log.WarnContext(ctx, "failed to destroy mdev on cleanup", "instance_id", id, "uuid", mdev.UUID, "error", err)
-			}
+			m.cleanupStartVGPU(ctx, stored, rollbackMeta)
 		})
+		if err := m.configureClaimedVGPU(ctx, device); err != nil {
+			log.ErrorContext(ctx, "failed to configure vGPU", "instance_id", id, "profile", stored.GPUProfile, "error", err)
+			return nil, fmt.Errorf("configure vGPU for profile %s: %w", stored.GPUProfile, err)
+		}
+		log.InfoContext(ctx, "configured vGPU", "instance_id", id, "profile", stored.GPUProfile, "uuid", device.MdevUUID)
+		if err := m.saveMetadata(meta); err != nil {
+			log.ErrorContext(ctx, "failed to save metadata after vGPU configuration", "instance_id", id, "error", err)
+			return nil, fmt.Errorf("save metadata after vGPU configuration: %w", err)
+		}
 	}
 
 	// 5. Regenerate config disk with new network configuration

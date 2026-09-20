@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/autostandby"
+	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/healthcheck"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/instances/phasetracking"
@@ -129,7 +130,8 @@ type StoredMetadata struct {
 	// Hypervisor configuration
 	HypervisorType    hypervisor.Type // Hypervisor type (e.g., "cloud-hypervisor")
 	HypervisorVersion string          // Hypervisor version (e.g., "v51.1")
-	HypervisorPID     *int            // Hypervisor process ID (may be stale after host restart)
+	// Embedded so its fields keep their flat JSON keys in persisted metadata.
+	HypervisorProcessIdentity
 
 	// Firecracker UFFD snapshot restore metadata.
 	FirecrackerSnapshotCacheKey     string
@@ -149,8 +151,11 @@ type StoredMetadata struct {
 	Devices []string // Device IDs attached to this instance
 
 	// GPU configuration (vGPU mode)
-	GPUProfile  string // vGPU profile name (e.g., "L40S-1Q")
-	GPUMdevUUID string // mdev device UUID
+	GPUProfile    string // vGPU profile name (e.g., "L40S-1Q")
+	GPUFramework  devices.VGPUFramework
+	GPUDevicePath string
+	GPUMdevUUID   string     // populated for mdev-backed vGPUs
+	GPUClaimedAt  *time.Time // when the vendor VFIO claim was persisted; identifies this assignment in VF health reports
 
 	// Command overrides (like docker run <image> <command>)
 	Entrypoint []string // Override image entrypoint (nil = use image default)

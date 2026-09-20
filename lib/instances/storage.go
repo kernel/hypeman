@@ -187,21 +187,42 @@ func removeAllWithRetry(path string, removeAll func(string) error, sleep func(ti
 	}
 }
 
-// listMetadataFiles returns paths to all instance metadata files
 func (m *manager) listMetadataFiles() ([]string, error) {
+	files, _, err := m.walkMetadataFiles()
+	return files, err
+}
+
+// listMetadataFilesStrict fails on any stat error other than absence, so
+// fail-closed callers treat an unreadable instance as an error instead of
+// silently missing it.
+func (m *manager) listMetadataFilesStrict() ([]string, error) {
+	files, statErrs, err := m.walkMetadataFiles()
+	if err != nil {
+		return nil, err
+	}
+	if len(statErrs) > 0 {
+		return nil, errors.Join(statErrs...)
+	}
+	return files, nil
+}
+
+// walkMetadataFiles returns readable metadata paths plus one error per
+// instance whose metadata could not be stat'd for a reason other than absence.
+func (m *manager) walkMetadataFiles() ([]string, []error, error) {
 	guestsDir := m.paths.GuestsDir()
 
 	// Ensure guests directory exists
 	if err := os.MkdirAll(guestsDir, 0755); err != nil {
-		return nil, fmt.Errorf("create guests directory: %w", err)
+		return nil, nil, fmt.Errorf("create guests directory: %w", err)
 	}
 
 	entries, err := os.ReadDir(guestsDir)
 	if err != nil {
-		return nil, fmt.Errorf("read guests directory: %w", err)
+		return nil, nil, fmt.Errorf("read guests directory: %w", err)
 	}
 
 	var metaFiles []string
+	var statErrs []error
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -210,8 +231,10 @@ func (m *manager) listMetadataFiles() ([]string, error) {
 		metaPath := filepath.Join(guestsDir, entry.Name(), "metadata.json")
 		if _, err := os.Stat(metaPath); err == nil {
 			metaFiles = append(metaFiles, metaPath)
+		} else if !os.IsNotExist(err) {
+			statErrs = append(statErrs, fmt.Errorf("stat metadata for instance %s: %w", entry.Name(), err))
 		}
 	}
 
-	return metaFiles, nil
+	return metaFiles, statErrs, nil
 }

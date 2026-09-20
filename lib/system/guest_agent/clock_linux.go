@@ -1,7 +1,6 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -81,7 +80,7 @@ func syncClockFromPTP(ptp *os.File) error {
 }
 
 func watchVMForkKmsg(restored chan<- struct{}) {
-	f, err := os.Open("/dev/kmsg")
+	f, err := os.Open(kmsgPath)
 	if err != nil {
 		log.Printf("[guest-agent] clock keeper kmsg watch disabled: %v", err)
 		return
@@ -89,27 +88,16 @@ func watchVMForkKmsg(restored chan<- struct{}) {
 	defer f.Close()
 
 	if _, err := f.Seek(0, io.SeekEnd); err != nil {
-		log.Printf("[guest-agent] warning: failed to seek /dev/kmsg to end: %v", err)
+		log.Printf("[guest-agent] warning: failed to seek %s to end: %v", kmsgPath, err)
 	}
 
-	// Each read returns one log record. EPIPE means the buffer wrapped and
-	// records were overwritten; the next read continues from the oldest
-	// available record.
-	buf := make([]byte, 8192)
-	for {
-		n, err := f.Read(buf)
-		if err != nil {
-			if errors.Is(err, unix.EPIPE) {
-				continue
-			}
-			log.Printf("[guest-agent] clock keeper kmsg watch stopped: %v", err)
-			return
-		}
-		if strings.Contains(string(buf[:n]), vmForkKmsgSignal) {
+	err = scanKmsg(f, func(record string) {
+		if strings.Contains(record, vmForkKmsgSignal) {
 			select {
 			case restored <- struct{}{}:
 			default:
 			}
 		}
-	}
+	})
+	log.Printf("[guest-agent] clock keeper kmsg watch stopped: %v", err)
 }

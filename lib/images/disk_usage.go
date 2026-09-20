@@ -1,6 +1,7 @@
 package images
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -8,42 +9,64 @@ import (
 	"syscall"
 )
 
+func walkWithContext(ctx context.Context, root string, walkFn filepath.WalkFunc) error {
+	return filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		return walkFn(path, info, err)
+	})
+}
+
 // totalReadyImageBytesFromMetadata sums ready image sizes directly from metadata.json files.
 // This is conservative for admission control and disk accounting: if metadata says an
 // image is ready, we count its recorded size without re-validating the rootfs path. If
 // the metadata file is unreadable or malformed, we fall back to counting any rootfs disk
 // files found in the digest directory so we do not undercount host disk usage.
-func totalReadyImageBytesFromMetadata(imagesDir string) (int64, error) {
+func totalReadyImageBytesFromMetadataWithContext(ctx context.Context, imagesDir string) (int64, error) {
 	var total int64
 	seenRootfs := make(map[rootfsIdentity]struct{})
+	layersDir := filepath.Join(imagesDir, "layers")
 
-	err := filepath.Walk(imagesDir, func(path string, info os.FileInfo, err error) error {
+	err := walkWithContext(ctx, imagesDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			if os.IsNotExist(err) {
 				return nil
 			}
 			return err
 		}
-		if info.IsDir() || info.Name() != "metadata.json" {
+		if info.IsDir() {
+			if filepath.Clean(path) == filepath.Clean(layersDir) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if info.Name() != "metadata.json" {
 			return nil
 		}
 
 		data, err := os.ReadFile(path)
 		if err != nil {
-			rootfsBytes, fallbackErr := totalUniqueRootfsBytesInDigestDir(filepath.Dir(path), seenRootfs)
+			rootfsBytes, fallbackErr := totalRootfsBytesInDigestDirWithContext(ctx, filepath.Dir(path), seenRootfs)
 			if fallbackErr == nil {
 				total += rootfsBytes
 				return nil
+			}
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
 			}
 			return fmt.Errorf("read image metadata %s: %w", path, err)
 		}
 
 		var meta imageMetadata
 		if err := json.Unmarshal(data, &meta); err != nil {
-			rootfsBytes, fallbackErr := totalUniqueRootfsBytesInDigestDir(filepath.Dir(path), seenRootfs)
+			rootfsBytes, fallbackErr := totalRootfsBytesInDigestDirWithContext(ctx, filepath.Dir(path), seenRootfs)
 			if fallbackErr == nil {
 				total += rootfsBytes
 				return nil
+			}
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
 			}
 			return fmt.Errorf("unmarshal image metadata %s: %w", path, err)
 		}
@@ -67,7 +90,7 @@ func totalReadyImageBytesFromMetadata(imagesDir string) (int64, error) {
 				total += meta.SizeBytes
 				return nil
 			}
-			rootfsBytes, err := totalRootfsBytesInDigestDir(filepath.Dir(path))
+			rootfsBytes, err := totalRootfsBytesInDigestDirWithContext(ctx, filepath.Dir(path), nil)
 			if err != nil {
 				return fmt.Errorf("stat ready image rootfs for %s: %w", path, err)
 			}
@@ -82,86 +105,138 @@ func totalReadyImageBytesFromMetadata(imagesDir string) (int64, error) {
 	return total, nil
 }
 
-// totalOCICacheBlobBytesFromFilesystem sums blob sizes directly from the OCI cache blob store.
-// This counts the actual bytes on disk, including any blob files that are currently
-// present but no longer referenced by the OCI layout index.
-func totalOCICacheBlobBytesFromFilesystem(blobDir string) (int64, error) {
+func totalFileBytesWithContext(ctx context.Context, dir, label string) (int64, error) {
 	var total int64
-
-	err := filepath.Walk(blobDir, func(path string, info os.FileInfo, err error) error {
+	err := walkWithContext(ctx, dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			if os.IsNotExist(err) {
 				return nil
 			}
 			return err
 		}
-		if info.IsDir() {
-			return nil
+		if !info.IsDir() {
+			total += info.Size()
 		}
-		total += info.Size()
 		return nil
 	})
 	if err != nil && !os.IsNotExist(err) {
-		return 0, fmt.Errorf("walk OCI cache blobs: %w", err)
+		return 0, fmt.Errorf("walk %s: %w", label, err)
 	}
-
 	return total, nil
 }
 
-func (m *manager) getDiskUsageTotals() (int64, int64, error) {
-	m.diskUsageMu.RLock()
-	if m.diskUsageLoaded {
-		readyImageBytes := m.readyImageBytes
-		ociCacheBytes := m.ociCacheBytes
-		m.diskUsageMu.RUnlock()
-		return readyImageBytes, ociCacheBytes, nil
-	}
-	m.diskUsageMu.RUnlock()
-
-	readyImageBytes, ociCacheBytes, err := m.computeDiskUsageTotals()
-	if err != nil {
-		return 0, 0, err
-	}
-
-	m.diskUsageMu.Lock()
-	if !m.diskUsageLoaded {
-		m.readyImageBytes = readyImageBytes
-		m.ociCacheBytes = ociCacheBytes
-		m.diskUsageLoaded = true
-	}
-	readyImageBytes = m.readyImageBytes
-	ociCacheBytes = m.ociCacheBytes
-	m.diskUsageMu.Unlock()
-
-	return readyImageBytes, ociCacheBytes, nil
+// totalLayerArtifactBytesFromFilesystem includes records and in-progress trees.
+func totalLayerArtifactBytesFromFilesystemWithContext(ctx context.Context, layersDir string) (int64, error) {
+	return totalFileBytesWithContext(ctx, layersDir, "layer artifacts")
 }
 
-func (m *manager) refreshDiskUsageTotals() {
-	readyImageBytes, ociCacheBytes, err := m.computeDiskUsageTotals()
+// totalOCICacheBlobBytesFromFilesystem includes unreferenced blobs still on disk.
+func totalOCICacheBlobBytesFromFilesystemWithContext(ctx context.Context, blobDir string) (int64, error) {
+	return totalFileBytesWithContext(ctx, blobDir, "OCI cache blobs")
+}
+
+func (s *layerStore) getDiskUsageTotals(ctx context.Context) (int64, int64, error) {
+	for attempt := 0; ; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return 0, 0, err
+		}
+		s.diskUsageMu.RLock()
+		generation := s.diskUsageGeneration
+		if s.diskUsageLoaded {
+			readyImageBytes := s.readyImageBytes
+			ociCacheBytes := s.ociCacheBytes
+			s.diskUsageMu.RUnlock()
+			return readyImageBytes, ociCacheBytes, nil
+		}
+		s.diskUsageMu.RUnlock()
+
+		readyImageBytes, ociCacheBytes, err := s.computeDiskUsageTotals(ctx)
+		if err != nil {
+			return 0, 0, err
+		}
+
+		s.diskUsageMu.Lock()
+		if s.diskUsageGeneration != generation {
+			s.diskUsageMu.Unlock()
+			if attempt >= 2 {
+				return 0, 0, fmt.Errorf("disk usage changed during scan")
+			}
+			continue
+		}
+		if s.activeBuilds == 0 {
+			if !s.diskUsageLoaded {
+				s.readyImageBytes = readyImageBytes
+				s.ociCacheBytes = ociCacheBytes
+				s.diskUsageLoaded = true
+			}
+			readyImageBytes = s.readyImageBytes
+			ociCacheBytes = s.ociCacheBytes
+		}
+		s.diskUsageMu.Unlock()
+
+		return readyImageBytes, ociCacheBytes, nil
+	}
+}
+
+func (s *layerStore) invalidateDiskUsageTotals() {
+	s.diskUsageMu.Lock()
+	s.diskUsageGeneration++
+	s.diskUsageLoaded = false
+	s.diskUsageMu.Unlock()
+}
+
+func (s *layerStore) beginLayerBuild() {
+	s.diskUsageMu.Lock()
+	s.activeBuilds++
+	s.diskUsageGeneration++
+	s.diskUsageLoaded = false
+	s.diskUsageMu.Unlock()
+}
+
+func (s *layerStore) endLayerBuild() {
+	s.diskUsageMu.Lock()
+	s.activeBuilds--
+	s.diskUsageGeneration++
+	s.diskUsageLoaded = false
+	s.diskUsageMu.Unlock()
+}
+
+func (s *layerStore) refreshDiskUsageTotals() {
+	s.diskUsageMu.RLock()
+	generation := s.diskUsageGeneration
+	s.diskUsageMu.RUnlock()
+
+	readyImageBytes, ociCacheBytes, err := s.computeDiskUsageTotals(context.Background())
 	if err != nil {
 		return
 	}
 
-	m.diskUsageMu.Lock()
-	m.readyImageBytes = readyImageBytes
-	m.ociCacheBytes = ociCacheBytes
-	m.diskUsageLoaded = true
-	m.diskUsageMu.Unlock()
+	s.diskUsageMu.Lock()
+	if s.diskUsageGeneration == generation && s.activeBuilds == 0 {
+		s.readyImageBytes = readyImageBytes
+		s.ociCacheBytes = ociCacheBytes
+		s.diskUsageLoaded = true
+	}
+	s.diskUsageMu.Unlock()
 }
 
-func (m *manager) computeDiskUsageTotals() (int64, int64, error) {
-	readyImageBytes, err := totalReadyImageBytesFromMetadata(m.paths.ImagesDir())
+func (s *layerStore) computeDiskUsageTotals(ctx context.Context) (int64, int64, error) {
+	readyImageBytes, err := totalReadyImageBytesFromMetadataWithContext(ctx, s.paths.ImagesDir())
 	if err != nil {
 		return 0, 0, err
 	}
-	ociCacheBytes, err := totalOCICacheBlobBytesFromFilesystem(m.paths.OCICacheBlobDir())
+	ociCacheBytes, err := totalOCICacheBlobBytesFromFilesystemWithContext(ctx, s.paths.OCICacheBlobDir())
 	if err != nil {
 		return 0, 0, err
 	}
-	return readyImageBytes, ociCacheBytes, nil
+	layerArtifactBytes, err := totalLayerArtifactBytesFromFilesystemWithContext(ctx, s.paths.ImageLayersDir())
+	if err != nil {
+		return 0, 0, err
+	}
+	return readyImageBytes, ociCacheBytes + layerArtifactBytes, nil
 }
 
-func totalRootfsBytesInDigestDir(digestDir string) (int64, error) {
+func totalRootfsBytesInDigestDirWithContext(ctx context.Context, digestDir string, seen map[rootfsIdentity]struct{}) (int64, error) {
 	rootfsPaths, err := filepath.Glob(filepath.Join(digestDir, "rootfs.*"))
 	if err != nil {
 		return 0, err
@@ -171,7 +246,11 @@ func totalRootfsBytesInDigestDir(digestDir string) (int64, error) {
 	}
 
 	var total int64
+	found := false
 	for _, rootfsPath := range rootfsPaths {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
 		info, err := os.Stat(rootfsPath)
 		if err != nil {
 			if os.IsNotExist(err) {
@@ -182,9 +261,13 @@ func totalRootfsBytesInDigestDir(digestDir string) (int64, error) {
 		if info.IsDir() {
 			continue
 		}
+		found = true
+		if seen != nil && !markUniqueRootfs(info, seen) {
+			continue
+		}
 		total += info.Size()
 	}
-	if total == 0 {
+	if !found || seen == nil && total == 0 {
 		return 0, os.ErrNotExist
 	}
 	return total, nil
@@ -206,38 +289,4 @@ func markUniqueRootfs(info os.FileInfo, seen map[rootfsIdentity]struct{}) bool {
 	}
 	seen[identity] = struct{}{}
 	return true
-}
-
-func totalUniqueRootfsBytesInDigestDir(digestDir string, seen map[rootfsIdentity]struct{}) (int64, error) {
-	rootfsPaths, err := filepath.Glob(filepath.Join(digestDir, "rootfs.*"))
-	if err != nil {
-		return 0, err
-	}
-	if len(rootfsPaths) == 0 {
-		return 0, os.ErrNotExist
-	}
-
-	var total int64
-	found := false
-	for _, rootfsPath := range rootfsPaths {
-		info, err := os.Stat(rootfsPath)
-		if err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
-			return 0, err
-		}
-		if info.IsDir() {
-			continue
-		}
-		found = true
-		if !markUniqueRootfs(info, seen) {
-			continue
-		}
-		total += info.Size()
-	}
-	if !found {
-		return 0, os.ErrNotExist
-	}
-	return total, nil
 }

@@ -3,14 +3,17 @@ package instances
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/paths"
+	restartpolicy "github.com/kernel/hypeman/lib/restart-policy"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -145,6 +148,193 @@ func TestLifecycleNoopStandbyWithOptionsStillRejectsStandbyInstance(t *testing.T
 	_, err := m.StandbyInstance(context.Background(), id, StandbyInstanceRequest{CompressionDelay: &delay})
 	require.ErrorIs(t, err, ErrInvalidState)
 	assertNoLifecycleEvent(t, events)
+}
+
+func TestDeleteWithoutVGPUDoesNotRewriteMetadata(t *testing.T) {
+	m, id := newLifecycleNoopManagerWithInstance(t, StateStopped, time.Now().UTC())
+	meta, err := m.loadMetadata(id)
+	require.NoError(t, err)
+	meta.Devices = []string{"dev-1"}
+	require.NoError(t, m.saveMetadata(meta))
+	before, err := os.Stat(m.paths.InstanceMetadata(id))
+	require.NoError(t, err)
+
+	deviceManager := &recordingDeviceManager{
+		onMarkDetached: func() {
+			during, err := os.Stat(m.paths.InstanceMetadata(id))
+			require.NoError(t, err)
+			// saveMetadata replaces the file, requiring free space even for deletion.
+			assert.True(t, os.SameFile(before, during), "delete without a vGPU must not rewrite metadata")
+		},
+	}
+	m.deviceManager = deviceManager
+
+	require.NoError(t, m.DeleteInstance(t.Context(), id))
+	assert.Equal(t, []string{"dev-1"}, deviceManager.detached)
+	_, err = m.loadMetadata(id)
+	require.ErrorIs(t, err, ErrNotFound)
+}
+
+func TestDeletePersistsVGPUReleaseBeforeTeardown(t *testing.T) {
+	m, id := newLifecycleNoopManagerWithInstance(t, StateStopped, time.Now().UTC())
+	var persisted *metadata
+	deviceManager := &recordingDeviceManager{
+		onMarkDetached: func() {
+			var err error
+			persisted, err = m.loadMetadata(id)
+			require.NoError(t, err)
+		},
+	}
+	m.deviceManager = deviceManager
+	meta, err := m.loadMetadata(id)
+	require.NoError(t, err)
+	meta.RestartPolicy = &restartpolicy.Policy{Policy: restartpolicy.PolicyAlways}
+	meta.GPUProfile = "NVIDIA L40S-2Q"
+	meta.GPUDevicePath = "/sys/bus/mdev/devices/test-mdev"
+	meta.GPUMdevUUID = "test-mdev"
+	meta.Devices = []string{"dev-1"}
+	require.NoError(t, m.saveMetadata(meta))
+
+	require.NoError(t, m.DeleteInstance(context.Background(), id))
+	require.NotNil(t, persisted)
+	assert.Empty(t, persisted.GPUDevicePath)
+	assert.Empty(t, persisted.GPUMdevUUID)
+	assert.Equal(t, "NVIDIA L40S-2Q", persisted.GPUProfile)
+	assert.Equal(t, restartpolicy.BlockedReasonManualStop, persisted.RestartStatus.BlockedReason)
+}
+
+func TestDeleteRetainsFailedVGPUReleaseForRetry(t *testing.T) {
+	releaseErr := errors.New("reset failed")
+	for _, reconcile := range []bool{false, true} {
+		t.Run(fmt.Sprintf("reconcile=%t", reconcile), func(t *testing.T) {
+			m, id := newLifecycleNoopManagerWithInstance(t, StateStopped, time.Now().UTC())
+			deviceManager := &recordingDeviceManager{}
+			m.deviceManager = deviceManager
+			m.destroyVGPU = func(context.Context, devices.VGPUAssignment) error { return releaseErr }
+			meta, err := m.loadMetadata(id)
+			require.NoError(t, err)
+			meta.RestartPolicy = &restartpolicy.Policy{Policy: restartpolicy.PolicyAlways}
+			meta.GPUProfile = "NVIDIA L40S-2Q"
+			meta.GPUFramework = devices.VGPUFrameworkVendorVFIO
+			meta.GPUDevicePath = "/sys/bus/pci/devices/0000:82:00.4"
+			meta.Devices = []string{"dev-1"}
+			require.NoError(t, m.saveMetadata(meta))
+
+			require.ErrorIs(t, m.DeleteInstance(t.Context(), id), releaseErr)
+			assert.Empty(t, deviceManager.detached)
+			retained, err := m.loadMetadata(id)
+			require.NoError(t, err)
+			assert.Equal(t, meta.GPUDevicePath, retained.GPUDevicePath)
+			assert.Equal(t, meta.GPUFramework, retained.GPUFramework)
+			assert.Equal(t, restartpolicy.BlockedReasonManualStop, retained.RestartStatus.BlockedReason)
+
+			if reconcile {
+				// A new manager must be able to recover the claim from disk.
+				restarted := &manager{
+					paths:                m.paths,
+					destroyVGPU:          m.destroyVGPU,
+					reconcileVGPUDevices: func(context.Context, map[string]struct{}) error { return nil },
+				}
+				restarted.ReconcileVGPUs(t.Context())
+				retained, err = restarted.loadMetadata(id)
+				require.NoError(t, err)
+				assert.Equal(t, meta.GPUDevicePath, retained.GPUDevicePath)
+				restarted.destroyVGPU = func(context.Context, devices.VGPUAssignment) error { return nil }
+				restarted.ReconcileVGPUs(t.Context())
+				retained, err = restarted.loadMetadata(id)
+				require.NoError(t, err)
+				assert.Empty(t, retained.GPUDevicePath)
+				assert.Equal(t, restartpolicy.BlockedReasonManualStop, retained.RestartStatus.BlockedReason)
+			} else {
+				m.destroyVGPU = func(context.Context, devices.VGPUAssignment) error { return nil }
+			}
+			// In the reconcile case m.destroyVGPU still fails; the retried delete
+			// succeeds because the claim was already cleared on disk.
+			require.NoError(t, m.DeleteInstance(t.Context(), id))
+			assert.Equal(t, []string{"dev-1"}, deviceManager.detached)
+			_, err = m.loadMetadata(id)
+			require.ErrorIs(t, err, ErrNotFound)
+		})
+	}
+}
+
+// A stale release during start must be persisted immediately: if start fails
+// later (here at vGPU recreation on a host without VFs), the on-disk metadata
+// must no longer point at the already-released device.
+func TestStartPersistsStaleVGPUReleaseImmediately(t *testing.T) {
+	m, id := newLifecycleNoopManagerWithInstance(t, StateStopped, time.Now().UTC())
+	m.imageManager = readyFixtureImageManager{name: "test-image"}
+	meta, err := m.loadMetadata(id)
+	require.NoError(t, err)
+	meta.GPUProfile = "NVIDIA L40S-2Q"
+	meta.HypervisorType = hypervisor.TypeQEMU
+	meta.GPUFramework = devices.VGPUFrameworkNone
+	meta.GPUDevicePath = "/sys/bus/pci/devices/0000:82:00.4"
+	require.NoError(t, m.saveMetadata(meta))
+
+	_, err = m.StartInstance(context.Background(), id, StartInstanceRequest{})
+	require.Error(t, err)
+
+	stored, err := m.loadMetadata(id)
+	require.NoError(t, err)
+	assert.Empty(t, stored.GPUDevicePath, "released assignment should be persisted despite the failed start")
+	assert.Equal(t, "NVIDIA L40S-2Q", stored.GPUProfile, "profile is kept for the next start")
+}
+
+func TestStopStoppedInstanceLeavesVGPUForReconcile(t *testing.T) {
+	m, id := newLifecycleNoopManagerWithInstance(t, StateStopped, time.Now().UTC())
+	meta, err := m.loadMetadata(id)
+	require.NoError(t, err)
+	meta.GPUProfile = "NVIDIA L40S-2Q"
+	meta.GPUFramework = devices.VGPUFrameworkNone
+	meta.GPUDevicePath = "/sys/bus/pci/devices/0000:82:00.4"
+	require.NoError(t, m.saveMetadata(meta))
+
+	// Stop on an already-stopped instance is a no-op for the assignment; the
+	// periodic reconcile retries the release.
+	inst, err := m.StopInstance(context.Background(), id)
+	require.NoError(t, err)
+	require.NotNil(t, inst)
+	assert.Equal(t, StateStopped, inst.State)
+	stored, err := m.loadMetadata(id)
+	require.NoError(t, err)
+	assert.Equal(t, "/sys/bus/pci/devices/0000:82:00.4", stored.GPUDevicePath)
+}
+
+// recordingDeviceManager is a devices.Manager stub that records passthrough
+// teardown calls. Only the methods delete exercises are implemented.
+type recordingDeviceManager struct {
+	devices.Manager
+	detached       []string
+	unbound        []string
+	onMarkDetached func()
+}
+
+func (m *recordingDeviceManager) MarkDetached(ctx context.Context, deviceID string) error {
+	m.detached = append(m.detached, deviceID)
+	if m.onMarkDetached != nil {
+		m.onMarkDetached()
+	}
+	return nil
+}
+
+func (m *recordingDeviceManager) UnbindFromVFIO(ctx context.Context, id string) error {
+	m.unbound = append(m.unbound, id)
+	return nil
+}
+
+func TestLifecycleNoopStandbyRejectsVendorVFIOVGPU(t *testing.T) {
+	m, id := newLifecycleNoopManagerWithInstance(t, StateRunning, time.Now().UTC())
+	meta, err := m.loadMetadata(id)
+	require.NoError(t, err)
+	meta.GPUProfile = "NVIDIA L40S-2Q"
+	meta.GPUFramework = devices.VGPUFrameworkVendorVFIO
+	meta.GPUDevicePath = "/sys/bus/pci/devices/0000:82:00.4"
+	require.NoError(t, m.saveMetadata(meta))
+
+	_, err = m.StandbyInstance(context.Background(), id, StandbyInstanceRequest{})
+	require.ErrorIs(t, err, ErrInvalidState)
+	assert.ErrorContains(t, err, "standby is not supported for instances with vGPU attached")
 }
 
 func newLifecycleNoopManagerWithInstance(t *testing.T, state State, now time.Time) (*manager, string) {

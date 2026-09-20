@@ -938,6 +938,30 @@ func CopyFromInstance(ctx context.Context, dialer hypervisor.VsockDialer, opts C
 	return nil
 }
 
+// GetGPUInitStatus reports the guest GPU driver init state observed by the
+// guest agent, plus the NVRM failure line when the init failed. The serial
+// console is shared with workload output, so this is the host's only trusted
+// signal for GPU init health.
+func GetGPUInitStatus(ctx context.Context, dialer hypervisor.VsockDialer) (GPUInitState, string, error) {
+	grpcConn, err := GetOrCreateConn(ctx, dialer)
+	if err != nil {
+		if isRetryableConnectionError(err) {
+			CloseConn(dialer.Key())
+		}
+		return GPUInitState_GPU_INIT_STATE_UNKNOWN, "", fmt.Errorf("get grpc connection: %w", err)
+	}
+
+	client := NewGuestServiceClient(grpcConn)
+	resp, err := client.GetGPUInitStatus(ctx, &GetGPUInitStatusRequest{})
+	if err != nil {
+		if isRetryableConnectionError(err) {
+			CloseConn(dialer.Key())
+		}
+		return GPUInitState_GPU_INIT_STATE_UNKNOWN, "", fmt.Errorf("gpu init status RPC: %w", err)
+	}
+	return resp.State, resp.FailureMessage, nil
+}
+
 // ShutdownInstance sends a shutdown signal to the guest VM's init process (PID 1).
 // The guest-agent forwards the signal to init, which forwards it to the entrypoint.
 // sig is the signal number to send (0 = SIGTERM default).

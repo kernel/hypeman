@@ -250,6 +250,18 @@ func TestValidateRejectsInvalidMetricsPort(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsInvalidVFQuarantineThreshold(t *testing.T) {
+	for _, threshold := range []int{0, -1} {
+		cfg := defaultConfig()
+		cfg.GPU.VFQuarantineThreshold = threshold
+
+		err := cfg.Validate()
+		if err == nil {
+			t.Fatalf("expected validation error for vf_quarantine_threshold %d", threshold)
+		}
+	}
+}
+
 func TestValidateRejectsInvalidMetricExportInterval(t *testing.T) {
 	cfg := defaultConfig()
 	cfg.Otel.MetricExportInterval = "not-a-duration"
