@@ -67,11 +67,13 @@ It replaces the previous shell-based init script with cleaner logic and structur
 - ✅ Load GPU drivers (if GPU attached)
 - ✅ Mount volumes
 - ✅ Execute container entrypoint (exec mode)
-- ✅ Hand off to systemd via chroot + exec (systemd mode)
+- ✅ Hand off to systemd via root switch + exec (systemd mode)
 
 **Two boot modes:**
-- **Exec mode** (default): Init chroots to container rootfs, starts guest-agent, and waits on an event-driven readiness signal (pipe FD, 10s timeout) before launching the entrypoint. When the app exits, init logs exit info and cleanly shuts down the VM via `reboot(POWER_OFF)`.
+- **Exec mode** (default): Init switches root to the container rootfs, starts guest-agent, and waits on an event-driven readiness signal (pipe FD, 10s timeout) before launching the entrypoint. When the app exits, init logs exit info and cleanly shuts down the VM via `reboot(POWER_OFF)`.
 - **Systemd mode** (auto-detected on host): Init injects systemd units (guest-agent plus async kernel-headers worker), emits handoff marker, then execs /sbin/init so systemd becomes PID 1.
+
+**Root switch:** Both modes move the overlay rootfs onto `/` (`MS_MOVE`, as `switch_root(8)` does) and then chroot into it, so the image rootfs is the mount namespace root rather than the initrd. A plain chroot left the initrd as the namespace root, which broke `setns(2)`-based tools inside the guest such as `docker exec` into a nested container. `pivot_root(2)` is not usable while `/` is the initramfs.
 
 **Boot progress sentinels:** Init and guest-agent emit machine-parseable markers to serial console:
 - `HYPEMAN-PROGRAM-START ts=... mode=...`
@@ -191,7 +193,7 @@ lib/system/init/
     network.go        # Network configuration
     headers.go        # Kernel headers setup for DKMS
     volumes.go        # Volume mounting
-    mode_exec.go      # Exec mode: chroot, event-driven agent gate, run entrypoint
-    mode_systemd.go   # Systemd mode: inject units + chroot + handoff marker + exec /sbin/init
+    mode_exec.go      # Exec mode: root switch, event-driven agent gate, run entrypoint
+    mode_systemd.go   # Systemd mode: inject units + root switch + handoff marker + exec /sbin/init
     logger.go         # Human-readable logging to hypeman operations log
 ```

@@ -82,6 +82,10 @@ func initializeApp() (*application, func(), error) {
 	}
 	autostandbyController := providers.ProvideAutoStandbyController(instancesManager, config, logger)
 	healthCheckController := providers.ProvideHealthCheckController(instancesManager, logger)
+	vgpuSentinelController, err := providers.ProvideVGPUSentinelController(instancesManager, logger)
+	if err != nil {
+		return nil, nil, err
+	}
 	vm_metricsManager, err := providers.ProvideVMMetricsManager(instancesManager, config, logger)
 	if err != nil {
 		return nil, nil, err
@@ -92,26 +96,27 @@ func initializeApp() (*application, func(), error) {
 	}
 	apiService := api.New(config, manager, instancesManager, volumesManager, buildersManager, networkManager, devicesManager, ingressManager, buildsManager, imagepushManager, resourcesManager, controller, autostandbyController, vm_metricsManager)
 	mainApplication := &application{
-		Ctx:                   context,
-		Logger:                logger,
-		Config:                config,
-		ImageManager:          manager,
-		SystemManager:         systemManager,
-		NetworkManager:        networkManager,
-		DeviceManager:         devicesManager,
-		InstanceManager:       instancesManager,
-		VolumeManager:         volumesManager,
-		BuilderManager:        buildersManager,
-		IngressManager:        ingressManager,
-		BuildManager:          buildsManager,
-		PushManager:           imagepushManager,
-		ResourceManager:       resourcesManager,
-		GuestMemoryController: controller,
-		AutoStandbyController: autostandbyController,
-		HealthCheckController: healthCheckController,
-		VMMetricsManager:      vm_metricsManager,
-		Registry:              registry,
-		ApiService:            apiService,
+		Ctx:                    context,
+		Logger:                 logger,
+		Config:                 config,
+		ImageManager:           manager,
+		SystemManager:          systemManager,
+		NetworkManager:         networkManager,
+		DeviceManager:          devicesManager,
+		InstanceManager:        instancesManager,
+		VolumeManager:          volumesManager,
+		BuilderManager:         buildersManager,
+		IngressManager:         ingressManager,
+		BuildManager:           buildsManager,
+		PushManager:            imagepushManager,
+		ResourceManager:        resourcesManager,
+		GuestMemoryController:  controller,
+		AutoStandbyController:  autostandbyController,
+		HealthCheckController:  healthCheckController,
+		VGPUSentinelController: vgpuSentinelController,
+		VMMetricsManager:       vm_metricsManager,
+		Registry:               registry,
+		ApiService:             apiService,
 	}
 	return mainApplication, func() {
 	}, nil
@@ -121,24 +126,25 @@ func initializeApp() (*application, func(), error) {
 
 // application struct to hold initialized components
 type application struct {
-	Ctx                   context.Context
-	Logger                *slog.Logger
-	Config                *config.Config
-	ImageManager          images.Manager
-	SystemManager         system.Manager
-	NetworkManager        network.Manager
-	DeviceManager         devices.Manager
-	InstanceManager       instances.Manager
-	VolumeManager         volumes.Manager
-	BuilderManager        builders.Manager
-	IngressManager        ingress.Manager
-	BuildManager          builds.Manager
-	PushManager           imagepush.Manager
-	ResourceManager       *resources.Manager
-	GuestMemoryController guestmemory.Controller
-	AutoStandbyController *autostandby.Controller
-	HealthCheckController *instances.HealthCheckController
-	VMMetricsManager      *vm_metrics.Manager
-	Registry              *registry.Registry
-	ApiService            *api.ApiService
+	Ctx                    context.Context
+	Logger                 *slog.Logger
+	Config                 *config.Config
+	ImageManager           images.Manager
+	SystemManager          system.Manager
+	NetworkManager         network.Manager
+	DeviceManager          devices.Manager
+	InstanceManager        instances.Manager
+	VolumeManager          volumes.Manager
+	BuilderManager         builders.Manager
+	IngressManager         ingress.Manager
+	BuildManager           builds.Manager
+	PushManager            imagepush.Manager
+	ResourceManager        *resources.Manager
+	GuestMemoryController  guestmemory.Controller
+	AutoStandbyController  *autostandby.Controller
+	HealthCheckController  *instances.HealthCheckController
+	VGPUSentinelController *instances.VGPUSentinelController
+	VMMetricsManager       *vm_metrics.Manager
+	Registry               *registry.Registry
+	ApiService             *api.ApiService
 }

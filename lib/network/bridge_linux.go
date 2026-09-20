@@ -51,6 +51,22 @@ func listBridgeAddrsWithRetry(link netlink.Link) ([]netlink.Addr, error) {
 	return nil, err
 }
 
+func listLinksWithRetry() ([]netlink.Link, error) {
+	var err error
+	for i := 0; i < netlinkDumpRetryCount; i++ {
+		links, listErr := netlink.LinkList()
+		if listErr == nil {
+			return links, nil
+		}
+		if !errors.Is(listErr, netlink.ErrDumpInterrupted) {
+			return nil, listErr
+		}
+		err = listErr
+		time.Sleep(10 * time.Millisecond)
+	}
+	return nil, err
+}
+
 // checkSubnetConflicts checks if the configured subnet conflicts with existing routes.
 // Returns an error if a conflict is detected, with guidance on how to resolve it.
 func (m *manager) checkSubnetConflicts(ctx context.Context, subnet string) error {
@@ -1170,7 +1186,7 @@ func (m *manager) CleanupOrphanedTAPs(ctx context.Context, preserveInstanceIDs [
 	}
 
 	// List all network interfaces
-	links, err := netlink.LinkList()
+	links, err := listLinksWithRetry()
 	if err != nil {
 		log.WarnContext(ctx, "failed to list network links for TAP cleanup", "error", err)
 		return 0
@@ -1259,7 +1275,7 @@ func (m *manager) CleanupOrphanedClasses(ctx context.Context) int {
 	}
 
 	liveTapIndexes := make(map[int]bool)
-	links, err := netlink.LinkList()
+	links, err := listLinksWithRetry()
 	if err != nil {
 		log.WarnContext(ctx, "skipping orphaned tc cleanup: failed to list links", "error", err)
 		return 0

@@ -7,7 +7,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/guest"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/logger"
@@ -15,24 +14,28 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 )
 
-const deleteGracefulShutdownTimeout = 2
+// Caps (seconds) on the graceful guest shutdown wait during delete. Ordinary
+// deletes stay fast; guests with VFIO devices get long enough to unload the
+// guest GPU driver, which can take ~5s.
+const (
+	deleteGracefulShutdownTimeout     = 2
+	vfioDeleteGracefulShutdownTimeout = 5
+)
 
-type deleteInstanceOptions struct {
-	skipGracefulShutdown bool
+// DeleteInstanceOptions configures instance deletion.
+type DeleteInstanceOptions struct {
+	SkipGracefulShutdown bool
 }
 
-// deleteInstance stops and deletes an instance
-func (m *manager) deleteInstance(
-	ctx context.Context,
-	id string,
-) error {
-	return m.deleteInstanceWithOptions(ctx, id, deleteInstanceOptions{})
+// deleteInstance stops and deletes an instance.
+func (m *manager) deleteInstance(ctx context.Context, id string) error {
+	return m.deleteInstanceWithOptions(ctx, id, DeleteInstanceOptions{})
 }
 
 func (m *manager) deleteInstanceWithOptions(
 	ctx context.Context,
 	id string,
-	options deleteInstanceOptions,
+	options DeleteInstanceOptions,
 ) (retErr error) {
 	log := logger.FromContext(ctx)
 	log.InfoContext(ctx, "deleting instance", "instance_id", id)
@@ -86,17 +89,30 @@ func (m *manager) deleteInstanceWithOptions(
 		guest.CloseConn(dialer.Key())
 	}
 
+	// 3b. Block the restart policy before any teardown. If the delete fails
+	// partway (e.g. the hypervisor cannot be confirmed dead) the metadata is
+	// retained with the VMM already stopped, and without this marker the
+	// restart policy controller would start the instance again.
+	if err := m.markRestartManualStopLocked(ctx, id); err != nil {
+		return fmt.Errorf("block restart policy before delete: %w", err)
+	}
+	// markRestartManualStopLocked persists through a separate metadata load.
+	// Reload it so later saves in this delete do not overwrite the block.
+	meta, err = m.loadMetadata(id)
+	if err != nil {
+		return fmt.Errorf("reload metadata after blocking restart policy: %w", err)
+	}
+	stored = &meta.StoredMetadata
+
 	// 4. If active, try graceful guest shutdown before force kill.
 	gracefulShutdown := false
-	if !options.skipGracefulShutdown && (inst.State == StateRunning || inst.State == StateInitializing) {
-		stopTimeout := resolveStopTimeout(stored)
-		if stopTimeout > deleteGracefulShutdownTimeout {
-			stopTimeout = deleteGracefulShutdownTimeout
-		}
+	if !options.SkipGracefulShutdown && (inst.State == StateRunning || inst.State == StateInitializing) {
+		stopTimeout := resolveDeleteStopTimeout(stored)
 		gracefulCtx, gracefulSpanEnd := m.startLifecycleStep(ctx, "graceful_guest_shutdown",
 			attribute.String("instance_id", id),
 			attribute.String("hypervisor", string(stored.HypervisorType)),
 			attribute.String("operation", "graceful_guest_shutdown"),
+			attribute.Int("stop_timeout_seconds", stopTimeout),
 		)
 		gracefulShutdown = m.tryGracefulGuestShutdown(gracefulCtx, &inst, stopTimeout)
 		if gracefulShutdown {
@@ -119,12 +135,23 @@ func (m *manager) deleteInstanceWithOptions(
 		err := m.killHypervisor(killCtx, &inst)
 		killSpanEnd(err)
 		if err != nil {
-			// Log error but continue with cleanup
-			// Best effort to clean up even if hypervisor is unresponsive
-			log.WarnContext(ctx, "failed to kill hypervisor, continuing with cleanup", "instance_id", id, "error", err)
+			// The hypervisor may still be running, so tearing down its vGPU,
+			// network, and devices is unsafe. The restart policy is already
+			// blocked and the metadata is retained, so a retried delete is safe.
+			log.ErrorContext(ctx, "failed to kill hypervisor; retaining instance metadata", "instance_id", id, "error", err)
+			return fmt.Errorf("kill hypervisor: %w", err)
 		}
 	}
 	m.closeFirecrackerUFFDSession(ctx, stored)
+
+	// Release before deleting metadata so a failed release can be retried safely.
+	if storedVGPUDevicePath(stored) != "" {
+		log.InfoContext(ctx, "destroying vGPU", "instance_id", id, "uuid", stored.GPUMdevUUID)
+		if err := m.releaseStoredVGPUPersisted(ctx, meta); err != nil {
+			log.ErrorContext(ctx, "failed to destroy vGPU; retaining instance metadata for retry", "instance_id", id, "uuid", stored.GPUMdevUUID, "error", err)
+			return fmt.Errorf("release vGPU: %w", err)
+		}
+	}
 
 	// 6. Release network allocation
 	if inst.NetworkEnabled {
@@ -171,15 +198,6 @@ func (m *manager) deleteInstanceWithOptions(
 		}
 	}
 
-	// 7c. Destroy vGPU mdev device if present
-	if inst.GPUMdevUUID != "" {
-		log.InfoContext(ctx, "destroying vGPU mdev", "instance_id", id, "uuid", inst.GPUMdevUUID)
-		if err := devices.DestroyMdev(ctx, inst.GPUMdevUUID); err != nil {
-			// Log error but continue with cleanup
-			log.WarnContext(ctx, "failed to destroy mdev, continuing with cleanup", "instance_id", id, "uuid", inst.GPUMdevUUID, "error", err)
-		}
-	}
-
 	// 8. Delete all instance data
 	log.DebugContext(ctx, "deleting instance data", "instance_id", id)
 	_, dataSpanEnd := m.startLifecycleStep(ctx, "delete_instance_data",
@@ -197,46 +215,41 @@ func (m *manager) deleteInstanceWithOptions(
 	return nil
 }
 
-// killHypervisor force kills the hypervisor process without graceful shutdown
-// Used only for delete operations where we're removing all data anyway.
-// For operations that need graceful shutdown (like standby), use the hypervisor API directly.
+// resolveDeleteStopTimeout returns the stop timeout (seconds) capped to the
+// delete bound.
+func resolveDeleteStopTimeout(stored *StoredMetadata) int {
+	bound := deleteGracefulShutdownTimeout
+	if hasVFIODevices(stored) {
+		bound = vfioDeleteGracefulShutdownTimeout
+	}
+	return min(resolveStopTimeout(stored), bound)
+}
+
+// killHypervisor force kills the hypervisor process without graceful shutdown.
+// Used by delete and as stop's final fallback after graceful shutdown fails.
+// It returns an error when the hypervisor may still be running: neither process
+// identity nor socket ownership can be confirmed, SIGKILL fails with an error
+// other than ESRCH, or the process does not exit after SIGKILL. Callers must not
+// tear down instance resources in that case.
 func (m *manager) killHypervisor(ctx context.Context, inst *Instance) error {
 	log := logger.FromContext(ctx)
 
-	// If we have a PID, kill the process immediately
-	if inst.HypervisorPID != nil {
-		pid := *inst.HypervisorPID
-
-		// Check if process exists
-		if err := syscall.Kill(pid, 0); err == nil {
-			// Process exists - kill it immediately with SIGKILL
-			// No graceful shutdown needed since we're deleting all data
-			log.DebugContext(ctx, "killing hypervisor process", "instance_id", inst.Id, "pid", pid)
-			if err := syscall.Kill(pid, syscall.SIGKILL); err != nil {
-				log.WarnContext(ctx, "failed to kill hypervisor process", "instance_id", inst.Id, "pid", pid, "error", err)
-			}
-
-			// Wait for process to die and reap it to prevent zombies
-			// SIGKILL should be instant, but give it a moment
-			for i := 0; i < 50; i++ { // 50 * 100ms = 5 seconds
-				var wstatus syscall.WaitStatus
-				wpid, err := syscall.Wait4(pid, &wstatus, syscall.WNOHANG, nil)
-				if err != nil || wpid == pid {
-					// Process reaped successfully or error (likely ECHILD if already reaped)
-					log.DebugContext(ctx, "hypervisor process killed and reaped", "instance_id", inst.Id, "pid", pid)
-					break
-				}
-				if i == 49 {
-					log.WarnContext(ctx, "hypervisor process did not exit in time", "instance_id", inst.Id, "pid", pid)
-				}
-				time.Sleep(100 * time.Millisecond)
-			}
-		} else {
-			log.DebugContext(ctx, "hypervisor process not running", "instance_id", inst.Id, "pid", pid)
+	pid, err := resolveLiveHypervisorPID(inst.HypervisorProcessIdentity, inst.SocketPath)
+	if err != nil {
+		return err
+	}
+	if pid > 0 {
+		if inst.HypervisorPID != nil && pid != *inst.HypervisorPID {
+			log.WarnContext(ctx, "stored hypervisor PID does not own the instance socket, killing the socket owner",
+				"instance_id", inst.Id, "stored_pid", *inst.HypervisorPID, "owner_pid", pid)
+		}
+		log.DebugContext(ctx, "killing hypervisor process", "instance_id", inst.Id, "pid", pid)
+		if err := m.terminateThenKill(ctx, inst, pid); err != nil {
+			return err
 		}
 	}
 
-	// Clean up socket if it still exists
+	// The hypervisor is confirmed gone; remove its stale socket.
 	os.Remove(inst.SocketPath)
 
 	return nil
@@ -262,12 +275,12 @@ func WaitForProcessExit(pid int, timeout time.Duration) bool {
 			// Process still running (or wait status not yet available).
 		case waitErr == syscall.ECHILD:
 			// Not our child (or already reaped elsewhere). Fall back to existence check.
-			if err := syscall.Kill(pid, 0); err != nil {
+			if !ProcessExists(pid) {
 				return true
 			}
 		default:
 			// Best effort fallback on transient/unexpected wait errors.
-			if err := syscall.Kill(pid, 0); err != nil {
+			if !ProcessExists(pid) {
 				return true
 			}
 		}

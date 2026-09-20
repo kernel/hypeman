@@ -219,7 +219,6 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 	default:
 		return nil, false, fmt.Errorf("%w: cannot fork from state %s (must be Stopped or Standby)", ErrInvalidState, source.State)
 	}
-
 	if !supportValidated {
 		if err := m.validateForkSupport(ctx, stored.HypervisorType); err != nil {
 			return nil, false, err
@@ -281,7 +280,7 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 	forkMeta.ExpiresAt = nil
 	forkMeta.StartedAt = nil
 	forkMeta.StoppedAt = nil
-	forkMeta.HypervisorPID = nil
+	forkMeta.HypervisorProcessIdentity.Clear()
 	forkMeta.SocketPath = m.paths.InstanceSocket(forkID, starter.SocketName())
 	forkMeta.DataDir = dstDir
 	forkMeta.VsockSocket = m.paths.InstanceSocket(forkID, hypervisor.VsockSocketNameForType(forkMeta.HypervisorType))
@@ -307,6 +306,11 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 	// phase (Standby for snapshot forks, Stopped for stopped forks) will be
 	// recorded by the appropriate operation when the fork is acted on.
 	forkMeta.Phases.Reset()
+	// A vGPU assignment is never shared with a fork: normally stop already
+	// released it, and an assignment retained by a failed release must stay
+	// with the source so only one instance retries it. The fork acquires its
+	// own vGPU on start from GPUProfile.
+	clearStoredVGPUDevice(&forkMeta)
 	switch source.State {
 	case StateStandby:
 		forkMeta.Phases.Record(phasetracking.PhaseStandby, now)
@@ -641,6 +645,10 @@ func cloneStoredMetadata(src StoredMetadata) StoredMetadata {
 	if src.GuestAgentReadyAt != nil {
 		guestAgentReadyAt := *src.GuestAgentReadyAt
 		dst.GuestAgentReadyAt = &guestAgentReadyAt
+	}
+	if src.GPUClaimedAt != nil {
+		gpuClaimedAt := *src.GPUClaimedAt
+		dst.GPUClaimedAt = &gpuClaimedAt
 	}
 	if src.ExitCode != nil {
 		exitCode := *src.ExitCode

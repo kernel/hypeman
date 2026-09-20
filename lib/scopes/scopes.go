@@ -229,10 +229,11 @@ var RouteScopes = map[string]Scope{
 	"POST /resources/memory/reclaim": ResourceWrite,
 
 	// Images
-	"GET /images":           ImageRead,
-	"POST /images":          ImageWrite,
-	"DELETE /images/{name}": ImageDelete,
-	"GET /images/{name}":    ImageRead,
+	"GET /images":             ImageRead,
+	"POST /images":            ImageWrite,
+	"POST /images/{name}/tag": ImageWrite,
+	"DELETE /images/{name}":   ImageDelete,
+	"GET /images/{name}":      ImageRead,
 
 	// Pushes (outbound image pushes to remote registries)
 	"POST /pushes":     ImageWrite,

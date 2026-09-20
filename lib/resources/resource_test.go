@@ -2,6 +2,7 @@ package resources
 
 import (
 	"context"
+	"errors"
 	"runtime"
 	"testing"
 
@@ -14,10 +15,11 @@ import (
 // mockInstanceLister implements InstanceLister for testing
 type mockInstanceLister struct {
 	allocations []InstanceAllocation
+	err         error
 }
 
 func (m *mockInstanceLister) ListInstanceAllocations(ctx context.Context) ([]InstanceAllocation, error) {
-	return m.allocations, nil
+	return m.allocations, m.err
 }
 
 // mockImageLister implements ImageLister for testing
@@ -37,10 +39,11 @@ func (m *mockImageLister) TotalOCICacheBytes(ctx context.Context) (int64, error)
 // mockVolumeLister implements VolumeLister for testing
 type mockVolumeLister struct {
 	totalBytes int64
+	err        error
 }
 
 func (m *mockVolumeLister) TotalVolumeBytes(ctx context.Context) (int64, error) {
-	return m.totalBytes, nil
+	return m.totalBytes, m.err
 }
 
 func TestNewManager(t *testing.T) {
@@ -485,6 +488,23 @@ func TestDiskBreakdown_IncludesOCICacheAndVolumeOverlays(t *testing.T) {
 	assert.Equal(t, int64(100*1024*1024*1024), status.DiskDetail.Volumes)
 	// Overlays should be (10+5) + (8+2) = 25GB
 	assert.Equal(t, int64(25*1024*1024*1024), status.DiskDetail.Overlays)
+}
+
+func TestDiskBreakdownPropagatesVolumeAndInstanceErrors(t *testing.T) {
+	cfg := &config.Config{DataDir: t.TempDir(), Capacity: config.CapacityConfig{Disk: "100GB"}}
+	p := paths.New(cfg.DataDir)
+
+	volumeErr := errors.New("volume lookup failed")
+	disk, err := NewDiskResource(cfg, p, nil, nil, &mockVolumeLister{err: volumeErr})
+	require.NoError(t, err)
+	_, err = disk.GetBreakdown(context.Background())
+	require.ErrorIs(t, err, volumeErr)
+
+	instanceErr := errors.New("instance lookup failed")
+	disk, err = NewDiskResource(cfg, p, &mockInstanceLister{err: instanceErr}, nil, nil)
+	require.NoError(t, err)
+	_, err = disk.GetBreakdown(context.Background())
+	require.ErrorIs(t, err, instanceErr)
 }
 
 func TestValidateAllocation_Disk(t *testing.T) {

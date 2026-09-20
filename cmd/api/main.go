@@ -204,6 +204,9 @@ func run() error {
 
 	// Configure GPU profile cache TTL
 	devices.SetGPUProfileCacheTTL(cfg.GPU.ProfileCacheTTL)
+	if err := devices.InitVFHealth(paths.New(cfg.DataDir).VFHealthState(), cfg.GPU.VFQuarantineThreshold); err != nil {
+		slog.Error("failed to initialize VF health state; vGPU placement is disabled until the state file is repaired or the next write succeeds", "error", err)
+	}
 
 	// Initialize OpenTelemetry (before wire initialization)
 	otelCfg := otel.Config{
@@ -384,11 +387,11 @@ func run() error {
 		return fmt.Errorf("reconcile device state: %w", err)
 	}
 
-	// Reconcile mdev devices (clears orphaned vGPUs from previous runs)
-	logger.Info("Reconciling mdev devices...")
-	if err := devices.ReconcileMdevs(app.Ctx, nil); err != nil {
-		// Log but don't fail - mdev cleanup is best-effort
-		logger.Warn("failed to reconcile mdev devices", "error", err)
+	logger.Info("Reconciling vGPU devices...")
+	if r, ok := app.InstanceManager.(interface{ StartVGPUReconciler(context.Context) }); ok {
+		r.StartVGPUReconciler(ctx)
+	} else {
+		logger.Warn("instance manager does not implement StartVGPUReconciler")
 	}
 
 	// Wire up resource validator for aggregate limit checking
@@ -655,6 +658,10 @@ func run() error {
 			return app.HealthCheckController.Run(gctx)
 		})
 	}
+	grp.Go(func() error {
+		logger.Info("starting vGPU sentinel controller")
+		return app.VGPUSentinelController.Run(gctx)
+	})
 	if restartController, ok := app.InstanceManager.(interface {
 		StartRestartPolicyController(context.Context) error
 	}); ok {

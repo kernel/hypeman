@@ -89,6 +89,14 @@ func rewriteQEMUConfigPaths(cfg hypervisor.VMConfig, sourceDir, targetDir string
 	cfg.VsockSocket = replace(cfg.VsockSocket)
 	cfg.KernelPath = replace(cfg.KernelPath)
 	cfg.InitrdPath = replace(cfg.InitrdPath)
+	if cfg.Firmware != nil {
+		cfg.Firmware.CodePath = replace(cfg.Firmware.CodePath)
+		cfg.Firmware.VarsPath = replace(cfg.Firmware.VarsPath)
+	}
+	if cfg.TPM != nil {
+		cfg.TPM.SocketPath = replace(cfg.TPM.SocketPath)
+		cfg.TPM.StateDir = replace(cfg.TPM.StateDir)
+	}
 
 	return cfg
 }

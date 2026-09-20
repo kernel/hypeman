@@ -2,6 +2,7 @@ package resources
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/c2h5oh/datasize"
@@ -75,31 +76,35 @@ func (d *DiskResource) GetBreakdown(ctx context.Context) (*DiskBreakdown, error)
 	// Get image sizes
 	if d.imageLister != nil {
 		imageBytes, err := d.imageLister.TotalImageBytes(ctx)
-		if err == nil {
-			breakdown.Images = imageBytes
+		if err != nil {
+			return nil, fmt.Errorf("get image disk usage: %w", err)
 		}
+		breakdown.Images = imageBytes
 		ociCacheBytes, err := d.imageLister.TotalOCICacheBytes(ctx)
-		if err == nil {
-			breakdown.OCICache = ociCacheBytes
+		if err != nil {
+			return nil, fmt.Errorf("get OCI cache disk usage: %w", err)
 		}
+		breakdown.OCICache = ociCacheBytes
 	}
 
 	// Get volume sizes
 	if d.volumeLister != nil {
 		volumeBytes, err := d.volumeLister.TotalVolumeBytes(ctx)
-		if err == nil {
-			breakdown.Volumes = volumeBytes
+		if err != nil {
+			return nil, fmt.Errorf("get volume disk usage: %w", err)
 		}
+		breakdown.Volumes = volumeBytes
 	}
 
 	// Get overlay sizes from instances
 	if d.instanceLister != nil {
 		instances, err := d.instanceLister.ListInstanceAllocations(ctx)
-		if err == nil {
-			for _, inst := range instances {
-				if isActiveState(inst.State) {
-					breakdown.Overlays += inst.OverlayBytes + inst.VolumeOverlayBytes
-				}
+		if err != nil {
+			return nil, fmt.Errorf("get instance disk usage: %w", err)
+		}
+		for _, inst := range instances {
+			if isActiveState(inst.State) {
+				breakdown.Overlays += inst.OverlayBytes + inst.VolumeOverlayBytes
 			}
 		}
 	}

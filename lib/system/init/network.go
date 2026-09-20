@@ -9,7 +9,7 @@ import (
 )
 
 // configureNetwork sets up networking in the guest VM.
-// This is done from the initrd before pivot_root so it works for both exec and systemd modes.
+// This is done from the initrd before the root switch so it works for both exec and systemd modes.
 func configureNetwork(log *Logger, cfg *vmconfig.Config) error {
 	// Bring up loopback interface
 	if err := runIP("link", "set", "lo", "up"); err != nil {

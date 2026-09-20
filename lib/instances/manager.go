@@ -2,8 +2,10 @@ package instances
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -36,6 +38,7 @@ type Manager interface {
 	// Returns ErrAmbiguousName if prefix matches multiple instances.
 	GetInstance(ctx context.Context, idOrName string) (*Instance, error)
 	DeleteInstance(ctx context.Context, id string) error
+	DeleteInstanceWithOptions(ctx context.Context, id string, options DeleteInstanceOptions) error
 	DeleteSnapshot(ctx context.Context, snapshotID string) error
 	ForkInstance(ctx context.Context, id string, req ForkInstanceRequest) (*Instance, error)
 	ForkSnapshot(ctx context.Context, snapshotID string, req ForkSnapshotRequest) (*Instance, error)
@@ -180,6 +183,15 @@ type manager struct {
 	now                       func() time.Time
 	writeFile                 func(string, []byte, os.FileMode) error
 	deleteInstanceFn          func(context.Context, string) error
+	discoverVGPU              func() (devices.VGPUFramework, []devices.VirtualFunction, error)
+	createVGPU                func(context.Context, string, string) (*devices.VGPUDevice, error)
+	configureVGPU             func(context.Context, string, string) error
+	vendorVFIOProfiles        func([]devices.VirtualFunction) (map[string][]devices.VGPUProfileType, error)
+	quarantinedVFs            func() (map[string]struct{}, error)
+	pickVFIndex               func(n int) int
+	destroyVGPU               func(context.Context, devices.VGPUAssignment) error
+	reconcileVGPUDevices      func(context.Context, map[string]struct{}) error
+	vgpuAllocationMu          sync.Mutex
 	deleteSnapshotFn          func(context.Context, string) error
 	ttlReaperDeleteTimeout    time.Duration
 	egressProxy               *egressproxy.Service
@@ -194,6 +206,7 @@ type manager struct {
 	nativeCodecPaths          map[string]string
 	imageUsageRecorder        ImageUsageRecorder
 	guestAgentReadyProbe      func(context.Context, *StoredMetadata) bool
+	shutdownGuestFn           func(context.Context, hypervisor.VsockDialer, int32) error
 
 	// Shared lifecycle event subscriptions for internal consumers.
 	lifecycleEvents *lifecycleSubscribers
@@ -206,6 +219,12 @@ type manager struct {
 
 	// Periodic TAP garbage collection reconciler.
 	tapGCOnce sync.Once
+
+	// Periodic vGPU reconciler.
+	vgpuReconcileOnce     sync.Once
+	vgpuReconcileInterval time.Duration
+
+	vfioTermGrace time.Duration
 
 	// Hypervisor support
 	vmStarters                       map[hypervisor.Type]hypervisor.VMStarter
@@ -441,17 +460,28 @@ func (m *manager) CreateInstance(ctx context.Context, req CreateInstanceRequest)
 	return inst, err
 }
 
-// DeleteInstance stops and deletes an instance
+// DeleteInstance stops and deletes an instance.
 func (m *manager) DeleteInstance(ctx context.Context, id string) error {
+	return m.DeleteInstanceWithOptions(ctx, id, DeleteInstanceOptions{})
+}
+
+// DeleteInstanceWithOptions stops and deletes an instance with the supplied options.
+func (m *manager) DeleteInstanceWithOptions(ctx context.Context, id string, options DeleteInstanceOptions) error {
 	lock := m.getInstanceLock(id)
 	lock.Lock()
 	defer lock.Unlock()
 
-	return m.deleteInstanceLocked(ctx, id)
+	return m.deleteInstanceLockedWithOptions(ctx, id, options)
 }
 
 func (m *manager) deleteInstanceLocked(ctx context.Context, id string) error {
-	deleteInstance := m.deleteInstance
+	return m.deleteInstanceLockedWithOptions(ctx, id, DeleteInstanceOptions{})
+}
+
+func (m *manager) deleteInstanceLockedWithOptions(ctx context.Context, id string, options DeleteInstanceOptions) error {
+	deleteInstance := func(ctx context.Context, id string) error {
+		return m.deleteInstanceWithOptions(ctx, id, options)
+	}
 	if m.deleteInstanceFn != nil {
 		deleteInstance = m.deleteInstanceFn
 	}
@@ -713,6 +743,26 @@ func (m *manager) DefaultHypervisor() hypervisor.Type {
 	return m.defaultHypervisor
 }
 
+func (m *manager) listMetadataForReconcile() ([]StoredMetadata, error) {
+	files, err := m.listMetadataFilesStrict()
+	if err != nil {
+		return nil, err
+	}
+	result := make([]StoredMetadata, 0, len(files))
+	for _, file := range files {
+		id := filepath.Base(filepath.Dir(file))
+		meta, err := m.loadMetadata(id)
+		if err != nil {
+			if errors.Is(err, ErrNotFound) {
+				continue
+			}
+			return nil, fmt.Errorf("load metadata for instance %s: %w", id, err)
+		}
+		result = append(result, meta.StoredMetadata)
+	}
+	return result, nil
+}
+
 // ListInstances returns instances, optionally filtered by the given criteria.
 // Pass nil to return all instances.
 func (m *manager) ListInstances(ctx context.Context, filter *ListInstancesFilter) ([]Instance, error) {
@@ -795,7 +845,7 @@ func (m *manager) StreamInstanceLogs(ctx context.Context, id string, tail int, f
 	return m.streamInstanceLogs(ctx, id, tail, follow, source)
 }
 
-// RotateLogs rotates all instance logs (app, vmm, hypeman) that exceed maxBytes
+// RotateLogs rotates all instance logs that exceed maxBytes
 func (m *manager) RotateLogs(ctx context.Context, maxBytes int64, maxFiles int) error {
 	instances, err := m.listInstances(ctx)
 	if err != nil {
@@ -804,11 +854,11 @@ func (m *manager) RotateLogs(ctx context.Context, maxBytes int64, maxFiles int) 
 
 	var lastErr error
 	for _, inst := range instances {
-		// Rotate all three log types
 		logPaths := []string{
 			m.paths.InstanceAppLog(inst.Id),
 			m.paths.InstanceVMMLog(inst.Id),
 			m.paths.InstanceHypemanLog(inst.Id),
+			m.paths.InstanceSWTPMLog(inst.Id),
 		}
 		for _, logPath := range logPaths {
 			if err := rotateLogIfNeeded(logPath, maxBytes, maxFiles); err != nil {

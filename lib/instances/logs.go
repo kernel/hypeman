@@ -24,6 +24,8 @@ const (
 	LogSourceVMM LogSource = "vmm"
 	// LogSourceHypeman is the hypeman operations log
 	LogSourceHypeman LogSource = "hypeman"
+	// LogSourceSWTPM is the software TPM log for TPM-backed QEMU guests.
+	LogSourceSWTPM LogSource = "swtpm"
 )
 
 // ErrTailNotFound is returned when the tail command is not available
@@ -73,6 +75,8 @@ func (m *manager) streamInstanceLogs(ctx context.Context, id string, tail int, f
 		logPath = m.paths.InstanceVMMLog(id)
 	case LogSourceHypeman:
 		logPath = m.paths.InstanceHypemanLog(id)
+	case LogSourceSWTPM:
+		logPath = m.paths.InstanceSWTPMLog(id)
 	default:
 		// Default to app log for backwards compatibility
 		logPath = m.paths.InstanceAppLog(id)

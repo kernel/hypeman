@@ -1310,6 +1310,15 @@ components:
         tags:
           $ref: "#/components/schemas/Tags"
     
+    TagImageRequest:
+      type: object
+      required: [target]
+      properties:
+        target:
+          type: string
+          description: Target OCI image reference with a tag. The local tag points to the source image without pulling it again.
+          example: docker.io/library/nginx:stable
+
     Image:
       type: object
       required: [name, digest, status, created_at]
@@ -1777,8 +1786,12 @@ components:
           example: "L40S-1Q"
         mdev_uuid:
           type: string
-          description: mdev device UUID
+          description: mdev device UUID (mdev hosts only)
           example: "aa618089-8b16-4d01-a136-25a0f3c73123"
+        device_path:
+          type: string
+          description: sysfs path of the assigned vGPU device
+          example: "/sys/bus/pci/devices/0000:82:00.4"
     
     GPUProfile:
       type: object
@@ -1795,7 +1808,7 @@ components:
           example: 1024
         available:
           type: integer
-          description: Number of instances that can be created with this profile
+          description: "Number of virtual functions currently able to create this profile. Best-effort: creating an instance may reduce availability on sibling functions sharing GPU framebuffer."
           example: 59
     
     PassthroughDevice:
@@ -1816,7 +1829,7 @@ components:
       type: object
       description: GPU resource status. Null if no GPUs available.
       nullable: true
-      required: [mode, total_slots, used_slots]
+      required: [mode, total_slots, used_slots, allocatable_slots, quarantined_slots]
       properties:
         mode:
           type: string
@@ -1829,8 +1842,20 @@ components:
           example: 64
         used_slots:
           type: integer
-          description: Slots currently in use
+          description: Slots currently in use. Includes quarantined VFs that are still assigned, so this can overlap quarantined_slots.
           example: 5
+        allocatable_slots:
+          type: integer
+          description: Free slots eligible for placement, matching admission control (excludes quarantined VFs; 0 while VF health state is unavailable)
+          example: 57
+        quarantined_slots:
+          type: integer
+          description: VFs quarantined after guest driver init failures (vGPU mode only). May overlap used_slots until the affected instance releases its VF.
+          example: 2
+        placement_disabled_reason:
+          type: string
+          description: Present when allocatable_slots is 0 because the VF health state could not be read or written rather than because the host is full. vGPU placement is refused until the state file is repaired or the next write succeeds.
+          example: "VF health state unavailable: unmarshal VF health state: invalid character 'x'"
         profiles:
           type: array
           description: Available vGPU profiles (only in vGPU mode)
@@ -2660,6 +2685,63 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+  /images/{name}/tag:
+    post:
+      summary: Create or update a local image tag
+      operationId: tagImage
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+          description: URL-encoded source image name or digest
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TagImageRequest"
+      responses:
+        200:
+          description: Image tag created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Image"
+        400:
+          description: Invalid source or target image reference
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        404:
+          description: Source image not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        409:
+          description: Source image is not ready
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        401:
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        500:
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /images/{name}:
     get:
       summary: Get image details
@@ -2864,6 +2946,13 @@ paths:
           schema:
             type: string
           description: Instance ID or name
+        - name: graceful_shutdown
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: true
+          description: Whether to attempt graceful guest shutdown before deleting the instance
       responses:
         204:
           description: Instance deleted
@@ -3619,7 +3708,7 @@ paths:
           required: false
           schema:
             type: string
-            enum: [app, vmm, hypeman]
+            enum: [app, vmm, hypeman, swtpm]
             default: app
           description: |
             Log source to stream:

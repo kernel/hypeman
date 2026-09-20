@@ -105,7 +105,9 @@ func NewStarter() *Starter {
 
 var _ hypervisor.VMStarter = (*Starter)(nil)
 
-func (s *Starter) ValidateConfig(hypervisor.VMConfig) error { return nil }
+func (s *Starter) ValidateConfig(config hypervisor.VMConfig) error {
+	return hypervisor.ValidateDirectRawConfig("vz", config)
+}
 
 func (s *Starter) SocketName() string {
 	return "vz.sock"
@@ -130,6 +132,9 @@ func (s *Starter) ResolveVersion(p *paths.Paths, requested string) (string, erro
 
 // StartVM spawns a vz-shim subprocess to host the VM.
 func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, socketPath string, config hypervisor.VMConfig) (int, hypervisor.Hypervisor, error) {
+	if err := s.ValidateConfig(config); err != nil {
+		return 0, nil, fmt.Errorf("validate vz config: %w", err)
+	}
 	shimConfig := buildShimConfigFromVMConfig(config, socketPath)
 	return s.startShim(ctx, p, version, shimConfig, 30*time.Second)
 }
