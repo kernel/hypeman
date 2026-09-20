@@ -21,6 +21,56 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// GPUInitState is the guest GPU driver init state observed by the guest agent
+type GPUInitState int32
+
+const (
+	GPUInitState_GPU_INIT_STATE_UNKNOWN GPUInitState = 0 // No NVIDIA device, or init has not concluded
+	GPUInitState_GPU_INIT_STATE_OK      GPUInitState = 1 // The driver initialized the GPU
+	GPUInitState_GPU_INIT_STATE_FAILED  GPUInitState = 2 // The kernel reported an RmInitAdapter failure
+)
+
+// Enum value maps for GPUInitState.
+var (
+	GPUInitState_name = map[int32]string{
+		0: "GPU_INIT_STATE_UNKNOWN",
+		1: "GPU_INIT_STATE_OK",
+		2: "GPU_INIT_STATE_FAILED",
+	}
+	GPUInitState_value = map[string]int32{
+		"GPU_INIT_STATE_UNKNOWN": 0,
+		"GPU_INIT_STATE_OK":      1,
+		"GPU_INIT_STATE_FAILED":  2,
+	}
+)
+
+func (x GPUInitState) Enum() *GPUInitState {
+	p := new(GPUInitState)
+	*p = x
+	return p
+}
+
+func (x GPUInitState) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (GPUInitState) Descriptor() protoreflect.EnumDescriptor {
+	return file_lib_guest_guest_proto_enumTypes[0].Descriptor()
+}
+
+func (GPUInitState) Type() protoreflect.EnumType {
+	return &file_lib_guest_guest_proto_enumTypes[0]
+}
+
+func (x GPUInitState) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use GPUInitState.Descriptor instead.
+func (GPUInitState) EnumDescriptor() ([]byte, []int) {
+	return file_lib_guest_guest_proto_rawDescGZIP(), []int{0}
+}
+
 // ExecRequest represents messages from client to server
 type ExecRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -1380,6 +1430,97 @@ func (*ReconfigureNetworkResponse) Descriptor() ([]byte, []int) {
 	return file_lib_guest_guest_proto_rawDescGZIP(), []int{18}
 }
 
+// GetGPUInitStatusRequest requests the guest GPU driver init state
+type GetGPUInitStatusRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetGPUInitStatusRequest) Reset() {
+	*x = GetGPUInitStatusRequest{}
+	mi := &file_lib_guest_guest_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetGPUInitStatusRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetGPUInitStatusRequest) ProtoMessage() {}
+
+func (x *GetGPUInitStatusRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_lib_guest_guest_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetGPUInitStatusRequest.ProtoReflect.Descriptor instead.
+func (*GetGPUInitStatusRequest) Descriptor() ([]byte, []int) {
+	return file_lib_guest_guest_proto_rawDescGZIP(), []int{19}
+}
+
+// GetGPUInitStatusResponse reports the guest GPU driver init state
+type GetGPUInitStatusResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	State GPUInitState           `protobuf:"varint,1,opt,name=state,proto3,enum=guest.GPUInitState" json:"state,omitempty"`
+	// Most recent NVRM init-failure line observed in kmsg; set when state is FAILED
+	FailureMessage string `protobuf:"bytes,2,opt,name=failure_message,json=failureMessage,proto3" json:"failure_message,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *GetGPUInitStatusResponse) Reset() {
+	*x = GetGPUInitStatusResponse{}
+	mi := &file_lib_guest_guest_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetGPUInitStatusResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetGPUInitStatusResponse) ProtoMessage() {}
+
+func (x *GetGPUInitStatusResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_lib_guest_guest_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetGPUInitStatusResponse.ProtoReflect.Descriptor instead.
+func (*GetGPUInitStatusResponse) Descriptor() ([]byte, []int) {
+	return file_lib_guest_guest_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *GetGPUInitStatusResponse) GetState() GPUInitState {
+	if x != nil {
+		return x.State
+	}
+	return GPUInitState_GPU_INIT_STATE_UNKNOWN
+}
+
+func (x *GetGPUInitStatusResponse) GetFailureMessage() string {
+	if x != nil {
+		return x.FailureMessage
+	}
+	return ""
+}
+
 var File_lib_guest_guest_proto protoreflect.FileDescriptor
 
 const file_lib_guest_guest_proto_rawDesc = "" +
@@ -1479,14 +1620,23 @@ const file_lib_guest_guest_proto_rawDesc = "" +
 	"\x04ipv4\x18\x03 \x01(\tR\x04ipv4\x12\x16\n" +
 	"\x06prefix\x18\x04 \x01(\rR\x06prefix\x12\x18\n" +
 	"\agateway\x18\x05 \x01(\tR\agateway\"\x1c\n" +
-	"\x1aReconfigureNetworkResponse2\xae\x03\n" +
+	"\x1aReconfigureNetworkResponse\"\x19\n" +
+	"\x17GetGPUInitStatusRequest\"n\n" +
+	"\x18GetGPUInitStatusResponse\x12)\n" +
+	"\x05state\x18\x01 \x01(\x0e2\x13.guest.GPUInitStateR\x05state\x12'\n" +
+	"\x0ffailure_message\x18\x02 \x01(\tR\x0efailureMessage*\\\n" +
+	"\fGPUInitState\x12\x1a\n" +
+	"\x16GPU_INIT_STATE_UNKNOWN\x10\x00\x12\x15\n" +
+	"\x11GPU_INIT_STATE_OK\x10\x01\x12\x19\n" +
+	"\x15GPU_INIT_STATE_FAILED\x10\x022\x83\x04\n" +
 	"\fGuestService\x123\n" +
 	"\x04Exec\x12\x12.guest.ExecRequest\x1a\x13.guest.ExecResponse(\x010\x01\x12F\n" +
 	"\vCopyToGuest\x12\x19.guest.CopyToGuestRequest\x1a\x1a.guest.CopyToGuestResponse(\x01\x12L\n" +
 	"\rCopyFromGuest\x12\x1b.guest.CopyFromGuestRequest\x1a\x1c.guest.CopyFromGuestResponse0\x01\x12;\n" +
 	"\bStatPath\x12\x16.guest.StatPathRequest\x1a\x17.guest.StatPathResponse\x12;\n" +
 	"\bShutdown\x12\x16.guest.ShutdownRequest\x1a\x17.guest.ShutdownResponse\x12Y\n" +
-	"\x12ReconfigureNetwork\x12 .guest.ReconfigureNetworkRequest\x1a!.guest.ReconfigureNetworkResponseB'Z%github.com/onkernel/hypeman/lib/guestb\x06proto3"
+	"\x12ReconfigureNetwork\x12 .guest.ReconfigureNetworkRequest\x1a!.guest.ReconfigureNetworkResponse\x12S\n" +
+	"\x10GetGPUInitStatus\x12\x1e.guest.GetGPUInitStatusRequest\x1a\x1f.guest.GetGPUInitStatusResponseB'Z%github.com/onkernel/hypeman/lib/guestb\x06proto3"
 
 var (
 	file_lib_guest_guest_proto_rawDescOnce sync.Once
@@ -1500,55 +1650,62 @@ func file_lib_guest_guest_proto_rawDescGZIP() []byte {
 	return file_lib_guest_guest_proto_rawDescData
 }
 
-var file_lib_guest_guest_proto_msgTypes = make([]protoimpl.MessageInfo, 20)
+var file_lib_guest_guest_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_lib_guest_guest_proto_msgTypes = make([]protoimpl.MessageInfo, 22)
 var file_lib_guest_guest_proto_goTypes = []any{
-	(*ExecRequest)(nil),                // 0: guest.ExecRequest
-	(*ExecStart)(nil),                  // 1: guest.ExecStart
-	(*WindowSize)(nil),                 // 2: guest.WindowSize
-	(*ExecResponse)(nil),               // 3: guest.ExecResponse
-	(*CopyToGuestRequest)(nil),         // 4: guest.CopyToGuestRequest
-	(*CopyToGuestStart)(nil),           // 5: guest.CopyToGuestStart
-	(*CopyToGuestEnd)(nil),             // 6: guest.CopyToGuestEnd
-	(*CopyToGuestResponse)(nil),        // 7: guest.CopyToGuestResponse
-	(*CopyFromGuestRequest)(nil),       // 8: guest.CopyFromGuestRequest
-	(*CopyFromGuestResponse)(nil),      // 9: guest.CopyFromGuestResponse
-	(*CopyFromGuestHeader)(nil),        // 10: guest.CopyFromGuestHeader
-	(*CopyFromGuestEnd)(nil),           // 11: guest.CopyFromGuestEnd
-	(*CopyFromGuestError)(nil),         // 12: guest.CopyFromGuestError
-	(*StatPathRequest)(nil),            // 13: guest.StatPathRequest
-	(*StatPathResponse)(nil),           // 14: guest.StatPathResponse
-	(*ShutdownRequest)(nil),            // 15: guest.ShutdownRequest
-	(*ShutdownResponse)(nil),           // 16: guest.ShutdownResponse
-	(*ReconfigureNetworkRequest)(nil),  // 17: guest.ReconfigureNetworkRequest
-	(*ReconfigureNetworkResponse)(nil), // 18: guest.ReconfigureNetworkResponse
-	nil,                                // 19: guest.ExecStart.EnvEntry
+	(GPUInitState)(0),                  // 0: guest.GPUInitState
+	(*ExecRequest)(nil),                // 1: guest.ExecRequest
+	(*ExecStart)(nil),                  // 2: guest.ExecStart
+	(*WindowSize)(nil),                 // 3: guest.WindowSize
+	(*ExecResponse)(nil),               // 4: guest.ExecResponse
+	(*CopyToGuestRequest)(nil),         // 5: guest.CopyToGuestRequest
+	(*CopyToGuestStart)(nil),           // 6: guest.CopyToGuestStart
+	(*CopyToGuestEnd)(nil),             // 7: guest.CopyToGuestEnd
+	(*CopyToGuestResponse)(nil),        // 8: guest.CopyToGuestResponse
+	(*CopyFromGuestRequest)(nil),       // 9: guest.CopyFromGuestRequest
+	(*CopyFromGuestResponse)(nil),      // 10: guest.CopyFromGuestResponse
+	(*CopyFromGuestHeader)(nil),        // 11: guest.CopyFromGuestHeader
+	(*CopyFromGuestEnd)(nil),           // 12: guest.CopyFromGuestEnd
+	(*CopyFromGuestError)(nil),         // 13: guest.CopyFromGuestError
+	(*StatPathRequest)(nil),            // 14: guest.StatPathRequest
+	(*StatPathResponse)(nil),           // 15: guest.StatPathResponse
+	(*ShutdownRequest)(nil),            // 16: guest.ShutdownRequest
+	(*ShutdownResponse)(nil),           // 17: guest.ShutdownResponse
+	(*ReconfigureNetworkRequest)(nil),  // 18: guest.ReconfigureNetworkRequest
+	(*ReconfigureNetworkResponse)(nil), // 19: guest.ReconfigureNetworkResponse
+	(*GetGPUInitStatusRequest)(nil),    // 20: guest.GetGPUInitStatusRequest
+	(*GetGPUInitStatusResponse)(nil),   // 21: guest.GetGPUInitStatusResponse
+	nil,                                // 22: guest.ExecStart.EnvEntry
 }
 var file_lib_guest_guest_proto_depIdxs = []int32{
-	1,  // 0: guest.ExecRequest.start:type_name -> guest.ExecStart
-	2,  // 1: guest.ExecRequest.resize:type_name -> guest.WindowSize
-	19, // 2: guest.ExecStart.env:type_name -> guest.ExecStart.EnvEntry
-	5,  // 3: guest.CopyToGuestRequest.start:type_name -> guest.CopyToGuestStart
-	6,  // 4: guest.CopyToGuestRequest.end:type_name -> guest.CopyToGuestEnd
-	10, // 5: guest.CopyFromGuestResponse.header:type_name -> guest.CopyFromGuestHeader
-	11, // 6: guest.CopyFromGuestResponse.end:type_name -> guest.CopyFromGuestEnd
-	12, // 7: guest.CopyFromGuestResponse.error:type_name -> guest.CopyFromGuestError
-	0,  // 8: guest.GuestService.Exec:input_type -> guest.ExecRequest
-	4,  // 9: guest.GuestService.CopyToGuest:input_type -> guest.CopyToGuestRequest
-	8,  // 10: guest.GuestService.CopyFromGuest:input_type -> guest.CopyFromGuestRequest
-	13, // 11: guest.GuestService.StatPath:input_type -> guest.StatPathRequest
-	15, // 12: guest.GuestService.Shutdown:input_type -> guest.ShutdownRequest
-	17, // 13: guest.GuestService.ReconfigureNetwork:input_type -> guest.ReconfigureNetworkRequest
-	3,  // 14: guest.GuestService.Exec:output_type -> guest.ExecResponse
-	7,  // 15: guest.GuestService.CopyToGuest:output_type -> guest.CopyToGuestResponse
-	9,  // 16: guest.GuestService.CopyFromGuest:output_type -> guest.CopyFromGuestResponse
-	14, // 17: guest.GuestService.StatPath:output_type -> guest.StatPathResponse
-	16, // 18: guest.GuestService.Shutdown:output_type -> guest.ShutdownResponse
-	18, // 19: guest.GuestService.ReconfigureNetwork:output_type -> guest.ReconfigureNetworkResponse
-	14, // [14:20] is the sub-list for method output_type
-	8,  // [8:14] is the sub-list for method input_type
-	8,  // [8:8] is the sub-list for extension type_name
-	8,  // [8:8] is the sub-list for extension extendee
-	0,  // [0:8] is the sub-list for field type_name
+	2,  // 0: guest.ExecRequest.start:type_name -> guest.ExecStart
+	3,  // 1: guest.ExecRequest.resize:type_name -> guest.WindowSize
+	22, // 2: guest.ExecStart.env:type_name -> guest.ExecStart.EnvEntry
+	6,  // 3: guest.CopyToGuestRequest.start:type_name -> guest.CopyToGuestStart
+	7,  // 4: guest.CopyToGuestRequest.end:type_name -> guest.CopyToGuestEnd
+	11, // 5: guest.CopyFromGuestResponse.header:type_name -> guest.CopyFromGuestHeader
+	12, // 6: guest.CopyFromGuestResponse.end:type_name -> guest.CopyFromGuestEnd
+	13, // 7: guest.CopyFromGuestResponse.error:type_name -> guest.CopyFromGuestError
+	0,  // 8: guest.GetGPUInitStatusResponse.state:type_name -> guest.GPUInitState
+	1,  // 9: guest.GuestService.Exec:input_type -> guest.ExecRequest
+	5,  // 10: guest.GuestService.CopyToGuest:input_type -> guest.CopyToGuestRequest
+	9,  // 11: guest.GuestService.CopyFromGuest:input_type -> guest.CopyFromGuestRequest
+	14, // 12: guest.GuestService.StatPath:input_type -> guest.StatPathRequest
+	16, // 13: guest.GuestService.Shutdown:input_type -> guest.ShutdownRequest
+	18, // 14: guest.GuestService.ReconfigureNetwork:input_type -> guest.ReconfigureNetworkRequest
+	20, // 15: guest.GuestService.GetGPUInitStatus:input_type -> guest.GetGPUInitStatusRequest
+	4,  // 16: guest.GuestService.Exec:output_type -> guest.ExecResponse
+	8,  // 17: guest.GuestService.CopyToGuest:output_type -> guest.CopyToGuestResponse
+	10, // 18: guest.GuestService.CopyFromGuest:output_type -> guest.CopyFromGuestResponse
+	15, // 19: guest.GuestService.StatPath:output_type -> guest.StatPathResponse
+	17, // 20: guest.GuestService.Shutdown:output_type -> guest.ShutdownResponse
+	19, // 21: guest.GuestService.ReconfigureNetwork:output_type -> guest.ReconfigureNetworkResponse
+	21, // 22: guest.GuestService.GetGPUInitStatus:output_type -> guest.GetGPUInitStatusResponse
+	16, // [16:23] is the sub-list for method output_type
+	9,  // [9:16] is the sub-list for method input_type
+	9,  // [9:9] is the sub-list for extension type_name
+	9,  // [9:9] is the sub-list for extension extendee
+	0,  // [0:9] is the sub-list for field type_name
 }
 
 func init() { file_lib_guest_guest_proto_init() }
@@ -1582,13 +1739,14 @@ func file_lib_guest_guest_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_lib_guest_guest_proto_rawDesc), len(file_lib_guest_guest_proto_rawDesc)),
-			NumEnums:      0,
-			NumMessages:   20,
+			NumEnums:      1,
+			NumMessages:   22,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
 		GoTypes:           file_lib_guest_guest_proto_goTypes,
 		DependencyIndexes: file_lib_guest_guest_proto_depIdxs,
+		EnumInfos:         file_lib_guest_guest_proto_enumTypes,
 		MessageInfos:      file_lib_guest_guest_proto_msgTypes,
 	}.Build()
 	File_lib_guest_guest_proto = out.File

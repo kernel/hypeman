@@ -5,9 +5,9 @@ package qemu
 import (
 	"context"
 	"fmt"
-	"io"
 	"log/slog"
 	"net"
+	"os"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -130,21 +130,20 @@ func (d *VsockDialer) DialVsock(ctx context.Context, port int) (net.Conn, error)
 		}
 	}
 
-	// Set back to blocking mode for normal I/O
-	if err := unix.SetNonblock(fd, false); err != nil {
-		unix.Close(fd)
-		return nil, fmt.Errorf("set blocking: %w", err)
-	}
-
 	slog.DebugContext(ctx, "vsock connection established", "cid", d.cid, "port", port)
 
 	// Wrap the file descriptor in a net.Conn
-	return newVsockConn(fd, d.cid, uint32(port))
+	conn, err := newVsockConn(fd, d.cid, uint32(port))
+	if err != nil {
+		return nil, err
+	}
+	return conn, nil
 }
 
-// vsockConn wraps a vsock file descriptor as a net.Conn
+// vsockConn wraps a vsock file descriptor as a net.Conn. The embedded
+// os.File owns the descriptor: close, in-flight I/O, and deadlines.
 type vsockConn struct {
-	fd         int
+	*os.File
 	localCID   uint32
 	localPort  uint32
 	remoteCID  uint32
@@ -152,43 +151,18 @@ type vsockConn struct {
 }
 
 func newVsockConn(fd int, remoteCID, remotePort uint32) (*vsockConn, error) {
+	// os.NewFile only registers a nonblocking descriptor with the poller.
+	if err := unix.SetNonblock(fd, true); err != nil {
+		unix.Close(fd)
+		return nil, fmt.Errorf("set non-blocking: %w", err)
+	}
 	return &vsockConn{
-		fd:         fd,
+		File:       os.NewFile(uintptr(fd), "vsock"),
 		localCID:   unix.VMADDR_CID_HOST,
 		localPort:  0, // ephemeral
 		remoteCID:  remoteCID,
 		remotePort: remotePort,
 	}, nil
-}
-
-func (c *vsockConn) Read(b []byte) (int, error) {
-	n, err := unix.Read(c.fd, b)
-	// Ensure we never return negative n (violates io.Reader contract)
-	// This can happen when the vsock fd becomes invalid (VM died)
-	if n < 0 {
-		if err == nil {
-			err = io.EOF
-		}
-		return 0, err
-	}
-	return n, err
-}
-
-func (c *vsockConn) Write(b []byte) (int, error) {
-	n, err := unix.Write(c.fd, b)
-	// Ensure we never return negative n (violates io.Writer contract)
-	// This can happen when the vsock fd becomes invalid (VM died)
-	if n < 0 {
-		if err == nil {
-			err = io.ErrClosedPipe
-		}
-		return 0, err
-	}
-	return n, err
-}
-
-func (c *vsockConn) Close() error {
-	return unix.Close(c.fd)
 }
 
 func (c *vsockConn) LocalAddr() net.Addr {
@@ -197,49 +171,6 @@ func (c *vsockConn) LocalAddr() net.Addr {
 
 func (c *vsockConn) RemoteAddr() net.Addr {
 	return &vsockAddr{cid: c.remoteCID, port: c.remotePort}
-}
-
-func (c *vsockConn) SetDeadline(t time.Time) error {
-	if t.IsZero() {
-		// Clear deadlines
-		if err := c.SetReadDeadline(t); err != nil {
-			return err
-		}
-		return c.SetWriteDeadline(t)
-	}
-	timeout := time.Until(t)
-	if timeout < 0 {
-		timeout = 0
-	}
-	tv := unix.NsecToTimeval(timeout.Nanoseconds())
-	if err := unix.SetsockoptTimeval(c.fd, unix.SOL_SOCKET, unix.SO_RCVTIMEO, &tv); err != nil {
-		return err
-	}
-	return unix.SetsockoptTimeval(c.fd, unix.SOL_SOCKET, unix.SO_SNDTIMEO, &tv)
-}
-
-func (c *vsockConn) SetReadDeadline(t time.Time) error {
-	var tv unix.Timeval
-	if !t.IsZero() {
-		timeout := time.Until(t)
-		if timeout < 0 {
-			timeout = 0
-		}
-		tv = unix.NsecToTimeval(timeout.Nanoseconds())
-	}
-	return unix.SetsockoptTimeval(c.fd, unix.SOL_SOCKET, unix.SO_RCVTIMEO, &tv)
-}
-
-func (c *vsockConn) SetWriteDeadline(t time.Time) error {
-	var tv unix.Timeval
-	if !t.IsZero() {
-		timeout := time.Until(t)
-		if timeout < 0 {
-			timeout = 0
-		}
-		tv = unix.NsecToTimeval(timeout.Nanoseconds())
-	}
-	return unix.SetsockoptTimeval(c.fd, unix.SOL_SOCKET, unix.SO_SNDTIMEO, &tv)
 }
 
 // vsockAddr implements net.Addr for vsock addresses

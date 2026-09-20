@@ -58,7 +58,9 @@ func WithUFFDClient(client UFFDClient) StarterOption {
 
 var _ hypervisor.VMStarter = (*Starter)(nil)
 
-func (s *Starter) ValidateConfig(hypervisor.VMConfig) error { return nil }
+func (s *Starter) ValidateConfig(config hypervisor.VMConfig) error {
+	return hypervisor.ValidateDirectRawConfig("firecracker", config)
+}
 
 func (s *Starter) SocketName() string {
 	return "fc.sock"
@@ -90,6 +92,9 @@ func (s *Starter) ResolveVersion(p *paths.Paths, requested string) (string, erro
 }
 
 func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, socketPath string, config hypervisor.VMConfig) (int, hypervisor.Hypervisor, error) {
+	if err := s.ValidateConfig(config); err != nil {
+		return 0, nil, fmt.Errorf("validate firecracker config: %w", err)
+	}
 	processCtx, processSpan := hypervisor.StartProcessSpan(ctx, hypervisor.TypeFirecracker)
 	pid, err := s.startProcess(processCtx, p, version, socketPath)
 	hypervisor.FinishTraceSpan(processSpan, err)

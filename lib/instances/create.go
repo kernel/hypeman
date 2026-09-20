@@ -52,11 +52,11 @@ var systemDirectories = []string{
 	"/var",
 }
 
-func wrapCreateMdevErr(profile string, err error) error {
+func wrapCreateVGPUErr(profile string, err error) error {
 	if errors.Is(err, devices.ErrVGPUNotSupportedOnMacOS) {
 		return fmt.Errorf("%w: %w", ErrInvalidRequest, err)
 	}
-	return fmt.Errorf("create vGPU mdev for profile %s: %w", profile, err)
+	return fmt.Errorf("create vGPU for profile %s: %w", profile, err)
 }
 
 // generateVsockCID converts first 8 chars of instance ID to a unique CID
@@ -272,13 +272,17 @@ func (m *manager) createInstance(
 	// whatever devices have been attached when cleanup runs.
 	var attachedDeviceIDs []string
 	var resolvedDeviceIDs []string
-	var gpuProfile string
-	var gpuMdevUUID string
-
-	// Setup cleanup stack early so device attachment errors trigger cleanup
+	var gpuDevice *devices.VGPUDevice
+	gpuProfile := ""
+	if req.GPU != nil {
+		gpuProfile = req.GPU.Profile
+	}
+	cleanupInstanceData := true
 	cu := cleanup.Make(func() {
 		log.DebugContext(ctx, "cleaning up instance on error", "instance_id", id)
-		m.deleteInstanceData(id)
+		if cleanupInstanceData {
+			m.deleteInstanceData(id)
+		}
 	})
 	defer cu.Clean()
 
@@ -288,27 +292,6 @@ func (m *manager) createInstance(
 			for _, deviceID := range attachedDeviceIDs {
 				log.DebugContext(ctx, "detaching device on cleanup", "instance_id", id, "device", deviceID)
 				m.deviceManager.MarkDetached(ctx, deviceID)
-			}
-		})
-	}
-
-	// Handle vGPU profile request - create mdev device
-	if req.GPU != nil && req.GPU.Profile != "" {
-		log.InfoContext(ctx, "creating vGPU mdev", "instance_id", id, "profile", req.GPU.Profile)
-		mdev, err := devices.CreateMdev(ctx, req.GPU.Profile, id)
-		if err != nil {
-			log.ErrorContext(ctx, "failed to create mdev", "profile", req.GPU.Profile, "error", err)
-			return nil, wrapCreateMdevErr(req.GPU.Profile, err)
-		}
-		gpuProfile = req.GPU.Profile
-		gpuMdevUUID = mdev.UUID
-		log.InfoContext(ctx, "created vGPU mdev", "instance_id", id, "profile", gpuProfile, "uuid", gpuMdevUUID)
-
-		// Add mdev cleanup to stack
-		cu.Add(func() {
-			log.DebugContext(ctx, "destroying mdev on cleanup", "instance_id", id, "uuid", gpuMdevUUID)
-			if err := devices.DestroyMdev(ctx, gpuMdevUUID); err != nil {
-				log.WarnContext(ctx, "failed to destroy mdev on cleanup", "instance_id", id, "uuid", gpuMdevUUID, "error", err)
 			}
 		})
 	}
@@ -382,7 +365,6 @@ func (m *manager) createInstance(
 		VsockSocket:              vsockSocket,
 		Devices:                  resolvedDeviceIDs,
 		GPUProfile:               gpuProfile,
-		GPUMdevUUID:              gpuMdevUUID,
 		Entrypoint:               req.Entrypoint,
 		Cmd:                      req.Cmd,
 		SkipKernelHeaders:        req.SkipKernelHeaders,
@@ -399,6 +381,33 @@ func (m *manager) createInstance(
 	if err := m.ensureDirectories(id); err != nil {
 		log.ErrorContext(ctx, "failed to create directories", "instance_id", id, "error", err)
 		return nil, fmt.Errorf("ensure directories: %w", err)
+	}
+
+	if gpuProfile != "" {
+		log.InfoContext(ctx, "claiming vGPU", "instance_id", id, "profile", gpuProfile)
+		claimMeta := &metadata{StoredMetadata: *stored}
+		gpuDevice, err = m.claimVGPU(ctx, claimMeta, gpuProfile)
+		if err != nil {
+			log.ErrorContext(ctx, "failed to claim vGPU", "profile", gpuProfile, "error", err)
+			return nil, wrapCreateVGPUErr(gpuProfile, err)
+		}
+		if gpuDevice.Framework == devices.VGPUFrameworkVendorVFIO {
+			*stored = claimMeta.StoredMetadata
+		} else {
+			setStoredVGPUDevice(stored, gpuDevice)
+		}
+		cu.Add(func() {
+			if !m.cleanupCreateVGPU(ctx, stored) {
+				cleanupInstanceData = false
+				log.ErrorContext(ctx, "retaining instance data for failed create because its vGPU claim could not be released; delete the instance to retry",
+					"instance_id", id, "device_path", storedVGPUDevicePath(stored))
+			}
+		})
+		if err := m.configureClaimedVGPU(ctx, gpuDevice); err != nil {
+			log.ErrorContext(ctx, "failed to configure vGPU", "profile", gpuProfile, "error", err)
+			return nil, wrapCreateVGPUErr(gpuProfile, err)
+		}
+		log.InfoContext(ctx, "configured vGPU", "instance_id", id, "profile", gpuProfile, "uuid", gpuDevice.MdevUUID)
 	}
 
 	// 13. Create overlay disk with specified size
@@ -818,10 +827,8 @@ func (m *manager) startAndBootVM(
 	if err != nil {
 		return fmt.Errorf("start vm: %w", err)
 	}
-	pid = resolveRuntimeHypervisorPID(log, stored.SocketPath, pid)
-
-	// Store the PID for later cleanup
-	stored.HypervisorPID = &pid
+	// Store the PID identity for later cleanup.
+	pid = resolveRuntimeHypervisorPID(log, stored, pid)
 	log.DebugContext(ctx, "VM started", "instance_id", stored.Id, "pid", pid)
 
 	// Optional: Expand memory to max if hotplug configured
@@ -837,15 +844,26 @@ func (m *manager) startAndBootVM(
 	return nil
 }
 
-func resolveRuntimeHypervisorPID(log *slog.Logger, socketPath string, fallbackPID int) int {
-	if processExists(fallbackPID) {
+// resolveRuntimeHypervisorPID resolves the runtime PID of the hypervisor
+// serving the instance socket and records its process identity. The
+// boot-scoped identity token is minted only for a trustworthy PID — the
+// direct child we spawned or the confirmed socket owner.
+func resolveRuntimeHypervisorPID(log *slog.Logger, stored *StoredMetadata, fallbackPID int) int {
+	if ProcessExists(fallbackPID) {
+		stored.HypervisorProcessIdentity.Set(fallbackPID)
 		return fallbackPID
 	}
-	pid, err := hypervisor.ResolveProcessPID(socketPath)
+	pid, err := hypervisor.ResolveProcessPID(stored.SocketPath)
 	if err != nil {
-		log.Debug("using fallback hypervisor pid", "socket_path", socketPath, "pid", fallbackPID, "error", err)
+		// The fallback PID was just proven dead, so it gets no identity
+		// token: minting one would stamp the current boot ID (and, if the
+		// PID is recycled mid-call, a live start time) onto a process that
+		// is not the hypervisor.
+		log.Debug("using fallback hypervisor pid", "socket_path", stored.SocketPath, "pid", fallbackPID, "error", err)
+		stored.HypervisorProcessIdentity.SetUnconfirmed(fallbackPID)
 		return fallbackPID
 	}
+	stored.HypervisorProcessIdentity.Set(pid)
 	return pid
 }
 
@@ -943,12 +961,6 @@ func (m *manager) buildHypervisorConfig(ctx context.Context, inst *Instance, ima
 		}
 	}
 
-	// Add vGPU mdev device if configured
-	if inst.GPUMdevUUID != "" {
-		mdevPath := filepath.Join("/sys/bus/mdev/devices", inst.GPUMdevUUID)
-		pciDevices = append(pciDevices, mdevPath)
-	}
-
 	// Build topology if available
 	var topology *hypervisor.CPUTopology
 	if hostTopo := calculateGuestTopology(inst.Vcpus, m.hostTopology); hostTopo != nil {
@@ -968,21 +980,22 @@ func (m *manager) buildHypervisorConfig(ctx context.Context, inst *Instance, ima
 	}
 
 	return hypervisor.VMConfig{
-		VCPUs:         inst.Vcpus,
-		MemoryBytes:   inst.Size,
-		HotplugBytes:  inst.HotplugSize,
-		Topology:      topology,
-		GuestMemory:   m.guestMemoryConfig(),
-		Disks:         disks,
-		Networks:      networks,
-		SerialLogPath: m.paths.InstanceAppLog(inst.Id),
-		VsockCID:      inst.VsockCID,
-		VsockSocket:   inst.VsockSocket,
-		PCIDevices:    pciDevices,
-		KernelPath:    kernelPath,
-		InitrdPath:    initrdPath,
-		KernelArgs:    m.kernelArgs(inst.HypervisorType),
-		EnableRosetta: inst.EnableRosetta,
+		VCPUs:          inst.Vcpus,
+		MemoryBytes:    inst.Size,
+		HotplugBytes:   inst.HotplugSize,
+		Topology:       topology,
+		GuestMemory:    m.guestMemoryConfig(),
+		Disks:          disks,
+		Networks:       networks,
+		SerialLogPath:  m.paths.InstanceAppLog(inst.Id),
+		VsockCID:       inst.VsockCID,
+		VsockSocket:    inst.VsockSocket,
+		PCIDevices:     pciDevices,
+		VGPUDevicePath: storedVGPUDevicePath(&inst.StoredMetadata),
+		KernelPath:     kernelPath,
+		InitrdPath:     initrdPath,
+		KernelArgs:     m.kernelArgs(inst.HypervisorType),
+		EnableRosetta:  inst.EnableRosetta,
 	}, nil
 }
 

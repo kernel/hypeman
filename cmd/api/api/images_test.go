@@ -2,13 +2,12 @@ package api
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"os"
 	"testing"
 	"time"
 
 	"github.com/kernel/hypeman/lib/images"
+	"github.com/kernel/hypeman/lib/images/testutil"
 	"github.com/kernel/hypeman/lib/oapi"
 	"github.com/kernel/hypeman/lib/paths"
 	"github.com/stretchr/testify/assert"
@@ -35,6 +34,15 @@ type captureCreateImageManager struct {
 func (m *captureCreateImageManager) CreateImage(_ context.Context, req images.CreateImageRequest) (*images.Image, error) {
 	m.req = req
 	return &images.Image{Name: req.Name, Digest: "sha256:test", Status: images.StatusPending, CreatedAt: time.Now()}, nil
+}
+
+type tagImageErrManager struct {
+	images.Manager
+	err error
+}
+
+func (m tagImageErrManager) TagImage(context.Context, string, string) (*images.Image, error) {
+	return nil, m.err
 }
 
 func TestCreateImage_MapsBorrowedCredentials(t *testing.T) {
@@ -505,28 +513,95 @@ func seedReadyDigestOnlyImage(t *testing.T, svc *ApiService, imageRef string, im
 	require.NoError(t, err)
 	require.True(t, ref.IsDigest(), "test helper expects a digest reference")
 
-	p := paths.New(svc.Config.DataDir)
-	digestDir := p.ImageDigestDir(ref.Repository(), ref.DigestHex())
-	require.NoError(t, os.MkdirAll(digestDir, 0o755))
-	require.NoError(t, os.WriteFile(p.ImageDigestPath(ref.Repository(), ref.DigestHex()), []byte("rootfs"), 0o644))
+	testutil.SeedReadyImage(t, paths.New(svc.Config.DataDir), testutil.Seed{
+		Repository: ref.Repository(),
+		DigestHex:  ref.DigestHex(),
+		Name:       imageRef,
+		Tags:       imageTags,
+	})
+}
 
-	meta := struct {
-		Name      string            `json:"name"`
-		Digest    string            `json:"digest"`
-		Status    string            `json:"status"`
-		SizeBytes int64             `json:"size_bytes"`
-		Tags      map[string]string `json:"tags,omitempty"`
-		CreatedAt time.Time         `json:"created_at"`
+func TestTagImage_ErrorStatusMapping(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		err  error
+		want oapi.TagImageResponseObject
 	}{
-		Name:      imageRef,
-		Digest:    "sha256:" + ref.DigestHex(),
-		Status:    "ready",
-		SizeBytes: int64(len("rootfs")),
-		Tags:      imageTags,
-		CreatedAt: time.Now().UTC(),
+		{
+			name: "invalid name -> 400",
+			err:  fmt.Errorf("tag: %w", images.ErrInvalidName),
+			want: oapi.TagImage400JSONResponse{Code: "invalid_name", Message: "tag: invalid image name"},
+		},
+		{
+			name: "not found -> 404",
+			err:  fmt.Errorf("tag: %w", images.ErrNotFound),
+			want: oapi.TagImage404JSONResponse{Code: "not_found", Message: "source image not found"},
+		},
+		{
+			name: "not ready -> 409",
+			err:  fmt.Errorf("tag: %w", images.ErrImageNotReady),
+			want: oapi.TagImage409JSONResponse{Code: "image_not_ready", Message: "tag: image is not ready"},
+		},
 	}
 
-	data, err := json.Marshal(meta)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := &ApiService{ImageManager: tagImageErrManager{err: tc.err}}
+			resp, err := svc.TagImage(ctx(), oapi.TagImageRequestObject{
+				Name: "docker.io/library/alpine:latest",
+				Body: &oapi.TagImageRequest{Target: "docker.io/library/alpine:stable"},
+			})
+			require.NoError(t, err)
+			require.Equal(t, tc.want, resp)
+		})
+	}
+}
+
+func TestTagImage_MissingBody(t *testing.T) {
+	t.Parallel()
+
+	svc := &ApiService{ImageManager: tagImageErrManager{}}
+	resp, err := svc.TagImage(ctx(), oapi.TagImageRequestObject{
+		Name: "docker.io/library/alpine:latest",
+	})
 	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(p.ImageMetadata(ref.Repository(), ref.DigestHex()), data, 0o644))
+	require.IsType(t, oapi.TagImage400JSONResponse{}, resp)
+}
+
+// seedReadyContentImage writes a ready image into the shared content layout
+// plus a repository tag reference, without pulling from a registry.
+func seedReadyContentImage(t *testing.T, svc *ApiService, repository, tag, digestHex string) {
+	t.Helper()
+	testutil.SeedReadyImage(t, paths.New(svc.Config.DataDir), testutil.Seed{
+		Repository: repository,
+		Tag:        tag,
+		DigestHex:  digestHex,
+		Content:    true,
+	})
+}
+
+func TestTagImage_Success(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t)
+
+	const repository = "docker.io/library/alpine"
+	const digestHex = "ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34"
+	seedReadyContentImage(t, svc, repository, "latest", digestHex)
+
+	resp, err := svc.TagImage(ctx(), oapi.TagImageRequestObject{
+		Name: repository + ":latest",
+		Body: &oapi.TagImageRequest{Target: "registry.example/apps/alpine:v1"},
+	})
+	require.NoError(t, err)
+	okResp, ok := resp.(oapi.TagImage200JSONResponse)
+	require.True(t, ok, "expected 200 response, got %T", resp)
+	require.Equal(t, "registry.example/apps/alpine:v1", okResp.Name)
+	require.Equal(t, "sha256:"+digestHex, okResp.Digest)
+
+	// The new tag resolves through GetImage.
+	img, err := svc.ImageManager.GetImage(ctx(), "registry.example/apps/alpine:v1")
+	require.NoError(t, err)
+	require.Equal(t, images.StatusReady, img.Status)
 }

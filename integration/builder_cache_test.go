@@ -138,7 +138,10 @@ func TestBuilderPersistentCacheReuse(t *testing.T) {
 		}
 		require.True(collect, ready)
 	}, 5*time.Minute, time.Second)
-	require.Eventually(t, buildManager.ReadyForBuilds, 30*time.Second, 100*time.Millisecond)
+	// The build manager removes its temporary Docker tag before it flags itself
+	// ready, which can trail the image becoming ready by well over 30s on a busy
+	// shared Docker daemon.
+	require.Eventually(t, buildManager.ReadyForBuilds, 5*time.Minute, 100*time.Millisecond)
 
 	builder, err := builderManager.CreateBuilder(ctx, builders.CreateBuilderRequest{DiskSizeGb: 4})
 	require.NoError(t, err)

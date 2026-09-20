@@ -28,16 +28,9 @@ const (
 func runExecMode(log *Logger, cfg *vmconfig.Config) {
 	const newroot = "/overlay/newroot"
 
-	// Change root to the new filesystem using chroot (consistent with systemd mode)
-	log.Info("hypeman-init:setup", "executing chroot")
-	if err := syscall.Chroot(newroot); err != nil {
-		log.Error("hypeman-init:setup", "chroot failed", err)
-		dropToShell()
-	}
-
-	// Change to new root directory
-	if err := os.Chdir("/"); err != nil {
-		log.Error("hypeman-init:setup", "chdir / failed", err)
+	log.Info("hypeman-init:setup", "switching root")
+	if err := switchRoot(newroot); err != nil {
+		log.Error("hypeman-init:setup", "switch root failed", err)
 		dropToShell()
 	}
 

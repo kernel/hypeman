@@ -32,9 +32,11 @@ const (
 // prewarmImage is a source image to mirror into the local registry. Platform
 // is empty for host-platform images and set explicitly to mirror a specific
 // variant (e.g. linux/amd64 for Rosetta emulation tests on an arm64 host).
+// LinuxOnly skips the image on other hosts, for tests that need /dev/kvm.
 type prewarmImage struct {
-	Source   string
-	Platform string
+	Source    string
+	Platform  string
+	LinuxOnly bool
 }
 
 var defaultImages = []prewarmImage{
@@ -45,6 +47,8 @@ var defaultImages = []prewarmImage{
 	// Keep in sync with redisEntrypointEnvImage in lib/instances tests.
 	{Source: "docker.io/bitnamilegacy/redis:7.2.5-debian-12-r0"},
 	{Source: "docker.io/jrei/systemd-ubuntu:22.04"},
+	// Keep in sync with nestedDockerImage in integration/nested_docker_test.go.
+	{Source: "docker.io/library/docker:28.5.2-dind", LinuxOnly: true},
 	// amd64-only mirror for the Rosetta x86 image E2E (single-platform manifest;
 	// see toLocalRegistryRef for why it must be the only mirror of this tag).
 	{Source: "docker.io/library/alpine:3.19", Platform: "linux/amd64"},
@@ -115,6 +119,9 @@ func main() {
 	}
 
 	for _, img := range imagesToWarm {
+		if img.LinuxOnly && runtime.GOOS != "linux" {
+			continue
+		}
 		entry, err := ensureMirroredImage(ctx, inspectClient, registry, img)
 		if err != nil {
 			fatalf("prewarm image %s: %v", img.Source, err)

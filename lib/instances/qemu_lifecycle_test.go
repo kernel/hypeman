@@ -154,8 +154,7 @@ func runQEMUStandbyAndRestore(t *testing.T, hypervisorType hypervisor.Type, inst
 
 	// Cleanup
 	t.Log("Cleaning up...")
-	err = manager.DeleteInstance(ctx, inst.Id)
-	require.NoError(t, err)
+	deleteInstanceEventually(t, ctx, manager, inst.Id)
 
 	// Verify cleanup
 	assert.NoDirExists(t, p.InstanceDir(inst.Id))

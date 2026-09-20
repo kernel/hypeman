@@ -252,6 +252,50 @@ func (h *testImageHandler) GetImage(w http.ResponseWriter, r *http.Request, name
 	}
 }
 
+func TestTagImageRoute_URLDecodedName(t *testing.T) {
+	// Verifies the generated POST /images/{name}/tag route exists and that the
+	// URL-encoded source name is decoded before reaching the handler.
+	r := chi.NewRouter()
+
+	var receivedName string
+	handler := &testTagImageHandler{
+		tagImage: func(w http.ResponseWriter, r *http.Request, name string) {
+			receivedName = name
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"name":"` + name + `","digest":"sha256:test","status":"ready","created_at":"2026-01-01T00:00:00Z"}`))
+		},
+	}
+
+	oapi.HandlerFromMux(handler, r)
+
+	token, err := generateValidJWT("user-123")
+	require.NoError(t, err)
+
+	body := bytes.NewReader([]byte(`{"target":"docker.io/library/alpine:stable"}`))
+	req := httptest.NewRequest(http.MethodPost, "/images/docker.io%2Flibrary%2Falpine%3Alatest/tag", body)
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	assert.Equal(t, "docker.io/library/alpine:latest", receivedName)
+}
+
+// testTagImageHandler implements oapi.ServerInterface with just TagImage for testing
+type testTagImageHandler struct {
+	oapi.Unimplemented
+	tagImage func(w http.ResponseWriter, r *http.Request, name string)
+}
+
+func (h *testTagImageHandler) TagImage(w http.ResponseWriter, r *http.Request, name string) {
+	if h.tagImage != nil {
+		h.tagImage(w, r, name)
+	}
+}
+
 func TestImageNameWithSlashes_URLEncoding(t *testing.T) {
 	// This test verifies how chi router handles image names with slashes.
 	// Image names like "docker.io/onkernel/chromium-headful:latest" contain slashes

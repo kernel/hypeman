@@ -282,6 +282,9 @@ hypeman logs --source vmm my-app
 
 # View Hypeman operational logs
 hypeman logs --source hypeman my-app
+
+# View software TPM logs for a TPM-backed QEMU guest
+hypeman logs --source swtpm my-app
 ```
 
 For all available commands, run `hypeman --help`.

@@ -4,6 +4,14 @@ The `qemu` backend uses `q35` on amd64 and `virt` on arm64. These architecture-n
 
 QEMU ships many other machine models, including versioned compatibility aliases and hardware-emulation boards that do not fit Hypeman's guest contract. Hypeman intentionally does not mirror that open-ended list in its API. If another model eventually provides a useful, supportable capability profile, expose it as another hypervisor backend with explicit lifecycle and device guarantees rather than as an unchecked machine-type string.
 
+## Firmware boot and TPM ownership
+
+The standard amd64 `qemu` profile supports UEFI firmware boot, Secure Boot variable storage, qcow2 disks, and software TPM 2.0 devices. These requirements are represented as runtime capabilities so callers can validate a guest's requirements without branching on the QEMU type name. Direct-kernel profiles reject firmware and TPM configuration.
+
+Firmware code is immutable host input. Each instance receives its own writable NVRAM file and TPM state directory, which must be preserved together with the guest disk. Hypeman starts `swtpm` first because QEMU connects to its control socket as a client; launching both processes concurrently would race that required ordering. Once the socket exists, QEMU starts immediately.
+
+QEMU and `swtpm` run in detached process groups and keep running if Hypeman restarts. QEMU retains its TPM control connection, and `swtpm --terminate` exits when that connection closes. Startup cleanup owns both processes as one cleanup stack so a partial boot cannot leave either process behind. TPM output is available through the instance logs API with `source=swtpm`.
+
 ## `qemu-microvm`
 
 The `qemu-microvm` backend uses QEMU's Linux amd64-only `microvm` board. Upstream registers this board only in the x86 system emulator; `qemu-system-aarch64` does not provide an equivalent `microvm` machine. Hypeman uses direct kernel boot, `ttyS0` serial logs, and virtio-mmio transport for disks, networking, vsock, and the optional balloon.

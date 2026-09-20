@@ -72,7 +72,9 @@ func NewStarter() *Starter {
 // Verify Starter implements the interface
 var _ hypervisor.VMStarter = (*Starter)(nil)
 
-func (s *Starter) ValidateConfig(hypervisor.VMConfig) error { return nil }
+func (s *Starter) ValidateConfig(config hypervisor.VMConfig) error {
+	return hypervisor.ValidateDirectRawConfig("cloud-hypervisor", config)
+}
 
 // SocketName returns the socket filename for Cloud Hypervisor.
 func (s *Starter) SocketName() string {
@@ -108,6 +110,9 @@ func (s *Starter) ResolveVersion(p *paths.Paths, requested string) (string, erro
 // StartVM launches Cloud Hypervisor, configures the VM, and boots it.
 // Returns the process ID and a Hypervisor client for subsequent operations.
 func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, socketPath string, config hypervisor.VMConfig) (int, hypervisor.Hypervisor, error) {
+	if err := s.ValidateConfig(config); err != nil {
+		return 0, nil, fmt.Errorf("validate cloud-hypervisor config: %w", err)
+	}
 	log := logger.FromContext(ctx)
 
 	// Validate version

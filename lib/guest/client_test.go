@@ -216,6 +216,24 @@ func TestExecIntoInstanceNoWaitClosesRetryableConnection(t *testing.T) {
 	}
 }
 
+func TestGetGPUInitStatusClosesRetryableConnection(t *testing.T) {
+	dialer := &alwaysFailDialer{key: "gpu-status-close-retryable-test"}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	_, _, err := GetGPUInitStatus(ctx, dialer)
+	if err == nil {
+		t.Fatal("GetGPUInitStatus succeeded unexpectedly")
+	}
+
+	connPool.RLock()
+	_, ok := connPool.conns[dialer.Key()]
+	connPool.RUnlock()
+	if ok {
+		t.Fatal("retryable GPU status error left connection in pool")
+	}
+}
+
 func TestCloseConnClosesPooledConnection(t *testing.T) {
 	dialer := &trackingDialer{
 		key:   "close-conn-test",

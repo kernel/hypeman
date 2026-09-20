@@ -161,6 +161,12 @@ func (p *Paths) ImageContentMetadata(digestHex string) string {
 	return filepath.Join(p.ImageContentDir(digestHex), "metadata.json")
 }
 
+// ImageContentManifestModel returns the path to the persisted OCI manifest
+// model (layer descriptors, config, platform) for content-addressed image data.
+func (p *Paths) ImageContentManifestModel(digestHex string) string {
+	return filepath.Join(p.ImageContentDir(digestHex), "manifest.json")
+}
+
 // ImageRepositoriesDir returns the root directory for repository tag references.
 func (p *Paths) ImageRepositoriesDir() string {
 	return filepath.Join(p.dataDir, "images", "repositories")
@@ -169,6 +175,28 @@ func (p *Paths) ImageRepositoriesDir() string {
 // ImageRepositoryTagSymlink returns the path to a tag reference in the new layout.
 func (p *Paths) ImageRepositoryTagSymlink(repository, tag string) string {
 	return filepath.Join(p.ImageRepositoriesDir(), repository, tag)
+}
+
+// ImageLayersDir returns the root directory of the per-layer artifact store.
+// Layer artifacts are content-addressed by the compressed layer blob digest.
+func (p *Paths) ImageLayersDir() string {
+	return filepath.Join(p.dataDir, "images", "layers")
+}
+
+// ImageLayerDir returns the artifact directory for one layer digest.
+func (p *Paths) ImageLayerDir(layerHex string) string {
+	return filepath.Join(p.ImageLayersDir(), layerHex)
+}
+
+// ImageLayerArtifactForFormat returns the path to a materialized layer artifact.
+func (p *Paths) ImageLayerArtifactForFormat(layerHex, format string) string {
+	return filepath.Join(p.ImageLayerDir(layerHex), "layer."+format)
+}
+
+// ImageLayerRecordForFormat returns the path to the artifact record for one
+// materialized layer and format.
+func (p *Paths) ImageLayerRecordForFormat(layerHex, format string) string {
+	return filepath.Join(p.ImageLayerDir(layerHex), "artifact."+format+".json")
 }
 
 // ImageDigestDir returns the directory for a specific image digest.
@@ -270,6 +298,11 @@ func (p *Paths) InstanceHypemanLog(id string) string {
 	return filepath.Join(p.InstanceLogs(id), "hypeman.log")
 }
 
+// InstanceSWTPMLog returns the path to the instance software TPM log.
+func (p *Paths) InstanceSWTPMLog(id string) string {
+	return filepath.Join(p.InstanceLogs(id), "swtpm.log")
+}
+
 // InstanceSnapshots returns the path to instance snapshots directory.
 func (p *Paths) InstanceSnapshots(id string) string {
 	return filepath.Join(p.InstanceDir(id), "snapshots")
@@ -341,6 +374,11 @@ func (p *Paths) DeviceDir(id string) string {
 // DeviceMetadata returns the path to device metadata.json.
 func (p *Paths) DeviceMetadata(id string) string {
 	return filepath.Join(p.DeviceDir(id), "metadata.json")
+}
+
+// VFHealthState returns the path to the persisted vGPU VF health file.
+func (p *Paths) VFHealthState() string {
+	return filepath.Join(p.dataDir, "gpu", "vf-health.json")
 }
 
 // Volume path methods
