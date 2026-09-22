@@ -3,7 +3,9 @@ package ingress
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"os/exec"
 	"strings"
@@ -84,6 +86,23 @@ type caddyLogEntry struct {
 	Error   string  `json:"error,omitempty"`
 	Module  string  `json:"module,omitempty"`
 	Adapter string  `json:"adapter,omitempty"`
+	Request *struct {
+		Host   string `json:"host"`
+		Method string `json:"method"`
+	} `json:"request"`
+	Status    int     `json:"status"`
+	Size      int64   `json:"size"`
+	BytesRead int64   `json:"bytes_read"`
+	Duration  float64 `json:"duration"`
+}
+
+func accessMethod(method string) string {
+	switch method {
+	case "GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "CONNECT", "TRACE":
+		return method
+	default:
+		return "OTHER"
+	}
 }
 
 // forwardLogLine parses a JSON log line and forwards to OTEL logger.
@@ -99,8 +118,7 @@ func (f *CaddyLogForwarder) forwardLogLine(ctx context.Context, line string) {
 
 	var entry caddyLogEntry
 	if err := json.Unmarshal([]byte(line), &entry); err != nil {
-		// If we can't parse, keep raw line at debug to avoid info noise.
-		f.logger.DebugContext(ctx, "caddy: "+line)
+		f.logger.DebugContext(ctx, "caddy: invalid JSON log entry")
 		return
 	}
 
@@ -112,18 +130,37 @@ func (f *CaddyLogForwarder) forwardLogLine(ctx context.Context, line string) {
 		"caddy_logger", entry.Logger,
 		"caddy_ts", ts.Format(time.RFC3339Nano),
 	}
-	if entry.Module != "" {
-		attrs = append(attrs, "module", entry.Module)
-	}
-	if entry.Adapter != "" {
-		attrs = append(attrs, "adapter", entry.Adapter)
-	}
-	if entry.Error != "" {
-		attrs = append(attrs, "error", entry.Error)
+	access := entry.Logger == "http.log.access"
+	msg := "caddy: " + entry.Msg
+	if access {
+		msg = "caddy: handled request"
+		if entry.Request != nil {
+			attrs = append(attrs,
+				"http_method", accessMethod(entry.Request.Method),
+				"http_status", entry.Status,
+				"duration_seconds", entry.Duration,
+				"bytes_written", entry.Size,
+				"bytes_read", entry.BytesRead,
+			)
+			if entry.Request.Host != "" {
+				// Preserve correlation without forwarding the caller-controlled host.
+				hostHash := sha256.Sum256([]byte(strings.ToLower(entry.Request.Host)))
+				attrs = append(attrs, "http_host_sha256", fmt.Sprintf("%x", hostHash))
+			}
+		}
+	} else {
+		if entry.Module != "" {
+			attrs = append(attrs, "module", entry.Module)
+		}
+		if entry.Adapter != "" {
+			attrs = append(attrs, "adapter", entry.Adapter)
+		}
+		if entry.Error != "" {
+			attrs = append(attrs, "error", entry.Error)
+		}
 	}
 
 	// Forward with appropriate level
-	msg := "caddy: " + entry.Msg
 	switch strings.ToLower(entry.Level) {
 	case "debug":
 		f.logger.DebugContext(ctx, msg, attrs...)
