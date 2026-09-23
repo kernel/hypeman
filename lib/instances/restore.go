@@ -69,11 +69,14 @@ func (m *manager) restoreInstance(
 		attribute.String("hypervisor", string(stored.HypervisorType)),
 		attribute.String("operation", "resolve_image"),
 	)
-	_, err = m.imageManager.GetImage(imageCtx, bootImageRef(stored))
+	imageInfo, err := m.imageManager.GetImage(imageCtx, bootImageRef(stored))
 	imageSpanEnd(err)
 	if err != nil {
 		log.ErrorContext(ctx, "failed to resolve image for restore", "instance_id", id, "image", bootImageRef(stored), "error", err)
 		return nil, fmt.Errorf("get image: %w", err)
+	}
+	if _, err := m.rootfsPath(ctx, imageInfo); err != nil {
+		return nil, fmt.Errorf("prepare image rootfs: %w", err)
 	}
 
 	// 2b. Validate aggregate resource limits before allocating resources (if configured)
