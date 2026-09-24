@@ -290,6 +290,14 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 	forkMeta.FirecrackerUFFDSessionID = ""
 	forkMeta.FirecrackerUFFDPagerVersion = ""
 	forkMeta.FirecrackerUseUFFDOnNextRestore = useFirecrackerUFFDOnNextRestore(forkMeta.HypervisorType, source.State == StateStandby, targetState)
+	// Record the actual fork mode so the API can report it rather than have a
+	// caller infer it: a shared mem-file is copy-on-write, anything else is a
+	// full copy. Mirrors the shareMemFile decision above exactly.
+	if shareMemFile {
+		forkMeta.ForkMode = ForkModeShared
+	} else {
+		forkMeta.ForkMode = ForkModeCopied
+	}
 	if source.State != StateStandby {
 		forkMeta.FirecrackerSnapshotCacheKey = ""
 	}
