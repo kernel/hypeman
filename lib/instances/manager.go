@@ -634,6 +634,23 @@ func (m *manager) RestoreInstance(ctx context.Context, id string) (*Instance, er
 	if current.State == StateRunning || current.State == StateInitializing {
 		return current, nil
 	}
+	if current.State == StatePaused {
+		hv, err := m.getHypervisor(current.SocketPath, current.HypervisorType)
+		if err != nil {
+			return nil, fmt.Errorf("create hypervisor client: %w", err)
+		}
+		if err := hv.Resume(ctx); err != nil {
+			m.invalidateCachedHypervisorState(id)
+			return nil, fmt.Errorf("resume paused vm: %w", err)
+		}
+		m.storeCachedHypervisorState(id, hypervisor.StateRunning)
+		current, err = m.currentInstanceWithoutHydration(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		m.notifyLifecycleEvent(ctx, LifecycleEventRestore, current)
+		return current, nil
+	}
 	inst, err := m.restoreInstance(ctx, id)
 	if err == nil {
 		m.notifyLifecycleEvent(ctx, LifecycleEventRestore, inst)
