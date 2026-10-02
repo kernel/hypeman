@@ -132,7 +132,8 @@ jobs:
             --repo "$REPO" \
             --ref main \
             --field pr_head_repo="$HEAD_REPO" \
-            --field pr_head_sha="$HEAD_SHA"
+            --field pr_head_sha="$HEAD_SHA" \
+            --field pr_number="$PR_NUMBER"
 
       - name: Report dispatch
         if: steps.command.outputs.run == 'true'
