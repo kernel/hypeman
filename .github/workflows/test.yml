@@ -555,9 +555,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
-          curl -fsSL --retry 5 --retry-all-errors \
-            "https://raw.githubusercontent.com/${{ env.TEST_SOURCE_REPO }}/${{ env.TEST_SOURCE_REF }}/scripts/e2e-install-test.sh" \
-            -o "$RUNNER_TEMP/e2e-install-test.sh"
+          cp scripts/e2e-install-test.sh "$RUNNER_TEMP/e2e-install-test.sh"
           HYPEMAN_E2E_REPO_DIR="$PWD" BINARY_DIR="$PWD/bin" \
             bash "$RUNNER_TEMP/e2e-install-test.sh"
       - name: Run E2E CLI-only install test
