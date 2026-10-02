@@ -555,7 +555,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
-          cp scripts/e2e-install-test.sh "$RUNNER_TEMP/e2e-install-test.sh"
+          # Keep the harness pinned to this workflow revision; it runs on a self-hosted runner.
+          curl -fsSL --retry 5 --retry-all-errors \
+            "https://raw.githubusercontent.com/${{ github.repository }}/${{ github.sha }}/scripts/e2e-install-test.sh" \
+            -o "$RUNNER_TEMP/e2e-install-test.sh"
           HYPEMAN_E2E_REPO_DIR="$PWD" BINARY_DIR="$PWD/bin" \
             bash "$RUNNER_TEMP/e2e-install-test.sh"
       - name: Run E2E CLI-only install test
