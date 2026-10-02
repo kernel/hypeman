@@ -19,13 +19,15 @@ type Version string
 const (
 	V1_14_2 Version = "v1.14.2"
 	V1_16_1 Version = "v1.16.1"
+	V1_17_0 Version = "v1.17.0"
 )
 
-const defaultVersion = V1_16_1
+const defaultVersion = V1_17_0
 
 var supportedVersions = []Version{
 	V1_14_2,
 	V1_16_1,
+	V1_17_0,
 }
 
 //go:embed binaries
