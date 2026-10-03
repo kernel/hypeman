@@ -35,11 +35,12 @@ $(XCADDY): | $(BIN_DIR)
 
 install-tools: $(OAPI_CODEGEN) $(AIR) $(WIRE) $(XCADDY)
 
-# Download Cloud Hypervisor binaries (both v49.0 and v51.1 for backwards-compatible upgrades)
+# Download Cloud Hypervisor binaries (v49.0, v51.1 and v51.2 for backwards-compatible upgrades)
 download-ch-binaries:
 	@echo "Downloading Cloud Hypervisor binaries..."
 	@mkdir -p lib/vmm/binaries/cloud-hypervisor/v49.0/{x86_64,aarch64}
 	@mkdir -p lib/vmm/binaries/cloud-hypervisor/v51.1/{x86_64,aarch64}
+	@mkdir -p lib/vmm/binaries/cloud-hypervisor/v51.2/{x86_64,aarch64}
 	@echo "Downloading v49.0..."
 	@curl -L -o lib/vmm/binaries/cloud-hypervisor/v49.0/x86_64/cloud-hypervisor \
 		https://github.com/cloud-hypervisor/cloud-hypervisor/releases/download/v49.0/cloud-hypervisor-static
@@ -50,6 +51,11 @@ download-ch-binaries:
 		https://github.com/cloud-hypervisor/cloud-hypervisor/releases/download/v51.1/cloud-hypervisor-static
 	@curl -L -o lib/vmm/binaries/cloud-hypervisor/v51.1/aarch64/cloud-hypervisor \
 		https://github.com/cloud-hypervisor/cloud-hypervisor/releases/download/v51.1/cloud-hypervisor-static-aarch64
+	@echo "Downloading v51.2..."
+	@curl -L -o lib/vmm/binaries/cloud-hypervisor/v51.2/x86_64/cloud-hypervisor \
+		https://github.com/cloud-hypervisor/cloud-hypervisor/releases/download/v51.2/cloud-hypervisor-static
+	@curl -L -o lib/vmm/binaries/cloud-hypervisor/v51.2/aarch64/cloud-hypervisor \
+		https://github.com/cloud-hypervisor/cloud-hypervisor/releases/download/v51.2/cloud-hypervisor-static-aarch64
 	@chmod +x lib/vmm/binaries/cloud-hypervisor/v*/*/cloud-hypervisor
 	@echo "Binaries downloaded successfully"
 
@@ -177,7 +183,7 @@ ensure-ch-binaries:
 		echo "Unsupported architecture: $$ARCH"; exit 1; \
 	fi; \
 	NEEDS_DOWNLOAD=0; \
-	for CH_VERSION in v49.0 v51.1; do \
+	for CH_VERSION in v49.0 v51.1 v51.2; do \
 		CH_BIN=lib/vmm/binaries/cloud-hypervisor/$$CH_VERSION/$$CH_ARCH/cloud-hypervisor; \
 		if [ ! -f "$$CH_BIN" ]; then \
 			echo "Cloud Hypervisor binary not found: $$CH_BIN"; \
