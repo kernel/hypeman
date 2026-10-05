@@ -14,7 +14,13 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 )
 
-const deleteGracefulShutdownTimeout = 2
+// Caps (seconds) on the graceful guest shutdown wait during delete. Ordinary
+// deletes stay fast; guests with VFIO devices get long enough to unload the
+// guest GPU driver, which can take ~5s.
+const (
+	deleteGracefulShutdownTimeout     = 2
+	vfioDeleteGracefulShutdownTimeout = 5
+)
 
 // DeleteInstanceOptions configures instance deletion.
 type DeleteInstanceOptions struct {
@@ -101,14 +107,12 @@ func (m *manager) deleteInstanceWithOptions(
 	// 4. If active, try graceful guest shutdown before force kill.
 	gracefulShutdown := false
 	if !options.SkipGracefulShutdown && (inst.State == StateRunning || inst.State == StateInitializing) {
-		stopTimeout := resolveStopTimeout(stored)
-		if stopTimeout > deleteGracefulShutdownTimeout {
-			stopTimeout = deleteGracefulShutdownTimeout
-		}
+		stopTimeout := resolveDeleteStopTimeout(stored)
 		gracefulCtx, gracefulSpanEnd := m.startLifecycleStep(ctx, "graceful_guest_shutdown",
 			attribute.String("instance_id", id),
 			attribute.String("hypervisor", string(stored.HypervisorType)),
 			attribute.String("operation", "graceful_guest_shutdown"),
+			attribute.Int("stop_timeout_seconds", stopTimeout),
 		)
 		gracefulShutdown = m.tryGracefulGuestShutdown(gracefulCtx, &inst, stopTimeout)
 		if gracefulShutdown {
@@ -141,12 +145,12 @@ func (m *manager) deleteInstanceWithOptions(
 	m.closeFirecrackerUFFDSession(ctx, stored)
 
 	// Release before deleting metadata so a failed release can be retried safely.
-	hadVGPUAssignment := storedVGPUDevicePath(stored) != ""
-	if hadVGPUAssignment {
+	if storedVGPUDevicePath(stored) != "" {
 		log.InfoContext(ctx, "destroying vGPU", "instance_id", id, "uuid", stored.GPUMdevUUID)
-	}
-	if err := m.releaseStoredVGPUPersisted(ctx, meta); err != nil {
-		log.WarnContext(ctx, "failed to destroy vGPU, continuing with cleanup; the next allocation repairs the VF before reuse", "instance_id", id, "uuid", stored.GPUMdevUUID, "error", err)
+		if err := m.releaseStoredVGPUPersisted(ctx, meta); err != nil {
+			log.ErrorContext(ctx, "failed to destroy vGPU; retaining instance metadata for retry", "instance_id", id, "uuid", stored.GPUMdevUUID, "error", err)
+			return fmt.Errorf("release vGPU: %w", err)
+		}
 	}
 
 	// 6. Release network allocation
@@ -209,6 +213,16 @@ func (m *manager) deleteInstanceWithOptions(
 
 	log.InfoContext(ctx, "instance deleted successfully", "instance_id", id)
 	return nil
+}
+
+// resolveDeleteStopTimeout returns the stop timeout (seconds) capped to the
+// delete bound.
+func resolveDeleteStopTimeout(stored *StoredMetadata) int {
+	bound := deleteGracefulShutdownTimeout
+	if hasVFIODevices(stored) {
+		bound = vfioDeleteGracefulShutdownTimeout
+	}
+	return min(resolveStopTimeout(stored), bound)
 }
 
 // killHypervisor force kills the hypervisor process without graceful shutdown.

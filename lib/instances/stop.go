@@ -33,6 +33,12 @@ func resolveStopTimeout(stored *StoredMetadata) int {
 	return stopTimeout
 }
 
+// hasVFIODevices reports whether the instance has a vGPU or a passthrough PCI
+// device assigned.
+func hasVFIODevices(stored *StoredMetadata) bool {
+	return storedVGPUDevicePath(stored) != "" || len(stored.Devices) > 0
+}
+
 // tryGracefulGuestShutdown asks guest init to shut down and waits for the
 // hypervisor process to exit. Returns true if the process exited in time.
 func (m *manager) tryGracefulGuestShutdown(ctx context.Context, inst *Instance, stopTimeout int) bool {
@@ -155,6 +161,7 @@ func (m *manager) stopInstance(
 		attribute.String("instance_id", id),
 		attribute.String("hypervisor", string(stored.HypervisorType)),
 		attribute.String("operation", "graceful_guest_shutdown"),
+		attribute.Int("stop_timeout_seconds", stopTimeout),
 	)
 	gracefulShutdown := m.tryGracefulGuestShutdown(gracefulCtx, &inst, stopTimeout)
 	if gracefulShutdown {

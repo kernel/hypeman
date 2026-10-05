@@ -99,6 +99,11 @@ Instance Create → Persist VF claim → Configure profile → Attach VF to VM �
 Instance Stop/Delete → Reset profile → Remove VF claim → VF available again
 ```
 
+Before signalling the hypervisor, stop and delete first ask the guest to shut
+itself down and wait for it. Delete normally caps that wait at 2s, but guests
+with a vGPU or passthrough device get 5s so the guest can unload its GPU driver
+before the hypervisor is signalled.
+
 Hypeman reconciles metadata claims once at startup and every minute afterward, skipping hosts without GPUs. A claim whose VMM is confirmed dead is reset before the claim is removed. An ambiguous hypervisor ownership check preserves the claim, logs a warning, and increments `hypeman_instances_vgpu_liveness_uncertain_total`; the create and start cleanup paths preserve and count the same way. mdev hosts also sweep orphaned device-level assignments. Vendor VFIO hosts repair an unclaimed dirty VF when the allocator next selects it; repair checks for open VFIO handles before resetting `current_vgpu_type`. The allocator prefers VFs that are already clean, and a dirty VF that refuses its reset is skipped in favor of another candidate.
 
 ### Hypervisor Support

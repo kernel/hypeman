@@ -50,6 +50,10 @@ func TestParseVersion(t *testing.T) {
 	version, err = parseVersion("v1.16.1")
 	require.NoError(t, err)
 	assert.Equal(t, V1_16_1, version)
+
+	version, err = parseVersion("v1.17.0")
+	require.NoError(t, err)
+	assert.Equal(t, V1_17_0, version)
 }
 
 func TestResolveEmbeddedBinaryVersions(t *testing.T) {

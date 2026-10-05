@@ -12,6 +12,10 @@ on:
         description: "Exact PR commit to test"
         required: false
         type: string
+      pr_number:
+        description: "Pull request number for reporting the test result"
+        required: false
+        type: string
 
 # Every branch push triggers a full run and superseded runs used to keep
 # running, holding self-hosted slots that every repo on the shared pool
@@ -343,6 +347,46 @@ jobs:
           sudo rm -f /run/hypeman/uffd/ci-${{ github.run_id }}-${{ github.run_attempt }}-*.env
           rm -f "${{ runner.temp }}/hypeman-uffd-pager-${{ github.run_id }}-${{ github.run_attempt }}"
 
+  report-pr-test:
+    if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.pr_number != '' }}
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+      statuses: write
+    steps:
+      - name: Publish test result to the pull request commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          EXPECTED_REPO: ${{ inputs.pr_head_repo }}
+          EXPECTED_SHA: ${{ inputs.pr_head_sha }}
+          TEST_RESULT: ${{ needs.test.result }}
+        run: |
+          set -euo pipefail
+          [[ "$PR_NUMBER" =~ ^[0-9]+$ ]]
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          pr="$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '[.state, .base.ref, .head.repo.full_name, .head.sha] | @tsv')"
+          read -r state base_ref head_repo head_sha <<< "$pr"
+          if [[ "$state" != open || "$base_ref" != main || "$head_repo" != "$EXPECTED_REPO" || "$head_sha" != "$EXPECTED_SHA" ]]; then
+            echo "::notice::Skipping test status because pull request $PR_NUMBER no longer points to the tested commit"
+            exit 0
+          fi
+
+          status=failure
+          description="test run failed"
+          if [[ "$TEST_RESULT" == success ]]; then
+            status=success
+            description="test run passed"
+          fi
+          gh api --method POST "repos/$REPO/statuses/$EXPECTED_SHA" \
+            --field state="$status" \
+            --field context=test \
+            --field description="$description" \
+            --field target_url="$GITHUB_SERVER_URL/$REPO/actions/runs/$GITHUB_RUN_ID"
+
   test-darwin:
     runs-on: [self-hosted, macos, arm64]
     concurrency:
@@ -511,6 +555,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
+          # Keep the harness pinned to this workflow revision; it runs on a self-hosted runner.
           curl -fsSL --retry 5 --retry-all-errors \
             "https://raw.githubusercontent.com/${{ github.repository }}/${{ github.sha }}/scripts/e2e-install-test.sh" \
             -o "$RUNNER_TEMP/e2e-install-test.sh"

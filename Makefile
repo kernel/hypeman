@@ -54,7 +54,7 @@ download-ch-binaries:
 	@echo "Binaries downloaded successfully"
 
 # Firecracker versions to embed for backwards-compatible snapshot restores
-FIRECRACKER_VERSIONS := v1.14.2 v1.16.1
+FIRECRACKER_VERSIONS := v1.14.2 v1.16.1 v1.17.0
 
 # Download Firecracker binaries
 download-firecracker-binaries:
