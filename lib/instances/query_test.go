@@ -2,12 +2,17 @@ package instances
 
 import (
 	"context"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
+	_ "github.com/kernel/hypeman/lib/hypervisor/firecracker"
 	"github.com/kernel/hypeman/lib/instances/phasetracking"
 	"github.com/kernel/hypeman/lib/paths"
 	"github.com/stretchr/testify/assert"
@@ -625,6 +630,82 @@ func TestHypervisorStateCache_TTL(t *testing.T) {
 	now = now.Add(2 * time.Millisecond)
 	_, ok = m.loadCachedHypervisorState("vm-1")
 	require.False(t, ok)
+}
+
+func TestDeriveStateCoalescesConcurrentHypervisorQueries(t *testing.T) {
+	socketPath := filepath.Join(t.TempDir(), "firecracker.sock")
+	var requests atomic.Int32
+	startFirecrackerInfoServer(t, socketPath, 50*time.Millisecond, &requests)
+
+	started := time.Now()
+	stored := StoredMetadata{
+		Id:               "vm-coalesced",
+		SocketPath:       socketPath,
+		DataDir:          t.TempDir(),
+		HypervisorType:   hypervisor.TypeFirecracker,
+		ProgramStartedAt: &started,
+		SkipGuestAgent:   true,
+	}
+	m := &manager{}
+
+	const callers = 12
+	var wg sync.WaitGroup
+	results := make(chan stateResult, callers)
+	for range callers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			results <- m.deriveState(context.Background(), &stored)
+		}()
+	}
+	wg.Wait()
+	close(results)
+
+	for result := range results {
+		require.Equal(t, StateRunning, result.State)
+	}
+	assert.EqualValues(t, 1, requests.Load())
+}
+
+func TestDeriveStateSkipsProbeDuringSnapshotOperation(t *testing.T) {
+	socketPath := filepath.Join(t.TempDir(), "firecracker.sock")
+	var requests atomic.Int32
+	startFirecrackerInfoServer(t, socketPath, 0, &requests)
+
+	stored := StoredMetadata{
+		Id:             "vm-snapshotting",
+		SocketPath:     socketPath,
+		DataDir:        t.TempDir(),
+		HypervisorType: hypervisor.TypeFirecracker,
+	}
+	m := &manager{}
+	lock := m.hypervisorStateQueryLock(stored.Id)
+	lock.Lock()
+	result := m.deriveState(context.Background(), &stored)
+	lock.Unlock()
+
+	require.Equal(t, StateUnknown, result.State)
+	require.NotNil(t, result.Error)
+	assert.Contains(t, *result.Error, "during snapshot operation")
+	assert.Zero(t, requests.Load())
+}
+
+func startFirecrackerInfoServer(t *testing.T, socketPath string, delay time.Duration, requests *atomic.Int32) {
+	t.Helper()
+	listener, err := net.Listen("unix", socketPath)
+	require.NoError(t, err)
+	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		if delay > 0 {
+			time.Sleep(delay)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"state":"Running"}`))
+	})}
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(func() {
+		_ = server.Close()
+	})
 }
 
 func TestHypervisorStateCache_InvalidationAndUpdate(t *testing.T) {
