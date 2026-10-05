@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"sync"
@@ -11,11 +12,13 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/devices"
+	"github.com/kernel/hypeman/lib/guest"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/paths"
 	restartpolicy "github.com/kernel/hypeman/lib/restart-policy"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/connectivity"
 )
 
 const lifecycleNoopHypervisorType hypervisor.Type = "lifecycle-noop-test"
@@ -30,6 +33,18 @@ func init() {
 		}
 		return lifecycleNoopHypervisor{state: state.(hypervisor.VMState)}, nil
 	})
+	hypervisor.RegisterVsockDialerFactory(lifecycleNoopHypervisorType, func(socketPath string, _ int64) hypervisor.VsockDialer {
+		return lifecycleNoopVsockDialer{socketPath: socketPath}
+	})
+}
+
+type lifecycleNoopVsockDialer struct {
+	socketPath string
+}
+
+func (d lifecycleNoopVsockDialer) Key() string { return "lifecycle-noop:" + d.socketPath }
+func (d lifecycleNoopVsockDialer) DialVsock(context.Context, int) (net.Conn, error) {
+	return nil, errors.New("no guest-agent in lifecycle fixture")
 }
 
 type lifecycleNoopHypervisor struct {
@@ -279,6 +294,41 @@ func TestStartPersistsStaleVGPUReleaseImmediately(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, stored.GPUDevicePath, "released assignment should be persisted despite the failed start")
 	assert.Equal(t, "NVIDIA L40S-2Q", stored.GPUProfile, "profile is kept for the next start")
+}
+
+func TestStopInstanceRetiresPooledGuestConnection(t *testing.T) {
+	m, id := newLifecycleNoopManagerWithInstance(t, StateRunning, time.Now().UTC())
+	meta, err := m.loadMetadata(id)
+	require.NoError(t, err)
+	// Bypass guest shutdown and readiness RPCs so their retry cleanup cannot
+	// evict the connection on behalf of terminal stop cleanup.
+	meta.SkipGuestAgent = true
+	meta.VsockSocket = m.paths.InstanceSocket(id, "noop.vsock")
+	require.NoError(t, m.saveMetadata(meta))
+
+	ctx := context.Background()
+	dialer, err := hypervisor.NewVsockDialer(meta.HypervisorType, meta.VsockSocket, meta.VsockCID)
+	require.NoError(t, err)
+	t.Cleanup(func() { guest.CloseConn(dialer.Key()) })
+	oldConn, err := guest.GetOrCreateConn(ctx, dialer)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = oldConn.Close() })
+	cachedConn, err := guest.GetOrCreateConn(ctx, dialer)
+	require.NoError(t, err)
+	require.Same(t, oldConn, cachedConn, "connection must be pooled before stop")
+
+	inst, err := m.StopInstance(ctx, id)
+	require.NoError(t, err)
+	require.Equal(t, StateStopped, inst.State)
+
+	// Check the same key before any restart or RPC can recover a stale
+	// connection. GetOrCreateConn alone does not evict failed connections.
+	newConn, err := guest.GetOrCreateConn(ctx, dialer)
+	require.NoError(t, err)
+	require.NotSame(t, oldConn, newConn, "stop must evict the previous VM's pooled connection")
+	require.Eventually(t, func() bool {
+		return oldConn.GetState() == connectivity.Shutdown
+	}, time.Second, time.Millisecond, "stop must close the retired connection")
 }
 
 func TestStopStoppedInstanceLeavesVGPUForReconcile(t *testing.T) {
