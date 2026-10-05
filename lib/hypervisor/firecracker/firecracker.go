@@ -19,6 +19,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
+	"golang.org/x/mod/semver"
 )
 
 type apiError struct {
@@ -120,6 +121,10 @@ func (f *Firecracker) Snapshot(ctx context.Context, destPath string) error {
 		return fmt.Errorf("create snapshot directory: %w", err)
 	}
 	params := toSnapshotCreateParams(destPath)
+	if f.supportsSyncSnapshotFiles(ctx) {
+		syncFiles := false
+		params.SyncSnapshotFiles = &syncFiles
+	}
 	if _, err := f.do(ctx, http.MethodPut, "/snapshot/create", params, http.StatusNoContent); err != nil {
 		return fmt.Errorf("create snapshot: %w", err)
 	}
@@ -225,6 +230,28 @@ func (f *Firecracker) configureForBoot(ctx context.Context, cfg hypervisor.VMCon
 
 func (f *Firecracker) instanceStart(ctx context.Context) error {
 	return f.postAction(ctx, "InstanceStart")
+}
+
+func (f *Firecracker) supportsSyncSnapshotFiles(ctx context.Context) bool {
+	body, err := f.do(ctx, http.MethodGet, "/version", nil, http.StatusOK)
+	if err != nil {
+		return false
+	}
+
+	var version struct {
+		FirecrackerVersion string `json:"firecracker_version"`
+	}
+	if err := json.Unmarshal(body, &version); err != nil {
+		return false
+	}
+
+	return supportsSyncSnapshotFilesVersion(version.FirecrackerVersion)
+}
+
+func supportsSyncSnapshotFilesVersion(version string) bool {
+	version = strings.TrimPrefix(version, "v")
+	version = "v" + version
+	return semver.IsValid(version) && semver.Compare(version, "v1.17.0") >= 0
 }
 
 func (f *Firecracker) loadSnapshot(ctx context.Context, snapshotDir string, networkOverrides []networkOverride, backend snapshotMemBackend) error {

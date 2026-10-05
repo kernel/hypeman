@@ -1,6 +1,7 @@
 package firecracker
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -58,6 +59,37 @@ func TestToNetworkInterfaces(t *testing.T) {
 	require.NotNil(t, nets[0].TxRateLimiter)
 	assert.Equal(t, int64(1_000_000), nets[0].RxRateLimiter.Bandwidth.Size)
 	assert.Equal(t, int64(2_000_000), nets[0].TxRateLimiter.Bandwidth.Size)
+}
+
+func TestSnapshotCreateParamsSyncFiles(t *testing.T) {
+	params := toSnapshotCreateParams(t.TempDir())
+	encoded, err := json.Marshal(params)
+	require.NoError(t, err)
+	assert.NotContains(t, string(encoded), "sync_snapshot_files")
+
+	syncFiles := false
+	params.SyncSnapshotFiles = &syncFiles
+	encoded, err = json.Marshal(params)
+	require.NoError(t, err)
+	assert.Contains(t, string(encoded), `"sync_snapshot_files":false`)
+}
+
+func TestSupportsSyncSnapshotFilesVersion(t *testing.T) {
+	for _, tc := range []struct {
+		version string
+		want    bool
+	}{
+		{version: "v1.14.2"},
+		{version: "1.16.1"},
+		{version: "v1.17.0", want: true},
+		{version: "1.18.0", want: true},
+		{version: "custom"},
+		{version: ""},
+	} {
+		t.Run(tc.version, func(t *testing.T) {
+			assert.Equal(t, tc.want, supportsSyncSnapshotFilesVersion(tc.version))
+		})
+	}
 }
 
 func TestSnapshotParamPaths(t *testing.T) {
