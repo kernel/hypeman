@@ -68,9 +68,10 @@ type vmState struct {
 }
 
 type snapshotCreateParams struct {
-	MemFilePath  string `json:"mem_file_path"`
-	SnapshotPath string `json:"snapshot_path"`
-	SnapshotType string `json:"snapshot_type,omitempty"`
+	MemFilePath       string `json:"mem_file_path"`
+	SnapshotPath      string `json:"snapshot_path"`
+	SnapshotType      string `json:"snapshot_type,omitempty"`
+	SyncSnapshotFiles *bool  `json:"sync_snapshot_files,omitempty"`
 }
 
 type snapshotLoadParams struct {
