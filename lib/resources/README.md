@@ -66,6 +66,8 @@ Bidirectional rate limiting with separate download and upload controls:
 
 **Capacity tracking:**
 - Uses max(download, upload) per instance since they share physical link
+- Failed capacity discovery logs a warning and disables host network admission enforcement; explicit per-instance rate limits remain unchanged.
+- `/resources` reports `source: "unknown"` in this case. Zero capacity, effective limit, and availability are placeholders, not enforced limits; allocation tracking remains active.
 
 ### Disk I/O
 

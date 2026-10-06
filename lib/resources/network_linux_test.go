@@ -3,61 +3,47 @@
 package resources
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
-	"log/slog"
 	"testing"
 
 	"github.com/kernel/hypeman/cmd/api/config"
-	"github.com/kernel/hypeman/lib/logger"
+	"github.com/kernel/hypeman/lib/paths"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func TestNewNetworkResourceCapacity(t *testing.T) {
+func TestNetworkAdmissionCapacity(t *testing.T) {
 	for _, tt := range []struct {
-		name       string
-		iface      string
 		configured string
-		want       int64
-		warn       bool
+		source     SourceType
 		wantErr    bool
 	}{
-		{name: "missing interface", iface: "hypeman-test", want: 1_250_000_000, warn: true},
-		{name: "loopback without speed", iface: "lo", want: 1_250_000_000, warn: true},
-		{name: "configured capacity", iface: "hypeman-test", configured: "2Gbps", want: 250_000_000},
-		{name: "invalid configured capacity", iface: "hypeman-test", configured: "invalid", wantErr: true},
+		{"", SourceUnknown, false},
+		{"1Gbps", SourceConfigured, true},
+		{"0Gbps", SourceConfigured, true},
 	} {
-		t.Run(tt.name, func(t *testing.T) {
-			var output bytes.Buffer
-			ctx := logger.AddToContext(context.Background(), slog.New(slog.NewJSONHandler(&output, nil)))
-			cfg := &config.Config{
-				Capacity: config.CapacityConfig{Network: tt.configured},
-				Network:  config.NetworkConfig{UplinkInterface: tt.iface},
-			}
-			network, err := NewNetworkResource(ctx, cfg, nil)
-			if tt.wantErr {
-				require.ErrorContains(t, err, "parse network limit")
-				assert.Nil(t, network)
-				assert.Empty(t, output.String())
-				return
-			}
+		t.Run(string(tt.source)+tt.configured, func(t *testing.T) {
+			cfg := &config.Config{Capacity: config.CapacityConfig{Network: tt.configured},
+				Network:          config.NetworkConfig{UplinkInterface: "missing-test-interface"},
+				Oversubscription: config.OversubscriptionConfig{Network: 1}}
+			lister := &mockInstanceLister{allocations: []InstanceAllocation{
+				{State: "Running", NetworkDownloadBps: 50_000_000},
+			}}
+			network, err := NewNetworkResource(context.Background(), cfg, lister)
 			require.NoError(t, err)
-			assert.Equal(t, tt.want, network.Capacity())
-			if tt.warn {
-				var record struct {
-					Level     string
-					Msg       string
-					Interface string
-				}
-				require.NoError(t, json.Unmarshal(output.Bytes(), &record))
-				assert.Equal(t, "WARN", record.Level)
-				assert.Contains(t, record.Msg, "falling back to 10Gbps")
-				assert.Equal(t, tt.iface, record.Interface)
+			mgr := NewManager(cfg, paths.New(t.TempDir()))
+			mgr.SetInstanceLister(lister)
+			mgr.resources[ResourceNetwork] = network
+			err = mgr.ReserveAllocation(context.Background(), "test", 0, 0, 125_000_001, 0, 0, 0, false)
+			if tt.wantErr {
+				require.ErrorContains(t, err, "insufficient network bandwidth")
 			} else {
-				assert.Empty(t, output.String())
+				require.NoError(t, err)
 			}
+			status, err := mgr.GetStatus(context.Background(), ResourceNetwork)
+			require.NoError(t, err)
+			assert.Equal(t, tt.source, status.Source)
+			assert.Equal(t, int64(50_000_000), status.Allocated)
 		})
 	}
 }

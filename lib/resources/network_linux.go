@@ -14,8 +14,6 @@ import (
 	"github.com/vishvananda/netlink"
 )
 
-const fallbackNetworkCapacity int64 = 10_000_000_000 / 8
-
 // NetworkResource implements Resource for network bandwidth discovery and tracking.
 type NetworkResource struct {
 	capacity       int64 // bytes per second
@@ -39,13 +37,13 @@ func NewNetworkResource(ctx context.Context, cfg *config.Config, instLister Inst
 		// Auto-detect from uplink interface
 		uplink, err := getUplinkInterface(cfg.Network.UplinkInterface)
 		if err != nil {
-			log.WarnContext(ctx, "no uplink interface found, falling back to 10Gbps", "error", err)
-			capacity = fallbackNetworkCapacity
+			log.WarnContext(ctx, "no uplink interface found, network admission limit disabled", "error", err)
+			capacity = 0
 		} else {
 			speed, err := getInterfaceSpeed(uplink)
 			if err != nil || speed <= 0 {
-				log.WarnContext(ctx, "failed to detect interface speed, falling back to 10Gbps", "interface", uplink, "error", err, "speed", speed)
-				capacity = fallbackNetworkCapacity
+				log.WarnContext(ctx, "failed to detect interface speed, network admission limit disabled", "interface", uplink, "error", err, "speed", speed)
+				capacity = 0
 			} else {
 				// speed is in Mbps, convert to bytes/sec
 				capacity = speed * 1000 * 1000 / 8

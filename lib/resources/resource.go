@@ -28,6 +28,7 @@ const (
 type SourceType string
 
 const (
+	SourceUnknown    SourceType = "unknown"    // Capacity unavailable; network admission limit disabled
 	SourceDetected   SourceType = "detected"   // Auto-detected from host hardware
 	SourceConfigured SourceType = "configured" // Explicitly configured by operator
 )
@@ -349,6 +350,8 @@ func (m *Manager) GetStatus(ctx context.Context, rt ResourceType) (*ResourceStat
 	if rt == ResourceNetwork {
 		if m.cfg.Capacity.Network != "" {
 			status.Source = SourceConfigured
+		} else if status.Capacity == 0 {
+			status.Source = SourceUnknown
 		} else {
 			status.Source = SourceDetected
 		}
@@ -604,6 +607,8 @@ func (m *Manager) admissionStatusLocked(rt ResourceType, visibleAllocated int64,
 		status.Allocated = visibleAllocated + pending.NetworkBps
 		if m.cfg.Capacity.Network != "" {
 			status.Source = SourceConfigured
+		} else if status.Capacity == 0 {
+			status.Source = SourceUnknown
 		} else {
 			status.Source = SourceDetected
 		}
@@ -686,7 +691,7 @@ func (m *Manager) validateAllocationLocked(ctx context.Context, excludeID string
 		if err != nil {
 			return fmt.Errorf("check network capacity: %w", err)
 		}
-		if req.NetworkBps > status.Available {
+		if status.Source != SourceUnknown && req.NetworkBps > status.Available {
 			return fmt.Errorf("insufficient network bandwidth: requested %s/s, but only %s/s available (currently allocated: %s/s, effective limit: %s/s with %.1fx oversubscription)",
 				datasize.ByteSize(req.NetworkBps).HR(), datasize.ByteSize(status.Available).HR(), datasize.ByteSize(status.Allocated).HR(), datasize.ByteSize(status.EffectiveLimit).HR(), status.OversubRatio)
 		}
