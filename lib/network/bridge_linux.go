@@ -667,42 +667,39 @@ func (m *manager) removeRateLimit(tapName string) error {
 func (m *manager) setupBridgeHTB(ctx context.Context, bridgeName string, capacityBps int64) error {
 	log := logger.FromContext(ctx)
 
-	if capacityBps <= 0 {
-		log.DebugContext(ctx, "skipping HTB setup - no capacity configured", "bridge", bridgeName)
-		return nil
-	}
-
 	// Check if HTB qdisc already exists
 	checkCmd := exec.Command("tc", "qdisc", "show", "dev", bridgeName)
 	checkCmd.SysProcAttr = &syscall.SysProcAttr{
 		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
 	}
 	output, err := checkCmd.Output()
-	if err == nil && strings.Contains(string(output), "htb") {
-		log.InfoContext(ctx, "HTB qdisc ready", "bridge", bridgeName, "status", "existing")
+	if err != nil || !strings.Contains(string(output), "htb") {
+		// Add the scheduler without replacing existing per-VM classes and filters.
+		cmd := exec.Command("tc", "qdisc", "add", "dev", bridgeName, "root",
+			"handle", htbRootHandle, "htb")
+		cmd.SysProcAttr = &syscall.SysProcAttr{
+			AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
+		}
+		if output, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("tc qdisc add htb: %w (output: %s)", err, string(output))
+		}
+	}
+
+	if capacityBps <= 0 {
+		log.InfoContext(ctx, "HTB qdisc ready", "bridge", bridgeName, "capacity", "unknown")
 		return nil
 	}
 
 	rateStr := formatTcRate(capacityBps)
 
-	// 1. Add root HTB qdisc (no default - all traffic must be classified)
-	cmd := exec.Command("tc", "qdisc", "add", "dev", bridgeName, "root",
-		"handle", htbRootHandle, "htb")
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
-	}
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("tc qdisc add htb: %w (output: %s)", err, string(output))
-	}
-
-	// 2. Add root class for total capacity
-	cmd = exec.Command("tc", "class", "add", "dev", bridgeName, "parent", htbRootHandle,
+	// Ensure the shared parent exists even after an uncapped startup.
+	cmd := exec.Command("tc", "class", "replace", "dev", bridgeName, "parent", htbRootHandle,
 		"classid", htbRootClassID, "htb", "rate", rateStr)
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},
 	}
 	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("tc class add root: %w (output: %s)", err, string(output))
+		return fmt.Errorf("tc class replace root: %w (output: %s)", err, string(output))
 	}
 
 	log.InfoContext(ctx, "HTB qdisc ready", "bridge", bridgeName, "capacity", rateStr, "status", "configured")
@@ -723,6 +720,11 @@ func (m *manager) addVMClass(ctx context.Context, bridgeName, tapName string, ra
 	}
 	ceilStr := formatTcRate(ceilBps)
 
+	parent := htbRootClassID
+	if m.uncappedUploads {
+		parent = htbRootHandle
+	}
+
 	// Start with derived class ID, probe linearly on collision.
 	classIDVal := deriveClassIDVal(tapName)
 
@@ -733,7 +735,7 @@ func (m *manager) addVMClass(ctx context.Context, bridgeName, tapName string, ra
 		fullClassID := fmt.Sprintf("1:%s", classID)
 
 		// Try tc class add (NOT replace) so we detect collisions.
-		cmd := exec.Command("tc", "class", "add", "dev", bridgeName, "parent", htbRootClassID,
+		cmd := exec.Command("tc", "class", "add", "dev", bridgeName, "parent", parent,
 			"classid", fullClassID, "htb", "rate", rateStr, "ceil", ceilStr, "prio", "1")
 		cmd.SysProcAttr = &syscall.SysProcAttr{
 			AmbientCaps: []uintptr{unix.CAP_NET_ADMIN},

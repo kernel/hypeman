@@ -64,6 +64,7 @@ type manager struct {
 	defaultNetwork     *Network
 	pendingAllocations map[string]pendingAllocation
 	tcMu               sync.Mutex // Serializes shared bridge tc mutations.
+	uncappedUploads    bool       // Protected by tcMu.
 	metrics            *Metrics
 }
 
@@ -201,7 +202,13 @@ func (m *manager) getDefaultNetwork(ctx context.Context) (*Network, error) {
 // SetupHTB initializes HTB qdisc on the bridge for upload fair sharing.
 // capacityBps is the total network capacity in bytes per second.
 func (m *manager) SetupHTB(ctx context.Context, capacityBps int64) error {
-	return m.setupBridgeHTB(ctx, m.config.Network.BridgeName, capacityBps)
+	m.tcMu.Lock()
+	defer m.tcMu.Unlock()
+	if err := m.setupBridgeHTB(ctx, m.config.Network.BridgeName, capacityBps); err != nil {
+		return err
+	}
+	m.uncappedUploads = capacityBps <= 0
+	return nil
 }
 
 // GetUploadBurstMultiplier returns the configured multiplier for upload burst ceiling.

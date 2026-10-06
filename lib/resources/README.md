@@ -67,6 +67,7 @@ Bidirectional rate limiting with separate download and upload controls:
 **Capacity tracking:**
 - Uses max(download, upload) per instance since they share physical link
 - Failed capacity discovery logs a warning and disables host network admission enforcement; explicit per-instance rate limits remain unchanged.
+- With unknown capacity, per-VM upload classes attach directly to the HTB scheduler, without a shared host-capacity parent or a guessed bandwidth limit. Existing classes are preserved during startup; recreated classes use the current capacity mode.
 - `/resources` reports `source: "unknown"` in this case. Zero capacity, effective limit, and availability are placeholders, not enforced limits; allocation tracking remains active.
 
 ### Disk I/O
