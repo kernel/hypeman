@@ -25,11 +25,14 @@ func createVM(config *shimconfig.ShimConfig) (*vz.VirtualMachine, *vz.VirtualMac
 		kernelArgs = strings.ReplaceAll(kernelArgs, "console=ttyS0", "console=hvc0")
 	}
 
-	bootLoader, err := vz.NewLinuxBootLoader(
-		config.KernelPath,
-		vz.WithCommandLine(kernelArgs),
-		vz.WithInitrd(config.InitrdPath),
-	)
+	macGuest := config.MacHardwareModelData != "" || config.MacMachineIdentifierData != "" || config.MacAuxStoragePath != ""
+	var bootLoader vz.BootLoader
+	var err error
+	if macGuest {
+		bootLoader, err = newMacBootLoader(config)
+	} else {
+		bootLoader, err = vz.NewLinuxBootLoader(config.KernelPath, vz.WithCommandLine(kernelArgs), vz.WithInitrd(config.InitrdPath))
+	}
 	if err != nil {
 		return nil, nil, fmt.Errorf("create boot loader: %w", err)
 	}
@@ -44,19 +47,23 @@ func createVM(config *shimconfig.ShimConfig) (*vz.VirtualMachine, *vz.VirtualMac
 		return nil, nil, fmt.Errorf("create vm configuration: %w", err)
 	}
 
-	if err := configureSerialConsole(vmConfig, config.SerialLogPath); err != nil {
-		return nil, nil, fmt.Errorf("configure serial: %w", err)
+	if !macGuest {
+		if err := configureSerialConsole(vmConfig, config.SerialLogPath); err != nil {
+			return nil, nil, fmt.Errorf("configure serial: %w", err)
+		}
 	}
 
 	if err := configureNetwork(vmConfig, config.Networks); err != nil {
 		return nil, nil, fmt.Errorf("configure network: %w", err)
 	}
 
-	entropyConfig, err := vz.NewVirtioEntropyDeviceConfiguration()
-	if err != nil {
-		return nil, nil, fmt.Errorf("create entropy device: %w", err)
+	if !macGuest {
+		entropyConfig, err := vz.NewVirtioEntropyDeviceConfiguration()
+		if err != nil {
+			return nil, nil, fmt.Errorf("create entropy device: %w", err)
+		}
+		vmConfig.SetEntropyDevicesVirtualMachineConfiguration([]*vz.VirtioEntropyDeviceConfiguration{entropyConfig})
 	}
-	vmConfig.SetEntropyDevicesVirtualMachineConfiguration([]*vz.VirtioEntropyDeviceConfiguration{entropyConfig})
 
 	if err := configureStorage(vmConfig, config.Disks); err != nil {
 		return nil, nil, fmt.Errorf("configure storage: %w", err)
@@ -66,7 +73,14 @@ func createVM(config *shimconfig.ShimConfig) (*vz.VirtualMachine, *vz.VirtualMac
 		return nil, nil, fmt.Errorf("configure directory sharing: %w", err)
 	}
 
-	if err := configurePlatform(vmConfig, config); err != nil {
+	if macGuest {
+		if config.EnableRosetta || config.EnableMemoryBalloon || config.RequireMemoryBalloon {
+			return nil, nil, fmt.Errorf("macOS spike does not support Linux Rosetta or memory ballooning")
+		}
+		if err := configureMacPlatform(vmConfig, config); err != nil {
+			return nil, nil, fmt.Errorf("configure Mac platform: %w", err)
+		}
+	} else if err := configurePlatform(vmConfig, config); err != nil {
 		return nil, nil, fmt.Errorf("configure platform: %w", err)
 	}
 

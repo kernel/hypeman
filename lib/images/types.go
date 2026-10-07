@@ -9,9 +9,10 @@ import (
 
 // Image represents a container image converted to bootable disk
 type Image struct {
-	Name          string // Normalized ref (e.g., docker.io/library/alpine:latest)
-	Digest        string // Resolved manifest digest (sha256:...)
-	Platform      string // Normalized platform (e.g., linux/amd64)
+	Name          string      // Normalized ref (e.g., docker.io/library/alpine:latest)
+	Digest        string      // Resolved manifest digest (sha256:...)
+	Platform      string      // Normalized platform (e.g., linux/amd64)
+	MacOS         *MacOSImage // Non-nil for locally imported macOS disk images
 	Status        string
 	QueuePosition *int
 	Error         *string
@@ -23,6 +24,16 @@ type Image struct {
 	Tags          tags.Tags
 	WorkingDir    string
 	CreatedAt     time.Time
+}
+
+// MacOSImage is a cold-boot template. Identity is preserved; until rekeying
+// is validated, only one instance with this identifier may run at a time.
+type MacOSImage struct {
+	HardwareModel     []byte `json:"hardware_model"`
+	MachineIdentifier []byte `json:"machine_identifier"`
+	MAC               string `json:"mac"`
+	CPUs              uint   `json:"cpus"`
+	Memory            uint64 `json:"memory"`
 }
 
 // CreateImageRequest represents a request to create an image

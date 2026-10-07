@@ -102,6 +102,12 @@ func (m *manager) createInstance(
 	if req.GPU != nil && req.GPU.Profile != "" && !devices.Capabilities().SupportsVGPU {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidRequest, devices.ErrVGPUNotSupportedOnMacOS)
 	}
+	if m.macOSOnly {
+		cached, err := m.imageManager.GetImage(ctx, req.Image)
+		if err != nil || cached.MacOS == nil {
+			return nil, fmt.Errorf("%w: macOS-only server requires an already imported macOS image", ErrInvalidRequest)
+		}
+	}
 	hvType := req.Hypervisor
 	if hvType == "" {
 		hvType = m.defaultHypervisor
@@ -130,6 +136,15 @@ func (m *manager) createInstance(
 	if imageInfo.Status != images.StatusReady {
 		log.ErrorContext(ctx, "image not ready", "image", req.Image, "status", imageInfo.Status)
 		return nil, fmt.Errorf("%w: image status is %s", ErrImageNotReady, imageInfo.Status)
+	}
+
+	if m.macOSOnly && imageInfo.MacOS == nil {
+		return nil, fmt.Errorf("%w: server is configured for macOS guests only", ErrInvalidRequest)
+	}
+	if imageInfo.MacOS != nil {
+		if err := prepareMacOSRequest(&req, imageInfo, hvType); err != nil {
+			return nil, err
+		}
 	}
 
 	// A guest whose architecture differs from the host kernel can only boot via
@@ -338,6 +353,7 @@ func (m *manager) createInstance(
 		Image:                    req.Image,
 		ResolvedImage:            resolvedImageRef,
 		Platform:                 imageInfo.Platform,
+		MacOS:                    imageInfo.MacOS,
 		Size:                     size,
 		HotplugSize:              hotplugSize,
 		OverlaySize:              overlaySize,
@@ -412,14 +428,18 @@ func (m *manager) createInstance(
 
 	// 13. Create overlay disk with specified size
 	log.DebugContext(ctx, "creating overlay disk", "instance_id", id, "size_bytes", stored.OverlaySize)
-	if err := m.createOverlayDisk(id, stored.OverlaySize); err != nil {
+	if err := m.prepareBootStorage(stored, imageInfo); err != nil {
 		log.ErrorContext(ctx, "failed to create overlay disk", "instance_id", id, "error", err)
 		return nil, fmt.Errorf("create overlay disk: %w", err)
 	}
 
 	// 14. Allocate network (if network enabled)
 	var netConfig *network.NetworkConfig
-	if networkName != "" {
+	if stored.MacOS != nil && stored.NetworkEnabled {
+		netConfig = &network.NetworkConfig{MAC: stored.MacOS.MAC}
+		stored.MAC = stored.MacOS.MAC
+	}
+	if networkName != "" && stored.MacOS == nil {
 		log.DebugContext(ctx, "allocating network", "instance_id", id, "network", networkName,
 			"download_bps", stored.NetworkBandwidthDownload, "upload_bps", stored.NetworkBandwidthUpload)
 		networkCtx, networkSpanEnd := m.startLifecycleStep(ctx, "allocate_network",
@@ -569,7 +589,7 @@ func (m *manager) createInstance(
 	// guest boot markers have not yet been written, so we are in Initializing;
 	// persistBootMarkers will advance us to Running once the markers appear
 	// in the serial log.
-	stored.Phases.Record(phasetracking.PhaseInitializing, time.Now().UTC())
+	stored.Phases.Record(initialBootPhase(stored), time.Now().UTC())
 	meta = &metadata{StoredMetadata: *stored}
 	if err := m.saveMetadata(meta); err != nil {
 		// VM is running but metadata failed - log but don't fail
@@ -797,6 +817,13 @@ func (m *manager) startAndBootVM(
 	refreshHostVersion bool,
 ) error {
 	log := logger.FromContext(ctx)
+	if stored.MacOS != nil {
+		m.macOSBootMu.Lock()
+		defer m.macOSBootMu.Unlock()
+		if err := m.checkMacOSIdentityAvailable(ctx, stored); err != nil {
+			return err
+		}
+	}
 
 	// Get VM starter for this hypervisor type
 	starter, err := m.getVMStarter(stored.HypervisorType)
@@ -869,6 +896,9 @@ func resolveRuntimeHypervisorPID(log *slog.Logger, stored *StoredMetadata, fallb
 
 // buildHypervisorConfig creates a hypervisor-agnostic VM configuration
 func (m *manager) buildHypervisorConfig(ctx context.Context, inst *Instance, imageInfo *images.Image, netConfig *network.NetworkConfig) (hypervisor.VMConfig, error) {
+	if inst.MacOS != nil {
+		return m.macOSVMConfig(inst), nil
+	}
 	// Get system file paths
 	kernelPath, _ := m.systemManager.GetKernelPath(system.KernelVersion(inst.KernelVersion))
 	initrdPath, _ := m.systemManager.GetInitrdPath()
@@ -1000,6 +1030,9 @@ func (m *manager) buildHypervisorConfig(ctx context.Context, inst *Instance, ima
 }
 
 func resolveCreateKernelVersion(imageInfo *images.Image, defaultKernel system.KernelVersion) (system.KernelVersion, error) {
+	if imageInfo != nil && imageInfo.MacOS != nil {
+		return "", nil
+	}
 	if imageInfo == nil || len(imageInfo.Labels) == 0 {
 		return defaultKernel, nil
 	}

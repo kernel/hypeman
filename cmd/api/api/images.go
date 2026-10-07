@@ -115,6 +115,8 @@ func (s *ApiService) TagImage(ctx context.Context, request oapi.TagImageRequestO
 
 func tagImageErrorResponse(ctx context.Context, err error, source, target string) oapi.TagImageResponseObject {
 	switch {
+	case errors.Is(err, images.ErrInvalidPlatform):
+		return oapi.TagImage400JSONResponse{Code: "invalid_platform", Message: err.Error()}
 	case errors.Is(err, images.ErrInvalidName):
 		return oapi.TagImage400JSONResponse{Code: "invalid_name", Message: err.Error()}
 	case errors.Is(err, images.ErrNotFound):

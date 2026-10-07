@@ -17,6 +17,7 @@ type imageMetadata struct {
 	Name              string              `json:"name"`   // Normalized ref (tag or digest)
 	Digest            string              `json:"digest"` // Always present: sha256:...
 	Platform          string              `json:"platform,omitempty"`
+	MacOS             *MacOSImage         `json:"macos,omitempty"`
 	Status            string              `json:"status"`
 	Error             *string             `json:"error,omitempty"`
 	Request           *CreateImageRequest `json:"request,omitempty"`
@@ -64,6 +65,7 @@ func (m *imageMetadata) toImage() *Image {
 		Name:      m.Name,
 		Digest:    m.Digest,
 		Platform:  platform,
+		MacOS:     m.MacOS,
 		Status:    m.Status,
 		Error:     m.Error,
 		CreatedAt: m.CreatedAt,
@@ -112,11 +114,7 @@ type imageLayout struct {
 // once content metadata is ready, content becomes canonical even if its disk
 // is missing so callers report the corruption instead of mixing layouts.
 func resolveImageLayout(p *paths.Paths, repository, digestHex string) imageLayout {
-	legacy := imageLayout{
-		dir:      p.ImageDigestDir(repository, digestHex),
-		metadata: p.ImageMetadata(repository, digestHex),
-		disk:     p.ImageDigestPath(repository, digestHex),
-	}
+	legacy := legacyLayout(p, repository, digestHex)
 	content := contentLayout(p, digestHex)
 
 	if legacyImageExists(p, repository, digestHex) {
@@ -152,9 +150,21 @@ func digestDir(p *paths.Paths, repository, digestHex string) string {
 	return resolveImageLayout(p, repository, digestHex).dir
 }
 
+func legacyLayout(p *paths.Paths, repository, digestHex string) imageLayout {
+	layout := imageLayout{dir: p.ImageDigestDir(repository, digestHex), metadata: p.ImageMetadata(repository, digestHex), disk: p.ImageDigestPath(repository, digestHex)}
+	if b, err := os.ReadFile(layout.metadata); err == nil {
+		var meta imageMetadata
+		if json.Unmarshal(b, &meta) == nil && meta.MacOS != nil {
+			layout.disk = filepath.Join(layout.dir, "rootfs.raw")
+		}
+	}
+	return layout
+}
+
 func legacyImageExists(p *paths.Paths, repository, digestHex string) bool {
-	_, metadataErr := os.Stat(p.ImageMetadata(repository, digestHex))
-	_, diskErr := os.Stat(p.ImageDigestPath(repository, digestHex))
+	layout := legacyLayout(p, repository, digestHex)
+	_, metadataErr := os.Stat(layout.metadata)
+	_, diskErr := os.Stat(layout.disk)
 	return metadataErr == nil && diskErr == nil
 }
 

@@ -273,12 +273,22 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 		}
 	}
 
+	// Imported desktop guests do not implement Linux disk/TAP shaping. Do not
+	// silently advertise proportional limits that the backend would ignore.
+	macOSImage := false
+	if img, err := s.ImageManager.GetImage(ctx, request.Body.Image); err == nil {
+		macOSImage = img.MacOS != nil
+	}
+	if macOSImage && request.Body.Vcpus == nil {
+		vcpus = 0
+	}
+
 	// Calculate default resource limits when not specified (0 = auto)
 	// Uses proportional allocation based on CPU: (vcpus / cpuCapacity) * resourceCapacity
-	if diskIOBps == 0 {
+	if diskIOBps == 0 && !macOSImage {
 		diskIOBps, _ = s.ResourceManager.DefaultDiskIOBandwidth(vcpus)
 	}
-	if networkBandwidthDownload == 0 || networkBandwidthUpload == 0 {
+	if !macOSImage && (networkBandwidthDownload == 0 || networkBandwidthUpload == 0) {
 		defaultDown, defaultUp := s.ResourceManager.DefaultNetworkBandwidth(vcpus)
 		if networkBandwidthDownload == 0 {
 			networkBandwidthDownload = defaultDown

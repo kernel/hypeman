@@ -86,6 +86,7 @@ type ResourceLimits struct {
 
 // ManagerConfig holds non-resource manager behavior settings.
 type ManagerConfig struct {
+	MacOSOnly                         bool
 	LifecycleEventBufferSize          int
 	FirecrackerSnapshotMemoryBackend  string
 	FirecrackerUFFDCacheMaxBytes      int64
@@ -174,6 +175,8 @@ type manager struct {
 	resourceValidator         ResourceValidator // Optional validator for aggregate resource limits
 	instanceLocks             sync.Map          // map[string]*sync.RWMutex - per-instance locks
 	forkMetadataMu            sync.Mutex
+	macOSBootMu               sync.Mutex // Serialize admission for preserved Mac identities.
+	macOSOnly                 bool
 	bootMarkerScans           sync.Map      // map[string]time.Time next allowed boot-marker rescan
 	hypervisorStateCache      sync.Map      // map[string]hypervisorStateCacheEntry - last observed hypervisor state per instance
 	hostTopology              *HostTopology // Cached host CPU topology
@@ -285,6 +288,7 @@ func NewManagerWithConfigE(p *paths.Paths, imageManager images.Manager, systemMa
 
 	m := &manager{
 		paths:                            p,
+		macOSOnly:                        managerConfig.MacOSOnly,
 		imageManager:                     imageManager,
 		systemManager:                    systemManager,
 		networkManager:                   networkManager,
@@ -502,6 +506,9 @@ func (m *manager) GetSnapshot(ctx context.Context, snapshotID string) (*Snapshot
 }
 
 func (m *manager) CreateSnapshot(ctx context.Context, id string, req CreateSnapshotRequest) (*Snapshot, error) {
+	if err := m.rejectMacOSOperation(id, "snapshot"); err != nil {
+		return nil, err
+	}
 	lock := m.getInstanceLock(id)
 	lock.Lock()
 	defer lock.Unlock()
@@ -514,6 +521,9 @@ func (m *manager) DeleteSnapshot(ctx context.Context, snapshotID string) error {
 
 // ForkInstance creates a forked copy of an instance.
 func (m *manager) ForkInstance(ctx context.Context, id string, req ForkInstanceRequest) (*Instance, error) {
+	if err := m.rejectMacOSOperation(id, "fork"); err != nil {
+		return nil, err
+	}
 	lock := m.getInstanceLock(id)
 	useReadLock := false
 	var sourceState State
@@ -603,6 +613,9 @@ func (m *manager) ForkSnapshot(ctx context.Context, snapshotID string, req ForkS
 
 // StandbyInstance puts an instance in standby (pause, snapshot, delete VMM)
 func (m *manager) StandbyInstance(ctx context.Context, id string, req StandbyInstanceRequest) (*Instance, error) {
+	if err := m.rejectMacOSOperation(id, "standby"); err != nil {
+		return nil, err
+	}
 	lock := m.getInstanceLock(id)
 	lock.Lock()
 	defer lock.Unlock()
@@ -624,6 +637,9 @@ func (m *manager) StandbyInstance(ctx context.Context, id string, req StandbyIns
 
 // RestoreInstance restores an instance from standby
 func (m *manager) RestoreInstance(ctx context.Context, id string) (*Instance, error) {
+	if err := m.rejectMacOSOperation(id, "restore"); err != nil {
+		return nil, err
+	}
 	lock := m.getInstanceLock(id)
 	lock.Lock()
 	defer lock.Unlock()
@@ -659,6 +675,9 @@ func (m *manager) RestoreInstance(ctx context.Context, id string) (*Instance, er
 }
 
 func (m *manager) RestoreSnapshot(ctx context.Context, id string, snapshotID string, req RestoreSnapshotRequest) (*Instance, error) {
+	if err := m.rejectMacOSOperation(id, "restore snapshot"); err != nil {
+		return nil, err
+	}
 	lock := m.getInstanceLock(id)
 	lock.Lock()
 	defer lock.Unlock()
@@ -741,6 +760,9 @@ func standbyRequestHasOptions(req StandbyInstanceRequest) bool {
 
 // UpdateInstance updates mutable properties of a running instance
 func (m *manager) UpdateInstance(ctx context.Context, id string, req UpdateInstanceRequest) (*Instance, error) {
+	if err := m.rejectMacOSOperation(id, "update"); err != nil {
+		return nil, err
+	}
 	lock := m.getInstanceLock(id)
 	lock.Lock()
 	defer lock.Unlock()
@@ -888,11 +910,17 @@ func (m *manager) RotateLogs(ctx context.Context, maxBytes int64, maxFiles int) 
 
 // AttachVolume attaches a volume to an instance (not yet implemented)
 func (m *manager) AttachVolume(ctx context.Context, id string, volumeId string, req AttachVolumeRequest) (*Instance, error) {
+	if err := m.rejectMacOSOperation(id, "attach volume"); err != nil {
+		return nil, err
+	}
 	return nil, fmt.Errorf("attach volume not yet implemented")
 }
 
 // DetachVolume detaches a volume from an instance (not yet implemented)
 func (m *manager) DetachVolume(ctx context.Context, id string, volumeId string) (*Instance, error) {
+	if err := m.rejectMacOSOperation(id, "detach volume"); err != nil {
+		return nil, err
+	}
 	return nil, fmt.Errorf("detach volume not yet implemented")
 }
 

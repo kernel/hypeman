@@ -145,6 +145,7 @@ func ProvideInstanceManager(p *paths.Paths, cfg *config.Config, imageManager ima
 		return nil, fmt.Errorf("failed to parse hypervisor.firecracker_uffd_cache_max_bytes %q: %w", cfg.Hypervisor.FirecrackerUFFDCacheMaxBytes, err)
 	}
 	managerConfig := instances.ManagerConfig{
+		MacOSOnly:                        cfg.MacOSOnly,
 		LifecycleEventBufferSize:         cfg.Instances.LifecycleEventBufferSize,
 		FirecrackerSnapshotMemoryBackend: cfg.Hypervisor.FirecrackerSnapshotMemoryBackend,
 		FirecrackerUFFDCacheMaxBytes:     int64(firecrackerUFFDCacheMaxBytes),

@@ -275,11 +275,13 @@ type GPUConfig struct {
 
 // Config is the top-level Hypeman server configuration.
 type Config struct {
-	Port      string `koanf:"port"`
-	DataDir   string `koanf:"data_dir"`
-	JwtSecret string `koanf:"jwt_secret"`
-	Env       string `koanf:"env"`
-	Version   string `koanf:"version"`
+	Port          string `koanf:"port"`
+	ListenAddress string `koanf:"listen_address"` // Empty preserves listening on all interfaces.
+	DataDir       string `koanf:"data_dir"`
+	JwtSecret     string `koanf:"jwt_secret"`
+	Env           string `koanf:"env"`
+	Version       string `koanf:"version"`
+	MacOSOnly     bool   `koanf:"macos_only"` // Experimental: omit Linux boot downloads and reject Linux creates.
 
 	Network          NetworkConfig          `koanf:"network"`
 	Caddy            CaddyConfig            `koanf:"caddy"`
@@ -588,6 +590,9 @@ func expandHomePath(path string) string {
 // Validate checks configuration values for correctness.
 // Returns an error if any configuration value is invalid.
 func (c *Config) Validate() error {
+	if c.MacOSOnly && (runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" || c.Hypervisor.Default != "vz") {
+		return fmt.Errorf("macos_only requires vz on Apple silicon")
+	}
 	if strings.TrimSpace(c.Metrics.ListenAddress) == "" {
 		return fmt.Errorf("metrics.listen_address must not be empty")
 	}

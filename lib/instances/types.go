@@ -7,6 +7,7 @@ import (
 	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/healthcheck"
 	"github.com/kernel/hypeman/lib/hypervisor"
+	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/instances/phasetracking"
 	restartpolicy "github.com/kernel/hypeman/lib/restart-policy"
 	"github.com/kernel/hypeman/lib/snapshot"
@@ -92,6 +93,7 @@ type StoredMetadata struct {
 	// "linux/amd64"), captured from the pulled image's metadata at create time.
 	// Read-only; echoed on the instance API.
 	Platform string
+	MacOS    *images.MacOSImage // Non-nil for experimental local macOS disk guests.
 
 	// Resources (matching Cloud Hypervisor terminology)
 	Size                     int64 // Base memory in bytes

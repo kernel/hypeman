@@ -174,6 +174,10 @@ func (m *manager) CreateImage(ctx context.Context, req CreateImageRequest) (*Ima
 		return nil, err
 	}
 
+	if platform.OS == "darwin" {
+		return nil, fmt.Errorf("%w: macOS images must be imported locally with import-macos, not pulled as Linux containers", ErrInvalidPlatform)
+	}
+
 	// Parse and normalize
 	normalized, err := ParseNormalizedRef(req.Name)
 	if err != nil {

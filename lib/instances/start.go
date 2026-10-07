@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/egressproxy"
-	"github.com/kernel/hypeman/lib/instances/phasetracking"
 	"github.com/kernel/hypeman/lib/logger"
 	"github.com/kernel/hypeman/lib/network"
 	"go.opentelemetry.io/otel/attribute"
@@ -41,6 +40,13 @@ func (m *manager) startInstance(
 	stored := &meta.StoredMetadata
 	ctx = enrichInstancesTrace(ctx, attribute.String("hypervisor", string(stored.HypervisorType)))
 	log.DebugContext(ctx, "loaded instance", "instance_id", id, "state", inst.State)
+
+	if m.macOSOnly && stored.MacOS == nil {
+		return nil, fmt.Errorf("%w: server is configured for macOS guests only", ErrInvalidRequest)
+	}
+	if stored.MacOS != nil && (len(req.Entrypoint) != 0 || len(req.Cmd) != 0) {
+		return nil, fmt.Errorf("%w: macOS start does not support command overrides", ErrInvalidRequest)
+	}
 
 	// 2. Validate state (must be Stopped to start)
 	if inst.State != StateStopped {
@@ -114,7 +120,12 @@ func (m *manager) startInstance(
 
 	// 4. Allocate fresh network if network enabled
 	var netConfig *network.NetworkConfig
-	if stored.NetworkEnabled {
+	if stored.MacOS != nil && stored.NetworkEnabled {
+		netConfig = &network.NetworkConfig{MAC: stored.MacOS.MAC}
+		stored.MAC = stored.MacOS.MAC
+		stored.IP = ""
+	}
+	if stored.NetworkEnabled && stored.MacOS == nil {
 		log.DebugContext(ctx, "allocating network for start", "instance_id", id, "network", "default")
 		networkCtx, networkSpanEnd := m.startLifecycleStep(ctx, "allocate_network",
 			attribute.String("instance_id", id),
@@ -231,7 +242,7 @@ func (m *manager) startInstance(
 
 	// 7. Update metadata (set PID, StartedAt). Boot markers were cleared at
 	// the top of this function, so we are in Initializing until they hydrate.
-	stored.Phases.Record(phasetracking.PhaseInitializing, time.Now().UTC())
+	stored.Phases.Record(initialBootPhase(stored), time.Now().UTC())
 	meta = &metadata{StoredMetadata: *stored}
 	if err := m.saveMetadata(meta); err != nil {
 		// VM is running but metadata failed - log but don't fail
