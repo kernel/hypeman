@@ -219,7 +219,7 @@ func (m *manager) updateCachedHypervisorStateFromInstance(inst *Instance) {
 }
 
 func deriveRunningState(stored *StoredMetadata) State {
-	// For unmanaged macOS desktops, Running means VMM running, not app/agent ready.
+	// For macOS, Running means VMM running. Agent readiness is a separate marker.
 	if stored.MacOS != nil {
 		return StateRunning
 	}
@@ -293,8 +293,8 @@ func advancePhaseIfRunning(stored *StoredMetadata) {
 // services do not need to forward stdout/stderr to the serial console.
 // Returns true when at least one missing marker was found and populated.
 func (m *manager) hydrateBootMarkersFromLogs(ctx context.Context, stored *StoredMetadata) bool {
-	needProgram := stored.ProgramStartedAt == nil
-	needAgent := !stored.SkipGuestAgent && stored.GuestAgentReadyAt == nil
+	needProgram := stored.MacOS == nil && stored.ProgramStartedAt == nil
+	needAgent := guestAgentEnabled(stored) && stored.GuestAgentReadyAt == nil
 	if !needProgram && !needAgent {
 		m.clearBootMarkerRescan(stored.Id)
 		return false
@@ -308,7 +308,10 @@ func (m *manager) hydrateBootMarkersFromLogs(ctx context.Context, stored *Stored
 	)
 	defer span.End()
 
-	programStartedAt, guestAgentReadyAt := m.parseBootMarkers(ctx, stored.Id, needProgram, needAgent, stored.StartedAt)
+	var programStartedAt, guestAgentReadyAt *time.Time
+	if stored.MacOS == nil {
+		programStartedAt, guestAgentReadyAt = m.parseBootMarkers(ctx, stored.Id, needProgram, needAgent, stored.StartedAt)
+	}
 	hydrated := false
 	if needProgram && programStartedAt != nil {
 		stored.ProgramStartedAt = programStartedAt
@@ -318,7 +321,7 @@ func (m *manager) hydrateBootMarkersFromLogs(ctx context.Context, stored *Stored
 		stored.GuestAgentReadyAt = guestAgentReadyAt
 		hydrated = true
 	}
-	if needAgent && stored.GuestAgentReadyAt == nil && stored.ProgramStartedAt != nil && m.hydrateGuestAgentReadyFromProbe(ctx, stored) {
+	if needAgent && stored.GuestAgentReadyAt == nil && (stored.MacOS != nil || stored.ProgramStartedAt != nil) && m.hydrateGuestAgentReadyFromProbe(ctx, stored) {
 		hydrated = true
 	}
 	if hydrated {
@@ -421,7 +424,7 @@ func (m *manager) nowUTC() time.Time {
 }
 
 func (m *manager) hydrateGuestAgentReadyFromProbe(ctx context.Context, stored *StoredMetadata) bool {
-	if stored == nil || stored.SkipGuestAgent || stored.GuestAgentReadyAt != nil {
+	if stored == nil || !guestAgentEnabled(stored) || stored.GuestAgentReadyAt != nil {
 		return false
 	}
 	probe := m.guestAgentReadyProbe
@@ -437,7 +440,7 @@ func (m *manager) hydrateGuestAgentReadyFromProbe(ctx context.Context, stored *S
 }
 
 func probeGuestAgentReady(ctx context.Context, stored *StoredMetadata) bool {
-	if stored == nil || stored.SkipGuestAgent {
+	if stored == nil || !guestAgentEnabled(stored) {
 		return false
 	}
 	dialer, err := hypervisor.NewVsockDialer(stored.HypervisorType, stored.VsockSocket, stored.VsockCID)
@@ -643,13 +646,16 @@ func (m *manager) persistBootMarkers(ctx context.Context, id string) {
 		return
 	}
 
-	needProgram := meta.ProgramStartedAt == nil
-	needAgent := !meta.SkipGuestAgent && meta.GuestAgentReadyAt == nil
+	needProgram := meta.MacOS == nil && meta.ProgramStartedAt == nil
+	needAgent := guestAgentEnabled(&meta.StoredMetadata) && meta.GuestAgentReadyAt == nil
 	if !needProgram && !needAgent {
 		return
 	}
 
-	programStartedAt, guestAgentReadyAt := m.parseBootMarkers(ctx, id, needProgram, needAgent, meta.StartedAt)
+	var programStartedAt, guestAgentReadyAt *time.Time
+	if meta.MacOS == nil {
+		programStartedAt, guestAgentReadyAt = m.parseBootMarkers(ctx, id, needProgram, needAgent, meta.StartedAt)
+	}
 	updated := false
 	if needProgram && programStartedAt != nil {
 		meta.ProgramStartedAt = programStartedAt
@@ -659,7 +665,7 @@ func (m *manager) persistBootMarkers(ctx context.Context, id string) {
 		meta.GuestAgentReadyAt = guestAgentReadyAt
 		updated = true
 	}
-	if needAgent && meta.GuestAgentReadyAt == nil && meta.ProgramStartedAt != nil && m.hydrateGuestAgentReadyFromProbe(ctx, &meta.StoredMetadata) {
+	if needAgent && meta.GuestAgentReadyAt == nil && (meta.MacOS != nil || meta.ProgramStartedAt != nil) && m.hydrateGuestAgentReadyFromProbe(ctx, &meta.StoredMetadata) {
 		updated = true
 	}
 	if !updated {

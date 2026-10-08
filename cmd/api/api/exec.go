@@ -71,8 +71,8 @@ func (s *ApiService) ExecHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if inst.MacOS != nil {
-		http.Error(w, `{"code":"unsupported","message":"exec is not implemented for experimental macOS instances"}`, http.StatusNotImplemented)
+	if inst.MacOS != nil && (!inst.MacOS.GuestAgent || inst.SkipGuestAgent) {
+		http.Error(w, `{"code":"unsupported","message":"exec is not implemented for macOS images without the shared guest agent enabled"}`, http.StatusNotImplemented)
 		return
 	}
 
@@ -128,6 +128,8 @@ func (s *ApiService) ExecHandler(w http.ResponseWriter, r *http.Request) {
 	tracer := otel.Tracer("hypeman/exec")
 	ctx, span := tracer.Start(ctx, "exec.session", trace.WithAttributes(execSpanAttributes(inst.Id, execReq.TTY)...))
 	defer span.End()
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
 	// Audit log: exec session started
 	log.InfoContext(ctx, "exec session started",
@@ -146,11 +148,10 @@ func (s *ApiService) ExecHandler(w http.ResponseWriter, r *http.Request) {
 	var resizeChan chan *guest.WindowSize
 	if execReq.TTY {
 		resizeChan = make(chan *guest.WindowSize, 10)
-		defer close(resizeChan)
 	}
 
 	// Create WebSocket read/writer wrapper that handles resize messages
-	wsConn := &wsReadWriter{ws: ws, ctx: ctx, resizeChan: resizeChan}
+	wsConn := &wsReadWriter{ws: ws, ctx: ctx, resizeChan: resizeChan, cancel: cancel}
 
 	dialer, err := s.InstanceManager.GetVsockDialer(ctx, inst.Id)
 	if err != nil {
@@ -221,6 +222,7 @@ type wsReadWriter struct {
 	reader     io.Reader
 	mu         sync.Mutex
 	resizeChan chan<- *guest.WindowSize // Channel to send resize events (nil if not TTY)
+	cancel     context.CancelFunc       // Exec session cancellation on disconnect (nil for other users).
 }
 
 func (w *wsReadWriter) Read(p []byte) (n int, err error) {
@@ -241,6 +243,9 @@ func (w *wsReadWriter) Read(p []byte) (n int, err error) {
 		// Read next WebSocket message
 		messageType, data, err := w.ws.ReadMessage()
 		if err != nil {
+			if w.cancel != nil {
+				w.cancel()
+			}
 			return 0, err
 		}
 
@@ -273,6 +278,9 @@ func (w *wsReadWriter) Read(p []byte) (n int, err error) {
 
 func (w *wsReadWriter) Write(p []byte) (n int, err error) {
 	if err := w.ws.WriteMessage(websocket.BinaryMessage, p); err != nil {
+		if w.cancel != nil {
+			w.cancel()
+		}
 		return 0, err
 	}
 	return len(p), nil

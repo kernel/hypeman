@@ -38,6 +38,27 @@ The host API and hypervisor still enforce authorization. The vsock host-CID
 check is transport admission, not a replacement for instance authority checks.
 Do not expose this privileged service through unauthenticated host forwarding.
 
+## Image declaration and host integration
+
+Set `"guest_agent": true` in the image's experimental macOS platform configuration
+only after provisioning the root shared agent on vsock 2222. This field is omitted
+by default, so existing local templates remain unmanaged. The normal instance
+`skip_guest_agent` option can disable agent integration even for a declared image.
+
+For declared/enabled instances, the normal exec and file-copy handlers use the
+shared GuestService and stop attempts its Shutdown RPC before the existing
+forced-stop fallback. An unavailable agent still produces a timeout/failure,
+not an assertion that it is ready. Readiness probing records the existing
+`guest_agent_ready_at` marker without requiring or inventing a Linux workload
+start marker. `Running` remains VMM-running for macOS; it does not certify system,
+desktop or browser readiness. This readiness timestamp is a boot observation,
+not continuous agent health. Start clears the prior boot's readiness marker.
+
+Undeclared/disabled images reject exec/copy before WebSocket upgrade and skip
+agent shutdown/probes. The declaration is an image capability claim, not a
+verified live guest handshake or a security credential. Runtime connectivity
+and privileged provisioning still require the validation below.
+
 ## OS-specific operations
 
 - **Shutdown:** root-only `/sbin/shutdown -h now`, not a signal to launchd/PID 1.
@@ -62,8 +83,8 @@ live guest AF_VSOCK handshake for this executable.
 Remaining draft gates:
 
 - Provision in a test guest and exercise real host GuestService connectivity.
-- Connect normal API exec/files, system readiness, graceful stop/recovery, and
-  guest-agent version compatibility; do not silently redefine `Running`.
+- Live normal API exec/files, readiness and graceful stop/recovery validation;
+  guest-agent version compatibility and bounded readiness wait semantics.
 - Root/desktop session authorization and image provisioning.
 - Broader backpressure/large-output validation of bounded non-TTY streaming,
   PTY/disconnect and descendant-process cleanup, transfer failure/size handling,

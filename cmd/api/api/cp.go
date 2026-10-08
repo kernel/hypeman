@@ -104,6 +104,11 @@ func (s *ApiService) CpHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if inst.MacOS != nil && (!inst.MacOS.GuestAgent || inst.SkipGuestAgent) {
+		http.Error(w, `{"code":"unsupported","message":"file copy requires the shared macOS guest agent to be enabled"}`, http.StatusNotImplemented)
+		return
+	}
+
 	if inst.State != instances.StateRunning {
 		http.Error(w, fmt.Sprintf(`{"code":"invalid_state","message":"instance must be running (current state: %s)"}`, inst.State), http.StatusConflict)
 		return

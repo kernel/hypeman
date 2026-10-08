@@ -46,6 +46,36 @@ func TestMacOSStatRejectedBeforeGuestDial(t *testing.T) {
 	require.Equal(t, "unsupported", unsupported.Code)
 }
 
+func TestMacOSGuestAgentAdmissionBeforeUpgrade(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		declared, skipped bool
+		status            int
+	}{
+		{"unmanaged", false, false, http.StatusNotImplemented},
+		{"disabled", true, true, http.StatusNotImplemented},
+		{"enabled but stopped", true, false, http.StatusConflict},
+	} {
+		for _, operation := range []string{"exec", "cp"} {
+			t.Run(tc.name+"/"+operation, func(t *testing.T) {
+				s := &ApiService{}
+				inst := &instances.Instance{StoredMetadata: instances.StoredMetadata{
+					MacOS: &images.MacOSImage{GuestAgent: tc.declared}, SkipGuestAgent: tc.skipped,
+				}, State: instances.StateStopped}
+				ctx := mw.WithResolvedInstance(context.Background(), "test", inst)
+				r := httptest.NewRequest(http.MethodGet, "/instances/test/"+operation, nil).WithContext(ctx)
+				w := httptest.NewRecorder()
+				if operation == "exec" {
+					s.ExecHandler(w, r)
+				} else {
+					s.CpHandler(w, r)
+				}
+				require.Equal(t, tc.status, w.Code)
+			})
+		}
+	}
+}
+
 func TestMacOSSchemaDefersTemplateDefaults(t *testing.T) {
 	spec, err := oapi.GetSwagger()
 	require.NoError(t, err)

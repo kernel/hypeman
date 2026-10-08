@@ -39,12 +39,12 @@ func hasVFIODevices(stored *StoredMetadata) bool {
 	return storedVGPUDevicePath(stored) != "" || len(stored.Devices) > 0
 }
 
-// tryGracefulGuestShutdown asks guest init to shut down and waits for the
+// tryGracefulGuestShutdown asks GuestService to shut down and waits for the
 // hypervisor process to exit. Returns true if the process exited in time.
 func (m *manager) tryGracefulGuestShutdown(ctx context.Context, inst *Instance, stopTimeout int) bool {
 	log := logger.FromContext(ctx)
 
-	if inst.SkipGuestAgent {
+	if !guestAgentEnabled(&inst.StoredMetadata) {
 		log.DebugContext(ctx, "guest-agent disabled, skipping graceful guest shutdown", "instance_id", inst.Id)
 		return false
 	}
