@@ -167,10 +167,6 @@ func resolveManifestPlatform(meta *containerMetadata, requested string) (Platfor
 		Variant:      meta.Variant,
 	}.Normalize()
 
-	if actual.OS == "darwin" {
-		return Platform{}, fmt.Errorf("%w: macOS must be imported as a local disk bundle", ErrInvalidPlatform)
-	}
-
 	// An explicit request is authoritative for the match check and, when the
 	// manifest omits its own platform, for the recorded value too.
 	if strings.TrimSpace(requested) != "" {

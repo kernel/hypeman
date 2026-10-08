@@ -20,9 +20,37 @@ go run -tags containers_image_openpgp ./cmd/import-macos \
   --name localhost/macos:spike
 ```
 
-The data directory needs APFS clonefile support. Images are `darwin/arm64`, not
-OCI macOS containers. Registry pulls, manifest resolution and tagging/promotion
-of macOS images are unsupported. Do not mutate the imported image files.
+The local importer needs APFS clonefile support. Images are `darwin/arm64`
+machine images, not OCI macOS containers. Registry pulls also support experimental
+complete-machine bundles described below. Additional tags within the same
+repository are supported; cross-repository promotion remains unsupported.
+Do not mutate the imported image files.
+
+## Experimental OCI bundles
+
+The normal image API accepts a `darwin/arm64` OCI manifest whose configuration
+labels describe a complete installed machine:
+
+| Label | Value |
+|---|---|
+| `io.hypeman.machine-image.version` | `1` |
+| `io.hypeman.machine-image.kind` | `macos-image` |
+| `io.hypeman.machine-image.disk-format` | `raw` |
+| `io.hypeman.machine-image.disk-path` | Relative installed boot disk path |
+| `io.hypeman.machine-image.aux-path` | Relative auxiliary storage path |
+| `io.hypeman.machine-image.platform-path` | Relative macOS platform configuration JSON path |
+
+All three files must be distinct, nonempty regular files inside the unpacked
+image. Platform configuration uses the local bundle's `MacOSImage` schema and
+is limited to 64 KiB. Absolute paths, traversal and symlink escapes are rejected.
+The installed disk is materialized directly rather than converted to a Linux
+root filesystem. The matching auxiliary storage and platform identity are
+retained. Do not package live mutable guest storage.
+
+This schema is experimental pending reconciliation with other machine-image
+platforms. Complete bundles only: no base/delta chain, identity rebinding, or
+concurrent-template guarantee. Ordinary OCI transport does not imply sparse
+distribution efficiency, boot portability, or container execution semantics.
 
 ## API
 

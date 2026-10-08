@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/uuid"
+	"github.com/kernel/hypeman/lib/forkvm"
 	"github.com/kernel/hypeman/lib/paths"
 	"github.com/kernel/hypeman/lib/queue"
 	"github.com/kernel/hypeman/lib/tags"
@@ -174,10 +175,6 @@ func (m *manager) CreateImage(ctx context.Context, req CreateImageRequest) (*Ima
 		return nil, err
 	}
 
-	if platform.OS == "darwin" {
-		return nil, fmt.Errorf("%w: macOS images must be imported locally with import-macos, not pulled as Linux containers", ErrInvalidPlatform)
-	}
-
 	// Parse and normalize
 	normalized, err := ParseNormalizedRef(req.Name)
 	if err != nil {
@@ -223,6 +220,14 @@ func (m *manager) CreateImage(ctx context.Context, req CreateImageRequest) (*Ima
 	m.createMu.Lock()
 	defer m.createMu.Unlock()
 
+	if req.Platform != "" {
+		if cached, err := readMetadata(m.paths, ref.Repository(), ref.DigestHex()); err == nil && cached.Status == StatusReady {
+			actual, err := ParsePlatform(cached.Platform)
+			if err != nil || !platform.Matches(actual) {
+				return nil, fmt.Errorf("%w: requested %s but cached manifest is %s", ErrInvalidPlatform, platform, cached.Platform)
+			}
+		}
+	}
 	if img, found, err := m.reuseExistingImage(ref, req.Credentials, req.Tags); found || err != nil {
 		return img, err
 	}
@@ -514,9 +519,25 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef, credentials 
 	// atomic even when system/builds and images are on different filesystems.
 	diskTempPath := diskPath + ".tmp-" + buildID
 	defer os.Remove(diskTempPath)
-	// Use default image format (erofs on Linux, ext4 on Darwin)
+	payload, err := parseMacOSMachine(tempDir, result.Metadata)
+	if err != nil {
+		m.updateStatusByDigest(ref, StatusFailed, err, buildID)
+		return
+	}
 	convertStart := time.Now()
-	diskSize, err := ExportRootfs(tempDir, diskTempPath, DefaultImageFormat)
+	var diskSize int64
+	if payload != nil {
+		err = forkvm.CopyRegularFile(payload.Disk, diskTempPath)
+		if err == nil {
+			var info os.FileInfo
+			info, err = os.Stat(diskTempPath)
+			if err == nil {
+				diskSize = info.Size()
+			}
+		}
+	} else {
+		diskSize, err = ExportRootfs(tempDir, diskTempPath, DefaultImageFormat)
+	}
 	m.recordImageBuildPhase(ctx, ref.Digest(), "filesystem_export", time.Since(convertStart), phaseStatus(err), "not_applicable")
 	if err != nil {
 		m.updateStatusByDigest(ref, StatusFailed, fmt.Errorf("convert to %s: %w", DefaultImageFormat, err), buildID)
@@ -524,7 +545,7 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef, credentials 
 	}
 
 	finalizeStart := time.Now()
-	err = m.finalizeImage(ref, result, diskSize, buildID, diskTempPath)
+	err = m.finalizeImage(ref, result, diskSize, buildID, diskTempPath, payload)
 	m.recordImageBuildPhase(ctx, ref.Digest(), "finalize", time.Since(finalizeStart), phaseStatus(err), "not_applicable")
 	if err != nil {
 		if errors.Is(err, errStaleBuild) {
@@ -537,7 +558,7 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef, credentials 
 	buildStatus = "success"
 }
 
-func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, diskSize int64, buildID, diskTempPath string) error {
+func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, diskSize int64, buildID, diskTempPath string, payloads ...*macOSMachinePayload) error {
 	m.createMu.Lock()
 	defer m.createMu.Unlock()
 
@@ -559,6 +580,34 @@ func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, diskSize i
 		return err
 	}
 
+	var payload *macOSMachinePayload
+	if len(payloads) > 0 {
+		payload = payloads[0]
+	}
+	if actualPlatform.OS == "darwin" && payload == nil {
+		return fmt.Errorf("macOS image requires a validated machine bundle")
+	}
+	auxCommitted := false
+	if payload != nil {
+		auxPath := filepath.Join(layout.dir, "aux.img")
+		auxTemp := auxPath + ".tmp-" + buildID
+		defer os.Remove(auxTemp)
+		if err := forkvm.CopyRegularFile(payload.Aux, auxTemp); err != nil {
+			return err
+		}
+		if err := os.Chmod(auxTemp, 0600); err != nil {
+			return err
+		}
+		if err := os.Rename(auxTemp, auxPath); err != nil {
+			return err
+		}
+		defer func() {
+			if !auxCommitted {
+				_ = os.Remove(auxPath)
+			}
+		}()
+		meta.MacOS = payload.Platform
+	}
 	modelPath := manifestModelPath(m.paths, layout, ref.DigestHex())
 	diskInstalled := false
 	modelWritten := false
@@ -596,6 +645,7 @@ func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, diskSize i
 		return rollbackFinalization(layout, modelPath, diskInstalled, modelWritten, fmt.Errorf("write final metadata: %w", err))
 	}
 
+	auxCommitted = true
 	m.notifyReady(ref.DigestHex(), StatusReady, nil)
 	if !m.claimRequestedTags(ref, meta) {
 		m.cleanupUnclaimedImage(ref)
