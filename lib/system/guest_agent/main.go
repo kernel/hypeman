@@ -3,20 +3,19 @@ package main
 import (
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
 	"time"
 
 	pb "github.com/kernel/hypeman/lib/guest"
-	"github.com/mdlayher/vsock"
 	"google.golang.org/grpc"
 )
 
 const (
-	readySentinelPrefix  = "HYPEMAN-AGENT-READY"
-	defaultReadyFilePath = "/run/hypeman/guest-agent-ready"
-	readyFDEnv           = "HYPEMAN_AGENT_READY_FD"
+	readySentinelPrefix = "HYPEMAN-AGENT-READY"
+	readyFDEnv          = "HYPEMAN_AGENT_READY_FD"
 )
 
 // guestServer implements the gRPC GuestService
@@ -27,11 +26,11 @@ type guestServer struct {
 
 func main() {
 	// Listen on vsock port 2222 with retries
-	var l *vsock.Listener
+	var l net.Listener
 	var err error
 
 	for i := 0; i < 10; i++ {
-		l, err = vsock.Listen(2222, nil)
+		l, err = listenVsock(2222)
 		if err == nil {
 			break
 		}

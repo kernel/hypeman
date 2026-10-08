@@ -16,9 +16,9 @@ func TestBuildEnv(t *testing.T) {
 	})
 
 	t.Run("non-TTY session does not add xterm-256color", func(t *testing.T) {
+		t.Setenv("TERM", "guest-agent-test")
 		env := s.buildEnv(nil, false)
-		// Non-TTY should not add our default TERM
-		// (host environment TERM may still be present, that's fine)
+		assert.Contains(t, env, "TERM=guest-agent-test", "non-TTY preserves the inherited TERM")
 		assert.NotContains(t, env, "TERM=xterm-256color", "non-TTY should not add xterm-256color default")
 	})
 

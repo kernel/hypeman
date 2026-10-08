@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -30,16 +29,16 @@ func (s *guestServer) Exec(stream pb.GuestService_ExecServer) error {
 		return fmt.Errorf("first message must be ExecStart")
 	}
 
-	command := start.Command
-	if len(command) == 0 {
-		command = []string{"/bin/sh"}
+	if len(start.Command) == 0 {
+		start.Command = []string{"/bin/sh"}
 	}
+	command := start.Command
 
 	log.Printf("[guest-agent] exec: command=%v tty=%v cwd=%s timeout=%d",
 		command, start.Tty, start.Cwd, start.TimeoutSeconds)
 
 	// Create context with timeout if specified
-	ctx := context.Background()
+	ctx := stream.Context()
 	if start.TimeoutSeconds > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, time.Duration(start.TimeoutSeconds)*time.Second)
@@ -59,30 +58,23 @@ func (s *guestServer) executeNoTTY(ctx context.Context, stream pb.GuestService_E
 		return fmt.Errorf("empty command")
 	}
 
-	cmd := exec.CommandContext(ctx, start.Command[0], start.Command[1:]...)
-
-	// Set up environment (no TTY defaults for non-TTY mode)
+	outputCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	// CommandContext must observe both caller cancellation and stream-send errors.
+	cmd := exec.CommandContext(outputCtx, start.Command[0], start.Command[1:]...)
 	cmd.Env = s.buildEnv(start.Env, false)
-
-	// Set up working directory
-	if start.Cwd != "" {
-		cmd.Dir = start.Cwd
+	cmd.Dir = start.Cwd
+	cmd.WaitDelay = 2 * time.Second
+	var sendMu sync.Mutex
+	cmd.Stdout = &execStreamWriter{stream: stream, mu: &sendMu, cancel: cancel}
+	cmd.Stderr = &execStreamWriter{stream: stream, mu: &sendMu, cancel: cancel, stderr: true}
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return fmt.Errorf("open command stdin: %w", err)
 	}
-
-	stdin, _ := cmd.StdinPipe()
-	stdout, _ := cmd.StdoutPipe()
-	stderr, _ := cmd.StderrPipe()
-
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start command: %w", err)
 	}
-
-	// Mutex to protect concurrent stream.Send calls (gRPC streams are not thread-safe)
-	var sendMu sync.Mutex
-
-	// Use WaitGroup to ensure all output is read before sending
-	var wg sync.WaitGroup
-	var stdoutData, stderrData []byte
 
 	// Handle stdin in background
 	go func() {
@@ -98,50 +90,12 @@ func (s *guestServer) executeNoTTY(ctx context.Context, stream pb.GuestService_E
 		}
 	}()
 
-	// Read all stdout/stderr BEFORE calling Wait() - Wait() closes the pipes!
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		data, _ := io.ReadAll(stdout)
-		stdoutData = data
-	}()
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		data, _ := io.ReadAll(stderr)
-		stderrData = data
-	}()
-
-	// Wait for all reads to complete FIRST (before Wait closes pipes)
-	wg.Wait()
-
-	// Now safe to call Wait - pipes are fully drained
+	// os/exec drains stdout/stderr through bounded writers before Wait returns.
 	waitErr := cmd.Wait()
-
-	// Now stream output in chunks (streaming compatible)
-	const chunkSize = 32 * 1024
-	for i := 0; i < len(stdoutData); i += chunkSize {
-		end := i + chunkSize
-		if end > len(stdoutData) {
-			end = len(stdoutData)
+	if waitErr != nil {
+		if _, exited := waitErr.(*exec.ExitError); !exited {
+			return fmt.Errorf("stream command output: %w", waitErr)
 		}
-		sendMu.Lock()
-		stream.Send(&pb.ExecResponse{
-			Response: &pb.ExecResponse_Stdout{Stdout: stdoutData[i:end]},
-		})
-		sendMu.Unlock()
-	}
-	for i := 0; i < len(stderrData); i += chunkSize {
-		end := i + chunkSize
-		if end > len(stderrData) {
-			end = len(stderrData)
-		}
-		sendMu.Lock()
-		stream.Send(&pb.ExecResponse{
-			Response: &pb.ExecResponse_Stderr{Stderr: stderrData[i:end]},
-		})
-		sendMu.Unlock()
 	}
 
 	exitCode := int32(0)
@@ -158,6 +112,33 @@ func (s *guestServer) executeNoTTY(ctx context.Context, stream pb.GuestService_E
 	return stream.Send(&pb.ExecResponse{
 		Response: &pb.ExecResponse_ExitCode{ExitCode: exitCode},
 	})
+}
+
+type execStreamWriter struct {
+	stream pb.GuestService_ExecServer
+	mu     *sync.Mutex
+	cancel context.CancelFunc
+	stderr bool
+}
+
+func (w *execStreamWriter) Write(data []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	written := 0
+	for len(data) > 0 {
+		n := min(len(data), 32*1024)
+		response := &pb.ExecResponse{Response: &pb.ExecResponse_Stdout{Stdout: data[:n]}}
+		if w.stderr {
+			response.Response = &pb.ExecResponse_Stderr{Stderr: data[:n]}
+		}
+		if err := w.stream.Send(response); err != nil {
+			w.cancel()
+			return written, err
+		}
+		written += n
+		data = data[n:]
+	}
+	return written, nil
 }
 
 // executeTTY executes command with TTY
