@@ -27,7 +27,8 @@ func prepareBuildOnDisk(t *testing.T, mgr *manager, id string, req CreateBuildRe
 		CreatedAt: time.Now(),
 	}
 	require.NoError(t, writeMetadata(mgr.paths, meta))
-	require.NoError(t, mgr.storeSource(id, []byte("fake-tarball-data")))
+	_, err := mgr.storeSource(context.Background(), id, []byte("fake-tarball-data"))
+	require.NoError(t, err)
 
 	config := &BuildConfig{
 		JobID:          id,
