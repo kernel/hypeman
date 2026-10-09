@@ -117,7 +117,7 @@ func resolveImageLayout(p *paths.Paths, repository, digestHex string) imageLayou
 	legacy := legacyLayout(p, repository, digestHex)
 	content := contentLayout(p, digestHex)
 
-	if legacyImageExists(p, repository, digestHex) {
+	if legacyImageExists(legacy) {
 		contentStatus, contentOK := metadataStatus(content.metadata)
 		if !contentOK || contentStatus != StatusReady {
 			return legacy
@@ -161,8 +161,7 @@ func legacyLayout(p *paths.Paths, repository, digestHex string) imageLayout {
 	return layout
 }
 
-func legacyImageExists(p *paths.Paths, repository, digestHex string) bool {
-	layout := legacyLayout(p, repository, digestHex)
+func legacyImageExists(layout imageLayout) bool {
 	_, metadataErr := os.Stat(layout.metadata)
 	_, diskErr := os.Stat(layout.disk)
 	return metadataErr == nil && diskErr == nil
