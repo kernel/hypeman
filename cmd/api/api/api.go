@@ -16,10 +16,13 @@ import (
 	"github.com/kernel/hypeman/lib/resources"
 	"github.com/kernel/hypeman/lib/vm_metrics"
 	"github.com/kernel/hypeman/lib/volumes"
+	"sync"
 )
 
 // ApiService implements the oapi.StrictServerInterface
 type ApiService struct {
+	desktopSlotsOnce      sync.Once
+	desktopSlots          chan struct{} // Bounds active desktop requests/upgraded sessions across instances.
 	Config                *config.Config
 	ImageManager          images.Manager
 	InstanceManager       instances.Manager

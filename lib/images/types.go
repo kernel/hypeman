@@ -39,6 +39,9 @@ type MacOSImage struct {
 	// GuestAgent declares a provisioned system GuestService on vsock 2222.
 	// Readiness is probed separately; old templates remain unmanaged.
 	GuestAgent bool `json:"guest_agent,omitempty"`
+	// DesktopAgentUID declares the non-root desktop role provisioned on vsock2223.
+	// Zero keeps desktop/browser operations disabled; readiness is a live handshake.
+	DesktopAgentUID uint32 `json:"desktop_agent_uid,omitempty"`
 }
 
 // Validate checks the platform fields every macOS bundle must carry, whether it

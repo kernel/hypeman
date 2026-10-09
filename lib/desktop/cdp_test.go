@@ -118,6 +118,24 @@ func TestCDPRejectsRedirect(t *testing.T) {
 	}
 }
 
+func TestCDPRejectsDiscoveryUpgrade(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Connection", "Upgrade")
+		w.Header().Set("Upgrade", "websocket")
+		w.WriteHeader(http.StatusSwitchingProtocols)
+	}))
+	defer upstream.Close()
+	h, err := NewCDPProxy(testTransport(t, upstream), "ws://api.example/instances/id/cdp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("GET", "http://api.example/json/version", nil))
+	if w.Code != 502 {
+		t.Fatalf("unexpected discovery upgrade: %d", w.Code)
+	}
+}
+
 func TestCDPWebSocketRoundTrip(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/devtools/browser/abc-123" || r.Header.Get("Authorization") != "" {
@@ -174,7 +192,7 @@ func TestCDPRejectsRequestBody(t *testing.T) {
 }
 
 func TestCDPConfigurationAndTargetPaths(t *testing.T) {
-	for _, base := range []string{"http://api.example/cdp", "ws://user@api.example/cdp", "ws://api.example/cdp?token=secret", "ws://api.example/cdp#fragment", "ws://api.example/cdp/", "ws:///cdp"} {
+	for _, base := range []string{"http://api.example/cdp", "ws://user@api.example/cdp", "ws://api.example/cdp?token=secret", "ws://api.example/cdp?", "ws://api.example/cdp#fragment", "ws://api.example/cdp/", "ws:///cdp"} {
 		if _, err := NewCDPProxy(http.DefaultTransport, base); err == nil {
 			t.Fatalf("accepted base %s", base)
 		}

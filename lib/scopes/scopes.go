@@ -194,8 +194,10 @@ var PublicRoutes = map[string]bool{
 // middleware directly (not via the Middleware() scope checker). These are
 // outside the OpenAPI router group (e.g. WebSocket endpoints).
 var DirectScopeRoutes = map[string]Scope{
-	"GET /instances/{id}/exec": InstanceWrite,
-	"GET /instances/{id}/cp":   InstanceWrite,
+	"GET /instances/{id}/exec":       InstanceWrite,
+	"GET /instances/{id}/cp":         InstanceWrite,
+	"GET /instances/{id}/cdp/*":      InstanceWrite,
+	"POST /instances/{id}/cdp/start": InstanceWrite,
 }
 
 // RouteScopes maps "METHOD /path-pattern" to the required scope.

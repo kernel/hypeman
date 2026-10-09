@@ -21,7 +21,7 @@ const maxDiscoveryBytes = 2 << 20
 // Requests must have the instance route prefix removed before reaching this handler.
 func NewCDPProxy(transport http.RoundTripper, publicBase string) (http.Handler, error) {
 	base, err := url.Parse(publicBase)
-	if err != nil || base == nil || (base.Scheme != "ws" && base.Scheme != "wss") || base.Host == "" || base.User != nil || base.RawQuery != "" || base.Fragment != "" || base.RawPath != "" || strings.HasSuffix(base.Path, "/") {
+	if err != nil || base == nil || (base.Scheme != "ws" && base.Scheme != "wss") || base.Host == "" || base.User != nil || base.RawQuery != "" || base.ForceQuery || base.Fragment != "" || base.RawPath != "" || strings.HasSuffix(base.Path, "/") {
 		return nil, fmt.Errorf("invalid public CDP base")
 	}
 	if transport == nil {
@@ -48,6 +48,9 @@ func NewCDPProxy(transport http.RoundTripper, publicBase string) (http.Handler, 
 		},
 		ModifyResponse: func(r *http.Response) error {
 			r.Header.Del("Set-Cookie")
+			if r.StatusCode == http.StatusSwitchingProtocols && !debuggerPath(r.Request.URL.Path) {
+				return fmt.Errorf("unexpected discovery upgrade")
+			}
 			if r.StatusCode >= 300 && r.StatusCode < 400 {
 				return fmt.Errorf("CDP redirects unsupported")
 			}
@@ -61,16 +64,23 @@ func NewCDPProxy(transport http.RoundTripper, publicBase string) (http.Handler, 
 		},
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet || r.ContentLength != 0 || len(r.TransferEncoding) != 0 || r.URL.RawQuery != "" || r.URL.RawPath != "" || !(discoveryPath(r.URL.Path) || debuggerPath(r.URL.Path)) {
-			http.Error(w, "unsupported CDP request", http.StatusBadRequest)
-			return
-		}
-		if debuggerPath(r.URL.Path) && !strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
-			http.Error(w, "WebSocket upgrade required", http.StatusBadRequest)
+		if err := ValidateCDPRequest(r); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		proxy.ServeHTTP(w, r)
 	}), nil
+}
+
+// ValidateCDPRequest allows API admission to run before dialing any guest service.
+func ValidateCDPRequest(r *http.Request) error {
+	if r.Method != http.MethodGet || r.ContentLength != 0 || len(r.TransferEncoding) != 0 || r.URL.RawQuery != "" || r.URL.ForceQuery || r.URL.RawPath != "" || !(discoveryPath(r.URL.Path) || debuggerPath(r.URL.Path)) {
+		return fmt.Errorf("unsupported CDP request")
+	}
+	if debuggerPath(r.URL.Path) && !strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
+		return fmt.Errorf("WebSocket upgrade required")
+	}
+	return nil
 }
 
 func discoveryPath(path string) bool {
