@@ -510,9 +510,6 @@ func (m *manager) GetSnapshot(ctx context.Context, snapshotID string) (*Snapshot
 }
 
 func (m *manager) CreateSnapshot(ctx context.Context, id string, req CreateSnapshotRequest) (*Snapshot, error) {
-	if err := m.rejectMacOSOperation(id, "snapshot"); err != nil {
-		return nil, err
-	}
 	lock := m.getInstanceLock(id)
 	lock.Lock()
 	defer lock.Unlock()
@@ -525,9 +522,6 @@ func (m *manager) DeleteSnapshot(ctx context.Context, snapshotID string) error {
 
 // ForkInstance creates a forked copy of an instance.
 func (m *manager) ForkInstance(ctx context.Context, id string, req ForkInstanceRequest) (*Instance, error) {
-	if err := m.rejectMacOSOperation(id, "fork"); err != nil {
-		return nil, err
-	}
 	lock := m.getInstanceLock(id)
 	useReadLock := false
 	var sourceState State
@@ -617,9 +611,6 @@ func (m *manager) ForkSnapshot(ctx context.Context, snapshotID string, req ForkS
 
 // StandbyInstance puts an instance in standby (pause, snapshot, delete VMM)
 func (m *manager) StandbyInstance(ctx context.Context, id string, req StandbyInstanceRequest) (*Instance, error) {
-	if err := m.rejectMacOSOperation(id, "standby"); err != nil {
-		return nil, err
-	}
 	lock := m.getInstanceLock(id)
 	lock.Lock()
 	defer lock.Unlock()
@@ -641,9 +632,6 @@ func (m *manager) StandbyInstance(ctx context.Context, id string, req StandbyIns
 
 // RestoreInstance restores an instance from standby
 func (m *manager) RestoreInstance(ctx context.Context, id string) (*Instance, error) {
-	if err := m.rejectMacOSOperation(id, "restore"); err != nil {
-		return nil, err
-	}
 	lock := m.getInstanceLock(id)
 	lock.Lock()
 	defer lock.Unlock()
@@ -679,9 +667,6 @@ func (m *manager) RestoreInstance(ctx context.Context, id string) (*Instance, er
 }
 
 func (m *manager) RestoreSnapshot(ctx context.Context, id string, snapshotID string, req RestoreSnapshotRequest) (*Instance, error) {
-	if err := m.rejectMacOSOperation(id, "restore snapshot"); err != nil {
-		return nil, err
-	}
 	lock := m.getInstanceLock(id)
 	lock.Lock()
 	defer lock.Unlock()
@@ -764,9 +749,6 @@ func standbyRequestHasOptions(req StandbyInstanceRequest) bool {
 
 // UpdateInstance updates mutable properties of a running instance
 func (m *manager) UpdateInstance(ctx context.Context, id string, req UpdateInstanceRequest) (*Instance, error) {
-	if err := m.rejectMacOSOperation(id, "update"); err != nil {
-		return nil, err
-	}
 	lock := m.getInstanceLock(id)
 	lock.Lock()
 	defer lock.Unlock()

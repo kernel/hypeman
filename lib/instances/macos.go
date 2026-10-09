@@ -9,7 +9,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
@@ -18,8 +17,13 @@ import (
 	"github.com/kernel/hypeman/lib/network"
 )
 
-func prepareMacOSRequest(req *CreateInstanceRequest, img *images.Image, hv hypervisor.Type) error {
-	if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" || hv != hypervisor.TypeVZ {
+// validateMacOSCreate rejects requests a macOS guest cannot honor. It reads only the
+// request, the image and the backend's capabilities, so it runs on any host.
+func validateMacOSCreate(req CreateInstanceRequest, img *images.Image, caps hypervisor.Capabilities) error {
+	if img.MacOS == nil {
+		return fmt.Errorf("%w: image is not a macOS disk bundle", ErrInvalidRequest)
+	}
+	if !caps.SupportsMacOSBoot {
 		return fmt.Errorf("%w: macOS guests require vz on Apple silicon", ErrInvalidRequest)
 	}
 	if img.Platform != "darwin/arm64" || img.SizeBytes == nil || *img.SizeBytes <= 0 {
@@ -28,19 +32,31 @@ func prepareMacOSRequest(req *CreateInstanceRequest, img *images.Image, hv hyper
 	if req.HotplugSize != 0 || req.OverlaySize != 0 || len(req.Volumes) != 0 || len(req.Devices) != 0 || req.GPU != nil || len(req.Env) != 0 || len(req.Entrypoint) != 0 || len(req.Cmd) != 0 || req.NetworkEgress != nil || len(req.Credentials) != 0 || req.AutoStandby != nil || req.HealthCheck != nil || req.RestartPolicy != nil || req.SnapshotPolicy != nil || req.DiskIOBps != 0 || req.NetworkBandwidthDownload != 0 || req.NetworkBandwidthUpload != 0 {
 		return fmt.Errorf("%w: experimental macOS supports local disk clone, CPU/RAM, tags, expiration and NAT only; Linux commands/env/volumes, overlays, agents, policies and I/O shaping are unsupported", ErrInvalidRequest)
 	}
+	size, vcpus := req.Size, req.Vcpus
+	if size == 0 {
+		size = int64(img.MacOS.Memory)
+	}
+	if vcpus == 0 {
+		vcpus = int(img.MacOS.CPUs)
+	}
+	if size < 4<<30 || vcpus < 2 {
+		return fmt.Errorf("%w: macOS requires at least 4 GiB and 2 vCPUs", ErrInvalidRequest)
+	}
+	return nil
+}
+
+// applyMacOSDefaults fills unspecified CPU and memory from the imported template and
+// sets the guest flags. Call it only after validateMacOSCreate accepted the request.
+func applyMacOSDefaults(req *CreateInstanceRequest, img *images.Image) {
 	if req.Size == 0 {
 		req.Size = int64(img.MacOS.Memory)
 	}
 	if req.Vcpus == 0 {
 		req.Vcpus = int(img.MacOS.CPUs)
 	}
-	if req.Size < 4<<30 || req.Vcpus < 2 {
-		return fmt.Errorf("%w: macOS requires at least 4 GiB and 2 vCPUs", ErrInvalidRequest)
-	}
 	req.OverlaySize = *img.SizeBytes // Reserve the writable boot disk, not a Linux overlay.
 	req.SkipGuestAgent = true
 	req.SkipKernelHeaders = true
-	return nil
 }
 func (m *manager) prepareBootStorage(stored *StoredMetadata, img *images.Image) error {
 	if stored.MacOS == nil {
@@ -94,12 +110,11 @@ func (m *manager) checkMacOSIdentityAvailable(ctx context.Context, stored *Store
 	}
 	return nil
 }
-func (m *manager) rejectMacOSOperation(id, operation string) error {
-	meta, err := m.loadMetadata(id)
-	if err != nil {
-		return err
-	}
-	if meta.MacOS != nil {
+
+// rejectMacOS refuses operations the experimental macOS guest does not implement.
+// Callers check it right after loading the record they already hold under the lock.
+func (s *StoredMetadata) rejectMacOS(operation string) error {
+	if s.MacOS != nil {
 		return fmt.Errorf("%w: %s is not implemented for experimental macOS instances", ErrInvalidRequest, operation)
 	}
 	return nil

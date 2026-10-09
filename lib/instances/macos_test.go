@@ -5,7 +5,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
 	"time"
 
@@ -20,11 +19,10 @@ func testMacImage() *images.Image {
 	return &images.Image{Platform: "darwin/arm64", SizeBytes: &size, MacOS: &images.MacOSImage{HardwareModel: []byte{1}, MachineIdentifier: []byte{2}, MAC: "02:00:00:00:00:01", CPUs: 4, Memory: 8 << 30}}
 }
 func TestMacOSRequestDefaultsAndRejections(t *testing.T) {
-	if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
-		t.Skip("Mac request acceptance requires Apple silicon")
-	}
+	caps := hypervisor.Capabilities{SupportsMacOSBoot: true}
 	req := CreateInstanceRequest{}
-	require.NoError(t, prepareMacOSRequest(&req, testMacImage(), hypervisor.TypeVZ))
+	require.NoError(t, validateMacOSCreate(req, testMacImage(), caps))
+	applyMacOSDefaults(&req, testMacImage())
 	require.Equal(t, int64(8<<30), req.Size)
 	require.Equal(t, 4, req.Vcpus)
 	require.Equal(t, int64(64<<30), req.OverlaySize)
@@ -32,9 +30,9 @@ func TestMacOSRequestDefaultsAndRejections(t *testing.T) {
 	for _, r := range []CreateInstanceRequest{
 		{Env: map[string]string{"X": "Y"}}, {Cmd: []string{"sh"}}, {HotplugSize: 1}, {OverlaySize: 1}, {DiskIOBps: 1}, {Size: 1 << 30}, {Volumes: []VolumeAttachment{{VolumeID: "v"}}},
 	} {
-		require.ErrorIs(t, prepareMacOSRequest(&r, testMacImage(), hypervisor.TypeVZ), ErrInvalidRequest)
+		require.ErrorIs(t, validateMacOSCreate(r, testMacImage(), caps), ErrInvalidRequest)
 	}
-	require.ErrorIs(t, prepareMacOSRequest(&CreateInstanceRequest{}, testMacImage(), hypervisor.TypeQEMU), ErrInvalidRequest)
+	require.ErrorIs(t, validateMacOSCreate(CreateInstanceRequest{}, testMacImage(), hypervisor.Capabilities{}), ErrInvalidRequest)
 }
 func TestMacOSBootConfigNoLinuxDevices(t *testing.T) {
 	p := paths.New(t.TempDir())
@@ -80,5 +78,5 @@ func TestMacOSPreservedIdentityAdmission(t *testing.T) {
 	require.NoError(t, m.checkMacOSIdentityAvailable(context.Background(), &stored))
 	require.NoError(t, os.Remove(socket))
 	require.NoError(t, m.checkMacOSIdentityAvailable(context.Background(), &other))
-	require.ErrorIs(t, m.rejectMacOSOperation("active", "snapshot"), ErrInvalidRequest)
+	require.ErrorIs(t, stored.rejectMacOS("snapshot"), ErrInvalidRequest)
 }

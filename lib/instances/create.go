@@ -165,9 +165,11 @@ func (m *manager) createInstance(
 		return nil, fmt.Errorf("%w: server is configured for macOS guests only", ErrInvalidRequest)
 	}
 	if imageInfo.MacOS != nil {
-		if err := prepareMacOSRequest(&req, imageInfo, hvType); err != nil {
+		caps, _ := hypervisor.CapabilitiesForType(hvType)
+		if err := validateMacOSCreate(req, imageInfo, caps); err != nil {
 			return nil, err
 		}
+		applyMacOSDefaults(&req, imageInfo)
 	}
 
 	// A guest whose architecture differs from the host kernel can only boot via

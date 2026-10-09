@@ -63,6 +63,9 @@ func (m *manager) createSnapshot(ctx context.Context, id string, req CreateSnaps
 	if err != nil {
 		return nil, err
 	}
+	if err := meta.rejectMacOS("snapshot"); err != nil {
+		return nil, err
+	}
 	inst := m.toInstance(ctx, meta)
 	stored := &meta.StoredMetadata
 
@@ -257,6 +260,9 @@ func (m *manager) restoreSnapshot(ctx context.Context, id string, snapshotID str
 
 	sourceMeta, err := m.loadMetadata(id)
 	if err != nil {
+		return nil, err
+	}
+	if err := sourceMeta.rejectMacOS("restore snapshot"); err != nil {
 		return nil, err
 	}
 	sourceInst := m.toInstance(ctx, sourceMeta)
