@@ -61,16 +61,16 @@ func sameFile(a, b string) bool {
 // stageMacOSMachine copies a validated bundle's boot disk and auxiliary storage to
 // build-private paths, outside the manager lock. It returns the bytes both files
 // occupy, which is the size recorded for accounting.
-func stageMacOSMachine(payload *macOSMachinePayload, diskTemp, auxTemp string) (int64, error) {
+func stageMacOSMachine(payload *macOSMachinePayload, diskTemp, auxTemp string) (stagedImageFiles, error) {
 	diskSize, err := stageMachineFile(payload.Disk, diskTemp)
 	if err != nil {
-		return 0, fmt.Errorf("stage boot disk: %w", err)
+		return stagedImageFiles{}, fmt.Errorf("stage boot disk: %w", err)
 	}
 	auxSize, err := stageMachineFile(payload.Aux, auxTemp)
 	if err != nil {
-		return 0, fmt.Errorf("stage auxiliary storage: %w", err)
+		return stagedImageFiles{}, fmt.Errorf("stage auxiliary storage: %w", err)
 	}
-	return diskSize + auxSize, nil
+	return stagedImageFiles{disk: diskTemp, aux: auxTemp, macos: payload.Platform, sizeBytes: diskSize + auxSize}, nil
 }
 
 func stageMachineFile(src, dst string) (int64, error) {

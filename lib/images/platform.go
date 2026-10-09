@@ -180,8 +180,8 @@ func resolveManifestPlatform(meta *containerMetadata, requested string) (Platfor
 		if err := actual.validate(); err != nil {
 			return Platform{}, fmt.Errorf("image platform: %w", err)
 		}
-		if !want.Matches(actual) {
-			return Platform{}, fmt.Errorf("%w: requested %s but manifest is %s", ErrInvalidPlatform, want, actual)
+		if err := validateDigestPlatform(requested, want, actual); err != nil {
+			return Platform{}, err
 		}
 		return actual, nil
 	}

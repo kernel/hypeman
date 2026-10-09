@@ -219,16 +219,11 @@ func (m *manager) CreateImage(ctx context.Context, req CreateImageRequest) (*Ima
 	m.createMu.Lock()
 	defer m.createMu.Unlock()
 
+	var requested *Platform
 	if req.Platform != "" {
-		// Only locally imported or pulled macOS records carry a platform the request can contradict.
-		if cached, err := readMetadata(m.paths, ref.Repository(), ref.DigestHex()); err == nil && cached.Status == StatusReady && cached.MacOS != nil {
-			actual, err := ParsePlatform(cached.Platform)
-			if err != nil || !platform.Matches(actual) {
-				return nil, fmt.Errorf("%w: requested %s but cached manifest is %s", ErrInvalidPlatform, platform, cached.Platform)
-			}
-		}
+		requested = &platform
 	}
-	if img, found, err := m.reuseExistingImage(ref, req.Credentials, req.Tags); found || err != nil {
+	if img, found, err := m.reuseExistingImage(ref, req.Credentials, req.Tags, requested); found || err != nil {
 		return img, err
 	}
 	return m.createAndQueueImage(ref, req, platform)
@@ -260,13 +255,15 @@ func (m *manager) ImportLocalImage(ctx context.Context, repo, reference, digest 
 	m.createMu.Lock()
 	defer m.createMu.Unlock()
 
-	if img, found, err := m.reuseExistingImage(ref, nil, nil); found || err != nil {
+	if img, found, err := m.reuseExistingImage(ref, nil, nil, nil); found || err != nil {
 		return img, err
 	}
 	return m.createAndQueueImage(ref, CreateImageRequest{Name: imageRef}, hostPlatform())
 }
 
-func (m *manager) reuseExistingImage(ref *ResolvedRef, credentials *authn.AuthConfig, resourceTags tags.Tags) (*Image, bool, error) {
+// reuseExistingImage returns a record already on disk for ref. requested is the
+// caller's explicit platform, or nil when the request named none.
+func (m *manager) reuseExistingImage(ref *ResolvedRef, credentials *authn.AuthConfig, resourceTags tags.Tags, requested *Platform) (*Image, bool, error) {
 	meta, err := readMetadata(m.paths, ref.Repository(), ref.DigestHex())
 	if err != nil {
 		return nil, false, nil
@@ -282,6 +279,13 @@ func (m *manager) reuseExistingImage(ref *ResolvedRef, credentials *authn.AuthCo
 		// the tag at its digest or update its labels.
 		if !m.inflightCredentialsMatch(ref.Digest(), credentials) {
 			return nil, true, fmt.Errorf("%w: retry after the current pull completes", ErrCredentialConflict)
+		}
+	}
+	// Only ready macOS records carry a platform the request can contradict.
+	if requested != nil && meta.Status == StatusReady && meta.MacOS != nil {
+		actual, err := ParsePlatform(meta.Platform)
+		if err != nil || !requested.Matches(actual) {
+			return nil, true, fmt.Errorf("%w: requested %s but cached manifest is %s", ErrInvalidPlatform, *requested, meta.Platform)
 		}
 	}
 	if resourceTags != nil {
@@ -526,13 +530,13 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef, credentials 
 		return
 	}
 	convertStart := time.Now()
-	staged := stagedImageFiles{disk: diskTempPath}
+	var staged stagedImageFiles
 	if payload != nil {
-		staged.aux = filepath.Join(layout.dir, "aux.img.tmp-"+buildID)
-		defer os.Remove(staged.aux)
-		staged.macos = payload.Platform
-		staged.sizeBytes, err = stageMacOSMachine(payload, diskTempPath, staged.aux)
+		auxTemp := filepath.Join(layout.dir, "aux.img.tmp-"+buildID)
+		defer os.Remove(auxTemp)
+		staged, err = stageMacOSMachine(payload, diskTempPath, auxTemp)
 	} else {
+		staged = stagedImageFiles{disk: diskTempPath}
 		staged.sizeBytes, err = ExportRootfs(tempDir, diskTempPath, DefaultImageFormat)
 	}
 	m.recordImageBuildPhase(ctx, ref.Digest(), "filesystem_export", time.Since(convertStart), phaseStatus(err), "not_applicable")
