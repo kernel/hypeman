@@ -24,6 +24,9 @@ type machineFixture struct {
 	fail                                        string
 	stop                                        MachineStopReceipt
 	cancel                                      context.CancelFunc
+	waitForCancel                               bool
+	mutateExport                                func(string) error
+	publicationOverride                         *MachinePublication
 	publisherCalled                             bool
 	cleanupContextLive                          bool
 	extraFile, changedIdentity, unknownMetadata bool
@@ -60,6 +63,10 @@ func (f *machineFixture) Provision(ctx context.Context, source string) error {
 		f.cancel()
 		return ctx.Err()
 	}
+	if f.waitForCancel {
+		<-ctx.Done()
+		return ctx.Err()
+	}
 	return f.record("provision")
 }
 func (f *machineFixture) Sanitize(context.Context) error { return f.record("sanitize") }
@@ -90,6 +97,9 @@ func (f *machineFixture) Export(_ context.Context, root string) error {
 	if f.extraFile {
 		return os.WriteFile(filepath.Join(root, "secret.txt"), []byte("must-not-publish"), 0600)
 	}
+	if f.mutateExport != nil {
+		return f.mutateExport(root)
+	}
 	return nil
 }
 func (f *machineFixture) Destroy(ctx context.Context) error {
@@ -113,7 +123,11 @@ func (f *machineFixture) Publish(ctx context.Context, id, root string) (MachineP
 			return MachinePublication{}, errors.New("unsafe export mode")
 		}
 	}
-	return MachinePublication{Reference: "localhost/builds/build-test@" + machineTestDigest, Digest: machineTestDigest}, f.record("publish")
+	publication := MachinePublication{Reference: "localhost/builds/build-test@" + machineTestDigest, Digest: machineTestDigest}
+	if f.publicationOverride != nil {
+		publication = *f.publicationOverride
+	}
+	return publication, f.record("publish")
 }
 func machineTestRunner(t *testing.T, f *machineFixture) *MachineBuildRunner {
 	t.Helper()

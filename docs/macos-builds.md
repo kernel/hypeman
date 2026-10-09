@@ -81,7 +81,13 @@ Synthetic tests cover input/resource/hash/size admission before VM start, exact
 phase order, partial-start cleanup, independent cancellation cleanup, forced/
 unconfirmed-stop nonpublication and no deletion of live storage, failed-stage
 nonpublication, identity changes, extra/unknown secret metadata rejection, private
-output modes, error-text masking and verified digest/source provenance.
+output modes, error-text masking and verified digest/source provenance. Expanded
+failure tests include partial source-read failure, actual deadline expiry with
+independent cleanup, ambiguous publisher errors without retry, invalid/tagged/
+mismatched digest receipts, empty disk/aux, symlink/hardlink payloads, truncated/
+oversized metadata, invalid Ethernet MAC and changed resources. Repeated existing
+build queue/cache/storage/secret-provider/registry-token regressions, CGO-disabled
+machine tests and `go vet ./lib/builds` also pass locally.
 
 No actual VM is created and no guest commands or registry uploads are executed by
 these tests. Fake tiny disk files establish contract behavior, not bootability.
