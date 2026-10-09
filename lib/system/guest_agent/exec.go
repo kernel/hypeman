@@ -47,27 +47,20 @@ func (s *guestServer) Exec(stream pb.GuestService_ExecServer) error {
 		defer cancel()
 	}
 
-	if start.Tty {
-		return s.executeTTY(ctx, stream, start)
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	cmd, err := s.execCommand(ctx, start)
+	if err != nil {
+		return err
 	}
-	return s.executeNoTTY(ctx, stream, start)
+	if start.Tty {
+		return s.executeTTY(ctx, cancel, stream, start, cmd)
+	}
+	return s.executeNoTTY(ctx, cancel, stream, cmd)
 }
 
 // executeNoTTY executes command without TTY
-func (s *guestServer) executeNoTTY(ctx context.Context, stream pb.GuestService_ExecServer, start *pb.ExecStart) error {
-	// Run command directly - guest-agent is already running in container namespace.
-	// One cancellable context covers caller cancellation and stream-send errors;
-	// killGroupOnDone is the only place the command is killed.
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	if err := ctx.Err(); err != nil {
-		return fmt.Errorf("start command: %w", err)
-	}
-	cmd := exec.Command(start.Command[0], start.Command[1:]...)
-	cmd.Env = s.buildEnv(start.Env, false)
-	cmd.Dir = start.Cwd
-	cmd.WaitDelay = 2 * time.Second
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+func (s *guestServer) executeNoTTY(ctx context.Context, cancel context.CancelFunc, stream pb.GuestService_ExecServer, cmd *exec.Cmd) error {
 	var sendMu sync.Mutex
 	cmd.Stdout = &execStreamWriter{stream: stream, mu: &sendMu, cancel: cancel}
 	cmd.Stderr = &execStreamWriter{stream: stream, mu: &sendMu, cancel: cancel, stderr: true}
@@ -98,7 +91,28 @@ func (s *guestServer) executeNoTTY(ctx context.Context, stream pb.GuestService_E
 		}
 	}()
 
-	// cmd.Wait also waits for the stdout/stderr copies, which can block in stream.Send.
+	return s.finishExec(ctx, stream, cmd, nil)
+}
+
+// execCommand owns setup and pre-start cancellation for both I/O modes.
+func (s *guestServer) execCommand(ctx context.Context, start *pb.ExecStart) (*exec.Cmd, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("start command: %w", err)
+	}
+	cmd := exec.CommandContext(ctx, start.Command[0], start.Command[1:]...)
+	cmd.Cancel = func() error { return killProcessGroup(cmd) }
+	cmd.WaitDelay = 2 * time.Second
+	cmd.Env = s.buildEnv(start.Env, start.Tty)
+	cmd.Dir = start.Cwd
+	if !start.Tty {
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	}
+	return cmd, nil
+}
+
+// finishExec owns bounded wait, output drain and final status for both I/O modes.
+func (s *guestServer) finishExec(ctx context.Context, stream pb.GuestService_ExecServer, cmd *exec.Cmd, outputDone <-chan struct{}) error {
+	// Non-TTY cmd.Wait also waits for copies, which can block in stream.Send.
 	var waitErr error
 	if err := s.runBounded(ctx, func() { waitErr = cmd.Wait() }); err != nil {
 		return err
@@ -112,6 +126,11 @@ func (s *guestServer) executeNoTTY(ctx context.Context, stream pb.GuestService_E
 		}
 	}
 
+	if outputDone != nil {
+		if err := awaitBounded(ctx, outputDone, s.drainBound()); err != nil {
+			return err
+		}
+	}
 	exitCode := exitCodeOf(ctx, cmd, waitErr)
 
 	log.Printf("[guest-agent] command finished with exit code: %d", exitCode)
@@ -234,15 +253,7 @@ func (w *execStreamWriter) Write(data []byte) (int, error) {
 }
 
 // executeTTY executes command with TTY
-func (s *guestServer) executeTTY(ctx context.Context, stream pb.GuestService_ExecServer, start *pb.ExecStart) error {
-	// Run command directly with PTY - guest-agent is already running in container namespace
-	// This ensures PTY and shell are in the same namespace, fixing Ctrl+C signal handling
-	cmd := exec.Command(start.Command[0], start.Command[1:]...)
-
-	// Set up environment (TTY mode adds TERM default)
-	cmd.Env = s.buildEnv(start.Env, true)
-
-	cmd.Dir = start.Cwd
+func (s *guestServer) executeTTY(ctx context.Context, cancel context.CancelFunc, stream pb.GuestService_ExecServer, start *pb.ExecStart, cmd *exec.Cmd) error {
 
 	// Set up initial window size (use defaults if not specified)
 	ws := &pty.Winsize{
@@ -269,8 +280,8 @@ func (s *guestServer) executeTTY(ctx context.Context, stream pb.GuestService_Exe
 	// Mutex to protect concurrent stream.Send calls (gRPC streams are not thread-safe)
 	var sendMu sync.Mutex
 
-	// Use WaitGroup to ensure all output is sent before exit code
-	var wg sync.WaitGroup
+	outputDone := make(chan struct{})
+	output := &execStreamWriter{stream: stream, mu: &sendMu, cancel: cancel}
 
 	// Handle stdin and resize in background
 	go func() {
@@ -295,18 +306,15 @@ func (s *guestServer) executeTTY(ctx context.Context, stream pb.GuestService_Exe
 	}()
 
 	// Stream output
-	wg.Add(1)
 	go func() {
-		defer wg.Done()
+		defer close(outputDone)
 		buf := make([]byte, 32*1024)
 		for {
 			n, err := ptmx.Read(buf)
 			if n > 0 {
-				sendMu.Lock()
-				stream.Send(&pb.ExecResponse{
-					Response: &pb.ExecResponse_Stdout{Stdout: buf[:n]},
-				})
-				sendMu.Unlock()
+				if _, sendErr := output.Write(buf[:n]); sendErr != nil {
+					return
+				}
 			}
 			if err != nil {
 				return
@@ -314,21 +322,7 @@ func (s *guestServer) executeTTY(ctx context.Context, stream pb.GuestService_Exe
 		}
 	}()
 
-	var waitErr error
-	if err := s.runBounded(ctx, func() { waitErr = cmd.Wait() }); err != nil {
-		return err
-	}
-
-	// Wait for all output to be sent
-	if err := s.runBounded(ctx, wg.Wait); err != nil {
-		return err
-	}
-
-	exitCode := exitCodeOf(ctx, cmd, waitErr)
-
-	log.Printf("[guest-agent] TTY command finished with exit code: %d", exitCode)
-
-	return s.sendExitCode(ctx, stream, exitCode)
+	return s.finishExec(ctx, stream, cmd, outputDone)
 }
 
 // buildEnv constructs environment variables by merging provided env with defaults.
