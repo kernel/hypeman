@@ -67,7 +67,7 @@ func NewService(backend Backend, uid uint32, cdp http.Handler) (http.Handler, er
 		_ = json.NewEncoder(w).Encode(s)
 	}
 	mux.HandleFunc("GET /status", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.RawQuery != "" || r.URL.ForceQuery || r.ContentLength != 0 || len(r.TransferEncoding) != 0 {
+		if ValidateBodylessRequest(r) != nil {
 			http.Error(w, "invalid status request", 400)
 			return
 		}
@@ -81,7 +81,7 @@ func NewService(backend Backend, uid uint32, cdp http.Handler) (http.Handler, er
 		respond(w, s)
 	})
 	mux.HandleFunc("POST /browser/start", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.RawQuery != "" || r.URL.ForceQuery || r.ContentLength != 0 || len(r.TransferEncoding) != 0 {
+		if ValidateBodylessRequest(r) != nil {
 			http.Error(w, "browser launch arguments unsupported", 400)
 			return
 		}

@@ -79,6 +79,12 @@ validation gates; these OS interactions have not been exercised by this PR's tes
 
 ## CDP transport boundary
 
+The host `NewCDPProxy` is the only discovery-validation/public-URL rewriting
+boundary. The host-only guest listener uses `NewCDPForwarder` to carry Chrome's
+fixed-upstream discovery unchanged. Both retain body/path/query/encoding admission,
+header isolation and no-redirect policy; guest session/browser ownership is still
+checked before forwarding. The guest forwarder is not a public authenticated proxy.
+
 `NewCDPProxy` supports GET discovery and browser/page debugger WebSockets. Its
 caller supplies a fixed transport, strips the instance route prefix, and supplies
 a trusted instance-scoped `ws`/`wss` base. Clients cannot select the upstream host,

@@ -17,7 +17,7 @@ func runDesktopAgent() error {
 	}
 	transport := &http.Transport{Proxy: nil, DisableKeepAlives: true, ResponseHeaderTimeout: 3 * time.Second}
 	defer transport.CloseIdleConnections()
-	proxy, err := desktop.NewCDPProxy(transport, "ws://127.0.0.1:9222")
+	proxy, err := desktop.NewCDPForwarder(transport)
 	if err != nil {
 		return err
 	}

@@ -24,6 +24,16 @@ func NewCDPProxy(transport http.RoundTripper, publicBase string) (http.Handler, 
 	if err != nil || base == nil || (base.Scheme != "ws" && base.Scheme != "wss") || base.Host == "" || base.User != nil || base.RawQuery != "" || base.ForceQuery || base.Fragment != "" || base.RawPath != "" || strings.HasSuffix(base.Path, "/") {
 		return nil, fmt.Errorf("invalid public CDP base")
 	}
+	return newBrowserProxy(transport, base)
+}
+
+// NewCDPForwarder serves the guest's fixed loopback browser without interpreting
+// discovery. The authenticated host proxy owns public URL validation/rewriting.
+func NewCDPForwarder(transport http.RoundTripper) (http.Handler, error) {
+	return newBrowserProxy(transport, nil)
+}
+
+func newBrowserProxy(transport http.RoundTripper, publicBase *url.URL) (http.Handler, error) {
 	if transport == nil {
 		return nil, fmt.Errorf("CDP transport required")
 	}
@@ -54,8 +64,8 @@ func NewCDPProxy(transport http.RoundTripper, publicBase string) (http.Handler, 
 			if r.StatusCode >= 300 && r.StatusCode < 400 {
 				return fmt.Errorf("CDP redirects unsupported")
 			}
-			if r.StatusCode == http.StatusOK && discoveryPath(r.Request.URL.Path) {
-				return rewriteDiscovery(r, base.String())
+			if publicBase != nil && r.StatusCode == http.StatusOK && discoveryPath(r.Request.URL.Path) {
+				return rewriteDiscovery(r, publicBase.String())
 			}
 			return nil
 		},
@@ -74,11 +84,20 @@ func NewCDPProxy(transport http.RoundTripper, publicBase string) (http.Handler, 
 
 // ValidateCDPRequest allows API admission to run before dialing any guest service.
 func ValidateCDPRequest(r *http.Request) error {
-	if r.Method != http.MethodGet || r.ContentLength != 0 || len(r.TransferEncoding) != 0 || r.URL.RawQuery != "" || r.URL.ForceQuery || r.URL.RawPath != "" || !(discoveryPath(r.URL.Path) || debuggerPath(r.URL.Path)) {
+	if ValidateBodylessRequest(r) != nil || r.Method != http.MethodGet || !(discoveryPath(r.URL.Path) || debuggerPath(r.URL.Path)) {
 		return fmt.Errorf("unsupported CDP request")
 	}
 	if debuggerPath(r.URL.Path) && !strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
 		return fmt.Errorf("WebSocket upgrade required")
+	}
+	return nil
+}
+
+// ValidateBodylessRequest rejects alternate URL encodings, query parameters and
+// request bodies for both desktop control and CDP routes.
+func ValidateBodylessRequest(r *http.Request) error {
+	if r.ContentLength != 0 || len(r.TransferEncoding) != 0 || r.URL.RawQuery != "" || r.URL.ForceQuery || r.URL.RawPath != "" {
+		return fmt.Errorf("invalid desktop request")
 	}
 	return nil
 }

@@ -63,7 +63,7 @@ func (s *ApiService) serveDesktop(w http.ResponseWriter, r *http.Request, transp
 		selector = inst.Id
 	}
 	prefix := "/instances/" + selector + "/cdp"
-	if !strings.HasPrefix(r.URL.Path, prefix+"/") || r.URL.RawPath != "" || r.URL.RawQuery != "" || r.URL.ForceQuery || r.ContentLength != 0 || len(r.TransferEncoding) != 0 {
+	if !strings.HasPrefix(r.URL.Path, prefix+"/") || desktop.ValidateBodylessRequest(r) != nil {
 		http.Error(w, "invalid desktop request", 400)
 		return
 	}

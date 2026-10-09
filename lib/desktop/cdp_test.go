@@ -153,7 +153,13 @@ func TestCDPWebSocketRoundTrip(t *testing.T) {
 		}
 	}))
 	defer upstream.Close()
-	h, err := NewCDPProxy(testTransport(t, upstream), "ws://api.example/instances/id/cdp")
+	forwarder, err := NewCDPForwarder(testTransport(t, upstream))
+	if err != nil {
+		t.Fatal(err)
+	}
+	guest := httptest.NewServer(forwarder)
+	defer guest.Close()
+	h, err := NewCDPProxy(testTransport(t, guest), "ws://api.example/instances/id/cdp")
 	if err != nil {
 		t.Fatal(err)
 	}
