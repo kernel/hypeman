@@ -1,7 +1,9 @@
 package ocicache
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"sync"
 
 	v1 "github.com/google/go-containerregistry/pkg/v1"
@@ -23,12 +25,15 @@ func AppendImage(cacheDir string, img v1.Image, tag string) error {
 	if err := path.WriteImage(img); err != nil {
 		return fmt.Errorf("write image blobs: %w", err)
 	}
-	desc, err := partial.Descriptor(img)
+	retained, err := partial.Descriptor(img)
 	if err != nil {
 		return fmt.Errorf("describe image: %w", err)
 	}
-	if desc.Annotations == nil {
-		desc.Annotations = make(map[string]string)
+	// Copy before annotating: remote images hand back their own descriptor.
+	desc := *retained
+	desc.Annotations = make(map[string]string, len(retained.Annotations)+1)
+	for k, v := range retained.Annotations {
+		desc.Annotations[k] = v
 	}
 	desc.Annotations["org.opencontainers.image.ref.name"] = tag
 
@@ -36,9 +41,12 @@ func AppendImage(cacheDir string, img v1.Image, tag string) error {
 	defer indexMu.Unlock()
 
 	if _, err := layout.FromPath(cacheDir); err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("open OCI layout: %w", err)
+		}
 		if _, err := layout.Write(cacheDir, empty.Index); err != nil {
 			return fmt.Errorf("create OCI layout: %w", err)
 		}
 	}
-	return path.AppendDescriptor(*desc)
+	return path.AppendDescriptor(desc)
 }
