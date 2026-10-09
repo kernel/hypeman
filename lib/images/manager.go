@@ -618,7 +618,7 @@ func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, buildID st
 		model.Platform = actualPlatform.String()
 		modelPath := manifestModelPath(m.paths, layout, ref.DigestHex())
 		if err := writeManifestModelAt(modelPath, ref.DigestHex(), &model); err != nil {
-			return rollbackFinalization(append(installed, modelPath), fmt.Errorf("write manifest model: %w", err))
+			return rollbackFinalization(installed, fmt.Errorf("write manifest model: %w", err))
 		}
 		installed = append(installed, modelPath)
 	}
@@ -637,7 +637,6 @@ func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, buildID st
 		return rollbackFinalization(installed, fmt.Errorf("write final metadata: %w", err))
 	}
 
-	installed = nil // committed: nothing below removes installed files
 	m.notifyReady(ref.DigestHex(), StatusReady, nil)
 	if !m.claimRequestedTags(ref, meta) {
 		m.cleanupUnclaimedImage(ref)
