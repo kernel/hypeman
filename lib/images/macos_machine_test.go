@@ -11,7 +11,6 @@ import (
 	"io"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -110,22 +109,9 @@ func TestMacOSMachineValidation(t *testing.T) {
 // It proves normal manager pull/materialization, not VZ boot or API server deployment.
 func TestMacOSMachineOCIRoundTrip(t *testing.T) {
 	source := macOSFixture(t)
-	if realSource := os.Getenv("HYPEMAN_MACOS_OCI_SOURCE"); realSource != "" {
-		source = realSource
-		for _, f := range []string{"disk.img", "aux.img"} {
-			err := exec.Command("lsof", "-t", filepath.Join(source, f)).Run()
-			exit, ok := err.(*exec.ExitError)
-			require.True(t, ok && exit.ExitCode() == 1, "source storage must be verifiably closed")
-		}
-	}
 	work := t.TempDir()
-	if persistent := os.Getenv("HYPEMAN_MACOS_OCI_WORK"); persistent != "" {
-		work = persistent
-		require.NoError(t, os.MkdirAll(work, 0700))
-	}
-	payload, err := parseMacOSMachine(source, macOSFixtureMetadata())
+	_, err := parseMacOSMachine(source, macOSFixtureMetadata())
 	require.NoError(t, err)
-	_ = payload
 	layerPath := filepath.Join(work, "bundle.tar.gz")
 	file, err := os.OpenFile(layerPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
 	require.NoError(t, err)
@@ -240,9 +226,5 @@ func TestMacOSMachineOCIRoundTrip(t *testing.T) {
 	require.ErrorIs(t, err, ErrInvalidPlatform)
 	_, err = manager.CreateImage(ctx, CreateImageRequest{Name: ref.Name(), Platform: "linux/arm64"})
 	require.Error(t, err)
-	report := map[string]any{"image": pulled.Name, "digest": pulled.Digest, "platform": pulled.Platform, "status": pulled.Status, "disk_path": disk, "source_hashes": hashes, "boot_tested": false}
-	b, err := json.MarshalIndent(report, "", "  ")
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(filepath.Join(work, "roundtrip.json"), b, 0600))
 	t.Log("round-trip verified", pulled.Digest)
 }

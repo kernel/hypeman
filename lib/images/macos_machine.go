@@ -3,7 +3,6 @@ package images
 import (
 	"encoding/json"
 	"fmt"
-	"net"
 	"os"
 	"path/filepath"
 
@@ -134,12 +133,8 @@ func parseMacOSMachine(root string, meta *containerMetadata) (*macOSMachinePaylo
 	if err := json.Unmarshal(b, &platform); err != nil {
 		return nil, err
 	}
-	if len(platform.HardwareModel) == 0 || len(platform.MachineIdentifier) == 0 || platform.CPUs < 2 || platform.Memory < 4<<30 {
-		return nil, fmt.Errorf("invalid macOS platform metadata")
-	}
-	// net.ParseMAC also accepts EUI-64 and InfiniBand addresses, which VZ rejects.
-	if mac, err := net.ParseMAC(platform.MAC); err != nil || len(mac) != 6 {
-		return nil, fmt.Errorf("invalid machine MAC %q: want a 6-byte Ethernet address", platform.MAC)
+	if err := platform.Validate(); err != nil {
+		return nil, err
 	}
 	return &macOSMachinePayload{Disk: disk, Aux: aux, Platform: &platform}, nil
 }

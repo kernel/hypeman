@@ -220,7 +220,8 @@ func (m *manager) CreateImage(ctx context.Context, req CreateImageRequest) (*Ima
 	defer m.createMu.Unlock()
 
 	if req.Platform != "" {
-		if cached, err := readMetadata(m.paths, ref.Repository(), ref.DigestHex()); err == nil && cached.Status == StatusReady {
+		// Only locally imported or pulled macOS records carry a platform the request can contradict.
+		if cached, err := readMetadata(m.paths, ref.Repository(), ref.DigestHex()); err == nil && cached.Status == StatusReady && cached.MacOS != nil {
 			actual, err := ParsePlatform(cached.Platform)
 			if err != nil || !platform.Matches(actual) {
 				return nil, fmt.Errorf("%w: requested %s but cached manifest is %s", ErrInvalidPlatform, platform, cached.Platform)
@@ -587,29 +588,22 @@ func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, buildID st
 	if actualPlatform.OS == "darwin" && staged.machine == nil {
 		return fmt.Errorf("macOS image requires a validated machine bundle")
 	}
-	auxCommitted := false
+	// Files installed before the metadata commit. Finalization failure removes them.
+	var installed []string
 	if staged.machine != nil {
 		auxPath := filepath.Join(layout.dir, "aux.img")
 		if err := os.Rename(staged.aux, auxPath); err != nil {
-			return err
+			return rollbackFinalization(installed, err)
 		}
-		defer func() {
-			if !auxCommitted {
-				_ = os.Remove(auxPath)
-			}
-		}()
+		installed = append(installed, auxPath)
 		meta.MacOS = staged.machine.Platform
 	}
-	modelPath := manifestModelPath(m.paths, layout, ref.DigestHex())
-	diskInstalled := false
-	modelWritten := false
-
 	if err := installAtomically(layout.disk, func(path string) error {
 		return os.Rename(staged.disk, path)
 	}); err != nil {
-		return fmt.Errorf("install image disk: %w", err)
+		return rollbackFinalization(installed, fmt.Errorf("install image disk: %w", err))
 	}
-	diskInstalled = true
+	installed = append(installed, layout.disk)
 
 	// Persist the manifest content model beside the shared content so later
 	// stages can recompose the image from per-layer artifacts and GC can tell
@@ -617,10 +611,11 @@ func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, buildID st
 	if result.Manifest != nil {
 		model := *result.Manifest
 		model.Platform = actualPlatform.String()
+		modelPath := manifestModelPath(m.paths, layout, ref.DigestHex())
 		if err := writeManifestModelAt(modelPath, ref.DigestHex(), &model); err != nil {
-			return rollbackFinalization(layout, modelPath, diskInstalled, modelWritten, fmt.Errorf("write manifest model: %w", err))
+			return rollbackFinalization(append(installed, modelPath), fmt.Errorf("write manifest model: %w", err))
 		}
-		modelWritten = true
+		installed = append(installed, modelPath)
 	}
 
 	meta.Status = StatusReady
@@ -634,10 +629,10 @@ func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, buildID st
 	meta.WorkingDir = result.Metadata.WorkingDir
 
 	if err := writeMetadataFile(layout.metadata, meta); err != nil {
-		return rollbackFinalization(layout, modelPath, diskInstalled, modelWritten, fmt.Errorf("write final metadata: %w", err))
+		return rollbackFinalization(installed, fmt.Errorf("write final metadata: %w", err))
 	}
 
-	auxCommitted = true
+	installed = nil // committed: nothing below removes installed files
 	m.notifyReady(ref.DigestHex(), StatusReady, nil)
 	if !m.claimRequestedTags(ref, meta) {
 		m.cleanupUnclaimedImage(ref)
@@ -653,13 +648,11 @@ func manifestModelPath(p *paths.Paths, layout imageLayout, digestHex string) str
 	return filepath.Join(layout.dir, "manifest.json")
 }
 
-func rollbackFinalization(layout imageLayout, modelPath string, diskInstalled, modelWritten bool, cause error) error {
+// rollbackFinalization removes the files finalization installed before it failed.
+func rollbackFinalization(installed []string, cause error) error {
 	var rollbackErr error
-	if modelWritten {
-		rollbackErr = errors.Join(rollbackErr, os.Remove(modelPath))
-	}
-	if diskInstalled {
-		rollbackErr = errors.Join(rollbackErr, os.Remove(layout.disk))
+	for _, path := range installed {
+		rollbackErr = errors.Join(rollbackErr, os.Remove(path))
 	}
 	if rollbackErr != nil {
 		return errors.Join(cause, fmt.Errorf("rollback finalization: %w", rollbackErr))
