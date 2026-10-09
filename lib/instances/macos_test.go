@@ -36,16 +36,15 @@ func TestMacOSRequestDefaultsAndRejections(t *testing.T) {
 	require.ErrorIs(t, prepareMacOSCreate(&CreateInstanceRequest{}, testMacImage(), hypervisor.Capabilities{}), ErrInvalidRequest)
 }
 func TestMacOSGuestAgentOptIn(t *testing.T) {
-	if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
-		t.Skip("Mac request acceptance requires Apple silicon")
-	}
+	caps := hypervisor.Capabilities{SupportsMacOSBoot: true}
 	image := testMacImage()
 	image.MacOS.GuestAgent = true
 	request := CreateInstanceRequest{}
-	require.NoError(t, prepareMacOSRequest(&request, image, hypervisor.TypeVZ))
+	require.NoError(t, validateMacOSCreate(request, image, caps))
+	applyMacOSDefaults(&request, image)
 	require.False(t, request.SkipGuestAgent)
 	request = CreateInstanceRequest{SkipGuestAgent: true}
-	require.NoError(t, prepareMacOSRequest(&request, image, hypervisor.TypeVZ))
+	applyMacOSDefaults(&request, image)
 	require.True(t, request.SkipGuestAgent)
 }
 
