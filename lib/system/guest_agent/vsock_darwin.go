@@ -32,8 +32,6 @@ import (
 	"time"
 )
 
-const defaultReadyFilePath = "/var/run/hypeman/guest-agent-ready"
-
 type vmAddr string
 
 func (a vmAddr) Network() string { return "vsock" }

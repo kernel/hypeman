@@ -31,8 +31,8 @@ explicitly. The default readiness file is `/var/run/hypeman/guest-agent-ready`
 A listening system agent does not establish autologin, desktop readiness, TCC
 permissions, or browser readiness. Root and user desktop agents need a reviewed
 handoff and explicit session selection before desktop execution is supported.
-No desktop agent installer or public session-selector extension is introduced
-by this initial patch.
+No desktop agent installer or public session-selector extension is part of this
+slice.
 
 The host API and hypervisor still enforce authorization. The vsock host-CID
 check is transport admission, not a replacement for instance authority checks.
@@ -83,7 +83,7 @@ shutdown policy without executing a real shutdown, explicit network rejection,
 and transport deadline errors using a local socket pair. These do not prove a
 live guest AF_VSOCK handshake for this executable.
 
-Remaining draft gates:
+Remaining gates:
 
 - Provision in a test guest and exercise real host GuestService connectivity.
 - Live normal API exec/files, readiness and graceful stop/recovery validation;
@@ -94,7 +94,3 @@ Remaining draft gates:
   and privilege/logging security review.
 - Linux test execution on an appropriate runner, and independent authenticated
   review.
-
-The live macOS benchmark guest and its prototype agent are unchanged by this
-source patch. Native gRPC integration remains experimental until those gates
-are satisfied.

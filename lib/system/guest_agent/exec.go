@@ -55,16 +55,19 @@ func (s *guestServer) Exec(stream pb.GuestService_ExecServer) error {
 
 // executeNoTTY executes command without TTY
 func (s *guestServer) executeNoTTY(ctx context.Context, stream pb.GuestService_ExecServer, start *pb.ExecStart) error {
-	// Run command directly - guest-agent is already running in container namespace
-	outputCtx, cancel := context.WithCancel(ctx)
+	// Run command directly - guest-agent is already running in container namespace.
+	// One cancellable context covers caller cancellation and stream-send errors;
+	// killGroupOnDone is the only place the command is killed.
+	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	// CommandContext must observe both caller cancellation and stream-send errors.
-	cmd := exec.CommandContext(outputCtx, start.Command[0], start.Command[1:]...)
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("start command: %w", err)
+	}
+	cmd := exec.Command(start.Command[0], start.Command[1:]...)
 	cmd.Env = s.buildEnv(start.Env, false)
 	cmd.Dir = start.Cwd
 	cmd.WaitDelay = 2 * time.Second
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error { return killProcessGroup(cmd) }
 	var sendMu sync.Mutex
 	cmd.Stdout = &execStreamWriter{stream: stream, mu: &sendMu, cancel: cancel}
 	cmd.Stderr = &execStreamWriter{stream: stream, mu: &sendMu, cancel: cancel, stderr: true}
@@ -231,8 +234,7 @@ func (w *execStreamWriter) Write(data []byte) (int, error) {
 func (s *guestServer) executeTTY(ctx context.Context, stream pb.GuestService_ExecServer, start *pb.ExecStart) error {
 	// Run command directly with PTY - guest-agent is already running in container namespace
 	// This ensures PTY and shell are in the same namespace, fixing Ctrl+C signal handling
-	cmd := exec.CommandContext(ctx, start.Command[0], start.Command[1:]...)
-	cmd.Cancel = func() error { return killProcessGroup(cmd) }
+	cmd := exec.Command(start.Command[0], start.Command[1:]...)
 
 	// Set up environment (TTY mode adds TERM default)
 	cmd.Env = s.buildEnv(start.Env, true)
