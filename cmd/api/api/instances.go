@@ -275,21 +275,17 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 
 	// Imported desktop guests do not implement Linux disk/TAP shaping. Do not
 	// silently advertise proportional limits that the backend would ignore.
+	// An uncached image is not an error here: CreateInstance pulls it, and the
+	// defaults stay Linux-shaped until a macOS image is known.
 	img, err := s.ImageManager.GetImage(ctx, request.Body.Image)
-	if err != nil {
-		if errors.Is(err, images.ErrNotFound) {
-			return oapi.CreateInstance404JSONResponse{
-				Code:    "not_found",
-				Message: err.Error(),
-			}, nil
-		}
+	if err != nil && !errors.Is(err, images.ErrNotFound) {
 		log.ErrorContext(ctx, "failed to resolve image for instance defaults", "error", err, "image", request.Body.Image)
 		return oapi.CreateInstance500JSONResponse{
 			Code:    "internal_error",
 			Message: "failed to create instance",
 		}, nil
 	}
-	macOSImage := img.MacOS != nil
+	macOSImage := err == nil && img.MacOS != nil
 	if macOSImage && request.Body.Vcpus == nil {
 		vcpus = 0
 	}
