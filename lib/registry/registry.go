@@ -16,8 +16,7 @@ import (
 	"sync"
 
 	"github.com/google/go-containerregistry/pkg/registry"
-	"github.com/google/go-containerregistry/pkg/v1/empty"
-	"github.com/google/go-containerregistry/pkg/v1/layout"
+	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/ocicache"
 	"github.com/kernel/hypeman/lib/paths"
@@ -165,7 +164,6 @@ func (r *Registry) Handler() http.Handler {
 // storeManifestBlob stores a manifest in the blob store by its digest.
 func (r *Registry) storeManifestBlob(digest string, data []byte) error {
 	digestHex := strings.TrimPrefix(digest, "sha256:")
-	blobPath := r.paths.OCICacheBlob(digestHex)
 
 	// Verify digest matches
 	actualDigest := computeDigest(data)
@@ -173,7 +171,7 @@ func (r *Registry) storeManifestBlob(digest string, data []byte) error {
 		return fmt.Errorf("digest mismatch: expected %s, got %s", digest, actualDigest)
 	}
 
-	return os.WriteFile(blobPath, data, 0644)
+	return ocicache.WriteBlob(r.paths.SystemOCICache(), v1.Hash{Algorithm: "sha256", Hex: digestHex}, data)
 }
 
 // responseWrapper captures the status code from the response
@@ -218,14 +216,6 @@ func (r *Registry) triggerConversion(repo, reference, dockerDigest string) {
 // addToOCILayout adds the image to the OCI layout, converting Docker v2 to OCI if needed.
 func (r *Registry) addToOCILayout(inputDigest string) (string, error) {
 	cacheDir := r.paths.SystemOCICache()
-	path, err := layout.FromPath(cacheDir)
-	if err != nil {
-		path, err = layout.Write(cacheDir, empty.Index)
-		if err != nil {
-			return "", fmt.Errorf("create oci layout: %w", err)
-		}
-	}
-
 	img, err := ocicache.ImageFromCache(r.paths, inputDigest)
 	if err != nil {
 		return "", fmt.Errorf("create image from blob store: %w", err)
@@ -238,9 +228,7 @@ func (r *Registry) addToOCILayout(inputDigest string) (string, error) {
 	digest := digestHash.String()
 	digestHex := digestHash.Hex
 
-	err = path.AppendImage(img, layout.WithAnnotations(map[string]string{
-		"org.opencontainers.image.ref.name": digestHex,
-	}))
+	err = ocicache.AppendImage(cacheDir, img, digestHex)
 	if err != nil {
 		return "", fmt.Errorf("append image to layout: %w", err)
 	}

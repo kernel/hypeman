@@ -16,12 +16,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/google/go-containerregistry/pkg/v1/empty"
-	"github.com/google/go-containerregistry/pkg/v1/layout"
 	"github.com/google/go-containerregistry/pkg/v1/tarball"
 	"github.com/kernel/hypeman/lib/builders"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/instances"
+	"github.com/kernel/hypeman/lib/ocicache"
 	"github.com/kernel/hypeman/lib/paths"
 	"github.com/kernel/hypeman/lib/tags"
 	"github.com/kernel/hypeman/lib/volumes"
@@ -382,17 +381,7 @@ func (m *manager) buildBuilderFromDockerfile(ctx context.Context) (string, error
 	// ImportLocalImage triggers buildImage → pullAndExport, it will find the
 	// layers already cached and skip the network pull entirely.
 	cacheDir := m.paths.SystemOCICache()
-	layoutPath, err := layout.FromPath(cacheDir)
-	if err != nil {
-		layoutPath, err = layout.Write(cacheDir, empty.Index)
-		if err != nil {
-			return "", fmt.Errorf("create OCI layout: %w", err)
-		}
-	}
-
-	if err := layoutPath.AppendImage(img, layout.WithAnnotations(map[string]string{
-		"org.opencontainers.image.ref.name": digestHex,
-	})); err != nil {
+	if err := ocicache.AppendImage(cacheDir, img, digestHex); err != nil {
 		return "", fmt.Errorf("add image to OCI layout: %w", err)
 	}
 

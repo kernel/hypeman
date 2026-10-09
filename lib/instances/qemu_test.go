@@ -256,10 +256,11 @@ func TestQEMUMicroVMEndToEnd(t *testing.T) {
 		Hypervisor:     hypervisor.TypeQEMUMicroVM,
 	})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = deleteTestInstanceNow(context.Background(), manager, inst.Id) })
+	instanceID := inst.Id
+	t.Cleanup(func() { _ = deleteTestInstanceNow(context.Background(), manager, instanceID) })
 	require.Equal(t, hypervisor.TypeQEMUMicroVM, inst.HypervisorType)
 
-	inst, err = waitForInstanceState(ctx, manager, inst.Id, StateRunning, integrationTestTimeout(30*time.Second))
+	inst, err = waitForInstanceState(ctx, manager, instanceID, StateRunning, integrationTestTimeout(30*time.Second))
 	require.NoError(t, err)
 	require.NoError(t, waitForQEMUReady(ctx, inst.SocketPath, inst.HypervisorType, integrationTestTimeout(30*time.Second)))
 	assertHostCanReachNginx(t, inst.IP, 80, 30*time.Second)
@@ -302,8 +303,9 @@ func TestQEMUStoppedSnapshotSwitchesToMicroVM(t *testing.T) {
 		Hypervisor:     hypervisor.TypeQEMU,
 	})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = deleteTestInstanceNow(context.Background(), manager, inst.Id) })
-	inst, err = waitForInstanceState(ctx, manager, inst.Id, StateRunning, integrationTestTimeout(30*time.Second))
+	instanceID := inst.Id
+	t.Cleanup(func() { _ = deleteTestInstanceNow(context.Background(), manager, instanceID) })
+	inst, err = waitForInstanceState(ctx, manager, instanceID, StateRunning, integrationTestTimeout(30*time.Second))
 	require.NoError(t, err)
 
 	inst, err = manager.StopInstance(ctx, inst.Id)
