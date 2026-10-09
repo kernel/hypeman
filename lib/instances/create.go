@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/devices"
-	"github.com/kernel/hypeman/lib/egressproxy"
 	"github.com/kernel/hypeman/lib/guestmemory"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/images"
@@ -295,12 +294,6 @@ func (m *manager) createInstance(
 		req.Tags = make(map[string]string)
 	}
 
-	// 7. Determine network based on NetworkEnabled flag
-	networkName := ""
-	if req.NetworkEnabled {
-		networkName = "default"
-	}
-
 	// Enrich logger and trace span with hypervisor type
 	log = log.With("hypervisor", string(hvType))
 	ctx = logger.AddToContext(ctx, log)
@@ -464,45 +457,18 @@ func (m *manager) createInstance(
 	}
 
 	// 14. Allocate network (if network enabled)
-	netConfig := macOSNetworkConfig(stored)
-	if networkName != "" && stored.MacOS == nil {
-		log.DebugContext(ctx, "allocating network", "instance_id", id, "network", networkName,
-			"download_bps", stored.NetworkBandwidthDownload, "upload_bps", stored.NetworkBandwidthUpload)
-		networkCtx, networkSpanEnd := m.startLifecycleStep(ctx, "allocate_network",
-			attribute.String("instance_id", id),
-			attribute.String("hypervisor", string(stored.HypervisorType)),
-			attribute.String("operation", "allocate_network"),
-			attribute.Bool("network_enabled", true),
-		)
-		netConfig, err = m.networkManager.CreateAllocation(networkCtx, network.AllocateRequest{
-			InstanceID:    id,
-			InstanceName:  req.Name,
-			DownloadBps:   stored.NetworkBandwidthDownload,
-			UploadBps:     stored.NetworkBandwidthUpload,
-			UploadCeilBps: stored.NetworkBandwidthUpload * int64(m.networkManager.GetUploadBurstMultiplier()),
-		})
-		networkSpanEnd(err)
-		if err != nil {
-			log.ErrorContext(ctx, "failed to allocate network", "instance_id", id, "network", networkName, "error", err)
-			return nil, fmt.Errorf("allocate network: %w", err)
-		}
-		// Store IP/MAC in metadata (persisted with instance)
-		stored.IP = netConfig.IP
-		stored.MAC = netConfig.MAC
-		// Add network cleanup to stack
-		cu.Add(func() {
-			// Network cleanup: TAP devices are removed when ReleaseAllocation is called.
-			// In case of unexpected scenarios (like power loss), TAP devices persist until host reboot.
-			// CreateAllocation just succeeded so the TAP exists on the host. If
-			// GetAllocation can't derive a full allocation here, fall back to ID-based
-			// release rather than silently leaking the TAP.
-			netAlloc, err := m.networkManager.GetAllocation(ctx, id)
-			if err == nil && netAlloc != nil {
-				m.networkManager.ReleaseAllocation(ctx, netAlloc)
-				return
-			}
-			m.networkManager.ReleaseByInstanceID(ctx, id)
-		})
+	networkRequest := network.AllocateRequest{InstanceID: id, InstanceName: req.Name}
+	if stored.NetworkEnabled && stored.MacOS == nil {
+		networkRequest.DownloadBps = stored.NetworkBandwidthDownload
+		networkRequest.UploadBps = stored.NetworkBandwidthUpload
+		networkRequest.UploadCeilBps = stored.NetworkBandwidthUpload * int64(m.networkManager.GetUploadBurstMultiplier())
+	}
+	netConfig, releaseNetwork, err := m.prepareBootNetwork(ctx, stored, networkRequest)
+	if err != nil {
+		return nil, err
+	}
+	if releaseNetwork != nil {
+		cu.Add(releaseNetwork)
 	}
 
 	// 15. Validate and attach volumes
@@ -545,33 +511,14 @@ func (m *manager) createInstance(
 		stored.Volumes = req.Volumes
 	}
 
-	// 16. Create config disk (needs Instance for buildVMConfig)
-	inst := &Instance{StoredMetadata: *stored}
-	var proxyGuestConfig *egressproxy.GuestConfig
-	proxyGuestConfig, err = m.maybeRegisterEgressProxy(ctx, stored, netConfig)
+	// 16. Prepare guest-specific boot configuration.
+	releaseConfig, err := m.prepareBootConfig(ctx, stored, imageInfo, netConfig)
 	if err != nil {
-		log.ErrorContext(ctx, "failed to configure egress proxy", "instance_id", id, "error", err)
-		return nil, fmt.Errorf("configure egress proxy: %w", err)
+		return nil, err
 	}
-	if proxyGuestConfig != nil {
-		cu.Add(func() {
-			m.unregisterEgressProxyInstance(ctx, id)
-		})
+	if releaseConfig != nil {
+		cu.Add(releaseConfig)
 	}
-	log.DebugContext(ctx, "creating config disk", "instance_id", id)
-	configDiskCtx, configDiskSpanEnd := m.startLifecycleStep(ctx, "create_config_disk",
-		attribute.String("instance_id", id),
-		attribute.String("hypervisor", string(stored.HypervisorType)),
-		attribute.String("operation", "create_config_disk"),
-	)
-	if stored.MacOS == nil {
-		if err := m.createConfigDisk(configDiskCtx, inst, imageInfo, netConfig, proxyGuestConfig); err != nil {
-			configDiskSpanEnd(err)
-			log.ErrorContext(ctx, "failed to create config disk", "instance_id", id, "error", err)
-			return nil, fmt.Errorf("create config disk: %w", err)
-		}
-	}
-	configDiskSpanEnd(nil)
 
 	// 17. Record boot start time before launching the VM so marker hydration
 	// can safely ignore stale sentinels from prior runs.

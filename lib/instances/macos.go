@@ -14,7 +14,6 @@ import (
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/instances/phasetracking"
-	"github.com/kernel/hypeman/lib/network"
 )
 
 // prepareMacOSCreate validates explicit options before applying machine defaults.
@@ -151,14 +150,4 @@ func macOSLeaseIP(data string, wanted net.HardwareAddr) string {
 		}
 	}
 	return ""
-}
-
-// macOSNetworkConfig pins a networked macOS guest to its preserved MAC and returns
-// its network config. It returns nil for Linux guests and networkless macOS guests.
-func macOSNetworkConfig(stored *StoredMetadata) *network.NetworkConfig {
-	if stored.MacOS == nil || !stored.NetworkEnabled {
-		return nil
-	}
-	stored.MAC = stored.MacOS.MAC
-	return &network.NetworkConfig{MAC: stored.MacOS.MAC}
 }

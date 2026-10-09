@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/kernel/hypeman/lib/egressproxy"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/logger"
 	"github.com/kernel/hypeman/lib/network"
@@ -125,51 +124,12 @@ func (m *manager) startInstance(
 	defer cu.Clean()
 
 	// 4. Allocate fresh network if network enabled
-	netConfig := macOSNetworkConfig(stored)
-	if netConfig != nil {
-		stored.IP = ""
+	netConfig, releaseNetwork, err := m.prepareBootNetwork(ctx, stored, network.AllocateRequest{InstanceID: id, InstanceName: stored.Name})
+	if err != nil {
+		return nil, err
 	}
-	if stored.NetworkEnabled && stored.MacOS == nil {
-		log.DebugContext(ctx, "allocating network for start", "instance_id", id, "network", "default")
-		networkCtx, networkSpanEnd := m.startLifecycleStep(ctx, "allocate_network",
-			attribute.String("instance_id", id),
-			attribute.String("hypervisor", string(stored.HypervisorType)),
-			attribute.String("operation", "allocate_network"),
-			attribute.Bool("network_enabled", true),
-		)
-		netConfig, err = m.networkManager.CreateAllocation(networkCtx, network.AllocateRequest{
-			InstanceID:   id,
-			InstanceName: stored.Name,
-		})
-		networkSpanEnd(err)
-		if err != nil {
-			log.ErrorContext(ctx, "failed to allocate network", "instance_id", id, "error", err)
-			return nil, fmt.Errorf("allocate network: %w", err)
-		}
-		// Update stored metadata with new IP/MAC
-		stored.IP = netConfig.IP
-		stored.MAC = netConfig.MAC
-		// Add network cleanup to stack
-		cu.Add(func() {
-			m.networkManager.ReleaseAllocation(ctx, &network.Allocation{
-				InstanceID: id,
-				TAPDevice:  netConfig.TAPDevice,
-			})
-		})
-	}
-
-	var proxyGuestConfig *egressproxy.GuestConfig
-	if stored.NetworkEnabled {
-		proxyGuestConfig, err = m.maybeRegisterEgressProxy(ctx, stored, netConfig)
-		if err != nil {
-			log.ErrorContext(ctx, "failed to configure egress proxy", "instance_id", id, "error", err)
-			return nil, fmt.Errorf("configure egress proxy: %w", err)
-		}
-		if proxyGuestConfig != nil {
-			cu.Add(func() {
-				m.unregisterEgressProxyInstance(ctx, id)
-			})
-		}
+	if releaseNetwork != nil {
+		cu.Add(releaseNetwork)
 	}
 
 	// 4b. Recreate the vGPU if this instance had a GPU profile
@@ -196,22 +156,14 @@ func (m *manager) startInstance(
 		}
 	}
 
-	// 5. Regenerate config disk with new network configuration
-	instForConfig := &Instance{StoredMetadata: *stored}
-	log.DebugContext(ctx, "regenerating config disk", "instance_id", id)
-	configDiskCtx, configDiskSpanEnd := m.startLifecycleStep(ctx, "create_config_disk",
-		attribute.String("instance_id", id),
-		attribute.String("hypervisor", string(stored.HypervisorType)),
-		attribute.String("operation", "create_config_disk"),
-	)
-	if stored.MacOS == nil {
-		if err := m.createConfigDisk(configDiskCtx, instForConfig, imageInfo, netConfig, proxyGuestConfig); err != nil {
-			configDiskSpanEnd(err)
-			log.ErrorContext(ctx, "failed to create config disk", "instance_id", id, "error", err)
-			return nil, fmt.Errorf("create config disk: %w", err)
-		}
+	// 5. Regenerate guest-specific boot configuration.
+	releaseConfig, err := m.prepareBootConfig(ctx, stored, imageInfo, netConfig)
+	if err != nil {
+		return nil, err
 	}
-	configDiskSpanEnd(nil)
+	if releaseConfig != nil {
+		cu.Add(releaseConfig)
+	}
 
 	if err := m.archiveAppLogForBoot(id); err != nil {
 		log.WarnContext(ctx, "failed to archive app log before start", "instance_id", id, "error", err)
