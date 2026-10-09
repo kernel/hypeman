@@ -78,6 +78,23 @@ func TestMacOSMachineValidation(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(root, "config.json"), []byte(`{}`), 0600))
 	_, err = parseMacOSMachine(root, macOSFixtureMetadata())
 	require.Error(t, err)
+
+	// EUI-64 and 20-octet InfiniBand addresses parse with net.ParseMAC but are not Ethernet.
+	for _, mac := range []string{"02:00:00:00:00:00:00:01", strings.Repeat("00:", 19) + "01"} {
+		b, err := json.Marshal(MacOSImage{HardwareModel: []byte{1}, MachineIdentifier: []byte{2}, MAC: mac, CPUs: 4, Memory: 8 << 30})
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(filepath.Join(root, "config.json"), b, 0600))
+		_, err = parseMacOSMachine(root, macOSFixtureMetadata())
+		require.Error(t, err, mac)
+	}
+
+	// A hardlink with a different name is the same file and must not satisfy distinctness.
+	linked := macOSFixture(t)
+	require.NoError(t, os.Link(filepath.Join(linked, "disk.img"), filepath.Join(linked, "alias.img")))
+	meta = macOSFixtureMetadata()
+	meta.Labels[MacOSMachineAuxLabel] = "alias.img"
+	_, err = parseMacOSMachine(linked, meta)
+	require.ErrorContains(t, err, "distinct")
 }
 
 // Optional real-bundle run only reads a stopped source, never the live benchmark disk.
@@ -113,7 +130,12 @@ func TestMacOSMachineOCIRoundTrip(t *testing.T) {
 		require.NoError(t, err)
 		info, err := input.Stat()
 		require.NoError(t, err)
-		require.NoError(t, tw.WriteHeader(&tar.Header{Name: f, Mode: 0600, Size: info.Size(), Typeflag: tar.TypeReg}))
+		// The registry controls modes; a permissive disk must not become the canonical image mode.
+		mode := int64(0600)
+		if f == "disk.img" {
+			mode = 0666
+		}
+		require.NoError(t, tw.WriteHeader(&tar.Header{Name: f, Mode: mode, Size: info.Size(), Typeflag: tar.TypeReg}))
 		h := sha256.New()
 		_, err = io.Copy(io.MultiWriter(tw, h), input)
 		require.NoError(t, err)
@@ -183,6 +205,9 @@ func TestMacOSMachineOCIRoundTrip(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, input.Close())
 		require.Equal(t, hashes[f], fmt.Sprintf("%x", h.Sum(nil)), f)
+		info, err := os.Stat(path)
+		require.NoError(t, err)
+		require.Equal(t, os.FileMode(0600), info.Mode().Perm(), f)
 	}
 	expected, err := os.ReadFile(filepath.Join(source, "config.json"))
 	require.NoError(t, err)

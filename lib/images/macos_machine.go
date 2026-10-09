@@ -51,6 +51,12 @@ func machineBundleFile(root, relative string) (string, error) {
 	return path, nil
 }
 
+func sameFile(a, b string) bool {
+	ai, errA := os.Stat(a)
+	bi, errB := os.Stat(b)
+	return errA == nil && errB == nil && os.SameFile(ai, bi)
+}
+
 func parseMacOSMachine(root string, meta *containerMetadata) (*macOSMachinePayload, error) {
 	if meta.OS != "darwin" {
 		return nil, nil
@@ -74,7 +80,8 @@ func parseMacOSMachine(root string, meta *containerMetadata) (*macOSMachinePaylo
 	if err != nil {
 		return nil, err
 	}
-	if disk == aux || disk == config || aux == config {
+	// Compare inodes: hardlinks with different names must not satisfy distinctness.
+	if sameFile(disk, aux) || sameFile(disk, config) || sameFile(aux, config) {
 		return nil, fmt.Errorf("machine bundle files must be distinct")
 	}
 	info, err := os.Stat(config)
@@ -95,8 +102,9 @@ func parseMacOSMachine(root string, meta *containerMetadata) (*macOSMachinePaylo
 	if len(platform.HardwareModel) == 0 || len(platform.MachineIdentifier) == 0 || platform.CPUs < 2 || platform.Memory < 4<<30 {
 		return nil, fmt.Errorf("invalid macOS platform metadata")
 	}
-	if _, err := net.ParseMAC(platform.MAC); err != nil {
-		return nil, fmt.Errorf("invalid machine MAC: %w", err)
+	// net.ParseMAC also accepts EUI-64 and InfiniBand addresses, which VZ rejects.
+	if mac, err := net.ParseMAC(platform.MAC); err != nil || len(mac) != 6 {
+		return nil, fmt.Errorf("invalid machine MAC %q: want a 6-byte Ethernet address", platform.MAC)
 	}
 	return &macOSMachinePayload{Disk: disk, Aux: aux, Platform: &platform}, nil
 }

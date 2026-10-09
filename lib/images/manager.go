@@ -514,7 +514,8 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef, credentials 
 
 	m.updateStatusByDigest(ref, StatusConverting, nil, buildID)
 
-	diskPath := resolveImageLayout(m.paths, ref.Repository(), ref.DigestHex()).disk
+	layout := resolveImageLayout(m.paths, ref.Repository(), ref.DigestHex())
+	diskPath := layout.disk
 	// Keep the temporary filesystem beside its final path so finalization stays
 	// atomic even when system/builds and images are on different filesystems.
 	diskTempPath := diskPath + ".tmp-" + buildID
@@ -528,6 +529,10 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef, credentials 
 	var diskSize int64
 	if payload != nil {
 		err = forkvm.CopyRegularFile(payload.Disk, diskTempPath)
+		if err == nil {
+			// Registry-supplied modes must not expose the canonical disk to other local users.
+			err = os.Chmod(diskTempPath, 0600)
+		}
 		if err == nil {
 			var info os.FileInfo
 			info, err = os.Stat(diskTempPath)
@@ -544,8 +549,30 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef, credentials 
 		return
 	}
 
+	// Copy auxiliary storage before taking createMu; finalization only renames it.
+	auxTempPath := ""
+	if payload != nil {
+		auxTempPath = filepath.Join(layout.dir, "aux.img.tmp-"+buildID)
+		defer os.Remove(auxTempPath)
+		if err = forkvm.CopyRegularFile(payload.Aux, auxTempPath); err == nil {
+			err = os.Chmod(auxTempPath, 0600)
+		}
+		if err == nil {
+			var info os.FileInfo
+			info, err = os.Stat(auxTempPath)
+			if err == nil {
+				// Accounting covers every file the image occupies, not only the boot disk.
+				diskSize += info.Size()
+			}
+		}
+		if err != nil {
+			m.updateStatusByDigest(ref, StatusFailed, fmt.Errorf("stage macOS auxiliary storage: %w", err), buildID)
+			return
+		}
+	}
+
 	finalizeStart := time.Now()
-	err = m.finalizeImage(ref, result, diskSize, buildID, diskTempPath, payload)
+	err = m.finalizeImage(ref, result, diskSize, buildID, diskTempPath, auxTempPath, payload)
 	m.recordImageBuildPhase(ctx, ref.Digest(), "finalize", time.Since(finalizeStart), phaseStatus(err), "not_applicable")
 	if err != nil {
 		if errors.Is(err, errStaleBuild) {
@@ -558,7 +585,7 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef, credentials 
 	buildStatus = "success"
 }
 
-func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, diskSize int64, buildID, diskTempPath string, payloads ...*macOSMachinePayload) error {
+func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, diskSize int64, buildID, diskTempPath, auxTempPath string, payload *macOSMachinePayload) error {
 	m.createMu.Lock()
 	defer m.createMu.Unlock()
 
@@ -580,25 +607,13 @@ func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, diskSize i
 		return err
 	}
 
-	var payload *macOSMachinePayload
-	if len(payloads) > 0 {
-		payload = payloads[0]
-	}
 	if actualPlatform.OS == "darwin" && payload == nil {
 		return fmt.Errorf("macOS image requires a validated machine bundle")
 	}
 	auxCommitted := false
 	if payload != nil {
 		auxPath := filepath.Join(layout.dir, "aux.img")
-		auxTemp := auxPath + ".tmp-" + buildID
-		defer os.Remove(auxTemp)
-		if err := forkvm.CopyRegularFile(payload.Aux, auxTemp); err != nil {
-			return err
-		}
-		if err := os.Chmod(auxTemp, 0600); err != nil {
-			return err
-		}
-		if err := os.Rename(auxTemp, auxPath); err != nil {
+		if err := os.Rename(auxTempPath, auxPath); err != nil {
 			return err
 		}
 		defer func() {
