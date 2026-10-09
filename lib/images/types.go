@@ -1,6 +1,8 @@
 package images
 
 import (
+	"fmt"
+	"net"
 	"time"
 
 	"github.com/google/go-containerregistry/pkg/authn"
@@ -34,6 +36,19 @@ type MacOSImage struct {
 	MAC               string `json:"mac"`
 	CPUs              uint   `json:"cpus"`
 	Memory            uint64 `json:"memory"`
+}
+
+// Validate checks the platform fields every macOS bundle must carry, whether it
+// arrives as a local import or as an OCI machine image.
+func (m MacOSImage) Validate() error {
+	if len(m.HardwareModel) == 0 || len(m.MachineIdentifier) == 0 || m.CPUs < 2 || m.Memory < 4<<30 {
+		return fmt.Errorf("invalid macOS platform metadata")
+	}
+	// net.ParseMAC also accepts EUI-64 and InfiniBand addresses, which VZ rejects.
+	if mac, err := net.ParseMAC(m.MAC); err != nil || len(mac) != 6 {
+		return fmt.Errorf("invalid machine MAC %q: want a 6-byte Ethernet address", m.MAC)
+	}
+	return nil
 }
 
 // CreateImageRequest represents a request to create an image

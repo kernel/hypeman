@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -39,11 +38,8 @@ func ImportMacOSImage(ctx context.Context, p *paths.Paths, name, source string) 
 	if err = json.Unmarshal(b, &mac); err != nil {
 		return nil, err
 	}
-	if len(mac.HardwareModel) == 0 || len(mac.MachineIdentifier) == 0 || mac.CPUs < 2 || mac.Memory < 4<<30 {
-		return nil, fmt.Errorf("invalid macOS bundle configuration")
-	}
-	if _, err = net.ParseMAC(mac.MAC); err != nil {
-		return nil, fmt.Errorf("invalid MAC: %w", err)
+	if err = mac.Validate(); err != nil {
+		return nil, err
 	}
 	for _, file := range []string{"disk.img", "aux.img"} {
 		file = filepath.Join(source, file)
