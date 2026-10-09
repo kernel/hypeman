@@ -3075,6 +3075,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+        400:
+          description: Request not supported for this guest type
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         409:
           description: Conflict - instance not in standby or no snapshot
           content:

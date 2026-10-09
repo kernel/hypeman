@@ -657,6 +657,11 @@ func (s *ApiService) RestoreInstance(ctx context.Context, request oapi.RestoreIn
 				Code:    "not_found",
 				Message: "instance not found",
 			}, nil
+		case errors.Is(err, instances.ErrInvalidRequest):
+			return oapi.RestoreInstance400JSONResponse{
+				Code:    "invalid_request",
+				Message: err.Error(),
+			}, nil
 		case errors.Is(err, instances.ErrInvalidState):
 			return oapi.RestoreInstance409JSONResponse{
 				Code:    "invalid_state",
