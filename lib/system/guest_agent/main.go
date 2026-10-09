@@ -22,6 +22,8 @@ const (
 type guestServer struct {
 	pb.UnimplementedGuestServiceServer
 	gpuReporter *gpuInitReporter
+	// drainGrace bounds how long a cancelled exec may take to finish; zero means defaultDrainGrace.
+	drainGrace time.Duration
 }
 
 func main() {

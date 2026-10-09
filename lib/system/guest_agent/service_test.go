@@ -176,11 +176,13 @@ func processGone(pid int) bool {
 }
 
 // stalledExecStream models a client that stopped reading: Send blocks until release closes.
+// With stallExitOnly, only the final exit-code send blocks.
 type stalledExecStream struct {
 	grpc.ServerStream
-	ctx     context.Context
-	start   *pb.ExecRequest
-	release chan struct{}
+	ctx           context.Context
+	start         *pb.ExecRequest
+	release       chan struct{}
+	stallExitOnly bool
 }
 
 func (s *stalledExecStream) Context() context.Context { return s.ctx }
@@ -193,15 +195,15 @@ func (s *stalledExecStream) Recv() (*pb.ExecRequest, error) {
 	<-s.ctx.Done()
 	return nil, s.ctx.Err()
 }
-func (s *stalledExecStream) Send(*pb.ExecResponse) error {
+func (s *stalledExecStream) Send(resp *pb.ExecResponse) error {
+	if _, exit := resp.Response.(*pb.ExecResponse_ExitCode); s.stallExitOnly && !exit {
+		return nil
+	}
 	<-s.release
 	return nil
 }
 
 func TestGuestServiceExecTimeoutFinishesWhenClientStopsReading(t *testing.T) {
-	restore := execDrainGrace
-	execDrainGrace = 100 * time.Millisecond
-	t.Cleanup(func() { execDrainGrace = restore })
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	release := make(chan struct{})
@@ -211,12 +213,76 @@ func TestGuestServiceExecTimeoutFinishesWhenClientStopsReading(t *testing.T) {
 		TimeoutSeconds: 1,
 	}}}}
 	done := make(chan error, 1)
-	go func() { done <- (&guestServer{}).Exec(stream) }()
+	go func() { done <- (&guestServer{drainGrace: 100 * time.Millisecond}).Exec(stream) }()
 	select {
 	case err := <-done:
-		require.ErrorContains(t, err, "did not drain")
+		require.ErrorContains(t, err, "did not finish")
 	case <-time.After(10 * time.Second):
 		t.Fatal("exec stayed blocked behind a stalled client after its timeout")
+	}
+}
+
+func TestGuestServiceExecTimeoutBoundsExitCodeSend(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	stream := &stalledExecStream{ctx: ctx, release: release, stallExitOnly: true, start: &pb.ExecRequest{Request: &pb.ExecRequest_Start{Start: &pb.ExecStart{
+		Command:        []string{"/bin/sh", "-c", "echo started; sleep 30"},
+		TimeoutSeconds: 1,
+	}}}}
+	done := make(chan error, 1)
+	go func() { done <- (&guestServer{drainGrace: 100 * time.Millisecond}).Exec(stream) }()
+	select {
+	case err := <-done:
+		require.ErrorContains(t, err, "did not finish")
+	case <-time.After(10 * time.Second):
+		t.Fatal("exit-code send stayed blocked after the command timed out")
+	}
+}
+
+func TestGuestServiceExecTimeoutKillsDescendantAfterShellExits(t *testing.T) {
+	for _, tty := range []bool{false, true} {
+		t.Run(map[bool]string{false: "pipes", true: "tty"}[tty], func(t *testing.T) {
+			client := testGuestClient(t)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			pidPath := filepath.Join(t.TempDir(), "pid")
+			stream, err := client.Exec(ctx)
+			require.NoError(t, err)
+			require.NoError(t, stream.Send(&pb.ExecRequest{Request: &pb.ExecRequest_Start{Start: &pb.ExecStart{
+				Command:        []string{"/bin/sh", "-c", "sleep 30 & printf '%s' \"$!\" > \"$HYPEMAN_PID_FILE\"; exit 0"},
+				Env:            map[string]string{"HYPEMAN_PID_FILE": pidPath},
+				Tty:            tty,
+				TimeoutSeconds: 1,
+			}}}))
+			require.NoError(t, stream.CloseSend())
+			var pid int
+			require.Eventually(t, func() bool {
+				data, err := os.ReadFile(pidPath)
+				if err != nil {
+					return false
+				}
+				pid, err = strconv.Atoi(string(data))
+				return err == nil && pid > 0
+			}, 5*time.Second, 10*time.Millisecond)
+			defer syscall.Kill(pid, syscall.SIGKILL)
+			finished := make(chan error, 1)
+			go func() {
+				for {
+					if _, err := stream.Recv(); err != nil {
+						finished <- err
+						return
+					}
+				}
+			}()
+			select {
+			case <-finished:
+			case <-time.After(10 * time.Second):
+				t.Fatal("RPC stayed open while a descendant held the command's output")
+			}
+			require.True(t, processGone(pid), "timeout must kill the descendant even after the shell exited")
+		})
 	}
 }
 

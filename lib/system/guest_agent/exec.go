@@ -79,6 +79,11 @@ func (s *guestServer) executeNoTTY(ctx context.Context, stream pb.GuestService_E
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start command: %w", err)
 	}
+	// Cancel is not called once the direct child has exited, so a descendant that
+	// still holds the pipes would outlive the timeout. Kill the group from the context.
+	finished := make(chan struct{})
+	defer close(finished)
+	go killGroupOnDone(ctx, cmd, finished)
 
 	// Handle stdin in background
 	go func() {
@@ -101,7 +106,7 @@ func (s *guestServer) executeNoTTY(ctx context.Context, stream pb.GuestService_E
 		waitErr = cmd.Wait()
 		close(waitDone)
 	}()
-	if err := awaitDrain(ctx, waitDone); err != nil {
+	if err := awaitBounded(ctx, waitDone, s.drainBound()); err != nil {
 		return err
 	}
 	if waitErr != nil {
@@ -120,32 +125,62 @@ func (s *guestServer) executeNoTTY(ctx context.Context, stream pb.GuestService_E
 
 	log.Printf("[guest-agent] command finished with exit code: %d", exitCode)
 
-	// Send exit code
-	return stream.Send(&pb.ExecResponse{
-		Response: &pb.ExecResponse_ExitCode{ExitCode: exitCode},
-	})
+	return s.sendExitCode(ctx, stream, exitCode)
 }
 
-// execDrainGrace bounds how long a cancelled command may take to finish. A descendant that
+// defaultDrainGrace bounds how long a cancelled command may take to finish. A descendant that
 // holds the terminal or output, or a client that stopped reading, must not block the handler.
-var execDrainGrace = 5 * time.Second
+const defaultDrainGrace = 5 * time.Second
 
-// awaitDrain waits for done. After ctx ends it allows execDrainGrace more, then returns an
-// error so the handler returns, ending the RPC and releasing any output send still blocked on it.
-func awaitDrain(ctx context.Context, done <-chan struct{}) error {
+func (s *guestServer) drainBound() time.Duration {
+	if s.drainGrace > 0 {
+		return s.drainGrace
+	}
+	return defaultDrainGrace
+}
+
+// awaitBounded waits for done. After ctx ends it allows grace more, then returns an
+// error so the handler returns, ending the RPC and releasing any send still blocked on it.
+func awaitBounded(ctx context.Context, done <-chan struct{}, grace time.Duration) error {
 	select {
 	case <-done:
 		return nil
 	case <-ctx.Done():
 	}
-	timer := time.NewTimer(execDrainGrace)
+	timer := time.NewTimer(grace)
 	defer timer.Stop()
 	select {
 	case <-done:
 		return nil
 	case <-timer.C:
-		return fmt.Errorf("command output did not drain after cancellation: %w", ctx.Err())
+		return fmt.Errorf("command did not finish after cancellation: %w", ctx.Err())
 	}
+}
+
+// killGroupOnDone kills cmd's process group once ctx ends, unless finished closes first.
+func killGroupOnDone(ctx context.Context, cmd *exec.Cmd, finished <-chan struct{}) {
+	select {
+	case <-ctx.Done():
+		_ = killProcessGroup(cmd)
+	case <-finished:
+	}
+}
+
+// sendExitCode delivers the final status under the same bound as output, so a client
+// that stopped reading cannot hold the handler past cancellation.
+func (s *guestServer) sendExitCode(ctx context.Context, stream pb.GuestService_ExecServer, exitCode int32) error {
+	sent := make(chan struct{})
+	var err error
+	go func() {
+		err = stream.Send(&pb.ExecResponse{
+			Response: &pb.ExecResponse_ExitCode{ExitCode: exitCode},
+		})
+		close(sent)
+	}()
+	if boundErr := awaitBounded(ctx, sent, s.drainBound()); boundErr != nil {
+		return boundErr
+	}
+	return err
 }
 
 // killProcessGroup kills the command and its descendants. Both exec paths start the command
@@ -221,6 +256,9 @@ func (s *guestServer) executeTTY(ctx context.Context, stream pb.GuestService_Exe
 		return fmt.Errorf("start pty: %w", err)
 	}
 	defer ptmx.Close()
+	finished := make(chan struct{})
+	defer close(finished)
+	go killGroupOnDone(ctx, cmd, finished)
 
 	// Mutex to protect concurrent stream.Send calls (gRPC streams are not thread-safe)
 	var sendMu sync.Mutex
@@ -276,7 +314,7 @@ func (s *guestServer) executeTTY(ctx context.Context, stream pb.GuestService_Exe
 		waitErr = cmd.Wait()
 		close(waitDone)
 	}()
-	if err := awaitDrain(ctx, waitDone); err != nil {
+	if err := awaitBounded(ctx, waitDone, s.drainBound()); err != nil {
 		return err
 	}
 
@@ -286,7 +324,7 @@ func (s *guestServer) executeTTY(ctx context.Context, stream pb.GuestService_Exe
 		wg.Wait()
 		close(outputDone)
 	}()
-	if err := awaitDrain(ctx, outputDone); err != nil {
+	if err := awaitBounded(ctx, outputDone, s.drainBound()); err != nil {
 		return err
 	}
 
@@ -300,10 +338,7 @@ func (s *guestServer) executeTTY(ctx context.Context, stream pb.GuestService_Exe
 
 	log.Printf("[guest-agent] TTY command finished with exit code: %d", exitCode)
 
-	// Send exit code
-	return stream.Send(&pb.ExecResponse{
-		Response: &pb.ExecResponse_ExitCode{ExitCode: exitCode},
-	})
+	return s.sendExitCode(ctx, stream, exitCode)
 }
 
 // buildEnv constructs environment variables by merging provided env with defaults.
