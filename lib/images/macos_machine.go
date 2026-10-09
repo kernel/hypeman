@@ -46,19 +46,6 @@ func stageMachineFile(src, dst string) (int64, error) {
 	return info.Size(), nil
 }
 
-// ValidateMacOSBundle validates a complete installed machine bundle at the fixed
-// disk.img/aux.img/config.json paths. It performs no boot, import or publication.
-func ValidateMacOSBundle(root string) (*MacOSImage, error) {
-	payload, err := parseMacOSMachine(root, &containerMetadata{OS: "darwin", Architecture: "arm64", Labels: map[string]string{
-		MacOSMachineVersionLabel: "1", MacOSMachineKindLabel: "macos-image", MacOSMachineFormatLabel: "raw",
-		MacOSMachineDiskLabel: "disk.img", MacOSMachineAuxLabel: "aux.img", MacOSMachinePlatformLabel: "config.json",
-	}})
-	if err != nil {
-		return nil, err
-	}
-	return payload.Platform, nil
-}
-
 func parseMacOSMachine(root string, meta *containerMetadata) (*macOSMachinePayload, error) {
 	// Normalize as resolveManifestPlatform does, so aliases such as aarch64 and
 	// case variants such as Darwin select the machine path rather than rootfs.

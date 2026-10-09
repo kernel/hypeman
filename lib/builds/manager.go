@@ -2,6 +2,7 @@ package builds
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	_ "embed"
 	"encoding/json"
@@ -88,6 +89,9 @@ type Manager interface {
 
 // Config holds configuration for the build manager
 type Config struct {
+	// MachineBuild is an opt-in internal executor. No HTTP recipe mode is exposed.
+	MachineBuild *MachineBuildBackend
+
 	// MaxConcurrentBuilds is the maximum number of concurrent builds
 	MaxConcurrentBuilds int
 
@@ -453,14 +457,47 @@ func (m *manager) CreateBuild(ctx context.Context, req CreateBuildRequest, sourc
 	}
 	req.Tags = tags.Clone(req.Tags)
 
-	// Apply defaults to build policy
+	// Machine resources inherit the installed base, not Linux builder defaults.
 	policy := req.BuildPolicy
-	if policy == nil {
+	if req.MachineBaseImage != "" {
+		if m.config.MachineBuild == nil || m.config.MachineBuild.Driver == nil || m.config.MachineBuild.Publisher == nil {
+			return nil, fmt.Errorf("machine build backend is not configured")
+		}
+		if req.Dockerfile != "" || req.BuilderID != "" || len(req.BuildArgs) != 0 || len(req.Secrets) != 0 || req.CacheScope != "" || req.GlobalCacheKey != "" || req.IsAdminBuild {
+			return nil, fmt.Errorf("machine builds do not support Linux builder/cache/secret options")
+		}
+		if len(sourceData) > maxBuildSourceBytes {
+			return nil, fmt.Errorf("machine build source too large")
+		}
+		ref, err := images.ParseNormalizedRef(req.MachineBaseImage)
+		if err != nil || !ref.IsDigest() || !machineDigest(ref.Digest()) {
+			return nil, fmt.Errorf("machine base must be pinned by sha256 digest")
+		}
+		if policy == nil {
+			policy = &BuildPolicy{}
+		} else {
+			copy := *policy
+			policy = &copy
+		}
+		if policy.TimeoutSeconds == 0 {
+			policy.TimeoutSeconds = 600
+		}
+		if policy.TimeoutSeconds < 1 || policy.TimeoutSeconds > 86400 {
+			return nil, fmt.Errorf("invalid machine build timeout")
+		}
+		if policy.NetworkMode == "" {
+			policy.NetworkMode = "isolated"
+		}
+		if len(policy.AllowedDomains) != 0 || (policy.NetworkMode != "isolated" && policy.NetworkMode != "egress") {
+			return nil, fmt.Errorf("unsupported machine network policy")
+		}
+	} else if policy == nil {
 		defaultPolicy := DefaultBuildPolicy()
 		policy = &defaultPolicy
 	} else {
 		policy.ApplyDefaults()
 	}
+	req.BuildPolicy = policy
 
 	m.createMu.Lock()
 	defer m.createMu.Unlock()
@@ -498,9 +535,20 @@ func (m *manager) CreateBuild(ctx context.Context, req CreateBuildRequest, sourc
 	}
 
 	// Store source data
-	if err := m.storeSource(id, sourceData); err != nil {
+	hash, err := m.storeSource(ctx, id, sourceData)
+	if err != nil {
 		deleteBuild(m.paths, id)
 		return nil, fmt.Errorf("store source: %w", err)
+	}
+
+	if req.SourceHash != "" && req.SourceHash != hash {
+		deleteBuild(m.paths, id)
+		return nil, ErrSourceHashMismatch
+	}
+	req.SourceHash = hash
+	if err := writeMetadata(m.paths, meta); err != nil {
+		deleteBuild(m.paths, id)
+		return nil, fmt.Errorf("write source provenance: %w", err)
 	}
 
 	// Generate scoped registry token for this build
@@ -673,15 +721,12 @@ func (m *manager) BuilderHasBuilds(builderID string) bool {
 }
 
 // storeSource stores the source tarball for a build
-func (m *manager) storeSource(buildID string, data []byte) error {
+func (m *manager) storeSource(ctx context.Context, buildID string, data []byte) (string, error) {
 	sourceDir := m.paths.BuildSourceDir(buildID)
-	if err := ensureDir(sourceDir); err != nil {
-		return err
+	if err := os.MkdirAll(sourceDir, 0700); err != nil {
+		return "", err
 	}
-
-	// Write source tarball
-	sourcePath := sourceDir + "/source.tar.gz"
-	return writeFile(sourcePath, data)
+	return stageBuildSource(ctx, bytes.NewReader(data), filepath.Join(sourceDir, "source.tar.gz"), int64(len(data)))
 }
 
 // runBuild executes a build in a builder VM
@@ -699,8 +744,10 @@ func (m *manager) runBuild(ctx context.Context, id string, req CreateBuildReques
 	// Mirror base images to the local registry before launching the VM.
 	// BuildKit is configured with our registry as a mirror for docker.io,
 	// so pre-cached images will be served locally without pulling from Docker Hub.
-	if err := m.mirrorBaseImagesForBuild(buildCtx, id, req); err != nil {
-		m.logger.Warn("failed to mirror base images", "id", id, "error", err)
+	if req.MachineBaseImage == "" {
+		if err := m.mirrorBaseImagesForBuild(buildCtx, id, req); err != nil {
+			m.logger.Warn("failed to mirror base images", "id", id, "error", err)
+		}
 	}
 
 	// Run the build in a builder VM
@@ -809,6 +856,9 @@ func (m *manager) runBuild(ctx context.Context, id string, req CreateBuildReques
 
 // executeBuild runs the build in a builder VM
 func (m *manager) executeBuild(ctx context.Context, id string, req CreateBuildRequest, policy *BuildPolicy) (*BuildResult, error) {
+	if req.MachineBaseImage != "" {
+		return m.executeMachineBuild(ctx, id, req, policy)
+	}
 	if !m.builderReady.Load() {
 		return nil, fmt.Errorf("builder image is being prepared, please retry shortly")
 	}

@@ -129,9 +129,9 @@ func (f *machineFixture) Publish(ctx context.Context, id, root string) (MachineP
 	}
 	return publication, f.record("publish")
 }
-func machineTestRunner(t *testing.T, f *machineFixture) *MachineBuildRunner {
+func machineTestRunner(t *testing.T, f *machineFixture) *machineRunnerFixture {
 	t.Helper()
-	return &MachineBuildRunner{Driver: f, Publisher: f, WorkDir: t.TempDir()}
+	return &machineRunnerFixture{MachineBuildBackend: MachineBuildBackend{Driver: f, Publisher: f}, WorkDir: t.TempDir()}
 }
 func machineTestRequest() MachineBuildRequest {
 	return MachineBuildRequest{ID: "build-test", BaseImage: "localhost/macos@" + machineTestDigest}

@@ -5,11 +5,14 @@ an isolated VM, then publish a complete cold-boot OCI machine image. This is not
 Linux rootfs conversion, macOS installation/bootstrap, memory forking or safe
 identity rekeying.
 
-This checkpoint adds an **internal lifecycle/publication contract** and tests.
+This checkpoint adds an **internal machine backend to the normal build manager**
+and synthetic tests. `Config.MachineBuild` opts into `CreateBuildRequest.MachineBaseImage`
+at the Go boundary only. The existing queue, persisted request, timeout, status/log
+completion, source staging/hash check, provenance and image-readiness gate are shared.
 It does not register an HTTP build mode, choose a recipe language, implement the
-VZ/GuestService driver or stream an artifact into a production registry. Existing
-Linux build behavior and macOS-only build rejection are unchanged. Do not claim
-that normal macOS builds work from this foundation alone.
+VZ/GuestService driver or stream an artifact into a production registry. Public
+macOS-only build rejection remains unchanged. Do not claim that normal macOS builds
+work from this foundation alone.
 
 ## Dependency and recipe boundaries
 
@@ -27,16 +30,20 @@ cancellation/provenance/output contracts should remain shared across OS backends
 
 ## Lifecycle contract
 
-`MachineBuildRunner` requires a ready installed `darwin/arm64` base pinned by a
+`MachineBuildBackend` executes only machine-specific phases. The shared manager
+resolves a ready installed `darwin/arm64` base pinned by a
 canonical SHA256 reference. CPU/memory must match that base (zero inherits), fit
 existing build limits, and preserve exact MiB precision. Negative/unbounded
 resource or timeout values are rejected before VM start. Timeout defaults to 600
 seconds and is capped at 24 hours. Networking defaults to isolated; egress means
 unrestricted VZ NAT, not domain/TAP/policy parity. Domain allowlists are rejected.
 
-Source input is staged in a private server-owned workspace, with bounded streaming
-(default 64MiB compressed input), cancellation checks, SHA256 provenance and optional
-expected-hash verification before start. Guest extraction must independently bound
+Source input is staged once in the existing private build-job source directory,
+with bounded streaming (64MiB compressed input), cancellation checks, SHA256
+provenance and optional expected-hash verification. Machine execution re-verifies
+that file before start, including on recovery; it does not stage another copy.
+Linux source staging uses the same helper. Machine mode rejects Linux builder,
+Dockerfile, cache, build-argument and secret options rather than ignoring them. Guest extraction must independently bound
 expanded archive size and reject traversal/symlink escapes; this is not implemented
 by the host compressed-size bound.
 
@@ -65,7 +72,7 @@ Cancellation/failure cleanup gets its own bounded 30-second context. It may dest
 instance storage only after a receipt confirms VMM exit. Otherwise the instance
 is quarantined for operator recovery, never deleted or published. Instance storage
 must be outside the input/export workspace; that private workspace is removed by
-the runner. Raw guest error text is masked in ordinary error/log strings while
+the machine backend. Raw guest error text is masked in ordinary error/log strings while
 `errors.Is/As` remain available internally. The concrete log stream must separately
 redact injected secrets before retention/forwarding.
 
@@ -94,8 +101,15 @@ these tests. Fake tiny disk files establish contract behavior, not bootability.
 The shared machine-bundle validator is the same structural validator used for OCI
 imports, not a macOS/VZ integrity or credential scanner.
 
-Remaining: concrete driver and streamed publisher, common build queue/status/log/
-secret/API integration, pinned toolchain/version provenance, recipe choice and
+Synthetic manager tests additionally cover actual shared queue/status completion,
+persisted machine requests, source consumption, inherited resource defaults and
+unconfigured/mutable-base/unsupported-secret admission. Source tests cover private
+exclusive staging and changed/missing/symlinked input rejection on recovery.
+The full local Linux build suite remains blocked by missing `mkfs.ext4`; focused
+queue/cache/storage/secret/token tests pass, not a full Linux runtime proof.
+
+Remaining: concrete driver and streamed publisher, recipe-level logs and common
+secret/API activation, pinned toolchain/version provenance, recipe choice and
 source validation, storage floor/quota enforcement, sanitation audit, large-layer
 upload transport validation, repeat builds and output cold boot through normal
 APIs. Keep PR5 draft and runtime admission disabled until these gates pass.

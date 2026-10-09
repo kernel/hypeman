@@ -3,13 +3,8 @@ package builds
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -37,7 +32,6 @@ type MachineBuildResult struct {
 }
 
 type MachineBuildDriver interface {
-	ResolveBase(context.Context, string) (*images.Image, error)
 	// Start owns an isolated instance and identity lease. A partially created
 	// session must be returned even with an error so cleanup can stop it.
 	Start(context.Context, *images.Image, BuildPolicy) (MachineBuildSession, error)
@@ -61,11 +55,9 @@ type MachineBuildPublisher interface {
 	Publish(context.Context, string, string) (MachinePublication, error)
 }
 
-type MachineBuildRunner struct {
-	Driver         MachineBuildDriver
-	Publisher      MachineBuildPublisher
-	WorkDir        string // Server-owned private build workspace, not supplied by recipes.
-	MaxSourceBytes int64  // Zero defaults to 64MiB of compressed input.
+type MachineBuildBackend struct {
+	Driver    MachineBuildDriver
+	Publisher MachineBuildPublisher
 }
 
 // machinePhaseError keeps potentially secret-bearing guest/command errors out of
@@ -79,9 +71,14 @@ func (e *machinePhaseError) Error() string         { return "machine build " + e
 func (e *machinePhaseError) Unwrap() error         { return e.cause }
 func machineFailure(phase string, err error) error { return &machinePhaseError{phase, err} }
 
-func (r *MachineBuildRunner) Run(ctx context.Context, req MachineBuildRequest, source io.Reader) (result *MachineBuildResult, err error) {
-	if r.Driver == nil || r.Publisher == nil || !filepath.IsAbs(r.WorkDir) || source == nil {
-		return nil, fmt.Errorf("machine driver, publisher, private workspace and source required")
+// runPrepared executes only machine-specific phases. The shared build manager
+// owns resolution, source staging/hash verification, deadline, queue and status.
+func (r *MachineBuildBackend) runPrepared(ctx context.Context, req MachineBuildRequest, base *images.Image, sourcePath, workDir string) (result *MachineBuildResult, err error) {
+	if r.Driver == nil || r.Publisher == nil || !filepath.IsAbs(workDir) || !filepath.IsAbs(sourcePath) || len(req.SourceHash) != 64 || strings.Trim(req.SourceHash, "0123456789abcdef") != "" {
+		return nil, fmt.Errorf("machine driver, publisher, private workspace and verified source required")
+	}
+	if _, bounded := ctx.Deadline(); !bounded {
+		return nil, fmt.Errorf("prepared machine job requires a deadline")
 	}
 	if len(req.ID) == 0 || len(req.ID) > 128 || strings.Trim(req.ID, "abcdefghijklmnopqrstuvwxyz0123456789-") != "" {
 		return nil, fmt.Errorf("invalid machine build ID")
@@ -109,17 +106,10 @@ func (r *MachineBuildRunner) Run(ctx context.Context, req MachineBuildRequest, s
 	if policy.NetworkMode != "isolated" && policy.NetworkMode != "egress" {
 		return nil, fmt.Errorf("unsupported machine network mode")
 	}
-	ctx, cancel := context.WithTimeout(ctx, time.Duration(policy.TimeoutSeconds)*time.Second)
-	defer cancel()
-	base, e := r.Driver.ResolveBase(ctx, ref.String())
-	if e != nil {
-		return nil, machineFailure("resolve_base", e)
-	}
 	if base == nil || base.Status != images.StatusReady || base.Platform != "darwin/arm64" || base.MacOS == nil || base.Digest != ref.Digest() || base.MacOS.CPUs < 2 || base.MacOS.CPUs > MaxBuildCPUs || base.MacOS.Memory < 4<<30 || base.MacOS.Memory > uint64(MaxBuildMemoryMB)<<20 || base.MacOS.Memory%(1<<20) != 0 {
 		return nil, fmt.Errorf("base is not the pinned ready macOS machine")
 	}
-	mac, macErr := net.ParseMAC(base.MacOS.MAC)
-	if len(base.MacOS.HardwareModel) == 0 || len(base.MacOS.MachineIdentifier) == 0 || macErr != nil || len(mac) != 6 {
+	if base.MacOS.Validate() != nil {
 		return nil, fmt.Errorf("base has invalid machine identity")
 	}
 	memory := int(base.MacOS.Memory >> 20)
@@ -132,25 +122,13 @@ func (r *MachineBuildRunner) Run(ctx context.Context, req MachineBuildRequest, s
 	if e = policy.Validate(); e != nil {
 		return nil, e
 	}
-	workspace, e := os.MkdirTemp(r.WorkDir, "machine-build-")
+	workspace, e := os.MkdirTemp(workDir, "machine-build-")
 	if e != nil {
 		return nil, machineFailure("workspace", e)
 	}
 	defer os.RemoveAll(workspace)
-	sourcePath := filepath.Join(workspace, "source.tar.gz")
-	limit := r.MaxSourceBytes
-	if limit == 0 {
-		limit = 64 << 20
-	}
-	if limit < 1 || limit > 1<<30 {
-		return nil, fmt.Errorf("invalid machine source limit")
-	}
-	hash, e := stageMachineSource(ctx, source, sourcePath, limit)
-	if e != nil {
-		return nil, machineFailure("stage_source", e)
-	}
-	if req.SourceHash != "" && req.SourceHash != hash {
-		return nil, fmt.Errorf("machine source hash mismatch")
+	if e = verifyBuildSource(ctx, sourcePath, req.SourceHash); e != nil {
+		return nil, machineFailure("verify_source", e)
 	}
 	if e = ctx.Err(); e != nil {
 		return nil, e
@@ -225,7 +203,7 @@ func (r *MachineBuildRunner) Run(ctx context.Context, req MachineBuildRequest, s
 	if e != nil || !output.IsDigest() || !machineDigest(publication.Digest) || output.Digest() != publication.Digest {
 		return nil, fmt.Errorf("machine publication receipt is unverified")
 	}
-	return &MachineBuildResult{Publication: publication, BuilderInstanceID: instanceID, Provenance: BuildProvenance{BaseImageDigest: base.Digest, SourceHash: hash, Timestamp: time.Now().UTC()}}, nil
+	return &MachineBuildResult{Publication: publication, BuilderInstanceID: instanceID, Provenance: BuildProvenance{BaseImageDigest: base.Digest, SourceHash: req.SourceHash, Timestamp: time.Now().UTC()}}, nil
 }
 
 func machineDigest(s string) bool {
@@ -233,37 +211,6 @@ func machineDigest(s string) bool {
 		return false
 	}
 	return strings.Trim(s[7:], "0123456789abcdef") == ""
-}
-
-type machineContextReader struct {
-	ctx context.Context
-	r   io.Reader
-}
-
-func (r machineContextReader) Read(p []byte) (int, error) {
-	if err := r.ctx.Err(); err != nil {
-		return 0, err
-	}
-	return r.r.Read(p)
-}
-func stageMachineSource(ctx context.Context, source io.Reader, path string, limit int64) (string, error) {
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
-	if err != nil {
-		return "", err
-	}
-	defer file.Close()
-	h := sha256.New()
-	n, err := io.Copy(io.MultiWriter(file, h), io.LimitReader(machineContextReader{ctx, source}, limit+1))
-	if err != nil {
-		return "", err
-	}
-	if n > limit {
-		return "", fmt.Errorf("machine source too large")
-	}
-	if err = file.Sync(); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 func validateMachineExport(root string, base *images.MacOSImage) error {
@@ -293,17 +240,6 @@ func validateMachineExport(root string, base *images.MacOSImage) error {
 	}
 	if !bytes.Equal(platform.HardwareModel, base.HardwareModel) || !bytes.Equal(platform.MachineIdentifier, base.MachineIdentifier) || !strings.EqualFold(platform.MAC, base.MAC) || platform.CPUs != base.CPUs || platform.Memory != base.Memory {
 		return fmt.Errorf("machine export changed preserved identity/resources")
-	}
-	// Reject unknown metadata rather than publishing an accidental credential field.
-	data, err := os.ReadFile(filepath.Join(root, "config.json"))
-	if err != nil {
-		return err
-	}
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	var strict images.MacOSImage
-	if err = decoder.Decode(&strict); err != nil {
-		return err
 	}
 	for _, entry := range entries {
 		if err = os.Chmod(filepath.Join(root, entry.Name()), 0600); err != nil {
