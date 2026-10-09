@@ -214,6 +214,10 @@ func execute() error {
 		if e != nil {
 			return e
 		}
+		if *state != "" && (*rekey || *newMAC) {
+			// Saved state is only restorable into the configuration it was saved from.
+			return fmt.Errorf("--with-state keeps the saved configuration; it cannot be combined with --rekey or --new-mac")
+		}
 		if e := os.Mkdir(*dst, 0700); e != nil {
 			return e
 		}

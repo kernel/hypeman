@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/egressproxy"
+	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/logger"
 	"github.com/kernel/hypeman/lib/network"
 	"go.opentelemetry.io/otel/attribute"
@@ -100,18 +101,23 @@ func (m *manager) startInstance(
 
 	// 3. Get image info (needed for buildHypervisorConfig). Resolve by the
 	// digest-pinned boot reference so a moved tag can't drift the rootfs/arch.
-	bootImage := bootImageRef(stored)
-	log.DebugContext(ctx, "getting image info", "instance_id", id, "image", bootImage)
-	imageCtx, imageSpanEnd := m.startLifecycleStep(ctx, "resolve_image",
-		attribute.String("instance_id", id),
-		attribute.String("hypervisor", string(stored.HypervisorType)),
-		attribute.String("operation", "resolve_image"),
-	)
-	imageInfo, err := m.imageManager.GetImage(imageCtx, bootImage)
-	imageSpanEnd(err)
-	if err != nil {
-		log.ErrorContext(ctx, "failed to get image", "instance_id", id, "image", bootImage, "error", err)
-		return nil, fmt.Errorf("get image: %w", err)
+	// macOS boots disk and aux storage cloned at create time, with its identity
+	// in metadata, so it does not depend on the template after create.
+	var imageInfo *images.Image
+	if stored.MacOS == nil {
+		bootImage := bootImageRef(stored)
+		log.DebugContext(ctx, "getting image info", "instance_id", id, "image", bootImage)
+		imageCtx, imageSpanEnd := m.startLifecycleStep(ctx, "resolve_image",
+			attribute.String("instance_id", id),
+			attribute.String("hypervisor", string(stored.HypervisorType)),
+			attribute.String("operation", "resolve_image"),
+		)
+		imageInfo, err = m.imageManager.GetImage(imageCtx, bootImage)
+		imageSpanEnd(err)
+		if err != nil {
+			log.ErrorContext(ctx, "failed to get image", "instance_id", id, "image", bootImage, "error", err)
+			return nil, fmt.Errorf("get image: %w", err)
+		}
 	}
 
 	// Setup cleanup stack for automatic rollback on errors

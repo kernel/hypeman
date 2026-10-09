@@ -54,7 +54,9 @@ credential rekeying; this spike is not a multi-tenant image format.
 it does **not** guarantee an orderly guest OS/application shutdown. Use a human
 or an authorized guest shutdown workflow before destructive operations when
 application consistency matters. Start cold-boots the instance's existing disk.
-Delete removes instance storage, not the imported image.
+Delete removes instance storage, not the imported image. Deleting the imported
+image does not affect existing instances: each owns independent copies and
+starts without the template.
 
 Unsupported instance operations reject requests: snapshot/fork/standby/restore,
 updates, volumes, env/commands/credential brokering, Linux guest-agent exec and
