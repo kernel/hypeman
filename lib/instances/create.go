@@ -76,8 +76,6 @@ func generateVsockCID(instanceID string) int64 {
 	return (sum % 4294967292) + 3
 }
 
-// createInstance creates and starts a new instance
-// Multi-hop orchestration: Stopped → Created → Running
 // applyLinuxShapingDefaults fills unspecified disk and network limits with the
 // proportional defaults for vcpus. Without a resource validator they stay at auto.
 func (m *manager) applyLinuxShapingDefaults(req *CreateInstanceRequest, vcpus int) {
@@ -98,6 +96,8 @@ func (m *manager) applyLinuxShapingDefaults(req *CreateInstanceRequest, vcpus in
 	}
 }
 
+// createInstance creates and starts a new instance
+// Multi-hop orchestration: Stopped → Created → Running
 func (m *manager) createInstance(
 	ctx context.Context,
 	req CreateInstanceRequest,
@@ -124,6 +124,9 @@ func (m *manager) createInstance(
 	}
 	if m.macOSOnly {
 		cached, err := m.imageManager.GetImage(ctx, req.Image)
+		if err != nil && !errors.Is(err, images.ErrNotFound) {
+			return nil, err
+		}
 		if err != nil || cached.MacOS == nil {
 			return nil, fmt.Errorf("%w: macOS-only server requires an already imported macOS image", ErrInvalidRequest)
 		}
@@ -242,8 +245,9 @@ func (m *manager) createInstance(
 	if overlaySize == 0 {
 		overlaySize = 10 * 1024 * 1024 * 1024 // 10GB default
 	}
-	// Validate overlay size against max
-	if overlaySize > m.limits.MaxOverlaySize {
+	// Validate overlay size against max. The macOS boot disk reuses the overlay field
+	// for accounting, but its size comes from the imported image, not the Linux limit.
+	if imageInfo.MacOS == nil && overlaySize > m.limits.MaxOverlaySize {
 		return nil, fmt.Errorf("overlay size %d exceeds maximum allowed size %d", overlaySize, m.limits.MaxOverlaySize)
 	}
 	vcpus := req.Vcpus
@@ -563,10 +567,12 @@ func (m *manager) createInstance(
 		attribute.String("hypervisor", string(stored.HypervisorType)),
 		attribute.String("operation", "create_config_disk"),
 	)
-	if err := m.createConfigDisk(configDiskCtx, inst, imageInfo, netConfig, proxyGuestConfig); err != nil {
-		configDiskSpanEnd(err)
-		log.ErrorContext(ctx, "failed to create config disk", "instance_id", id, "error", err)
-		return nil, fmt.Errorf("create config disk: %w", err)
+	if stored.MacOS == nil {
+		if err := m.createConfigDisk(configDiskCtx, inst, imageInfo, netConfig, proxyGuestConfig); err != nil {
+			configDiskSpanEnd(err)
+			log.ErrorContext(ctx, "failed to create config disk", "instance_id", id, "error", err)
+			return nil, fmt.Errorf("create config disk: %w", err)
+		}
 	}
 	configDiskSpanEnd(nil)
 

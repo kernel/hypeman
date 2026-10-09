@@ -3762,6 +3762,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+        501:
+          description: Not implemented for this guest type
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         500:
           description: Internal server error
           content:

@@ -35,12 +35,6 @@ func TestMacOSExecRejectedBeforeWebsocketUpgrade(t *testing.T) {
 	require.Contains(t, w.Body.String(), "not implemented")
 }
 
-type macOSFixtureImages struct{ images.Manager }
-
-func (macOSFixtureImages) GetImage(context.Context, string) (*images.Image, error) {
-	return &images.Image{MacOS: &images.MacOSImage{}}, nil
-}
-
 func TestMacOSSchemaDefersTemplateDefaults(t *testing.T) {
 	spec, err := oapi.GetSwagger()
 	require.NoError(t, err)
@@ -48,7 +42,7 @@ func TestMacOSSchemaDefersTemplateDefaults(t *testing.T) {
 		require.Nil(t, spec.Components.Schemas["CreateInstanceRequest"].Value.Properties[name].Value.Default, name)
 	}
 	m := newCaptureCreateManager(nil)
-	s := &ApiService{InstanceManager: m, ImageManager: macOSFixtureImages{}, Config: &config.Config{}}
+	s := &ApiService{InstanceManager: m, Config: &config.Config{}}
 	platform := "darwin/arm64"
 	_, err = s.CreateInstance(context.Background(), oapi.CreateInstanceRequestObject{Body: &oapi.CreateInstanceRequest{Name: "macos", Image: "localhost/macos:spike", Platform: &platform}})
 	require.NoError(t, err)

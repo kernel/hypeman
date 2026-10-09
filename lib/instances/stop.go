@@ -205,7 +205,7 @@ func (m *manager) stopInstance(
 	if inst.NetworkEnabled {
 		m.unregisterEgressProxyInstance(ctx, id)
 	}
-	if inst.NetworkEnabled && inst.MacOS == nil && networkAlloc != nil {
+	if inst.NetworkEnabled && networkAlloc != nil {
 		log.DebugContext(ctx, "releasing network", "instance_id", id, "network", "default")
 		releaseNetworkCtx, releaseNetworkSpanEnd := m.startLifecycleStep(ctx, "release_network",
 			attribute.String("instance_id", id),
@@ -219,7 +219,7 @@ func (m *manager) stopInstance(
 		} else {
 			releaseNetworkSpanEnd(nil)
 		}
-	} else if inst.NetworkEnabled && inst.MacOS == nil && networkAllocErr != nil {
+	} else if inst.NetworkEnabled && networkAllocErr != nil {
 		// GetAllocation failed earlier, so we don't have a full Allocation. Fall back
 		// to deleting the TAP by deterministic name to avoid leaking it on the host.
 		log.DebugContext(ctx, "releasing network by instance id (fallback)", "instance_id", id)

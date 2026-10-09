@@ -152,11 +152,10 @@ func digestDir(p *paths.Paths, repository, digestHex string) string {
 
 func legacyLayout(p *paths.Paths, repository, digestHex string) imageLayout {
 	layout := imageLayout{dir: p.ImageDigestDir(repository, digestHex), metadata: p.ImageMetadata(repository, digestHex), disk: p.ImageDigestPath(repository, digestHex)}
-	if b, err := os.ReadFile(layout.metadata); err == nil {
-		var meta imageMetadata
-		if json.Unmarshal(b, &meta) == nil && meta.MacOS != nil {
-			layout.disk = filepath.Join(layout.dir, "rootfs.raw")
-		}
+	// Locally imported machine images keep a raw disk beside their metadata. Linux
+	// legacy layouts never have one, so a stat is enough to pick the file.
+	if raw := filepath.Join(layout.dir, "rootfs.raw"); pathExists(raw) {
+		layout.disk = raw
 	}
 	return layout
 }

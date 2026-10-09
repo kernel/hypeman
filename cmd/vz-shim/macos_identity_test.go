@@ -9,7 +9,6 @@ import (
 )
 
 func TestMacOSIdentityLifetimeLock(t *testing.T) {
-	t.Setenv("TMPDIR", t.TempDir())
 	c := &shimconfig.ShimConfig{MacMachineIdentifierData: "aWRlbnRpdHk="}
 	first, err := lockMacOSIdentity(c)
 	require.NoError(t, err)

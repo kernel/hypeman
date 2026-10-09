@@ -206,10 +206,12 @@ func (m *manager) startInstance(
 		attribute.String("hypervisor", string(stored.HypervisorType)),
 		attribute.String("operation", "create_config_disk"),
 	)
-	if err := m.createConfigDisk(configDiskCtx, instForConfig, imageInfo, netConfig, proxyGuestConfig); err != nil {
-		configDiskSpanEnd(err)
-		log.ErrorContext(ctx, "failed to create config disk", "instance_id", id, "error", err)
-		return nil, fmt.Errorf("create config disk: %w", err)
+	if stored.MacOS == nil {
+		if err := m.createConfigDisk(configDiskCtx, instForConfig, imageInfo, netConfig, proxyGuestConfig); err != nil {
+			configDiskSpanEnd(err)
+			log.ErrorContext(ctx, "failed to create config disk", "instance_id", id, "error", err)
+			return nil, fmt.Errorf("create config disk: %w", err)
+		}
 	}
 	configDiskSpanEnd(nil)
 
