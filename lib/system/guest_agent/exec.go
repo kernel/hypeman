@@ -80,9 +80,25 @@ func (s *guestServer) executeNoTTY(ctx context.Context, stream pb.GuestService_E
 	// Mutex to protect concurrent stream.Send calls (gRPC streams are not thread-safe)
 	var sendMu sync.Mutex
 
-	// Use WaitGroup to ensure all output is read before sending
+	// Stream output as it is produced so long-lived commands (relays, tails)
+	// deliver bytes before exit; drain both pipes before Wait closes them.
 	var wg sync.WaitGroup
-	var stdoutData, stderrData []byte
+	pump := func(r io.Reader, wrap func([]byte) *pb.ExecResponse) {
+		defer wg.Done()
+		buf := make([]byte, 32*1024)
+		for {
+			n, err := r.Read(buf)
+			if n > 0 {
+				chunk := append([]byte(nil), buf[:n]...)
+				sendMu.Lock()
+				_ = stream.Send(wrap(chunk))
+				sendMu.Unlock()
+			}
+			if err != nil {
+				return
+			}
+		}
+	}
 
 	// Handle stdin in background
 	go func() {
@@ -98,51 +114,16 @@ func (s *guestServer) executeNoTTY(ctx context.Context, stream pb.GuestService_E
 		}
 	}()
 
-	// Read all stdout/stderr BEFORE calling Wait() - Wait() closes the pipes!
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		data, _ := io.ReadAll(stdout)
-		stdoutData = data
-	}()
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		data, _ := io.ReadAll(stderr)
-		stderrData = data
-	}()
-
-	// Wait for all reads to complete FIRST (before Wait closes pipes)
+	wg.Add(2)
+	go pump(stdout, func(b []byte) *pb.ExecResponse {
+		return &pb.ExecResponse{Response: &pb.ExecResponse_Stdout{Stdout: b}}
+	})
+	go pump(stderr, func(b []byte) *pb.ExecResponse {
+		return &pb.ExecResponse{Response: &pb.ExecResponse_Stderr{Stderr: b}}
+	})
 	wg.Wait()
 
-	// Now safe to call Wait - pipes are fully drained
 	waitErr := cmd.Wait()
-
-	// Now stream output in chunks (streaming compatible)
-	const chunkSize = 32 * 1024
-	for i := 0; i < len(stdoutData); i += chunkSize {
-		end := i + chunkSize
-		if end > len(stdoutData) {
-			end = len(stdoutData)
-		}
-		sendMu.Lock()
-		stream.Send(&pb.ExecResponse{
-			Response: &pb.ExecResponse_Stdout{Stdout: stdoutData[i:end]},
-		})
-		sendMu.Unlock()
-	}
-	for i := 0; i < len(stderrData); i += chunkSize {
-		end := i + chunkSize
-		if end > len(stderrData) {
-			end = len(stderrData)
-		}
-		sendMu.Lock()
-		stream.Send(&pb.ExecResponse{
-			Response: &pb.ExecResponse_Stderr{Stderr: stderrData[i:end]},
-		})
-		sendMu.Unlock()
-	}
 
 	exitCode := int32(0)
 	if cmd.ProcessState != nil {
