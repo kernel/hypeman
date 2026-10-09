@@ -24,6 +24,10 @@ func (v *recordingResourceValidator) ReserveAllocation(context.Context, string, 
 
 func (v *recordingResourceValidator) FinishAllocation(string) {}
 
+func (v *recordingResourceValidator) DefaultNetworkBandwidth(int) (int64, int64) { return 0, 0 }
+
+func (v *recordingResourceValidator) DefaultDiskIOBandwidth(int) (int64, int64) { return 0, 0 }
+
 func TestCreateInstanceRejectsUnsupportedVGPUBeforeResourceReservation(t *testing.T) {
 	t.Parallel()
 

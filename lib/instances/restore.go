@@ -42,6 +42,9 @@ func (m *manager) restoreInstance(
 		log.ErrorContext(ctx, "failed to load instance metadata", "instance_id", id, "error", err)
 		return nil, err
 	}
+	if err := meta.rejectMacOS("restore"); err != nil {
+		return nil, err
+	}
 
 	inst := m.toInstance(ctx, meta)
 	stored := &meta.StoredMetadata

@@ -4,6 +4,9 @@ import "fmt"
 
 // ValidateBootConfig validates boot and disk fields shared by hypervisor backends.
 func ValidateBootConfig(cfg VMConfig) error {
+	if cfg.MacOS != nil && cfg.EffectiveBootMode() != BootModeMacOS {
+		return fmt.Errorf("Mac platform requires macos boot mode")
+	}
 	switch cfg.EffectiveBootMode() {
 	case BootModeDirect:
 		if cfg.Firmware != nil {
@@ -11,6 +14,13 @@ func ValidateBootConfig(cfg VMConfig) error {
 		}
 		if cfg.TPM != nil {
 			return fmt.Errorf("direct boot cannot specify a TPM")
+		}
+	case BootModeMacOS:
+		if cfg.MacOS == nil || len(cfg.MacOS.HardwareModelData) == 0 || len(cfg.MacOS.MachineIdentifierData) == 0 || cfg.MacOS.AuxStoragePath == "" {
+			return fmt.Errorf("macos boot requires a complete Mac platform identity")
+		}
+		if cfg.Firmware != nil || cfg.TPM != nil || cfg.KernelPath != "" || cfg.InitrdPath != "" || cfg.KernelArgs != "" {
+			return fmt.Errorf("macos boot cannot specify Linux boot files, firmware, or TPM")
 		}
 	case BootModeUEFI:
 		if cfg.Firmware == nil {

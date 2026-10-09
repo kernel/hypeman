@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/devices"
-	"github.com/kernel/hypeman/lib/egressproxy"
 	"github.com/kernel/hypeman/lib/guestmemory"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/images"
@@ -76,6 +75,26 @@ func generateVsockCID(instanceID string) int64 {
 	return (sum % 4294967292) + 3
 }
 
+// applyLinuxShapingDefaults fills unspecified disk and network limits with the
+// proportional defaults for vcpus. Without a resource validator they stay at auto.
+func (m *manager) applyLinuxShapingDefaults(req *CreateInstanceRequest, vcpus int) {
+	if m.resourceValidator == nil {
+		return
+	}
+	if req.DiskIOBps == 0 {
+		req.DiskIOBps, _ = m.resourceValidator.DefaultDiskIOBandwidth(vcpus)
+	}
+	if req.NetworkBandwidthDownload == 0 || req.NetworkBandwidthUpload == 0 {
+		defaultDown, defaultUp := m.resourceValidator.DefaultNetworkBandwidth(vcpus)
+		if req.NetworkBandwidthDownload == 0 {
+			req.NetworkBandwidthDownload = defaultDown
+		}
+		if req.NetworkBandwidthUpload == 0 {
+			req.NetworkBandwidthUpload = defaultUp
+		}
+	}
+}
+
 // createInstance creates and starts a new instance
 // Multi-hop orchestration: Stopped → Created → Running
 func (m *manager) createInstance(
@@ -101,6 +120,15 @@ func (m *manager) createInstance(
 	}
 	if req.GPU != nil && req.GPU.Profile != "" && !devices.Capabilities().SupportsVGPU {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidRequest, devices.ErrVGPUNotSupportedOnMacOS)
+	}
+	if m.macOSOnly {
+		cached, err := m.imageManager.GetImage(ctx, req.Image)
+		if err != nil && !errors.Is(err, images.ErrNotFound) {
+			return nil, err
+		}
+		if err != nil || cached.MacOS == nil {
+			return nil, fmt.Errorf("%w: macOS-only server requires an already imported macOS image", ErrInvalidRequest)
+		}
 	}
 	hvType := req.Hypervisor
 	if hvType == "" {
@@ -130,6 +158,16 @@ func (m *manager) createInstance(
 	if imageInfo.Status != images.StatusReady {
 		log.ErrorContext(ctx, "image not ready", "image", req.Image, "status", imageInfo.Status)
 		return nil, fmt.Errorf("%w: image status is %s", ErrImageNotReady, imageInfo.Status)
+	}
+
+	if m.macOSOnly && imageInfo.MacOS == nil {
+		return nil, fmt.Errorf("%w: server is configured for macOS guests only", ErrInvalidRequest)
+	}
+	if imageInfo.MacOS != nil {
+		caps, _ := hypervisor.CapabilitiesForType(hvType)
+		if err := prepareMacOSCreate(&req, imageInfo, caps); err != nil {
+			return nil, err
+		}
 	}
 
 	// A guest whose architecture differs from the host kernel can only boot via
@@ -207,13 +245,19 @@ func (m *manager) createInstance(
 	if overlaySize == 0 {
 		overlaySize = 10 * 1024 * 1024 * 1024 // 10GB default
 	}
-	// Validate overlay size against max
-	if overlaySize > m.limits.MaxOverlaySize {
+	// Validate overlay size against max. The macOS boot disk reuses the overlay field
+	// for accounting, but its size comes from the imported image, not the Linux limit.
+	if imageInfo.MacOS == nil && overlaySize > m.limits.MaxOverlaySize {
 		return nil, fmt.Errorf("overlay size %d exceeds maximum allowed size %d", overlaySize, m.limits.MaxOverlaySize)
 	}
 	vcpus := req.Vcpus
 	if vcpus == 0 {
 		vcpus = 2
+	}
+	// Linux defaults come from the resolved image, not a separate lookup at the API.
+	// macOS guests take their CPU and memory from the image and reject shaping.
+	if imageInfo.MacOS == nil {
+		m.applyLinuxShapingDefaults(&req, vcpus)
 	}
 
 	// Validate per-instance resource limits
@@ -248,12 +292,6 @@ func (m *manager) createInstance(
 	}
 	if req.Tags == nil {
 		req.Tags = make(map[string]string)
-	}
-
-	// 7. Determine network based on NetworkEnabled flag
-	networkName := ""
-	if req.NetworkEnabled {
-		networkName = "default"
 	}
 
 	// Enrich logger and trace span with hypervisor type
@@ -338,6 +376,7 @@ func (m *manager) createInstance(
 		Image:                    req.Image,
 		ResolvedImage:            resolvedImageRef,
 		Platform:                 imageInfo.Platform,
+		MacOS:                    imageInfo.MacOS,
 		Size:                     size,
 		HotplugSize:              hotplugSize,
 		OverlaySize:              overlaySize,
@@ -412,51 +451,24 @@ func (m *manager) createInstance(
 
 	// 13. Create overlay disk with specified size
 	log.DebugContext(ctx, "creating overlay disk", "instance_id", id, "size_bytes", stored.OverlaySize)
-	if err := m.createOverlayDisk(id, stored.OverlaySize); err != nil {
+	if err := m.prepareBootStorage(stored, imageInfo); err != nil {
 		log.ErrorContext(ctx, "failed to create overlay disk", "instance_id", id, "error", err)
 		return nil, fmt.Errorf("create overlay disk: %w", err)
 	}
 
 	// 14. Allocate network (if network enabled)
-	var netConfig *network.NetworkConfig
-	if networkName != "" {
-		log.DebugContext(ctx, "allocating network", "instance_id", id, "network", networkName,
-			"download_bps", stored.NetworkBandwidthDownload, "upload_bps", stored.NetworkBandwidthUpload)
-		networkCtx, networkSpanEnd := m.startLifecycleStep(ctx, "allocate_network",
-			attribute.String("instance_id", id),
-			attribute.String("hypervisor", string(stored.HypervisorType)),
-			attribute.String("operation", "allocate_network"),
-			attribute.Bool("network_enabled", true),
-		)
-		netConfig, err = m.networkManager.CreateAllocation(networkCtx, network.AllocateRequest{
-			InstanceID:    id,
-			InstanceName:  req.Name,
-			DownloadBps:   stored.NetworkBandwidthDownload,
-			UploadBps:     stored.NetworkBandwidthUpload,
-			UploadCeilBps: stored.NetworkBandwidthUpload * int64(m.networkManager.GetUploadBurstMultiplier()),
-		})
-		networkSpanEnd(err)
-		if err != nil {
-			log.ErrorContext(ctx, "failed to allocate network", "instance_id", id, "network", networkName, "error", err)
-			return nil, fmt.Errorf("allocate network: %w", err)
-		}
-		// Store IP/MAC in metadata (persisted with instance)
-		stored.IP = netConfig.IP
-		stored.MAC = netConfig.MAC
-		// Add network cleanup to stack
-		cu.Add(func() {
-			// Network cleanup: TAP devices are removed when ReleaseAllocation is called.
-			// In case of unexpected scenarios (like power loss), TAP devices persist until host reboot.
-			// CreateAllocation just succeeded so the TAP exists on the host. If
-			// GetAllocation can't derive a full allocation here, fall back to ID-based
-			// release rather than silently leaking the TAP.
-			netAlloc, err := m.networkManager.GetAllocation(ctx, id)
-			if err == nil && netAlloc != nil {
-				m.networkManager.ReleaseAllocation(ctx, netAlloc)
-				return
-			}
-			m.networkManager.ReleaseByInstanceID(ctx, id)
-		})
+	networkRequest := network.AllocateRequest{InstanceID: id, InstanceName: req.Name}
+	if stored.NetworkEnabled && stored.MacOS == nil {
+		networkRequest.DownloadBps = stored.NetworkBandwidthDownload
+		networkRequest.UploadBps = stored.NetworkBandwidthUpload
+		networkRequest.UploadCeilBps = stored.NetworkBandwidthUpload * int64(m.networkManager.GetUploadBurstMultiplier())
+	}
+	netConfig, releaseNetwork, err := m.prepareBootNetwork(ctx, stored, networkRequest)
+	if err != nil {
+		return nil, err
+	}
+	if releaseNetwork != nil {
+		cu.Add(releaseNetwork)
 	}
 
 	// 15. Validate and attach volumes
@@ -499,31 +511,14 @@ func (m *manager) createInstance(
 		stored.Volumes = req.Volumes
 	}
 
-	// 16. Create config disk (needs Instance for buildVMConfig)
-	inst := &Instance{StoredMetadata: *stored}
-	var proxyGuestConfig *egressproxy.GuestConfig
-	proxyGuestConfig, err = m.maybeRegisterEgressProxy(ctx, stored, netConfig)
+	// 16. Prepare guest-specific boot configuration.
+	releaseConfig, err := m.prepareBootConfig(ctx, stored, imageInfo, netConfig)
 	if err != nil {
-		log.ErrorContext(ctx, "failed to configure egress proxy", "instance_id", id, "error", err)
-		return nil, fmt.Errorf("configure egress proxy: %w", err)
+		return nil, err
 	}
-	if proxyGuestConfig != nil {
-		cu.Add(func() {
-			m.unregisterEgressProxyInstance(ctx, id)
-		})
+	if releaseConfig != nil {
+		cu.Add(releaseConfig)
 	}
-	log.DebugContext(ctx, "creating config disk", "instance_id", id)
-	configDiskCtx, configDiskSpanEnd := m.startLifecycleStep(ctx, "create_config_disk",
-		attribute.String("instance_id", id),
-		attribute.String("hypervisor", string(stored.HypervisorType)),
-		attribute.String("operation", "create_config_disk"),
-	)
-	if err := m.createConfigDisk(configDiskCtx, inst, imageInfo, netConfig, proxyGuestConfig); err != nil {
-		configDiskSpanEnd(err)
-		log.ErrorContext(ctx, "failed to create config disk", "instance_id", id, "error", err)
-		return nil, fmt.Errorf("create config disk: %w", err)
-	}
-	configDiskSpanEnd(nil)
 
 	// 17. Record boot start time before launching the VM so marker hydration
 	// can safely ignore stale sentinels from prior runs.
@@ -569,7 +564,7 @@ func (m *manager) createInstance(
 	// guest boot markers have not yet been written, so we are in Initializing;
 	// persistBootMarkers will advance us to Running once the markers appear
 	// in the serial log.
-	stored.Phases.Record(phasetracking.PhaseInitializing, time.Now().UTC())
+	stored.Phases.Record(initialBootPhase(stored), time.Now().UTC())
 	meta = &metadata{StoredMetadata: *stored}
 	if err := m.saveMetadata(meta); err != nil {
 		// VM is running but metadata failed - log but don't fail
@@ -797,6 +792,13 @@ func (m *manager) startAndBootVM(
 	refreshHostVersion bool,
 ) error {
 	log := logger.FromContext(ctx)
+	if stored.MacOS != nil {
+		m.macOSBootMu.Lock()
+		defer m.macOSBootMu.Unlock()
+		if err := m.checkMacOSIdentityAvailable(ctx, stored); err != nil {
+			return err
+		}
+	}
 
 	// Get VM starter for this hypervisor type
 	starter, err := m.getVMStarter(stored.HypervisorType)
@@ -869,6 +871,9 @@ func resolveRuntimeHypervisorPID(log *slog.Logger, stored *StoredMetadata, fallb
 
 // buildHypervisorConfig creates a hypervisor-agnostic VM configuration
 func (m *manager) buildHypervisorConfig(ctx context.Context, inst *Instance, imageInfo *images.Image, netConfig *network.NetworkConfig) (hypervisor.VMConfig, error) {
+	if inst.MacOS != nil {
+		return m.macOSVMConfig(inst), nil
+	}
 	// Get system file paths
 	kernelPath, _ := m.systemManager.GetKernelPath(system.KernelVersion(inst.KernelVersion))
 	initrdPath, _ := m.systemManager.GetInitrdPath()
@@ -1000,6 +1005,9 @@ func (m *manager) buildHypervisorConfig(ctx context.Context, inst *Instance, ima
 }
 
 func resolveCreateKernelVersion(imageInfo *images.Image, defaultKernel system.KernelVersion) (system.KernelVersion, error) {
+	if imageInfo != nil && imageInfo.MacOS != nil {
+		return "", nil
+	}
 	if imageInfo == nil || len(imageInfo.Labels) == 0 {
 		return defaultKernel, nil
 	}

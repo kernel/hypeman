@@ -137,7 +137,7 @@ func (m *manager) deriveStateWithOptions(ctx context.Context, stored *StoredMeta
 		return stateResult{State: StateCreated}
 	case hypervisor.StateRunning:
 		hydrated := false
-		if hydrateBootMarkers {
+		if hydrateBootMarkers && stored.MacOS == nil {
 			hydrated = m.hydrateBootMarkersFromLogs(ctx, stored)
 		}
 		return stateResult{
@@ -219,6 +219,10 @@ func (m *manager) updateCachedHypervisorStateFromInstance(inst *Instance) {
 }
 
 func deriveRunningState(stored *StoredMetadata) State {
+	// For unmanaged macOS desktops, Running means VMM running, not app/agent ready.
+	if stored.MacOS != nil {
+		return StateRunning
+	}
 	if stored.ProgramStartedAt == nil {
 		return StateInitializing
 	}
@@ -555,6 +559,9 @@ func (m *manager) toInstanceWithStateDerivation(ctx context.Context, meta *metad
 		HealthCheckRuntime:  healthcheck.CloneRuntime(meta.HealthCheckRuntime),
 	}
 	refreshHypervisorPID(&inst.StoredMetadata, result.State)
+	if inst.MacOS != nil && inst.NetworkEnabled && inst.State.RequiresVMM() {
+		inst.IP = macOSGuestIP(inst.MAC)
+	}
 
 	// If VM is stopped and exit info isn't persisted yet, populate in-memory
 	// from the serial console log. This is read-only -- no metadata writes.

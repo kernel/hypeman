@@ -119,7 +119,7 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 		diskIOBps = int64(ioBpsBytes)
 	}
 
-	vcpus := 2
+	var vcpus int
 	if request.Body.Vcpus != nil {
 		vcpus = *request.Body.Vcpus
 	}
@@ -270,21 +270,6 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 	if request.Body.Gpu != nil && request.Body.Gpu.Profile != nil && *request.Body.Gpu.Profile != "" {
 		gpuConfig = &instances.GPUConfig{
 			Profile: *request.Body.Gpu.Profile,
-		}
-	}
-
-	// Calculate default resource limits when not specified (0 = auto)
-	// Uses proportional allocation based on CPU: (vcpus / cpuCapacity) * resourceCapacity
-	if diskIOBps == 0 {
-		diskIOBps, _ = s.ResourceManager.DefaultDiskIOBandwidth(vcpus)
-	}
-	if networkBandwidthDownload == 0 || networkBandwidthUpload == 0 {
-		defaultDown, defaultUp := s.ResourceManager.DefaultNetworkBandwidth(vcpus)
-		if networkBandwidthDownload == 0 {
-			networkBandwidthDownload = defaultDown
-		}
-		if networkBandwidthUpload == 0 {
-			networkBandwidthUpload = defaultUp
 		}
 	}
 
@@ -672,6 +657,11 @@ func (s *ApiService) RestoreInstance(ctx context.Context, request oapi.RestoreIn
 				Code:    "not_found",
 				Message: "instance not found",
 			}, nil
+		case errors.Is(err, instances.ErrInvalidRequest):
+			return oapi.RestoreInstance400JSONResponse{
+				Code:    "invalid_request",
+				Message: err.Error(),
+			}, nil
 		case errors.Is(err, instances.ErrInvalidState):
 			return oapi.RestoreInstance409JSONResponse{
 				Code:    "invalid_state",
@@ -960,6 +950,13 @@ func (s *ApiService) StatInstancePath(ctx context.Context, request oapi.StatInst
 		return oapi.StatInstancePath500JSONResponse{
 			Code:    "internal_error",
 			Message: "resource not resolved",
+		}, nil
+	}
+
+	if inst.MacOS != nil {
+		return oapi.StatInstancePath501JSONResponse{
+			Code:    "unsupported",
+			Message: "stat is not implemented for experimental macOS instances",
 		}, nil
 	}
 

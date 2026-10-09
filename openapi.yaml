@@ -557,12 +557,11 @@ components:
         platform:
           type: string
           pattern: '^[a-z0-9]+/[a-z0-9]+(/[a-z0-9.]+)?$'
-          description: 'Target platform as os/arch[/variant] (e.g. "linux/amd64"), matching Docker --platform. Omit for the host platform. Not a fixed enum: the os/arch[/variant] grammar is validated server-side and invalid values return 400 invalid_platform. Only os "linux" with arch amd64 or arm64 is accepted today.'
+          description: 'Target platform as os/arch[/variant]. Linux container guests support amd64 and arm64. Experimental darwin/arm64 guests require an offline-imported macOS disk image and vz on Apple silicon. Omit to use the cached native image or host platform.'
           example: linux/amd64
         size:
           type: string
-          description: Base memory size (human-readable format like "1GB", "512MB", "2G")
-          default: "1GB"
+          description: Base memory size (human-readable format like "1GB", "512MB", "2G"). Defaults to 1GB for Linux or the imported template memory for macOS.
           example: "2GB"
         hotplug_size:
           type: string
@@ -570,8 +569,7 @@ components:
           example: "2GB"
         overlay_size:
           type: string
-          description: Writable overlay disk size (human-readable format like "10GB", "50G")
-          default: "10GB"
+          description: Writable Linux overlay disk size (human-readable format like "10GB", "50G"), default 10GB. Omit for macOS, which clones the complete boot disk.
           example: "20GB"
         disk_io_bps:
           type: string
@@ -579,8 +577,7 @@ components:
           example: "100MB/s"
         vcpus:
           type: integer
-          description: Number of virtual CPUs
-          default: 2
+          description: Number of virtual CPUs. Defaults to 2 for Linux or the imported template CPU count for macOS.
           example: 2
         env:
           type: object
@@ -3078,6 +3075,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+        400:
+          description: Request not supported for this guest type
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         409:
           description: Conflict - instance not in standby or no snapshot
           content:
@@ -3761,6 +3764,12 @@ paths:
                 $ref: "#/components/schemas/Error"
         409:
           description: Instance not in running state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        501:
+          description: Not implemented for this guest type
           content:
             application/json:
               schema:

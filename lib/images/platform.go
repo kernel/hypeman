@@ -9,9 +9,8 @@ import (
 )
 
 // Platform identifies the OS/architecture variant of an image, modeled on
-// Docker's --platform (os/arch[/variant]). Hypeman guests are always Linux, so
-// OS is currently constrained to "linux", but the field exists for parity with
-// Docker references and future non-Linux support.
+// Docker's --platform (os/arch[/variant]). Linux supports OCI container pulls;
+// darwin/arm64 identifies locally imported macOS disk bundles.
 type Platform struct {
 	OS           string
 	Architecture string
@@ -83,8 +82,11 @@ func (p Platform) Normalize() Platform {
 // guests on amd64 or arm64. Other operating systems and architectures are
 // rejected with an actionable error.
 func (p Platform) validate() error {
+	if p.OS == "darwin" && p.Architecture == "arm64" && p.Variant == "" {
+		return nil
+	}
 	if p.OS != "linux" {
-		return fmt.Errorf("%w: unsupported os %q: only linux guests are supported", ErrInvalidPlatform, p.OS)
+		return fmt.Errorf("%w: unsupported os %q: use linux or locally imported darwin/arm64", ErrInvalidPlatform, p.OS)
 	}
 	switch p.Architecture {
 	case "amd64", "arm64":
@@ -164,6 +166,10 @@ func resolveManifestPlatform(meta *containerMetadata, requested string) (Platfor
 		Architecture: meta.Architecture,
 		Variant:      meta.Variant,
 	}.Normalize()
+
+	if actual.OS == "darwin" {
+		return Platform{}, fmt.Errorf("%w: macOS must be imported as a local disk bundle", ErrInvalidPlatform)
+	}
 
 	// An explicit request is authoritative for the match check and, when the
 	// manifest omits its own platform, for the recorded value too.

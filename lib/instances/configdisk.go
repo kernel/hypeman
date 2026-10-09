@@ -16,7 +16,8 @@ import (
 )
 
 // createConfigDisk generates an ext4 disk with instance configuration.
-// The disk contains /config.json read by the guest init binary.
+// The disk contains /config.json read by the guest init binary. Linux guests
+// only: macOS boots the imported disk and callers skip this step for it.
 func (m *manager) createConfigDisk(ctx context.Context, inst *Instance, imageInfo *images.Image, netConfig *network.NetworkConfig, proxyCfg *egressproxy.GuestConfig) error {
 	// Create temporary directory for config files
 	tmpDir, err := os.MkdirTemp("", "hypeman-config-*")

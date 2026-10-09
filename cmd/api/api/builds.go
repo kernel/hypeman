@@ -43,6 +43,9 @@ func (s *ApiService) ListBuilds(ctx context.Context, request oapi.ListBuildsRequ
 
 // CreateBuild creates a new build job
 func (s *ApiService) CreateBuild(ctx context.Context, request oapi.CreateBuildRequestObject) (oapi.CreateBuildResponseObject, error) {
+	if s.Config != nil && s.Config.MacOSOnly {
+		return oapi.CreateBuild400JSONResponse{Code: "unsupported", Message: "Linux builder VMs are unavailable in macOS-only mode"}, nil
+	}
 	log := logger.FromContext(ctx)
 
 	// Parse multipart form fields

@@ -5,8 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/kernel/hypeman/lib/egressproxy"
-	"github.com/kernel/hypeman/lib/instances/phasetracking"
+	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/logger"
 	"github.com/kernel/hypeman/lib/network"
 	"go.opentelemetry.io/otel/attribute"
@@ -41,6 +40,13 @@ func (m *manager) startInstance(
 	stored := &meta.StoredMetadata
 	ctx = enrichInstancesTrace(ctx, attribute.String("hypervisor", string(stored.HypervisorType)))
 	log.DebugContext(ctx, "loaded instance", "instance_id", id, "state", inst.State)
+
+	if m.macOSOnly && stored.MacOS == nil {
+		return nil, fmt.Errorf("%w: server is configured for macOS guests only", ErrInvalidRequest)
+	}
+	if stored.MacOS != nil && (len(req.Entrypoint) != 0 || len(req.Cmd) != 0) {
+		return nil, fmt.Errorf("%w: macOS start does not support command overrides", ErrInvalidRequest)
+	}
 
 	// 2. Validate state (must be Stopped to start)
 	if inst.State != StateStopped {
@@ -94,18 +100,23 @@ func (m *manager) startInstance(
 
 	// 3. Get image info (needed for buildHypervisorConfig). Resolve by the
 	// digest-pinned boot reference so a moved tag can't drift the rootfs/arch.
-	bootImage := bootImageRef(stored)
-	log.DebugContext(ctx, "getting image info", "instance_id", id, "image", bootImage)
-	imageCtx, imageSpanEnd := m.startLifecycleStep(ctx, "resolve_image",
-		attribute.String("instance_id", id),
-		attribute.String("hypervisor", string(stored.HypervisorType)),
-		attribute.String("operation", "resolve_image"),
-	)
-	imageInfo, err := m.imageManager.GetImage(imageCtx, bootImage)
-	imageSpanEnd(err)
-	if err != nil {
-		log.ErrorContext(ctx, "failed to get image", "instance_id", id, "image", bootImage, "error", err)
-		return nil, fmt.Errorf("get image: %w", err)
+	// macOS boots disk and aux storage cloned at create time, with its identity
+	// in metadata, so it does not depend on the template after create.
+	var imageInfo *images.Image
+	if stored.MacOS == nil {
+		bootImage := bootImageRef(stored)
+		log.DebugContext(ctx, "getting image info", "instance_id", id, "image", bootImage)
+		imageCtx, imageSpanEnd := m.startLifecycleStep(ctx, "resolve_image",
+			attribute.String("instance_id", id),
+			attribute.String("hypervisor", string(stored.HypervisorType)),
+			attribute.String("operation", "resolve_image"),
+		)
+		imageInfo, err = m.imageManager.GetImage(imageCtx, bootImage)
+		imageSpanEnd(err)
+		if err != nil {
+			log.ErrorContext(ctx, "failed to get image", "instance_id", id, "image", bootImage, "error", err)
+			return nil, fmt.Errorf("get image: %w", err)
+		}
 	}
 
 	// Setup cleanup stack for automatic rollback on errors
@@ -113,48 +124,12 @@ func (m *manager) startInstance(
 	defer cu.Clean()
 
 	// 4. Allocate fresh network if network enabled
-	var netConfig *network.NetworkConfig
-	if stored.NetworkEnabled {
-		log.DebugContext(ctx, "allocating network for start", "instance_id", id, "network", "default")
-		networkCtx, networkSpanEnd := m.startLifecycleStep(ctx, "allocate_network",
-			attribute.String("instance_id", id),
-			attribute.String("hypervisor", string(stored.HypervisorType)),
-			attribute.String("operation", "allocate_network"),
-			attribute.Bool("network_enabled", true),
-		)
-		netConfig, err = m.networkManager.CreateAllocation(networkCtx, network.AllocateRequest{
-			InstanceID:   id,
-			InstanceName: stored.Name,
-		})
-		networkSpanEnd(err)
-		if err != nil {
-			log.ErrorContext(ctx, "failed to allocate network", "instance_id", id, "error", err)
-			return nil, fmt.Errorf("allocate network: %w", err)
-		}
-		// Update stored metadata with new IP/MAC
-		stored.IP = netConfig.IP
-		stored.MAC = netConfig.MAC
-		// Add network cleanup to stack
-		cu.Add(func() {
-			m.networkManager.ReleaseAllocation(ctx, &network.Allocation{
-				InstanceID: id,
-				TAPDevice:  netConfig.TAPDevice,
-			})
-		})
+	netConfig, releaseNetwork, err := m.prepareBootNetwork(ctx, stored, network.AllocateRequest{InstanceID: id, InstanceName: stored.Name})
+	if err != nil {
+		return nil, err
 	}
-
-	var proxyGuestConfig *egressproxy.GuestConfig
-	if stored.NetworkEnabled {
-		proxyGuestConfig, err = m.maybeRegisterEgressProxy(ctx, stored, netConfig)
-		if err != nil {
-			log.ErrorContext(ctx, "failed to configure egress proxy", "instance_id", id, "error", err)
-			return nil, fmt.Errorf("configure egress proxy: %w", err)
-		}
-		if proxyGuestConfig != nil {
-			cu.Add(func() {
-				m.unregisterEgressProxyInstance(ctx, id)
-			})
-		}
+	if releaseNetwork != nil {
+		cu.Add(releaseNetwork)
 	}
 
 	// 4b. Recreate the vGPU if this instance had a GPU profile
@@ -181,20 +156,14 @@ func (m *manager) startInstance(
 		}
 	}
 
-	// 5. Regenerate config disk with new network configuration
-	instForConfig := &Instance{StoredMetadata: *stored}
-	log.DebugContext(ctx, "regenerating config disk", "instance_id", id)
-	configDiskCtx, configDiskSpanEnd := m.startLifecycleStep(ctx, "create_config_disk",
-		attribute.String("instance_id", id),
-		attribute.String("hypervisor", string(stored.HypervisorType)),
-		attribute.String("operation", "create_config_disk"),
-	)
-	if err := m.createConfigDisk(configDiskCtx, instForConfig, imageInfo, netConfig, proxyGuestConfig); err != nil {
-		configDiskSpanEnd(err)
-		log.ErrorContext(ctx, "failed to create config disk", "instance_id", id, "error", err)
-		return nil, fmt.Errorf("create config disk: %w", err)
+	// 5. Regenerate guest-specific boot configuration.
+	releaseConfig, err := m.prepareBootConfig(ctx, stored, imageInfo, netConfig)
+	if err != nil {
+		return nil, err
 	}
-	configDiskSpanEnd(nil)
+	if releaseConfig != nil {
+		cu.Add(releaseConfig)
+	}
 
 	if err := m.archiveAppLogForBoot(id); err != nil {
 		log.WarnContext(ctx, "failed to archive app log before start", "instance_id", id, "error", err)
@@ -231,7 +200,7 @@ func (m *manager) startInstance(
 
 	// 7. Update metadata (set PID, StartedAt). Boot markers were cleared at
 	// the top of this function, so we are in Initializing until they hydrate.
-	stored.Phases.Record(phasetracking.PhaseInitializing, time.Now().UTC())
+	stored.Phases.Record(initialBootPhase(stored), time.Now().UTC())
 	meta = &metadata{StoredMetadata: *stored}
 	if err := m.saveMetadata(meta); err != nil {
 		// VM is running but metadata failed - log but don't fail

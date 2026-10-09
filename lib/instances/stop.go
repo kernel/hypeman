@@ -146,7 +146,7 @@ func (m *manager) stopInstance(
 	// 3. Get network allocation BEFORE killing VMM (while we can still query it)
 	var networkAlloc *network.Allocation
 	var networkAllocErr error
-	if inst.NetworkEnabled {
+	if inst.NetworkEnabled && inst.MacOS == nil {
 		log.DebugContext(ctx, "getting network allocation", "instance_id", id)
 		networkAlloc, networkAllocErr = m.networkManager.GetAllocation(ctx, id)
 		if networkAllocErr != nil {

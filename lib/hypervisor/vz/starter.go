@@ -7,6 +7,7 @@ package vz
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -106,7 +107,19 @@ func NewStarter() *Starter {
 var _ hypervisor.VMStarter = (*Starter)(nil)
 
 func (s *Starter) ValidateConfig(config hypervisor.VMConfig) error {
-	return hypervisor.ValidateDirectRawConfig("vz", config)
+	if config.EffectiveBootMode() != hypervisor.BootModeMacOS {
+		return hypervisor.ValidateDirectRawConfig("vz", config)
+	}
+	if err := hypervisor.ValidateBootConfig(config); err != nil {
+		return err
+	}
+	if config.HotplugBytes != 0 || config.EnableRosetta || config.GuestMemory.EnableBalloon || config.GuestMemory.RequireBalloon || len(config.PCIDevices) != 0 || config.VGPUDevicePath != "" {
+		return fmt.Errorf("macOS does not support hotplug, ballooning, Rosetta shares or PCI passthrough")
+	}
+	if len(config.Disks) != 1 || config.Disks[0].Readonly || config.Disks[0].EffectiveFormat() != hypervisor.DiskFormatRaw {
+		return fmt.Errorf("macOS requires one writable raw boot disk")
+	}
+	return nil
 }
 
 func (s *Starter) SocketName() string {
@@ -165,7 +178,11 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 	}
 
 	shimConfig := manifest.ShimConfig
-	if shimConfig.KernelPath == "" || shimConfig.InitrdPath == "" {
+	if shimConfig.MacHardwareModelData != "" || shimConfig.MacMachineIdentifierData != "" || shimConfig.MacAuxStoragePath != "" {
+		if shimConfig.MacHardwareModelData == "" || shimConfig.MacMachineIdentifierData == "" || shimConfig.MacAuxStoragePath == "" {
+			return 0, nil, fmt.Errorf("invalid snapshot manifest: incomplete Mac platform")
+		}
+	} else if shimConfig.KernelPath == "" || shimConfig.InitrdPath == "" {
 		return 0, nil, fmt.Errorf("invalid snapshot manifest: missing kernel/initrd in shim config")
 	}
 	instanceDir := filepath.Dir(socketPath)
@@ -192,6 +209,11 @@ func buildShimConfigFromVMConfig(config hypervisor.VMConfig, socketPath string) 
 		ControlSocket:        socketPath,
 		VsockSocket:          filepath.Join(instanceDir, "vz.vsock"),
 		LogPath:              filepath.Join(instanceDir, "logs", "vz-shim.log"),
+	}
+	if config.MacOS != nil {
+		cfg.MacHardwareModelData = base64.StdEncoding.EncodeToString(config.MacOS.HardwareModelData)
+		cfg.MacMachineIdentifierData = base64.StdEncoding.EncodeToString(config.MacOS.MachineIdentifierData)
+		cfg.MacAuxStoragePath = config.MacOS.AuxStoragePath
 	}
 	for _, disk := range config.Disks {
 		cfg.Disks = append(cfg.Disks, shimconfig.DiskConfig{

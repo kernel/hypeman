@@ -17,6 +17,7 @@ type imageMetadata struct {
 	Name              string              `json:"name"`   // Normalized ref (tag or digest)
 	Digest            string              `json:"digest"` // Always present: sha256:...
 	Platform          string              `json:"platform,omitempty"`
+	MacOS             *MacOSImage         `json:"macos,omitempty"`
 	Status            string              `json:"status"`
 	Error             *string             `json:"error,omitempty"`
 	Request           *CreateImageRequest `json:"request,omitempty"`
@@ -64,6 +65,7 @@ func (m *imageMetadata) toImage() *Image {
 		Name:      m.Name,
 		Digest:    m.Digest,
 		Platform:  platform,
+		MacOS:     m.MacOS,
 		Status:    m.Status,
 		Error:     m.Error,
 		CreatedAt: m.CreatedAt,
@@ -112,14 +114,10 @@ type imageLayout struct {
 // once content metadata is ready, content becomes canonical even if its disk
 // is missing so callers report the corruption instead of mixing layouts.
 func resolveImageLayout(p *paths.Paths, repository, digestHex string) imageLayout {
-	legacy := imageLayout{
-		dir:      p.ImageDigestDir(repository, digestHex),
-		metadata: p.ImageMetadata(repository, digestHex),
-		disk:     p.ImageDigestPath(repository, digestHex),
-	}
+	legacy := legacyLayout(p, repository, digestHex)
 	content := contentLayout(p, digestHex)
 
-	if legacyImageExists(p, repository, digestHex) {
+	if legacyImageExists(legacy) {
 		contentStatus, contentOK := metadataStatus(content.metadata)
 		if !contentOK || contentStatus != StatusReady {
 			return legacy
@@ -152,9 +150,19 @@ func digestDir(p *paths.Paths, repository, digestHex string) string {
 	return resolveImageLayout(p, repository, digestHex).dir
 }
 
-func legacyImageExists(p *paths.Paths, repository, digestHex string) bool {
-	_, metadataErr := os.Stat(p.ImageMetadata(repository, digestHex))
-	_, diskErr := os.Stat(p.ImageDigestPath(repository, digestHex))
+func legacyLayout(p *paths.Paths, repository, digestHex string) imageLayout {
+	layout := imageLayout{dir: p.ImageDigestDir(repository, digestHex), metadata: p.ImageMetadata(repository, digestHex), disk: p.ImageDigestPath(repository, digestHex)}
+	// Locally imported machine images keep a raw disk beside their metadata. Linux
+	// legacy layouts never have one, so a stat is enough to pick the file.
+	if raw := filepath.Join(layout.dir, "rootfs.raw"); pathExists(raw) {
+		layout.disk = raw
+	}
+	return layout
+}
+
+func legacyImageExists(layout imageLayout) bool {
+	_, metadataErr := os.Stat(layout.metadata)
+	_, diskErr := os.Stat(layout.disk)
 	return metadataErr == nil && diskErr == nil
 }
 
@@ -182,6 +190,23 @@ func GetDiskPath(p *paths.Paths, imageName string, digest string) (string, error
 	digestHex := strings.TrimPrefix(digest, "sha256:")
 
 	return resolveImageLayout(p, ref.Repository(), digestHex).disk, nil
+}
+
+// BootStorage names the rootfs disk and auxiliary storage files of one image digest.
+// Both come from the same resolved layout, so callers never infer one from the other.
+type BootStorage struct {
+	Disk string
+	Aux  string
+}
+
+// GetBootStorage returns the disk and auxiliary storage paths for an image digest.
+func GetBootStorage(p *paths.Paths, imageName string, digest string) (BootStorage, error) {
+	ref, err := ParseNormalizedRef(imageName)
+	if err != nil {
+		return BootStorage{}, fmt.Errorf("parse image name: %w", err)
+	}
+	layout := resolveImageLayout(p, ref.Repository(), strings.TrimPrefix(digest, "sha256:"))
+	return BootStorage{Disk: layout.disk, Aux: filepath.Join(layout.dir, "aux.img")}, nil
 }
 
 func digestPath(p *paths.Paths, repository, digestHex string) string {
