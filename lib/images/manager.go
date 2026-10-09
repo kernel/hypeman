@@ -174,10 +174,6 @@ func (m *manager) CreateImage(ctx context.Context, req CreateImageRequest) (*Ima
 		return nil, err
 	}
 
-	if platform.OS == "darwin" {
-		return nil, fmt.Errorf("%w: macOS images must be imported locally with import-macos, not pulled as Linux containers", ErrInvalidPlatform)
-	}
-
 	// Parse and normalize
 	normalized, err := ParseNormalizedRef(req.Name)
 	if err != nil {
@@ -223,7 +219,11 @@ func (m *manager) CreateImage(ctx context.Context, req CreateImageRequest) (*Ima
 	m.createMu.Lock()
 	defer m.createMu.Unlock()
 
-	if img, found, err := m.reuseExistingImage(ref, req.Credentials, req.Tags); found || err != nil {
+	var requested *Platform
+	if req.Platform != "" {
+		requested = &platform
+	}
+	if img, found, err := m.reuseExistingImage(ref, req.Credentials, req.Tags, requested); found || err != nil {
 		return img, err
 	}
 	return m.createAndQueueImage(ref, req, platform)
@@ -255,13 +255,15 @@ func (m *manager) ImportLocalImage(ctx context.Context, repo, reference, digest 
 	m.createMu.Lock()
 	defer m.createMu.Unlock()
 
-	if img, found, err := m.reuseExistingImage(ref, nil, nil); found || err != nil {
+	if img, found, err := m.reuseExistingImage(ref, nil, nil, nil); found || err != nil {
 		return img, err
 	}
 	return m.createAndQueueImage(ref, CreateImageRequest{Name: imageRef}, hostPlatform())
 }
 
-func (m *manager) reuseExistingImage(ref *ResolvedRef, credentials *authn.AuthConfig, resourceTags tags.Tags) (*Image, bool, error) {
+// reuseExistingImage returns a record already on disk for ref. requested is the
+// caller's explicit platform, or nil when the request named none.
+func (m *manager) reuseExistingImage(ref *ResolvedRef, credentials *authn.AuthConfig, resourceTags tags.Tags, requested *Platform) (*Image, bool, error) {
 	meta, err := readMetadata(m.paths, ref.Repository(), ref.DigestHex())
 	if err != nil {
 		return nil, false, nil
@@ -277,6 +279,13 @@ func (m *manager) reuseExistingImage(ref *ResolvedRef, credentials *authn.AuthCo
 		// the tag at its digest or update its labels.
 		if !m.inflightCredentialsMatch(ref.Digest(), credentials) {
 			return nil, true, fmt.Errorf("%w: retry after the current pull completes", ErrCredentialConflict)
+		}
+	}
+	// Only ready macOS records carry a platform the request can contradict.
+	if requested != nil && meta.Status == StatusReady && meta.MacOS != nil {
+		actual, err := ParsePlatform(meta.Platform)
+		if err != nil || !requested.Matches(actual) {
+			return nil, true, fmt.Errorf("%w: requested %s but cached manifest is %s", ErrInvalidPlatform, *requested, meta.Platform)
 		}
 	}
 	if resourceTags != nil {
@@ -509,14 +518,27 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef, credentials 
 
 	m.updateStatusByDigest(ref, StatusConverting, nil, buildID)
 
-	diskPath := resolveImageLayout(m.paths, ref.Repository(), ref.DigestHex()).disk
+	layout := resolveImageLayout(m.paths, ref.Repository(), ref.DigestHex())
+	diskPath := layout.disk
 	// Keep the temporary filesystem beside its final path so finalization stays
 	// atomic even when system/builds and images are on different filesystems.
 	diskTempPath := diskPath + ".tmp-" + buildID
 	defer os.Remove(diskTempPath)
-	// Use default image format (erofs on Linux, ext4 on Darwin)
+	payload, err := parseMacOSMachine(tempDir, result.Metadata)
+	if err != nil {
+		m.updateStatusByDigest(ref, StatusFailed, err, buildID)
+		return
+	}
 	convertStart := time.Now()
-	diskSize, err := ExportRootfs(tempDir, diskTempPath, DefaultImageFormat)
+	var staged stagedImageFiles
+	if payload != nil {
+		auxTemp := filepath.Join(layout.dir, "aux.img.tmp-"+buildID)
+		defer os.Remove(auxTemp)
+		staged, err = stageMacOSMachine(payload, diskTempPath, auxTemp)
+	} else {
+		staged = stagedImageFiles{disk: diskTempPath}
+		staged.sizeBytes, err = ExportRootfs(tempDir, diskTempPath, DefaultImageFormat)
+	}
 	m.recordImageBuildPhase(ctx, ref.Digest(), "filesystem_export", time.Since(convertStart), phaseStatus(err), "not_applicable")
 	if err != nil {
 		m.updateStatusByDigest(ref, StatusFailed, fmt.Errorf("convert to %s: %w", DefaultImageFormat, err), buildID)
@@ -524,7 +546,7 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef, credentials 
 	}
 
 	finalizeStart := time.Now()
-	err = m.finalizeImage(ref, result, diskSize, buildID, diskTempPath)
+	err = m.finalizeImage(ref, result, buildID, staged)
 	m.recordImageBuildPhase(ctx, ref.Digest(), "finalize", time.Since(finalizeStart), phaseStatus(err), "not_applicable")
 	if err != nil {
 		if errors.Is(err, errStaleBuild) {
@@ -537,7 +559,16 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef, credentials 
 	buildStatus = "success"
 }
 
-func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, diskSize int64, buildID, diskTempPath string) error {
+// stagedImageFiles are the build outputs written before finalization takes createMu.
+// Finalization only renames them into place and commits metadata.
+type stagedImageFiles struct {
+	disk      string      // staged disk, beside its final path
+	aux       string      // staged auxiliary storage; macOS machine images only
+	macos     *MacOSImage // platform of a macOS machine image; nil for rootfs images
+	sizeBytes int64       // bytes the staged files occupy, recorded for accounting
+}
+
+func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, buildID string, staged stagedImageFiles) error {
 	m.createMu.Lock()
 	defer m.createMu.Unlock()
 
@@ -559,16 +590,25 @@ func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, diskSize i
 		return err
 	}
 
-	modelPath := manifestModelPath(m.paths, layout, ref.DigestHex())
-	diskInstalled := false
-	modelWritten := false
-
-	if err := installAtomically(layout.disk, func(path string) error {
-		return os.Rename(diskTempPath, path)
-	}); err != nil {
-		return fmt.Errorf("install image disk: %w", err)
+	if actualPlatform.OS == "darwin" && staged.macos == nil {
+		return fmt.Errorf("macOS image requires a validated machine bundle")
 	}
-	diskInstalled = true
+	// Files installed before the metadata commit. Finalization failure removes them.
+	var installed []string
+	if staged.macos != nil {
+		auxPath := filepath.Join(layout.dir, "aux.img")
+		if err := os.Rename(staged.aux, auxPath); err != nil {
+			return rollbackFinalization(installed, err)
+		}
+		installed = append(installed, auxPath)
+		meta.MacOS = staged.macos
+	}
+	if err := installAtomically(layout.disk, func(path string) error {
+		return os.Rename(staged.disk, path)
+	}); err != nil {
+		return rollbackFinalization(installed, fmt.Errorf("install image disk: %w", err))
+	}
+	installed = append(installed, layout.disk)
 
 	// Persist the manifest content model beside the shared content so later
 	// stages can recompose the image from per-layer artifacts and GC can tell
@@ -576,16 +616,17 @@ func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, diskSize i
 	if result.Manifest != nil {
 		model := *result.Manifest
 		model.Platform = actualPlatform.String()
+		modelPath := manifestModelPath(m.paths, layout, ref.DigestHex())
 		if err := writeManifestModelAt(modelPath, ref.DigestHex(), &model); err != nil {
-			return rollbackFinalization(layout, modelPath, diskInstalled, modelWritten, fmt.Errorf("write manifest model: %w", err))
+			return rollbackFinalization(installed, fmt.Errorf("write manifest model: %w", err))
 		}
-		modelWritten = true
+		installed = append(installed, modelPath)
 	}
 
 	meta.Status = StatusReady
 	meta.Error = nil
 	meta.Platform = actualPlatform.String()
-	meta.SizeBytes = diskSize
+	meta.SizeBytes = staged.sizeBytes
 	meta.Entrypoint = result.Metadata.Entrypoint
 	meta.Cmd = result.Metadata.Cmd
 	meta.Env = result.Metadata.Env
@@ -593,7 +634,7 @@ func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, diskSize i
 	meta.WorkingDir = result.Metadata.WorkingDir
 
 	if err := writeMetadataFile(layout.metadata, meta); err != nil {
-		return rollbackFinalization(layout, modelPath, diskInstalled, modelWritten, fmt.Errorf("write final metadata: %w", err))
+		return rollbackFinalization(installed, fmt.Errorf("write final metadata: %w", err))
 	}
 
 	m.notifyReady(ref.DigestHex(), StatusReady, nil)
@@ -611,13 +652,11 @@ func manifestModelPath(p *paths.Paths, layout imageLayout, digestHex string) str
 	return filepath.Join(layout.dir, "manifest.json")
 }
 
-func rollbackFinalization(layout imageLayout, modelPath string, diskInstalled, modelWritten bool, cause error) error {
+// rollbackFinalization removes the files finalization installed before it failed.
+func rollbackFinalization(installed []string, cause error) error {
 	var rollbackErr error
-	if modelWritten {
-		rollbackErr = errors.Join(rollbackErr, os.Remove(modelPath))
-	}
-	if diskInstalled {
-		rollbackErr = errors.Join(rollbackErr, os.Remove(layout.disk))
+	for _, path := range installed {
+		rollbackErr = errors.Join(rollbackErr, os.Remove(path))
 	}
 	if rollbackErr != nil {
 		return errors.Join(cause, fmt.Errorf("rollback finalization: %w", rollbackErr))
