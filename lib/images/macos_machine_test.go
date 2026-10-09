@@ -75,6 +75,15 @@ func TestMacOSMachineValidation(t *testing.T) {
 	meta.Architecture = "amd64"
 	_, err = parseMacOSMachine(root, meta)
 	require.Error(t, err)
+
+	// Platform aliases normalize before the machine check, as they do for manifest matching.
+	for _, alias := range []struct{ os, arch string }{{"darwin", "aarch64"}, {"Darwin", "arm64"}} {
+		meta = macOSFixtureMetadata()
+		meta.OS, meta.Architecture = alias.os, alias.arch
+		payload, err := parseMacOSMachine(root, meta)
+		require.NoError(t, err, alias)
+		require.NotNil(t, payload, alias)
+	}
 	require.NoError(t, os.WriteFile(filepath.Join(root, "config.json"), []byte(`{}`), 0600))
 	_, err = parseMacOSMachine(root, macOSFixtureMetadata())
 	require.Error(t, err)

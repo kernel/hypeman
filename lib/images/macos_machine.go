@@ -58,10 +58,13 @@ func sameFile(a, b string) bool {
 }
 
 func parseMacOSMachine(root string, meta *containerMetadata) (*macOSMachinePayload, error) {
-	if meta.OS != "darwin" {
+	// Normalize as resolveManifestPlatform does, so aliases such as aarch64 and
+	// case variants such as Darwin select the machine path rather than rootfs.
+	normalized := Platform{OS: meta.OS, Architecture: meta.Architecture, Variant: meta.Variant}.Normalize()
+	if normalized.OS != "darwin" {
 		return nil, nil
 	}
-	if meta.Architecture != "arm64" || meta.Variant != "" {
+	if normalized.Architecture != "arm64" || normalized.Variant != "" {
 		return nil, fmt.Errorf("macOS machine requires darwin/arm64")
 	}
 	labels := meta.Labels
