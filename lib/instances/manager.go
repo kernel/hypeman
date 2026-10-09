@@ -914,17 +914,11 @@ func (m *manager) RotateLogs(ctx context.Context, maxBytes int64, maxFiles int) 
 
 // AttachVolume attaches a volume to an instance (not yet implemented)
 func (m *manager) AttachVolume(ctx context.Context, id string, volumeId string, req AttachVolumeRequest) (*Instance, error) {
-	if err := m.rejectMacOSOperation(id, "attach volume"); err != nil {
-		return nil, err
-	}
 	return nil, fmt.Errorf("attach volume not yet implemented")
 }
 
 // DetachVolume detaches a volume from an instance (not yet implemented)
 func (m *manager) DetachVolume(ctx context.Context, id string, volumeId string) (*Instance, error) {
-	if err := m.rejectMacOSOperation(id, "detach volume"); err != nil {
-		return nil, err
-	}
 	return nil, fmt.Errorf("detach volume not yet implemented")
 }
 

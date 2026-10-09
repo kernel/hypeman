@@ -464,9 +464,8 @@ func (m *manager) createInstance(
 
 	// 14. Allocate network (if network enabled)
 	var netConfig *network.NetworkConfig
-	if stored.MacOS != nil && stored.NetworkEnabled {
-		netConfig = &network.NetworkConfig{MAC: stored.MacOS.MAC}
-		stored.MAC = stored.MacOS.MAC
+	if cfg := macOSNetworkConfig(stored); cfg != nil {
+		netConfig = cfg
 	}
 	if networkName != "" && stored.MacOS == nil {
 		log.DebugContext(ctx, "allocating network", "instance_id", id, "network", networkName,

@@ -3,15 +3,19 @@ package instances
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/instances/phasetracking"
+	"github.com/kernel/hypeman/lib/network"
 )
 
 func prepareMacOSRequest(req *CreateInstanceRequest, img *images.Image, hv hypervisor.Type) error {
@@ -99,4 +103,57 @@ func (m *manager) rejectMacOSOperation(id, operation string) error {
 		return fmt.Errorf("%w: %s is not implemented for experimental macOS instances", ErrInvalidRequest, operation)
 	}
 	return nil
+}
+
+// vmnet stores octets without leading zeroes. A lease is observed addressing,
+// not a static-IP assignment or a guest-readiness signal.
+func macOSGuestIP(mac string) string {
+	wanted, err := net.ParseMAC(mac)
+	if err != nil {
+		return ""
+	}
+	data, err := os.ReadFile("/var/db/dhcpd_leases")
+	if err != nil {
+		return ""
+	}
+	return macOSLeaseIP(string(data), wanted)
+}
+func macOSLeaseIP(data string, wanted net.HardwareAddr) string {
+	for _, block := range strings.Split(data, "}") {
+		var addr, ip string
+		for _, line := range strings.Split(block, "\n") {
+			k, v, ok := strings.Cut(strings.TrimSpace(line), "=")
+			if !ok {
+				continue
+			}
+			switch k {
+			case "hw_address":
+				_, addr, _ = strings.Cut(v, ",")
+			case "ip_address":
+				ip = v
+			}
+		}
+		var padded []string
+		for _, octet := range strings.Split(addr, ":") {
+			if len(octet) == 1 {
+				octet = "0" + octet
+			}
+			padded = append(padded, octet)
+		}
+		raw, err := hex.DecodeString(strings.Join(padded, ""))
+		if err == nil && string(raw) == string(wanted) && net.ParseIP(ip) != nil {
+			return ip
+		}
+	}
+	return ""
+}
+
+// macOSNetworkConfig pins a networked macOS guest to its preserved MAC and returns
+// its network config. It returns nil for Linux guests and networkless macOS guests.
+func macOSNetworkConfig(stored *StoredMetadata) *network.NetworkConfig {
+	if stored.MacOS == nil || !stored.NetworkEnabled {
+		return nil
+	}
+	stored.MAC = stored.MacOS.MAC
+	return &network.NetworkConfig{MAC: stored.MacOS.MAC}
 }
