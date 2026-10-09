@@ -109,6 +109,11 @@ func (m *manager) standbyInstance(
 		return nil, fmt.Errorf("hypervisor %s does not support standby (snapshots)", stored.HypervisorType)
 	}
 
+	// Keep state probes out of the VMM socket while pausing and snapshotting.
+	stateQueryLock := m.hypervisorStateQueryLock(id)
+	stateQueryLock.Lock()
+	defer stateQueryLock.Unlock()
+
 	// 6. Transition: Running → Paused
 	log.DebugContext(ctx, "pausing VM", "instance_id", id)
 	pauseCtx, pauseSpanEnd := m.startLifecycleStep(ctx, "pause_vm",

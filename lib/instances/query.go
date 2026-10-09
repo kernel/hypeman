@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/kernel/hypeman/lib/guest"
@@ -34,9 +35,8 @@ const (
 	// guest-driven shutdowns promptly, long enough that bursty list calls
 	// collapse onto one underlying socket query.
 	hypervisorStateCacheTTL = 5 * time.Second
-	// getVMInfoTimeout bounds a single hypervisor /vm.info query. The cloud
-	// hypervisor API socket serializes requests, so a snapshot in flight can
-	// otherwise park derive_state for tens of seconds.
+	// getVMInfoTimeout bounds a single hypervisor /vm.info query when the VMM
+	// socket is stalled. Standby snapshots exclude probes with a per-instance lock.
 	getVMInfoTimeout = 500 * time.Millisecond
 )
 
@@ -100,35 +100,16 @@ func (m *manager) deriveStateWithOptions(ctx context.Context, stored *StoredMeta
 		hvState = cached
 	} else {
 		span.SetAttributes(attribute.Bool("hypervisor_state.cache_hit", false))
-		hv, err := m.getHypervisor(stored.SocketPath, stored.HypervisorType)
-		if err != nil {
-			// Failed to create client - this is unexpected if socket exists
-			errMsg := fmt.Sprintf("failed to create hypervisor client: %v", err)
-			log.WarnContext(ctx, "failed to determine instance state",
-				"instance_id", stored.Id,
-				"socket", stored.SocketPath,
-				"error", err,
-			)
+		state, err, operationInProgress := m.queryHypervisorState(ctx, stored)
+		if operationInProgress {
+			errMsg := "hypervisor state unavailable during snapshot operation"
 			return stateResult{State: StateUnknown, Error: &errMsg}
 		}
-
-		queryCtx, cancel := context.WithTimeout(ctx, getVMInfoTimeout)
-		info, err := hv.GetVMInfo(queryCtx)
-		cancel()
 		if err != nil {
-			// Socket exists but hypervisor query failed or timed out. The API
-			// socket serializes requests, so a snapshot in flight will trip
-			// the timeout — return Unknown and let the next list call retry.
-			errMsg := fmt.Sprintf("failed to query hypervisor: %v", err)
-			log.WarnContext(ctx, "failed to query hypervisor state",
-				"instance_id", stored.Id,
-				"socket", stored.SocketPath,
-				"error", err,
-			)
+			errMsg := err.Error()
 			return stateResult{State: StateUnknown, Error: &errMsg}
 		}
-		hvState = info.State
-		m.storeCachedHypervisorState(stored.Id, hvState)
+		hvState = state
 	}
 
 	// 3. Map hypervisor state to our state
@@ -157,6 +138,67 @@ func (m *manager) deriveStateWithOptions(ctx context.Context, stored *StoredMeta
 		)
 		return stateResult{State: StateUnknown, Error: &errMsg}
 	}
+}
+
+func (m *manager) queryHypervisorState(ctx context.Context, stored *StoredMetadata) (hypervisor.VMState, error, bool) {
+	resultCh := m.hypervisorStateQueries.DoChan(stored.Id, func() (any, error) {
+		lock := m.hypervisorStateQueryLock(stored.Id)
+		if !lock.TryRLock() {
+			return hypervisorStateQueryResult{operationInProgress: true}, nil
+		}
+		defer lock.RUnlock()
+
+		if cached, ok := m.loadCachedHypervisorState(stored.Id); ok {
+			return hypervisorStateQueryResult{state: cached}, nil
+		}
+
+		log := logger.FromContext(ctx)
+		hv, err := m.getHypervisor(stored.SocketPath, stored.HypervisorType)
+		if err != nil {
+			log.WarnContext(ctx, "failed to determine instance state",
+				"instance_id", stored.Id,
+				"socket", stored.SocketPath,
+				"error", err,
+			)
+			return nil, fmt.Errorf("failed to create hypervisor client: %w", err)
+		}
+
+		queryCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), getVMInfoTimeout)
+		info, err := hv.GetVMInfo(queryCtx)
+		cancel()
+		if err != nil {
+			log.WarnContext(ctx, "failed to query hypervisor state",
+				"instance_id", stored.Id,
+				"socket", stored.SocketPath,
+				"error", err,
+			)
+			return nil, fmt.Errorf("failed to query hypervisor: %w", err)
+		}
+		m.storeCachedHypervisorState(stored.Id, info.State)
+		return hypervisorStateQueryResult{state: info.State}, nil
+	})
+
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err(), false
+	case result := <-resultCh:
+		if result.Err != nil {
+			return "", result.Err, false
+		}
+		queryResult := result.Val.(hypervisorStateQueryResult)
+		return queryResult.state, nil, queryResult.operationInProgress
+	}
+}
+
+type hypervisorStateQueryResult struct {
+	state               hypervisor.VMState
+	operationInProgress bool
+}
+
+// hypervisorStateQueryLock returns the lock shared by state probes and standby snapshots.
+func (m *manager) hypervisorStateQueryLock(id string) *sync.RWMutex {
+	lock, _ := m.hypervisorStateQueryLocks.LoadOrStore(id, &sync.RWMutex{})
+	return lock.(*sync.RWMutex)
 }
 
 // loadCachedHypervisorState returns the cached hypervisor state for an instance
