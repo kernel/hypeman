@@ -125,9 +125,8 @@ func (m *manager) startInstance(
 	defer cu.Clean()
 
 	// 4. Allocate fresh network if network enabled
-	var netConfig *network.NetworkConfig
-	if cfg := macOSNetworkConfig(stored); cfg != nil {
-		netConfig = cfg
+	netConfig := macOSNetworkConfig(stored)
+	if netConfig != nil {
 		stored.IP = ""
 	}
 	if stored.NetworkEnabled && stored.MacOS == nil {

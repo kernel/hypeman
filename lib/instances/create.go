@@ -465,10 +465,7 @@ func (m *manager) createInstance(
 	}
 
 	// 14. Allocate network (if network enabled)
-	var netConfig *network.NetworkConfig
-	if cfg := macOSNetworkConfig(stored); cfg != nil {
-		netConfig = cfg
-	}
+	netConfig := macOSNetworkConfig(stored)
 	if networkName != "" && stored.MacOS == nil {
 		log.DebugContext(ctx, "allocating network", "instance_id", id, "network", networkName,
 			"download_bps", stored.NetworkBandwidthDownload, "upload_bps", stored.NetworkBandwidthUpload)
