@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -216,31 +217,11 @@ func execute() error {
 		if e := os.Mkdir(*dst, 0700); e != nil {
 			return e
 		}
-		for _, name := range []string{"disk.img", "aux.img"} {
-			if e := unix.Clonefile(filepath.Join(*src, name), filepath.Join(*dst, name), 0); e != nil {
-				return e
-			}
+		// Remove only the destination this run created, so a retry is not blocked by a partial bundle.
+		if e := cloneBundle(*src, *dst, c, *state, *rekey, *newMAC); e != nil {
+			return errors.Join(e, os.RemoveAll(*dst))
 		}
-		if *rekey {
-			id, e := vz.NewMacMachineIdentifier()
-			if e != nil {
-				return e
-			}
-			c.MachineIdentifier = id.DataRepresentation()
-		}
-		if *newMAC {
-			mac, e := vz.NewRandomLocallyAdministeredMACAddress()
-			if e != nil {
-				return e
-			}
-			c.MAC = mac.String()
-		}
-		if *state != "" {
-			if e := unix.Clonefile(*state, filepath.Join(*dst, "machine-state.vzm"), 0); e != nil {
-				return e
-			}
-		}
-		return writeConfig(*dst, c)
+		return nil
 	case "ctl":
 		if *dir == "" || len(fs.Args()) == 0 {
 			return fmt.Errorf("--dir and action required")
@@ -303,6 +284,34 @@ func execute() error {
 		return fmt.Errorf("unknown command %q", cmd)
 	}
 }
+func cloneBundle(src, dst string, c config, state string, rekey, newMAC bool) error {
+	for _, name := range []string{"disk.img", "aux.img"} {
+		if e := unix.Clonefile(filepath.Join(src, name), filepath.Join(dst, name), 0); e != nil {
+			return e
+		}
+	}
+	if rekey {
+		id, e := vz.NewMacMachineIdentifier()
+		if e != nil {
+			return e
+		}
+		c.MachineIdentifier = id.DataRepresentation()
+	}
+	if newMAC {
+		mac, e := vz.NewRandomLocallyAdministeredMACAddress()
+		if e != nil {
+			return e
+		}
+		c.MAC = mac.String()
+	}
+	if state != "" {
+		if e := unix.Clonefile(state, filepath.Join(dst, "machine-state.vzm"), 0); e != nil {
+			return e
+		}
+	}
+	return writeConfig(dst, c)
+}
+
 func errText(e error) string {
 	if e != nil {
 		return e.Error()

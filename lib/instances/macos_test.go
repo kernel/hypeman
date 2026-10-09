@@ -52,6 +52,18 @@ func TestMacOSBootConfigNoLinuxDevices(t *testing.T) {
 	require.Equal(t, StateRunning, deriveRunningState(&inst.StoredMetadata))
 	require.Nil(t, inst.ProgramStartedAt)
 }
+func TestMacOSIdentityAdmissionSkipsDirectoriesWithoutMetadata(t *testing.T) {
+	p := paths.New(t.TempDir())
+	m := &manager{paths: p}
+	stored := StoredMetadata{Id: "new", DataDir: p.InstanceDir("new"), MacOS: testMacImage().MacOS}
+	require.NoError(t, m.ensureDirectories("orphan"))
+	require.NoError(t, m.ensureDirectories("new"))
+	require.NoError(t, m.checkMacOSIdentityAvailable(context.Background(), &stored))
+
+	require.NoError(t, os.WriteFile(p.InstanceMetadata("orphan"), []byte("{not json"), 0600))
+	require.Error(t, m.checkMacOSIdentityAvailable(context.Background(), &stored))
+}
+
 func TestMacOSPreservedIdentityAdmission(t *testing.T) {
 	p := paths.New(t.TempDir())
 	m := &manager{paths: p}

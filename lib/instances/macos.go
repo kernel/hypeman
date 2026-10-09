@@ -3,6 +3,7 @@ package instances
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -41,11 +42,11 @@ func (m *manager) prepareBootStorage(stored *StoredMetadata, img *images.Image) 
 	if stored.MacOS == nil {
 		return m.createOverlayDisk(stored.Id, stored.OverlaySize)
 	}
-	root, err := images.GetDiskPath(m.paths, img.Name, img.Digest)
+	boot, err := images.GetBootStorage(m.paths, img.Name, img.Digest)
 	if err != nil {
 		return err
 	}
-	return cloneMacOSStorage(root, m.paths.InstanceOverlay(stored.Id), filepath.Join(stored.DataDir, "mac-aux.img"))
+	return cloneMacOSStorage(boot.Disk, boot.Aux, m.paths.InstanceOverlay(stored.Id), filepath.Join(stored.DataDir, "mac-aux.img"))
 }
 func (m *manager) macOSVMConfig(inst *Instance) hypervisor.VMConfig {
 	c := hypervisor.VMConfig{BootMode: hypervisor.BootModeMacOS, VCPUs: inst.Vcpus, MemoryBytes: inst.Size, VsockCID: inst.VsockCID, VsockSocket: inst.VsockSocket,
@@ -72,6 +73,10 @@ func (m *manager) checkMacOSIdentityAvailable(ctx context.Context, stored *Store
 			continue
 		}
 		meta, err := m.loadMetadata(entry.Name())
+		if errors.Is(err, ErrNotFound) {
+			// A create in progress or a leftover directory has no instance to admit against.
+			continue
+		}
 		if err != nil {
 			return fmt.Errorf("check Mac identity admission: %w", err)
 		}

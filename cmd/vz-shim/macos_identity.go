@@ -24,7 +24,8 @@ func lockMacOSIdentity(c *shimconfig.ShimConfig) (*os.File, error) {
 		return nil, fmt.Errorf("decode Mac identity for admission: %w", err)
 	}
 	hash := sha256.Sum256(data)
-	path := filepath.Join(os.TempDir(), fmt.Sprintf("hypeman-mac-identity-%d-%x.lock", os.Getuid(), hash))
+	// Fixed directory, not TMPDIR: servers with different environments must contend on the same lock.
+	path := filepath.Join("/tmp", fmt.Sprintf("hypeman-mac-identity-%d-%x.lock", os.Getuid(), hash))
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
 		return nil, err

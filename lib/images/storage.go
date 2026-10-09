@@ -194,6 +194,23 @@ func GetDiskPath(p *paths.Paths, imageName string, digest string) (string, error
 	return resolveImageLayout(p, ref.Repository(), digestHex).disk, nil
 }
 
+// BootStorage names the rootfs disk and auxiliary storage files of one image digest.
+// Both come from the same resolved layout, so callers never infer one from the other.
+type BootStorage struct {
+	Disk string
+	Aux  string
+}
+
+// GetBootStorage returns the disk and auxiliary storage paths for an image digest.
+func GetBootStorage(p *paths.Paths, imageName string, digest string) (BootStorage, error) {
+	ref, err := ParseNormalizedRef(imageName)
+	if err != nil {
+		return BootStorage{}, fmt.Errorf("parse image name: %w", err)
+	}
+	layout := resolveImageLayout(p, ref.Repository(), strings.TrimPrefix(digest, "sha256:"))
+	return BootStorage{Disk: layout.disk, Aux: filepath.Join(layout.dir, "aux.img")}, nil
+}
+
 func digestPath(p *paths.Paths, repository, digestHex string) string {
 	return resolveImageLayout(p, repository, digestHex).disk
 }

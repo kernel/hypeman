@@ -30,7 +30,7 @@ func TestMacOSStorageClone(t *testing.T) {
 	t.Run("private writable copies", func(t *testing.T) {
 		dest := t.TempDir()
 		disk, aux := filepath.Join(dest, "disk"), filepath.Join(dest, "aux")
-		require.NoError(t, cloneMacOSStorage(source, disk, aux))
+		require.NoError(t, cloneMacOSStorage(source, auxSource, disk, aux))
 		for path, expected := range map[string]string{disk: "template disk", aux: "template aux"} {
 			data, err := os.ReadFile(path)
 			require.NoError(t, err)
@@ -51,7 +51,7 @@ func TestMacOSStorageClone(t *testing.T) {
 		dest := t.TempDir()
 		disk, aux := filepath.Join(dest, "disk"), filepath.Join(dest, "aux")
 		require.NoError(t, os.WriteFile(aux, []byte("existing aux"), 0600))
-		require.Error(t, cloneMacOSStorage(source, disk, aux))
+		require.Error(t, cloneMacOSStorage(source, auxSource, disk, aux))
 		_, err := os.Stat(disk)
 		require.ErrorIs(t, err, os.ErrNotExist)
 		data, err := os.ReadFile(aux)
@@ -63,7 +63,7 @@ func TestMacOSStorageClone(t *testing.T) {
 		dest := t.TempDir()
 		disk, aux := filepath.Join(dest, "disk"), filepath.Join(dest, "aux")
 		require.NoError(t, os.WriteFile(disk, []byte("existing disk"), 0600))
-		require.Error(t, cloneMacOSStorage(source, disk, aux))
+		require.Error(t, cloneMacOSStorage(source, auxSource, disk, aux))
 		data, err := os.ReadFile(disk)
 		require.NoError(t, err)
 		require.Equal(t, "existing disk", string(data))

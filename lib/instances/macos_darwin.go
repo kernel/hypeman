@@ -6,13 +6,12 @@ import (
 	"encoding/hex"
 	"net"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"golang.org/x/sys/unix"
 )
 
-func cloneMacOSStorage(root, disk, aux string) (err error) {
+func cloneMacOSStorage(rootDisk, rootAux, disk, aux string) (err error) {
 	var created []string
 	defer func() {
 		if err != nil {
@@ -23,8 +22,8 @@ func cloneMacOSStorage(root, disk, aux string) (err error) {
 		}
 	}()
 	for _, file := range []struct{ src, dst string }{
-		{root, disk},
-		{filepath.Join(filepath.Dir(root), "aux.img"), aux},
+		{rootDisk, disk},
+		{rootAux, aux},
 	} {
 		if err = unix.Clonefile(file.src, file.dst, unix.CLONE_NOFOLLOW|unix.CLONE_NOOWNERCOPY); err != nil {
 			return err

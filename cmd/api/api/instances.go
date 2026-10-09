@@ -275,10 +275,21 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 
 	// Imported desktop guests do not implement Linux disk/TAP shaping. Do not
 	// silently advertise proportional limits that the backend would ignore.
-	macOSImage := false
-	if img, err := s.ImageManager.GetImage(ctx, request.Body.Image); err == nil {
-		macOSImage = img.MacOS != nil
+	img, err := s.ImageManager.GetImage(ctx, request.Body.Image)
+	if err != nil {
+		if errors.Is(err, images.ErrNotFound) {
+			return oapi.CreateInstance404JSONResponse{
+				Code:    "not_found",
+				Message: err.Error(),
+			}, nil
+		}
+		log.ErrorContext(ctx, "failed to resolve image for instance defaults", "error", err, "image", request.Body.Image)
+		return oapi.CreateInstance500JSONResponse{
+			Code:    "internal_error",
+			Message: "failed to create instance",
+		}, nil
 	}
+	macOSImage := img.MacOS != nil
 	if macOSImage && request.Body.Vcpus == nil {
 		vcpus = 0
 	}
