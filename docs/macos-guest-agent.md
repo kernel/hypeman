@@ -36,6 +36,9 @@ by this initial patch.
 
 The host API and hypervisor still enforce authorization. The vsock host-CID
 check is transport admission, not a replacement for instance authority checks.
+As with the Linux guest agent, commands and file operations run as root with no
+per-caller credential switch; the host API alone decides who may reach them.
+An exec `timeout_seconds` ends the command; it does not bound a healthy stream.
 Do not expose this privileged service through unauthenticated host forwarding.
 
 ## Image declaration and host integration
