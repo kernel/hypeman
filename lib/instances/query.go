@@ -320,7 +320,7 @@ func (m *manager) hydrateBootMarkersFromLogs(ctx context.Context, stored *Stored
 // bootMarkersMissing reports which boot markers stored still lacks.
 func bootMarkersMissing(stored *StoredMetadata) (needProgram, needAgent bool) {
 	needProgram = stored.MacOS == nil && stored.ProgramStartedAt == nil
-	needAgent = guestAgentEnabled(stored) && stored.GuestAgentReadyAt == nil
+	needAgent = stored.GuestAgentEnabled() && stored.GuestAgentReadyAt == nil
 	return needProgram, needAgent
 }
 
@@ -443,7 +443,7 @@ func (m *manager) nowUTC() time.Time {
 }
 
 func (m *manager) hydrateGuestAgentReadyFromProbe(ctx context.Context, stored *StoredMetadata) bool {
-	if stored == nil || !guestAgentEnabled(stored) || stored.GuestAgentReadyAt != nil {
+	if stored == nil || !stored.GuestAgentEnabled() || stored.GuestAgentReadyAt != nil {
 		return false
 	}
 	probe := m.guestAgentReadyProbe
@@ -459,7 +459,7 @@ func (m *manager) hydrateGuestAgentReadyFromProbe(ctx context.Context, stored *S
 }
 
 func probeGuestAgentReady(ctx context.Context, stored *StoredMetadata) bool {
-	if stored == nil || !guestAgentEnabled(stored) {
+	if stored == nil || !stored.GuestAgentEnabled() {
 		return false
 	}
 	dialer, err := hypervisor.NewVsockDialer(stored.HypervisorType, stored.VsockSocket, stored.VsockCID)

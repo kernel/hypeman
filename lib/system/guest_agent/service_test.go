@@ -286,6 +286,43 @@ func TestGuestServiceExecTimeoutKillsDescendantAfterShellExits(t *testing.T) {
 	}
 }
 
+// runExec drives one exec to completion and returns its stdout and exit code.
+func runExec(t *testing.T, start *pb.ExecStart) (string, int32) {
+	t.Helper()
+	client := testGuestClient(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	stream, err := client.Exec(ctx)
+	require.NoError(t, err)
+	require.NoError(t, stream.Send(&pb.ExecRequest{Request: &pb.ExecRequest_Start{Start: start}}))
+	require.NoError(t, stream.CloseSend())
+	var stdout strings.Builder
+	exit := int32(-1)
+	for {
+		resp, err := stream.Recv()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		require.NoError(t, err)
+		stdout.Write(resp.GetStdout())
+		if code, ok := resp.Response.(*pb.ExecResponse_ExitCode); ok {
+			exit = code.ExitCode
+		}
+	}
+	return stdout.String(), exit
+}
+
+func TestGuestServiceExecExitZeroWhenDescendantHoldsOutput(t *testing.T) {
+	stdout, exit := runExec(t, &pb.ExecStart{Command: []string{"/bin/sh", "-c", "sleep 5 & echo hi"}})
+	require.Equal(t, "hi\n", stdout)
+	require.Equal(t, int32(0), exit, "a command that exits 0 must report 0, not a stream error")
+}
+
+func TestGuestServiceExecTimeoutReports124(t *testing.T) {
+	_, exit := runExec(t, &pb.ExecStart{Command: []string{"/bin/sleep", "30"}, TimeoutSeconds: 1})
+	require.Equal(t, int32(124), exit)
+}
+
 func TestGuestServiceFileRoundTrip(t *testing.T) {
 	client := testGuestClient(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

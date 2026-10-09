@@ -44,7 +44,7 @@ func hasVFIODevices(stored *StoredMetadata) bool {
 func (m *manager) tryGracefulGuestShutdown(ctx context.Context, inst *Instance, stopTimeout int) bool {
 	log := logger.FromContext(ctx)
 
-	if !guestAgentEnabled(&inst.StoredMetadata) {
+	if !inst.StoredMetadata.GuestAgentEnabled() {
 		log.DebugContext(ctx, "guest-agent disabled, skipping graceful guest shutdown", "instance_id", inst.Id)
 		return false
 	}

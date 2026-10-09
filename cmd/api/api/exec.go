@@ -71,7 +71,7 @@ func (s *ApiService) ExecHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if inst.MacOS != nil && (!inst.MacOS.GuestAgent || inst.SkipGuestAgent) {
+	if inst.MacOS != nil && !inst.GuestAgentEnabled() {
 		http.Error(w, `{"code":"unsupported","message":"exec is not implemented for macOS images without the shared guest agent enabled"}`, http.StatusNotImplemented)
 		return
 	}
@@ -222,7 +222,7 @@ type wsReadWriter struct {
 	reader     io.Reader
 	mu         sync.Mutex
 	resizeChan chan<- *guest.WindowSize // Channel to send resize events (nil if not TTY)
-	cancel     context.CancelFunc       // Exec session cancellation on disconnect (nil for other users).
+	cancel     context.CancelFunc       // ends the exec session when the websocket side fails
 }
 
 func (w *wsReadWriter) Read(p []byte) (n int, err error) {
@@ -243,9 +243,7 @@ func (w *wsReadWriter) Read(p []byte) (n int, err error) {
 		// Read next WebSocket message
 		messageType, data, err := w.ws.ReadMessage()
 		if err != nil {
-			if w.cancel != nil {
-				w.cancel()
-			}
+			w.cancel()
 			return 0, err
 		}
 
@@ -278,9 +276,7 @@ func (w *wsReadWriter) Read(p []byte) (n int, err error) {
 
 func (w *wsReadWriter) Write(p []byte) (n int, err error) {
 	if err := w.ws.WriteMessage(websocket.BinaryMessage, p); err != nil {
-		if w.cancel != nil {
-			w.cancel()
-		}
+		w.cancel()
 		return 0, err
 	}
 	return len(p), nil

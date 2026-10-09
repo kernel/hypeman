@@ -14,7 +14,7 @@ func (m *manager) GetVsockDialer(ctx context.Context, instanceID string) (hyperv
 		return nil, err
 	}
 
-	if inst.MacOS != nil && !guestAgentEnabled(&inst.StoredMetadata) {
+	if inst.MacOS != nil && !inst.StoredMetadata.GuestAgentEnabled() {
 		return nil, fmt.Errorf("%w: macOS image does not enable the shared guest agent", ErrInvalidRequest)
 	}
 	return hypervisor.NewVsockDialer(hypervisor.Type(inst.HypervisorType), inst.VsockSocket, inst.VsockCID)

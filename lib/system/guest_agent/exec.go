@@ -56,10 +56,6 @@ func (s *guestServer) Exec(stream pb.GuestService_ExecServer) error {
 // executeNoTTY executes command without TTY
 func (s *guestServer) executeNoTTY(ctx context.Context, stream pb.GuestService_ExecServer, start *pb.ExecStart) error {
 	// Run command directly - guest-agent is already running in container namespace
-	if len(start.Command) == 0 {
-		return fmt.Errorf("empty command")
-	}
-
 	outputCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	// CommandContext must observe both caller cancellation and stream-send errors.
@@ -109,19 +105,16 @@ func (s *guestServer) executeNoTTY(ctx context.Context, stream pb.GuestService_E
 	if err := awaitBounded(ctx, waitDone, s.drainBound()); err != nil {
 		return err
 	}
+	// ErrWaitDelay means the command exited but a descendant still held its output.
+	// The status is already known, so it is reported as a normal exit.
 	if waitErr != nil {
-		if _, exited := waitErr.(*exec.ExitError); !exited {
+		_, exited := waitErr.(*exec.ExitError)
+		if !exited && !errors.Is(waitErr, exec.ErrWaitDelay) {
 			return fmt.Errorf("stream command output: %w", waitErr)
 		}
 	}
 
-	exitCode := int32(0)
-	if cmd.ProcessState != nil {
-		exitCode = int32(cmd.ProcessState.ExitCode())
-	} else if waitErr != nil {
-		// If killed by timeout, exit with 124 (GNU timeout convention)
-		exitCode = 124
-	}
+	exitCode := exitCodeOf(ctx, cmd, waitErr)
 
 	log.Printf("[guest-agent] command finished with exit code: %d", exitCode)
 
@@ -183,6 +176,21 @@ func (s *guestServer) sendExitCode(ctx context.Context, stream pb.GuestService_E
 	return err
 }
 
+// exitCodeOf reports how a command ended. A command that hit its deadline exits 124
+// (GNU timeout convention) even though the group kill leaves a process state behind.
+func exitCodeOf(ctx context.Context, cmd *exec.Cmd, waitErr error) int32 {
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return 124
+	}
+	if cmd.ProcessState != nil {
+		return int32(cmd.ProcessState.ExitCode())
+	}
+	if waitErr != nil {
+		return 124
+	}
+	return 0
+}
+
 // killProcessGroup kills the command and its descendants. Both exec paths start the command
 // as a group leader (Setpgid for no-TTY, Setsid for TTY), so the group id is its pid.
 func killProcessGroup(cmd *exec.Cmd) error {
@@ -223,20 +231,13 @@ func (w *execStreamWriter) Write(data []byte) (int, error) {
 func (s *guestServer) executeTTY(ctx context.Context, stream pb.GuestService_ExecServer, start *pb.ExecStart) error {
 	// Run command directly with PTY - guest-agent is already running in container namespace
 	// This ensures PTY and shell are in the same namespace, fixing Ctrl+C signal handling
-	if len(start.Command) == 0 {
-		return fmt.Errorf("empty command")
-	}
-
 	cmd := exec.CommandContext(ctx, start.Command[0], start.Command[1:]...)
 	cmd.Cancel = func() error { return killProcessGroup(cmd) }
 
 	// Set up environment (TTY mode adds TERM default)
 	cmd.Env = s.buildEnv(start.Env, true)
 
-	// Set up working directory
-	if start.Cwd != "" {
-		cmd.Dir = start.Cwd
-	}
+	cmd.Dir = start.Cwd
 
 	// Set up initial window size (use defaults if not specified)
 	ws := &pty.Winsize{
@@ -328,13 +329,7 @@ func (s *guestServer) executeTTY(ctx context.Context, stream pb.GuestService_Exe
 		return err
 	}
 
-	exitCode := int32(0)
-	if cmd.ProcessState != nil {
-		exitCode = int32(cmd.ProcessState.ExitCode())
-	} else if waitErr != nil {
-		// If killed by timeout, exit with 124 (GNU timeout convention)
-		exitCode = 124
-	}
+	exitCode := exitCodeOf(ctx, cmd, waitErr)
 
 	log.Printf("[guest-agent] TTY command finished with exit code: %d", exitCode)
 

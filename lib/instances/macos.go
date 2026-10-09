@@ -100,10 +100,11 @@ func (m *manager) checkMacOSIdentityAvailable(ctx context.Context, stored *Store
 	return nil
 }
 
-// guestAgentEnabled keeps old macOS templates unmanaged even if older or
-// hand-written metadata did not set SkipGuestAgent explicitly.
-func guestAgentEnabled(stored *StoredMetadata) bool {
-	return !stored.SkipGuestAgent && (stored.MacOS == nil || stored.MacOS.GuestAgent)
+// GuestAgentEnabled reports whether exec, copy, readiness and shutdown may use the
+// shared guest agent. A macOS image must declare it; hand-written metadata that
+// leaves SkipGuestAgent unset does not enable it.
+func (s *StoredMetadata) GuestAgentEnabled() bool {
+	return !s.SkipGuestAgent && (s.MacOS == nil || s.MacOS.GuestAgent)
 }
 
 // rejectMacOS refuses operations the experimental macOS guest does not implement.

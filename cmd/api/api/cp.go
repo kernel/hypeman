@@ -104,7 +104,7 @@ func (s *ApiService) CpHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if inst.MacOS != nil && (!inst.MacOS.GuestAgent || inst.SkipGuestAgent) {
+	if inst.MacOS != nil && !inst.GuestAgentEnabled() {
 		http.Error(w, `{"code":"unsupported","message":"file copy requires the shared macOS guest agent to be enabled"}`, http.StatusNotImplemented)
 		return
 	}
