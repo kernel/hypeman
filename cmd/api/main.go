@@ -459,6 +459,20 @@ func run() error {
 		mw.ResolveResource(app.ApiService.NewResolvers(), api.ResolverErrorResponder),
 	).Get("/instances/{id}/exec", app.ApiService.ExecHandler)
 
+	// Desktop/browser routes grant browser control, including discovery and status.
+	desktopRoutes := r.With(
+		middleware.RequestID,
+		middleware.RealIP,
+		middleware.Recoverer,
+		mw.InjectLogger(logger),
+		mw.AccessLogger(accessLogger),
+		mw.JwtAuth(app.Config.JwtSecret),
+		scopes.RequireScope(scopes.InstanceWrite),
+		mw.ResolveResource(app.ApiService.NewResolvers(), api.ResolverErrorResponder),
+	)
+	desktopRoutes.Get("/instances/{id}/cdp/*", app.ApiService.CDPHandler)
+	desktopRoutes.Post("/instances/{id}/cdp/start", app.ApiService.CDPHandler)
+
 	// Custom cp endpoint (outside OpenAPI spec, uses WebSocket)
 	r.With(
 		middleware.RequestID,

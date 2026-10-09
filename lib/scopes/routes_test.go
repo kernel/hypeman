@@ -20,9 +20,11 @@ func TestAllRoutesHaveScopes(t *testing.T) {
 	r := chi.NewRouter()
 	noop := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})
 
-	// WebSocket endpoints registered outside OpenAPI (same as cmd/api/main.go)
+	// Custom endpoints registered outside OpenAPI (same as cmd/api/main.go)
 	r.Get("/instances/{id}/exec", noop)
 	r.Get("/instances/{id}/cp", noop)
+	r.Get("/instances/{id}/cdp/*", noop)
+	r.Post("/instances/{id}/cdp/start", noop)
 
 	// Public/unauthenticated endpoints
 	r.Get("/spec.yaml", noop)
@@ -88,6 +90,8 @@ func TestRouteScopesHaveNoStaleEntries(t *testing.T) {
 	// Mirror production routes
 	r.Get("/instances/{id}/exec", noop)
 	r.Get("/instances/{id}/cp", noop)
+	r.Get("/instances/{id}/cdp/*", noop)
+	r.Post("/instances/{id}/cdp/start", noop)
 	r.Get("/spec.yaml", noop)
 	r.Get("/spec.json", noop)
 	r.Get("/swagger", noop)

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"log"
 	"net"
@@ -27,6 +28,18 @@ type guestServer struct {
 }
 
 func main() {
+	role := flag.String("role", "system", "agent role: system or desktop (Darwin Aqua user only)")
+	flag.Parse()
+	switch *role {
+	case "desktop":
+		if err := runDesktopAgent(); err != nil {
+			log.Fatalf("[desktop-agent] %v", err)
+		}
+		return
+	case "system":
+	default:
+		log.Fatalf("unsupported agent role %q", *role)
+	}
 	// Listen on vsock port 2222 with retries
 	var l net.Listener
 	var err error

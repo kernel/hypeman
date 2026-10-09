@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/c2h5oh/datasize"
+	"github.com/kernel/hypeman/lib/desktop"
 	"github.com/kernel/hypeman/lib/snapshot"
 	"github.com/knadh/koanf/parsers/yaml"
 	"github.com/knadh/koanf/providers/env"
@@ -275,13 +276,14 @@ type GPUConfig struct {
 
 // Config is the top-level Hypeman server configuration.
 type Config struct {
-	Port          string `koanf:"port"`
-	ListenAddress string `koanf:"listen_address"` // Empty preserves listening on all interfaces.
-	DataDir       string `koanf:"data_dir"`
-	JwtSecret     string `koanf:"jwt_secret"`
-	Env           string `koanf:"env"`
-	Version       string `koanf:"version"`
-	MacOSOnly     bool   `koanf:"macos_only"` // Experimental: omit Linux boot downloads and reject Linux creates.
+	Port               string `koanf:"port"`
+	ListenAddress      string `koanf:"listen_address"` // Empty preserves listening on all interfaces.
+	DataDir            string `koanf:"data_dir"`
+	JwtSecret          string `koanf:"jwt_secret"`
+	Env                string `koanf:"env"`
+	Version            string `koanf:"version"`
+	MacOSDesktopOrigin string `koanf:"macos_desktop_origin"` // Trusted external API origin; empty disables desktop/CDP routes.
+	MacOSOnly          bool   `koanf:"macos_only"`           // Experimental: omit Linux boot downloads and reject Linux creates.
 
 	Network          NetworkConfig          `koanf:"network"`
 	Caddy            CaddyConfig            `koanf:"caddy"`
@@ -590,6 +592,11 @@ func expandHomePath(path string) string {
 // Validate checks configuration values for correctness.
 // Returns an error if any configuration value is invalid.
 func (c *Config) Validate() error {
+	if c.MacOSDesktopOrigin != "" {
+		if _, err := desktop.ParseOrigin(c.MacOSDesktopOrigin); err != nil {
+			return fmt.Errorf("macos_desktop_origin: %w", err)
+		}
+	}
 	if c.MacOSOnly && (runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" || c.Hypervisor.Default != "vz") {
 		return fmt.Errorf("macos_only requires vz on Apple silicon")
 	}
