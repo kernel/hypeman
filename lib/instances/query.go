@@ -137,7 +137,7 @@ func (m *manager) deriveStateWithOptions(ctx context.Context, stored *StoredMeta
 		return stateResult{State: StateCreated}
 	case hypervisor.StateRunning:
 		hydrated := false
-		if hydrateBootMarkers && stored.MacOS == nil {
+		if hydrateBootMarkers {
 			hydrated = m.hydrateBootMarkersFromLogs(ctx, stored)
 		}
 		return stateResult{
@@ -219,7 +219,7 @@ func (m *manager) updateCachedHypervisorStateFromInstance(inst *Instance) {
 }
 
 func deriveRunningState(stored *StoredMetadata) State {
-	// For unmanaged macOS desktops, Running means VMM running, not app/agent ready.
+	// For macOS, Running means VMM running. Agent readiness is a separate marker.
 	if stored.MacOS != nil {
 		return StateRunning
 	}
@@ -293,8 +293,7 @@ func advancePhaseIfRunning(stored *StoredMetadata) {
 // services do not need to forward stdout/stderr to the serial console.
 // Returns true when at least one missing marker was found and populated.
 func (m *manager) hydrateBootMarkersFromLogs(ctx context.Context, stored *StoredMetadata) bool {
-	needProgram := stored.ProgramStartedAt == nil
-	needAgent := !stored.SkipGuestAgent && stored.GuestAgentReadyAt == nil
+	needProgram, needAgent := bootMarkersMissing(stored)
 	if !needProgram && !needAgent {
 		m.clearBootMarkerRescan(stored.Id)
 		return false
@@ -308,7 +307,42 @@ func (m *manager) hydrateBootMarkersFromLogs(ctx context.Context, stored *Stored
 	)
 	defer span.End()
 
-	programStartedAt, guestAgentReadyAt := m.parseBootMarkers(ctx, stored.Id, needProgram, needAgent, stored.StartedAt)
+	hydrated := m.applyBootMarkers(ctx, stored)
+	if hydrated {
+		advancePhaseIfRunning(stored)
+		m.clearBootMarkerRescan(stored.Id)
+	} else {
+		m.deferBootMarkerRescan(stored.Id)
+	}
+	return hydrated
+}
+
+// programMarkerSettled reports that no workload-start marker is awaited or already
+// recorded. macOS guests have no Linux workload marker, so it is never awaited.
+func (s *StoredMetadata) programMarkerSettled() bool {
+	return s.MacOS != nil || s.ProgramStartedAt != nil
+}
+
+// bootMarkersMissing reports which boot markers stored still lacks.
+func bootMarkersMissing(stored *StoredMetadata) (needProgram, needAgent bool) {
+	needProgram = !stored.programMarkerSettled()
+	needAgent = stored.GuestAgentEnabled() && stored.GuestAgentReadyAt == nil
+	return needProgram, needAgent
+}
+
+// applyBootMarkers fills missing boot markers on stored from serial logs, then from
+// the guest-agent probe, and reports whether it filled any. Callers own locking,
+// phase advancement and persistence.
+func (m *manager) applyBootMarkers(ctx context.Context, stored *StoredMetadata) bool {
+	needProgram, needAgent := bootMarkersMissing(stored)
+	if !needProgram && !needAgent {
+		return false
+	}
+
+	var programStartedAt, guestAgentReadyAt *time.Time
+	if stored.MacOS == nil {
+		programStartedAt, guestAgentReadyAt = m.parseBootMarkers(ctx, stored.Id, needProgram, needAgent, stored.StartedAt)
+	}
 	hydrated := false
 	if needProgram && programStartedAt != nil {
 		stored.ProgramStartedAt = programStartedAt
@@ -318,14 +352,8 @@ func (m *manager) hydrateBootMarkersFromLogs(ctx context.Context, stored *Stored
 		stored.GuestAgentReadyAt = guestAgentReadyAt
 		hydrated = true
 	}
-	if needAgent && stored.GuestAgentReadyAt == nil && stored.ProgramStartedAt != nil && m.hydrateGuestAgentReadyFromProbe(ctx, stored) {
+	if needAgent && stored.GuestAgentReadyAt == nil && stored.programMarkerSettled() && m.hydrateGuestAgentReadyFromProbe(ctx, stored) {
 		hydrated = true
-	}
-	if hydrated {
-		advancePhaseIfRunning(stored)
-		m.clearBootMarkerRescan(stored.Id)
-	} else {
-		m.deferBootMarkerRescan(stored.Id)
 	}
 	return hydrated
 }
@@ -421,7 +449,7 @@ func (m *manager) nowUTC() time.Time {
 }
 
 func (m *manager) hydrateGuestAgentReadyFromProbe(ctx context.Context, stored *StoredMetadata) bool {
-	if stored == nil || stored.SkipGuestAgent || stored.GuestAgentReadyAt != nil {
+	if stored == nil || !stored.GuestAgentEnabled() || stored.GuestAgentReadyAt != nil {
 		return false
 	}
 	probe := m.guestAgentReadyProbe
@@ -437,7 +465,7 @@ func (m *manager) hydrateGuestAgentReadyFromProbe(ctx context.Context, stored *S
 }
 
 func probeGuestAgentReady(ctx context.Context, stored *StoredMetadata) bool {
-	if stored == nil || stored.SkipGuestAgent {
+	if stored == nil || !stored.GuestAgentEnabled() {
 		return false
 	}
 	dialer, err := hypervisor.NewVsockDialer(stored.HypervisorType, stored.VsockSocket, stored.VsockCID)
@@ -642,27 +670,7 @@ func (m *manager) persistBootMarkers(ctx context.Context, id string) {
 	if err != nil {
 		return
 	}
-
-	needProgram := meta.ProgramStartedAt == nil
-	needAgent := !meta.SkipGuestAgent && meta.GuestAgentReadyAt == nil
-	if !needProgram && !needAgent {
-		return
-	}
-
-	programStartedAt, guestAgentReadyAt := m.parseBootMarkers(ctx, id, needProgram, needAgent, meta.StartedAt)
-	updated := false
-	if needProgram && programStartedAt != nil {
-		meta.ProgramStartedAt = programStartedAt
-		updated = true
-	}
-	if needAgent && guestAgentReadyAt != nil {
-		meta.GuestAgentReadyAt = guestAgentReadyAt
-		updated = true
-	}
-	if needAgent && meta.GuestAgentReadyAt == nil && meta.ProgramStartedAt != nil && m.hydrateGuestAgentReadyFromProbe(ctx, &meta.StoredMetadata) {
-		updated = true
-	}
-	if !updated {
+	if !m.applyBootMarkers(ctx, &meta.StoredMetadata) {
 		return
 	}
 

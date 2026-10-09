@@ -29,7 +29,7 @@ func prepareMacOSCreate(req *CreateInstanceRequest, img *images.Image, caps hype
 		return fmt.Errorf("%w: incomplete macOS image", ErrImageNotReady)
 	}
 	if req.HotplugSize != 0 || req.OverlaySize != 0 || len(req.Volumes) != 0 || len(req.Devices) != 0 || req.GPU != nil || len(req.Env) != 0 || len(req.Entrypoint) != 0 || len(req.Cmd) != 0 || req.NetworkEgress != nil || len(req.Credentials) != 0 || req.AutoStandby != nil || req.HealthCheck != nil || req.RestartPolicy != nil || req.SnapshotPolicy != nil || req.DiskIOBps != 0 || req.NetworkBandwidthDownload != 0 || req.NetworkBandwidthUpload != 0 {
-		return fmt.Errorf("%w: experimental macOS supports local disk clone, CPU/RAM, tags, expiration and NAT only; Linux commands/env/volumes, overlays, agents, policies and I/O shaping are unsupported", ErrInvalidRequest)
+		return fmt.Errorf("%w: experimental macOS supports local disk clone, CPU/RAM, tags, expiration and NAT only; Linux startup commands/env/volumes, overlays, policies and I/O shaping are unsupported", ErrInvalidRequest)
 	}
 	size, vcpus := req.Size, req.Vcpus
 	if size == 0 {
@@ -43,7 +43,7 @@ func prepareMacOSCreate(req *CreateInstanceRequest, img *images.Image, caps hype
 	}
 	req.Size, req.Vcpus = size, vcpus
 	req.OverlaySize = *img.SizeBytes // Reserve the writable boot disk, not a Linux overlay.
-	req.SkipGuestAgent = true
+	req.SkipGuestAgent = req.SkipGuestAgent || !img.MacOS.GuestAgent
 	req.SkipKernelHeaders = true
 	return nil
 }
@@ -98,6 +98,13 @@ func (m *manager) checkMacOSIdentityAvailable(ctx context.Context, stored *Store
 		}
 	}
 	return nil
+}
+
+// GuestAgentEnabled reports whether exec, copy, readiness and shutdown may use the
+// shared guest agent. A macOS image must declare it; hand-written metadata that
+// leaves SkipGuestAgent unset does not enable it.
+func (s *StoredMetadata) GuestAgentEnabled() bool {
+	return !s.SkipGuestAgent && (s.MacOS == nil || s.MacOS.GuestAgent)
 }
 
 // rejectMacOS refuses operations the experimental macOS guest does not implement.

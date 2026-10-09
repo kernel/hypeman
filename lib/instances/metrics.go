@@ -603,7 +603,7 @@ func timeToRunningReadyAt(stored *StoredMetadata) *time.Time {
 	if stored == nil || stored.ProgramStartedAt == nil {
 		return nil
 	}
-	if stored.SkipGuestAgent || stored.GuestAgentReadyAt == nil {
+	if !stored.GuestAgentEnabled() || stored.GuestAgentReadyAt == nil {
 		return stored.ProgramStartedAt
 	}
 	if stored.GuestAgentReadyAt.After(*stored.ProgramStartedAt) {

@@ -442,6 +442,8 @@ func retryableConnectionErrorType(err error) string {
 
 // execIntoInstanceOnce executes command in instance via vsock using gRPC (single attempt).
 func execIntoInstanceOnce(ctx context.Context, dialer hypervisor.VsockDialer, opts ExecOptions) (*ExitStatus, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	start := time.Now()
 	var bytesSent int64
 
@@ -515,14 +517,21 @@ func execIntoInstanceOnce(ctx context.Context, dialer hypervisor.VsockDialer, op
 	// Handle resize events in background (if channel provided)
 	if opts.ResizeChan != nil {
 		go func() {
-			for resize := range opts.ResizeChan {
-				streamMu.Lock()
-				stream.Send(&ExecRequest{
-					Request: &ExecRequest_Resize{
-						Resize: resize,
-					},
-				})
-				streamMu.Unlock()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case resize, ok := <-opts.ResizeChan:
+					if !ok {
+						return
+					}
+					streamMu.Lock()
+					err := stream.Send(&ExecRequest{Request: &ExecRequest_Resize{Resize: resize}})
+					streamMu.Unlock()
+					if err != nil {
+						return
+					}
+				}
 			}
 		}()
 	}

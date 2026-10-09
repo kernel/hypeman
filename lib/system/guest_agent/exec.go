@@ -2,13 +2,14 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"os/exec"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/creack/pty"
@@ -30,59 +31,51 @@ func (s *guestServer) Exec(stream pb.GuestService_ExecServer) error {
 		return fmt.Errorf("first message must be ExecStart")
 	}
 
-	command := start.Command
-	if len(command) == 0 {
-		command = []string{"/bin/sh"}
+	if len(start.Command) == 0 {
+		start.Command = []string{"/bin/sh"}
 	}
+	command := start.Command
 
 	log.Printf("[guest-agent] exec: command=%v tty=%v cwd=%s timeout=%d",
 		command, start.Tty, start.Cwd, start.TimeoutSeconds)
 
 	// Create context with timeout if specified
-	ctx := context.Background()
+	ctx := stream.Context()
 	if start.TimeoutSeconds > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, time.Duration(start.TimeoutSeconds)*time.Second)
 		defer cancel()
 	}
 
-	if start.Tty {
-		return s.executeTTY(ctx, stream, start)
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	cmd, err := s.execCommand(ctx, start)
+	if err != nil {
+		return err
 	}
-	return s.executeNoTTY(ctx, stream, start)
+	if start.Tty {
+		return s.executeTTY(ctx, cancel, stream, start, cmd)
+	}
+	return s.executeNoTTY(ctx, cancel, stream, cmd)
 }
 
 // executeNoTTY executes command without TTY
-func (s *guestServer) executeNoTTY(ctx context.Context, stream pb.GuestService_ExecServer, start *pb.ExecStart) error {
-	// Run command directly - guest-agent is already running in container namespace
-	if len(start.Command) == 0 {
-		return fmt.Errorf("empty command")
+func (s *guestServer) executeNoTTY(ctx context.Context, cancel context.CancelFunc, stream pb.GuestService_ExecServer, cmd *exec.Cmd) error {
+	var sendMu sync.Mutex
+	cmd.Stdout = &execStreamWriter{stream: stream, mu: &sendMu, cancel: cancel}
+	cmd.Stderr = &execStreamWriter{stream: stream, mu: &sendMu, cancel: cancel, stderr: true}
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return fmt.Errorf("open command stdin: %w", err)
 	}
-
-	cmd := exec.CommandContext(ctx, start.Command[0], start.Command[1:]...)
-
-	// Set up environment (no TTY defaults for non-TTY mode)
-	cmd.Env = s.buildEnv(start.Env, false)
-
-	// Set up working directory
-	if start.Cwd != "" {
-		cmd.Dir = start.Cwd
-	}
-
-	stdin, _ := cmd.StdinPipe()
-	stdout, _ := cmd.StdoutPipe()
-	stderr, _ := cmd.StderrPipe()
-
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start command: %w", err)
 	}
-
-	// Mutex to protect concurrent stream.Send calls (gRPC streams are not thread-safe)
-	var sendMu sync.Mutex
-
-	// Use WaitGroup to ensure all output is read before sending
-	var wg sync.WaitGroup
-	var stdoutData, stderrData []byte
+	// Cancel is not called once the direct child has exited, so a descendant that
+	// still holds the pipes would outlive the timeout. Kill the group from the context.
+	finished := make(chan struct{})
+	defer close(finished)
+	go killGroupOnDone(ctx, cmd, finished)
 
 	// Handle stdin in background
 	go func() {
@@ -98,85 +91,169 @@ func (s *guestServer) executeNoTTY(ctx context.Context, stream pb.GuestService_E
 		}
 	}()
 
-	// Read all stdout/stderr BEFORE calling Wait() - Wait() closes the pipes!
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		data, _ := io.ReadAll(stdout)
-		stdoutData = data
-	}()
+	return s.finishExec(ctx, stream, cmd, nil)
+}
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		data, _ := io.ReadAll(stderr)
-		stderrData = data
-	}()
+// execCommand owns setup and pre-start cancellation for both I/O modes.
+func (s *guestServer) execCommand(ctx context.Context, start *pb.ExecStart) (*exec.Cmd, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("start command: %w", err)
+	}
+	cmd := exec.CommandContext(ctx, start.Command[0], start.Command[1:]...)
+	cmd.Cancel = func() error { return killProcessGroup(cmd) }
+	cmd.WaitDelay = 2 * time.Second
+	cmd.Env = s.buildEnv(start.Env, start.Tty)
+	cmd.Dir = start.Cwd
+	if !start.Tty {
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	}
+	return cmd, nil
+}
 
-	// Wait for all reads to complete FIRST (before Wait closes pipes)
-	wg.Wait()
-
-	// Now safe to call Wait - pipes are fully drained
-	waitErr := cmd.Wait()
-
-	// Now stream output in chunks (streaming compatible)
-	const chunkSize = 32 * 1024
-	for i := 0; i < len(stdoutData); i += chunkSize {
-		end := i + chunkSize
-		if end > len(stdoutData) {
-			end = len(stdoutData)
+// finishExec owns bounded wait, output drain and final status for both I/O modes.
+func (s *guestServer) finishExec(ctx context.Context, stream pb.GuestService_ExecServer, cmd *exec.Cmd, outputDone <-chan struct{}) error {
+	// Non-TTY cmd.Wait also waits for copies, which can block in stream.Send.
+	var waitErr error
+	if err := s.runBounded(ctx, func() { waitErr = cmd.Wait() }); err != nil {
+		return err
+	}
+	// ErrWaitDelay means the command exited but a descendant still held its output.
+	// The status is already known, so it is reported as a normal exit.
+	if waitErr != nil {
+		_, exited := waitErr.(*exec.ExitError)
+		if !exited && !errors.Is(waitErr, exec.ErrWaitDelay) {
+			return fmt.Errorf("stream command output: %w", waitErr)
 		}
-		sendMu.Lock()
-		stream.Send(&pb.ExecResponse{
-			Response: &pb.ExecResponse_Stdout{Stdout: stdoutData[i:end]},
-		})
-		sendMu.Unlock()
-	}
-	for i := 0; i < len(stderrData); i += chunkSize {
-		end := i + chunkSize
-		if end > len(stderrData) {
-			end = len(stderrData)
-		}
-		sendMu.Lock()
-		stream.Send(&pb.ExecResponse{
-			Response: &pb.ExecResponse_Stderr{Stderr: stderrData[i:end]},
-		})
-		sendMu.Unlock()
 	}
 
-	exitCode := int32(0)
-	if cmd.ProcessState != nil {
-		exitCode = int32(cmd.ProcessState.ExitCode())
-	} else if waitErr != nil {
-		// If killed by timeout, exit with 124 (GNU timeout convention)
-		exitCode = 124
+	if outputDone != nil {
+		if err := awaitBounded(ctx, outputDone, s.drainBound()); err != nil {
+			return err
+		}
 	}
+	exitCode := exitCodeOf(ctx, cmd, waitErr)
 
 	log.Printf("[guest-agent] command finished with exit code: %d", exitCode)
 
-	// Send exit code
-	return stream.Send(&pb.ExecResponse{
-		Response: &pb.ExecResponse_ExitCode{ExitCode: exitCode},
-	})
+	return s.sendExitCode(ctx, stream, exitCode)
+}
+
+// defaultDrainGrace bounds how long a cancelled command may take to finish. A descendant that
+// holds the terminal or output, or a client that stopped reading, must not block the handler.
+const defaultDrainGrace = 5 * time.Second
+
+func (s *guestServer) drainBound() time.Duration {
+	if s.drainGrace > 0 {
+		return s.drainGrace
+	}
+	return defaultDrainGrace
+}
+
+// awaitBounded waits for done. After ctx ends it allows grace more, then returns an
+// error so the handler returns, ending the RPC and releasing any send still blocked on it.
+func awaitBounded(ctx context.Context, done <-chan struct{}, grace time.Duration) error {
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+	}
+	timer := time.NewTimer(grace)
+	defer timer.Stop()
+	select {
+	case <-done:
+		return nil
+	case <-timer.C:
+		return fmt.Errorf("command did not finish after cancellation: %w", ctx.Err())
+	}
+}
+
+// killGroupOnDone kills cmd's process group once ctx ends, unless finished closes first.
+func killGroupOnDone(ctx context.Context, cmd *exec.Cmd, finished <-chan struct{}) {
+	select {
+	case <-ctx.Done():
+		_ = killProcessGroup(cmd)
+	case <-finished:
+	}
+}
+
+// sendExitCode delivers the final status under the same bound as output, so a client
+// that stopped reading cannot hold the handler past cancellation.
+func (s *guestServer) sendExitCode(ctx context.Context, stream pb.GuestService_ExecServer, exitCode int32) error {
+	var err error
+	if boundErr := s.runBounded(ctx, func() {
+		err = stream.Send(&pb.ExecResponse{
+			Response: &pb.ExecResponse_ExitCode{ExitCode: exitCode},
+		})
+	}); boundErr != nil {
+		return boundErr
+	}
+	return err
+}
+
+// runBounded runs fn on its own goroutine and waits for it under the drain bound.
+// If the bound expires, fn keeps running and must not rely on the handler still waiting.
+func (s *guestServer) runBounded(ctx context.Context, fn func()) error {
+	done := make(chan struct{})
+	go func() {
+		fn()
+		close(done)
+	}()
+	return awaitBounded(ctx, done, s.drainBound())
+}
+
+// exitCodeOf reports how a command ended. A command that hit its deadline exits 124
+// (GNU timeout convention) even though the group kill leaves a process state behind.
+func exitCodeOf(ctx context.Context, cmd *exec.Cmd, waitErr error) int32 {
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return 124
+	}
+	if cmd.ProcessState != nil {
+		return int32(cmd.ProcessState.ExitCode())
+	}
+	if waitErr != nil {
+		return 124
+	}
+	return 0
+}
+
+// killProcessGroup kills the command and its descendants. Both exec paths start the command
+// as a group leader (Setpgid for no-TTY, Setsid for TTY), so the group id is its pid.
+func killProcessGroup(cmd *exec.Cmd) error {
+	if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+		return err
+	}
+	return nil
+}
+
+type execStreamWriter struct {
+	stream pb.GuestService_ExecServer
+	mu     *sync.Mutex
+	cancel context.CancelFunc
+	stderr bool
+}
+
+func (w *execStreamWriter) Write(data []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	written := 0
+	for len(data) > 0 {
+		n := min(len(data), 32*1024)
+		response := &pb.ExecResponse{Response: &pb.ExecResponse_Stdout{Stdout: data[:n]}}
+		if w.stderr {
+			response.Response = &pb.ExecResponse_Stderr{Stderr: data[:n]}
+		}
+		if err := w.stream.Send(response); err != nil {
+			w.cancel()
+			return written, err
+		}
+		written += n
+		data = data[n:]
+	}
+	return written, nil
 }
 
 // executeTTY executes command with TTY
-func (s *guestServer) executeTTY(ctx context.Context, stream pb.GuestService_ExecServer, start *pb.ExecStart) error {
-	// Run command directly with PTY - guest-agent is already running in container namespace
-	// This ensures PTY and shell are in the same namespace, fixing Ctrl+C signal handling
-	if len(start.Command) == 0 {
-		return fmt.Errorf("empty command")
-	}
-
-	cmd := exec.CommandContext(ctx, start.Command[0], start.Command[1:]...)
-
-	// Set up environment (TTY mode adds TERM default)
-	cmd.Env = s.buildEnv(start.Env, true)
-
-	// Set up working directory
-	if start.Cwd != "" {
-		cmd.Dir = start.Cwd
-	}
+func (s *guestServer) executeTTY(ctx context.Context, cancel context.CancelFunc, stream pb.GuestService_ExecServer, start *pb.ExecStart, cmd *exec.Cmd) error {
 
 	// Set up initial window size (use defaults if not specified)
 	ws := &pty.Winsize{
@@ -196,12 +273,15 @@ func (s *guestServer) executeTTY(ctx context.Context, stream pb.GuestService_Exe
 		return fmt.Errorf("start pty: %w", err)
 	}
 	defer ptmx.Close()
+	finished := make(chan struct{})
+	defer close(finished)
+	go killGroupOnDone(ctx, cmd, finished)
 
 	// Mutex to protect concurrent stream.Send calls (gRPC streams are not thread-safe)
 	var sendMu sync.Mutex
 
-	// Use WaitGroup to ensure all output is sent before exit code
-	var wg sync.WaitGroup
+	outputDone := make(chan struct{})
+	output := &execStreamWriter{stream: stream, mu: &sendMu, cancel: cancel}
 
 	// Handle stdin and resize in background
 	go func() {
@@ -226,18 +306,15 @@ func (s *guestServer) executeTTY(ctx context.Context, stream pb.GuestService_Exe
 	}()
 
 	// Stream output
-	wg.Add(1)
 	go func() {
-		defer wg.Done()
+		defer close(outputDone)
 		buf := make([]byte, 32*1024)
 		for {
 			n, err := ptmx.Read(buf)
 			if n > 0 {
-				sendMu.Lock()
-				stream.Send(&pb.ExecResponse{
-					Response: &pb.ExecResponse_Stdout{Stdout: buf[:n]},
-				})
-				sendMu.Unlock()
+				if _, sendErr := output.Write(buf[:n]); sendErr != nil {
+					return
+				}
 			}
 			if err != nil {
 				return
@@ -245,26 +322,7 @@ func (s *guestServer) executeTTY(ctx context.Context, stream pb.GuestService_Exe
 		}
 	}()
 
-	// Wait for command or context cancellation
-	waitErr := cmd.Wait()
-
-	// Wait for all output to be sent
-	wg.Wait()
-
-	exitCode := int32(0)
-	if cmd.ProcessState != nil {
-		exitCode = int32(cmd.ProcessState.ExitCode())
-	} else if waitErr != nil {
-		// If killed by timeout, exit with 124 (GNU timeout convention)
-		exitCode = 124
-	}
-
-	log.Printf("[guest-agent] TTY command finished with exit code: %d", exitCode)
-
-	// Send exit code
-	return stream.Send(&pb.ExecResponse{
-		Response: &pb.ExecResponse_ExitCode{ExitCode: exitCode},
-	})
+	return s.finishExec(ctx, stream, cmd, outputDone)
 }
 
 // buildEnv constructs environment variables by merging provided env with defaults.

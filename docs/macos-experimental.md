@@ -72,14 +72,19 @@ attached. NAT uses the preserved MAC. The IP is observed from the host's VZ
 DHCP leases, which may retain an old lease before the guest is ready.
 
 **`Running` means the VMM is running, not that SSH, the desktop or Chrome is
-ready.** Readiness is currently tested over SSH. Startup does not launch Chrome.
+ready.** Unmanaged templates still need an external readiness check. Templates
+provisioned with the shared Darwin GuestService can opt in with `guest_agent: true`
+in their platform configuration; system readiness is observed separately through
+`guest_agent_ready_at`. See [Darwin GuestService](macos-guest-agent.md). Startup
+does not launch Chrome.
 Guest identity, host keys, user secrets and MAC are preserved. Only one active
 instance with a given Mac identifier is allowed. Do not run the source bundle
 or an external clone concurrently. Production provisioning needs identity and
 credential rekeying; this spike is not a multi-tenant image format.
 
-`POST /instances/{id}/stop` shuts down the VMM; without a Darwin guest agent,
-it does **not** guarantee an orderly guest OS/application shutdown. Use a human
+`POST /instances/{id}/stop` attempts orderly GuestService shutdown for opted-in
+images, then falls back to VMM shutdown if necessary. Without an enabled Darwin
+guest agent it does **not** guarantee an orderly guest OS/application shutdown. Use a human
 or an authorized guest shutdown workflow before destructive operations when
 application consistency matters. Start cold-boots the instance's existing disk.
 Delete removes instance storage, not the imported image. Deleting the imported
@@ -87,8 +92,9 @@ image does not affect existing instances: each owns independent copies and
 starts without the template.
 
 Unsupported instance operations reject requests: snapshot/fork/standby/restore,
-updates, volumes, env/commands/credential brokering, Linux guest-agent exec and
-vsock operations, health/restart/auto-standby policies, passthrough and shaping.
+updates, volumes, startup env/commands/credential brokering,
+health/restart/auto-standby policies, passthrough and shaping. Exec/file-copy over
+vsock require an opted-in shared agent; unmanaged images reject those requests.
 The shim's standalone save/restore proof does not make API snapshot semantics
 safe; consistent disk+aux+state bundle handling remains separate work.
 
