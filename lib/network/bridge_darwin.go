@@ -36,7 +36,7 @@ func (m *manager) setupBridgeHTB(ctx context.Context, bridgeName string, capacit
 
 // createTAPDevice is a no-op on macOS as we use NAT networking.
 // Virtualization.framework creates virtual network interfaces internally.
-func (m *manager) createTAPDevice(ctx context.Context, tapName, bridgeName string, isolated bool) error {
+func (m *manager) createTAPDevice(ctx context.Context, tapName, bridgeName, mac string, isolated bool) error {
 	// On macOS with vz, network devices are created by the VMM itself
 	return nil
 }
