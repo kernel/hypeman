@@ -526,10 +526,11 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef, credentials 
 		return
 	}
 	convertStart := time.Now()
-	staged := stagedImageFiles{disk: diskTempPath, machine: payload}
+	staged := stagedImageFiles{disk: diskTempPath}
 	if payload != nil {
 		staged.aux = filepath.Join(layout.dir, "aux.img.tmp-"+buildID)
 		defer os.Remove(staged.aux)
+		staged.macos = payload.Platform
 		staged.sizeBytes, err = stageMacOSMachine(payload, diskTempPath, staged.aux)
 	} else {
 		staged.sizeBytes, err = ExportRootfs(tempDir, diskTempPath, DefaultImageFormat)
@@ -557,10 +558,10 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef, credentials 
 // stagedImageFiles are the build outputs written before finalization takes createMu.
 // Finalization only renames them into place and commits metadata.
 type stagedImageFiles struct {
-	disk      string               // staged disk, beside its final path
-	aux       string               // staged auxiliary storage; macOS machine images only
-	machine   *macOSMachinePayload // nil for rootfs images
-	sizeBytes int64                // bytes the staged files occupy, recorded for accounting
+	disk      string      // staged disk, beside its final path
+	aux       string      // staged auxiliary storage; macOS machine images only
+	macos     *MacOSImage // platform of a macOS machine image; nil for rootfs images
+	sizeBytes int64       // bytes the staged files occupy, recorded for accounting
 }
 
 func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, buildID string, staged stagedImageFiles) error {
@@ -585,18 +586,18 @@ func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, buildID st
 		return err
 	}
 
-	if actualPlatform.OS == "darwin" && staged.machine == nil {
+	if actualPlatform.OS == "darwin" && staged.macos == nil {
 		return fmt.Errorf("macOS image requires a validated machine bundle")
 	}
 	// Files installed before the metadata commit. Finalization failure removes them.
 	var installed []string
-	if staged.machine != nil {
+	if staged.macos != nil {
 		auxPath := filepath.Join(layout.dir, "aux.img")
 		if err := os.Rename(staged.aux, auxPath); err != nil {
 			return rollbackFinalization(installed, err)
 		}
 		installed = append(installed, auxPath)
-		meta.MacOS = staged.machine.Platform
+		meta.MacOS = staged.macos
 	}
 	if err := installAtomically(layout.disk, func(path string) error {
 		return os.Rename(staged.disk, path)
