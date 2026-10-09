@@ -29,6 +29,10 @@ func buildArgs(cfg hypervisor.VMConfig, machine MachineType) []string {
 		// Do not allow a host qemu.conf to add devices outside microvm's
 		// documented eight virtio-mmio-device limit.
 		args = append(args, "-no-user-config")
+		// Pin upstream's default microvm firmware. Some distros point
+		// bios-microvm.bin at SeaBIOS instead, whose ACPI tables omit the
+		// IOAPICs and crash the guest kernel during early boot.
+		args = append(args, "-bios", "qboot.rom")
 	}
 
 	// CPU configuration

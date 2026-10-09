@@ -249,6 +249,7 @@ func TestBuildArgs_MicroVM(t *testing.T) {
 	args := buildArgs(cfg, MachineTypeMicroVM)
 	assert.Contains(t, args, "microvm,accel=kvm")
 	assert.Contains(t, args, "-no-user-config")
+	assert.Contains(t, args, "qboot.rom")
 	assert.Contains(t, args, "virtio-blk-device,drive=drive0")
 	assert.Contains(t, args, "virtio-net-device,netdev=net0,mac=02:00:00:ab:cd:ef")
 	assert.Contains(t, args, "vhost-vsock-device,guest-cid=123")
