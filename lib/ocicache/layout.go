@@ -25,8 +25,8 @@ var indexMu sync.Mutex
 // a descriptor tagged with org.opencontainers.image.ref.name=tag to index.json.
 //
 // Every file is written to a temp file and renamed into place, so readers never
-// see a partial blob or index and an interrupted write leaves nothing behind.
-// Blob writes run concurrently; the index update is serialized.
+// see a partial blob or index and an interrupted write never replaces a good
+// file. Blob writes run concurrently; the index update is serialized.
 func AppendImage(cacheDir string, img v1.Image, tag string) error {
 	if err := writeImage(cacheDir, img); err != nil {
 		return err
@@ -101,6 +101,12 @@ func writeImage(cacheDir string, img v1.Image) error {
 	return nil
 }
 
+// WriteBlob stores data as the blob for hash, which the caller must have
+// verified. Atomic and concurrency-safe like the blobs AppendImage writes.
+func WriteBlob(cacheDir string, hash v1.Hash, data []byte) error {
+	return writeBlob(cacheDir, hash, int64(len(data)), io.NopCloser(bytes.NewReader(data)))
+}
+
 // writeBlob skips the write when the blob already exists with the expected
 // size, so a blob truncated by an interrupted writer is rewritten.
 func writeBlob(cacheDir string, hash v1.Hash, size int64, rc io.ReadCloser) error {
@@ -164,8 +170,9 @@ func appendDescriptor(cacheDir string, desc v1.Descriptor) error {
 	})
 }
 
-// writeFile writes to a temp file in the same directory and renames it over
-// path. The temp name never matches a blob digest, so the cache GC ignores it.
+// writeFile writes to a temp file in the same directory, syncs it, and renames
+// it over path. The temp name never matches a blob digest, so the cache GC
+// ignores it.
 func writeFile(path string, write func(io.Writer) error) error {
 	dir, base := filepath.Split(path)
 	tmp, err := os.CreateTemp(dir, "."+base+".tmp-*")
@@ -178,6 +185,10 @@ func writeFile(path string, write func(io.Writer) error) error {
 		return err
 	}
 	if err := write(tmp); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
 		tmp.Close()
 		return err
 	}
