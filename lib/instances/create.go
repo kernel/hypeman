@@ -78,6 +78,26 @@ func generateVsockCID(instanceID string) int64 {
 
 // createInstance creates and starts a new instance
 // Multi-hop orchestration: Stopped → Created → Running
+// applyLinuxShapingDefaults fills unspecified disk and network limits with the
+// proportional defaults for vcpus. Without a resource validator they stay at auto.
+func (m *manager) applyLinuxShapingDefaults(req *CreateInstanceRequest, vcpus int) {
+	if m.resourceValidator == nil {
+		return
+	}
+	if req.DiskIOBps == 0 {
+		req.DiskIOBps, _ = m.resourceValidator.DefaultDiskIOBandwidth(vcpus)
+	}
+	if req.NetworkBandwidthDownload == 0 || req.NetworkBandwidthUpload == 0 {
+		defaultDown, defaultUp := m.resourceValidator.DefaultNetworkBandwidth(vcpus)
+		if req.NetworkBandwidthDownload == 0 {
+			req.NetworkBandwidthDownload = defaultDown
+		}
+		if req.NetworkBandwidthUpload == 0 {
+			req.NetworkBandwidthUpload = defaultUp
+		}
+	}
+}
+
 func (m *manager) createInstance(
 	ctx context.Context,
 	req CreateInstanceRequest,
@@ -229,6 +249,11 @@ func (m *manager) createInstance(
 	vcpus := req.Vcpus
 	if vcpus == 0 {
 		vcpus = 2
+	}
+	// Linux defaults come from the resolved image, not a separate lookup at the API.
+	// macOS guests take their CPU and memory from the image and reject shaping.
+	if imageInfo.MacOS == nil {
+		m.applyLinuxShapingDefaults(&req, vcpus)
 	}
 
 	// Validate per-instance resource limits

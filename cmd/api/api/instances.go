@@ -119,7 +119,7 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 		diskIOBps = int64(ioBpsBytes)
 	}
 
-	vcpus := 2
+	var vcpus int
 	if request.Body.Vcpus != nil {
 		vcpus = *request.Body.Vcpus
 	}
@@ -270,38 +270,6 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 	if request.Body.Gpu != nil && request.Body.Gpu.Profile != nil && *request.Body.Gpu.Profile != "" {
 		gpuConfig = &instances.GPUConfig{
 			Profile: *request.Body.Gpu.Profile,
-		}
-	}
-
-	// Imported desktop guests do not implement Linux disk/TAP shaping. Do not
-	// silently advertise proportional limits that the backend would ignore.
-	// An uncached image is not an error here: CreateInstance pulls it, and the
-	// defaults stay Linux-shaped until a macOS image is known.
-	img, err := s.ImageManager.GetImage(ctx, request.Body.Image)
-	if err != nil && !errors.Is(err, images.ErrNotFound) {
-		log.ErrorContext(ctx, "failed to resolve image for instance defaults", "error", err, "image", request.Body.Image)
-		return oapi.CreateInstance500JSONResponse{
-			Code:    "internal_error",
-			Message: "failed to create instance",
-		}, nil
-	}
-	macOSImage := err == nil && img.MacOS != nil
-	if macOSImage && request.Body.Vcpus == nil {
-		vcpus = 0
-	}
-
-	// Calculate default resource limits when not specified (0 = auto)
-	// Uses proportional allocation based on CPU: (vcpus / cpuCapacity) * resourceCapacity
-	if diskIOBps == 0 && !macOSImage {
-		diskIOBps, _ = s.ResourceManager.DefaultDiskIOBandwidth(vcpus)
-	}
-	if !macOSImage && (networkBandwidthDownload == 0 || networkBandwidthUpload == 0) {
-		defaultDown, defaultUp := s.ResourceManager.DefaultNetworkBandwidth(vcpus)
-		if networkBandwidthDownload == 0 {
-			networkBandwidthDownload = defaultDown
-		}
-		if networkBandwidthUpload == 0 {
-			networkBandwidthUpload = defaultUp
 		}
 	}
 

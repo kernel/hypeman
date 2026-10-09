@@ -162,6 +162,10 @@ type ResourceValidator interface {
 	ReserveAllocation(ctx context.Context, instanceID string, vcpus int, memoryBytes int64, networkDownloadBps int64, networkUploadBps int64, diskIOBps int64, diskBytes int64, needsGPU bool) error
 	// FinishAllocation removes any pending reservation for the given instance ID.
 	FinishAllocation(instanceID string)
+	// DefaultNetworkBandwidth and DefaultDiskIOBandwidth return the proportional
+	// limits applied to unspecified shaping for a guest with vcpus.
+	DefaultNetworkBandwidth(vcpus int) (downloadBps, uploadBps int64)
+	DefaultDiskIOBandwidth(vcpus int) (ioBps, burstBps int64)
 }
 
 type manager struct {
