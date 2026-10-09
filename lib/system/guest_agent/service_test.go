@@ -203,13 +203,16 @@ func (s *stalledExecStream) Send(resp *pb.ExecResponse) error {
 	return nil
 }
 
-func TestGuestServiceExecTimeoutFinishesWhenClientStopsReading(t *testing.T) {
+// runStalledExec runs a timed-out command against a client that stopped reading and
+// requires the handler to return the bounded-drain error instead of hanging.
+func runStalledExec(t *testing.T, command string, exitOnly bool) {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	release := make(chan struct{})
 	t.Cleanup(func() { close(release) })
-	stream := &stalledExecStream{ctx: ctx, release: release, start: &pb.ExecRequest{Request: &pb.ExecRequest_Start{Start: &pb.ExecStart{
-		Command:        []string{"/bin/sh", "-c", "yes"},
+	stream := &stalledExecStream{ctx: ctx, release: release, stallExitOnly: exitOnly, start: &pb.ExecRequest{Request: &pb.ExecRequest_Start{Start: &pb.ExecStart{
+		Command:        []string{"/bin/sh", "-c", command},
 		TimeoutSeconds: 1,
 	}}}}
 	done := make(chan error, 1)
@@ -222,23 +225,12 @@ func TestGuestServiceExecTimeoutFinishesWhenClientStopsReading(t *testing.T) {
 	}
 }
 
+func TestGuestServiceExecTimeoutFinishesWhenClientStopsReading(t *testing.T) {
+	runStalledExec(t, "yes", false)
+}
+
 func TestGuestServiceExecTimeoutBoundsExitCodeSend(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	release := make(chan struct{})
-	t.Cleanup(func() { close(release) })
-	stream := &stalledExecStream{ctx: ctx, release: release, stallExitOnly: true, start: &pb.ExecRequest{Request: &pb.ExecRequest_Start{Start: &pb.ExecStart{
-		Command:        []string{"/bin/sh", "-c", "echo started; sleep 30"},
-		TimeoutSeconds: 1,
-	}}}}
-	done := make(chan error, 1)
-	go func() { done <- (&guestServer{drainGrace: 100 * time.Millisecond}).Exec(stream) }()
-	select {
-	case err := <-done:
-		require.ErrorContains(t, err, "did not finish")
-	case <-time.After(10 * time.Second):
-		t.Fatal("exit-code send stayed blocked after the command timed out")
-	}
+	runStalledExec(t, "echo started; sleep 30", true)
 }
 
 func TestGuestServiceExecTimeoutKillsDescendantAfterShellExits(t *testing.T) {

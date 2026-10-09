@@ -99,13 +99,8 @@ func (s *guestServer) executeNoTTY(ctx context.Context, stream pb.GuestService_E
 	}()
 
 	// cmd.Wait also waits for the stdout/stderr copies, which can block in stream.Send.
-	waitDone := make(chan struct{})
 	var waitErr error
-	go func() {
-		waitErr = cmd.Wait()
-		close(waitDone)
-	}()
-	if err := awaitBounded(ctx, waitDone, s.drainBound()); err != nil {
+	if err := s.runBounded(ctx, func() { waitErr = cmd.Wait() }); err != nil {
 		return err
 	}
 	// ErrWaitDelay means the command exited but a descendant still held its output.
@@ -165,18 +160,26 @@ func killGroupOnDone(ctx context.Context, cmd *exec.Cmd, finished <-chan struct{
 // sendExitCode delivers the final status under the same bound as output, so a client
 // that stopped reading cannot hold the handler past cancellation.
 func (s *guestServer) sendExitCode(ctx context.Context, stream pb.GuestService_ExecServer, exitCode int32) error {
-	sent := make(chan struct{})
 	var err error
-	go func() {
+	if boundErr := s.runBounded(ctx, func() {
 		err = stream.Send(&pb.ExecResponse{
 			Response: &pb.ExecResponse_ExitCode{ExitCode: exitCode},
 		})
-		close(sent)
-	}()
-	if boundErr := awaitBounded(ctx, sent, s.drainBound()); boundErr != nil {
+	}); boundErr != nil {
 		return boundErr
 	}
 	return err
+}
+
+// runBounded runs fn on its own goroutine and waits for it under the drain bound.
+// If the bound expires, fn keeps running and must not rely on the handler still waiting.
+func (s *guestServer) runBounded(ctx context.Context, fn func()) error {
+	done := make(chan struct{})
+	go func() {
+		fn()
+		close(done)
+	}()
+	return awaitBounded(ctx, done, s.drainBound())
 }
 
 // exitCodeOf reports how a command ended. A command that hit its deadline exits 124
@@ -311,23 +314,13 @@ func (s *guestServer) executeTTY(ctx context.Context, stream pb.GuestService_Exe
 		}
 	}()
 
-	waitDone := make(chan struct{})
 	var waitErr error
-	go func() {
-		waitErr = cmd.Wait()
-		close(waitDone)
-	}()
-	if err := awaitBounded(ctx, waitDone, s.drainBound()); err != nil {
+	if err := s.runBounded(ctx, func() { waitErr = cmd.Wait() }); err != nil {
 		return err
 	}
 
 	// Wait for all output to be sent
-	outputDone := make(chan struct{})
-	go func() {
-		wg.Wait()
-		close(outputDone)
-	}()
-	if err := awaitBounded(ctx, outputDone, s.drainBound()); err != nil {
+	if err := s.runBounded(ctx, wg.Wait); err != nil {
 		return err
 	}
 

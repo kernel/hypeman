@@ -317,9 +317,15 @@ func (m *manager) hydrateBootMarkersFromLogs(ctx context.Context, stored *Stored
 	return hydrated
 }
 
+// programMarkerSettled reports that no workload-start marker is awaited or already
+// recorded. macOS guests have no Linux workload marker, so it is never awaited.
+func (s *StoredMetadata) programMarkerSettled() bool {
+	return s.MacOS != nil || s.ProgramStartedAt != nil
+}
+
 // bootMarkersMissing reports which boot markers stored still lacks.
 func bootMarkersMissing(stored *StoredMetadata) (needProgram, needAgent bool) {
-	needProgram = stored.MacOS == nil && stored.ProgramStartedAt == nil
+	needProgram = !stored.programMarkerSettled()
 	needAgent = stored.GuestAgentEnabled() && stored.GuestAgentReadyAt == nil
 	return needProgram, needAgent
 }
@@ -346,7 +352,7 @@ func (m *manager) applyBootMarkers(ctx context.Context, stored *StoredMetadata) 
 		stored.GuestAgentReadyAt = guestAgentReadyAt
 		hydrated = true
 	}
-	if needAgent && stored.GuestAgentReadyAt == nil && (stored.MacOS != nil || stored.ProgramStartedAt != nil) && m.hydrateGuestAgentReadyFromProbe(ctx, stored) {
+	if needAgent && stored.GuestAgentReadyAt == nil && stored.programMarkerSettled() && m.hydrateGuestAgentReadyFromProbe(ctx, stored) {
 		hydrated = true
 	}
 	return hydrated
