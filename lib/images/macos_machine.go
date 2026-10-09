@@ -6,6 +6,8 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+
+	"github.com/kernel/hypeman/lib/forkvm"
 )
 
 const (
@@ -55,6 +57,36 @@ func sameFile(a, b string) bool {
 	ai, errA := os.Stat(a)
 	bi, errB := os.Stat(b)
 	return errA == nil && errB == nil && os.SameFile(ai, bi)
+}
+
+// stageMacOSMachine copies a validated bundle's boot disk and auxiliary storage to
+// build-private paths, outside the manager lock. It returns the bytes both files
+// occupy, which is the size recorded for accounting.
+func stageMacOSMachine(payload *macOSMachinePayload, diskTemp, auxTemp string) (int64, error) {
+	diskSize, err := stageMachineFile(payload.Disk, diskTemp)
+	if err != nil {
+		return 0, fmt.Errorf("stage boot disk: %w", err)
+	}
+	auxSize, err := stageMachineFile(payload.Aux, auxTemp)
+	if err != nil {
+		return 0, fmt.Errorf("stage auxiliary storage: %w", err)
+	}
+	return diskSize + auxSize, nil
+}
+
+func stageMachineFile(src, dst string) (int64, error) {
+	if err := forkvm.CopyRegularFile(src, dst); err != nil {
+		return 0, err
+	}
+	// Registry-supplied modes must not expose the canonical files to other local users.
+	if err := os.Chmod(dst, 0600); err != nil {
+		return 0, err
+	}
+	info, err := os.Stat(dst)
+	if err != nil {
+		return 0, err
+	}
+	return info.Size(), nil
 }
 
 func parseMacOSMachine(root string, meta *containerMetadata) (*macOSMachinePayload, error) {

@@ -15,7 +15,6 @@ import (
 
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/uuid"
-	"github.com/kernel/hypeman/lib/forkvm"
 	"github.com/kernel/hypeman/lib/paths"
 	"github.com/kernel/hypeman/lib/queue"
 	"github.com/kernel/hypeman/lib/tags"
@@ -526,22 +525,13 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef, credentials 
 		return
 	}
 	convertStart := time.Now()
-	var diskSize int64
+	staged := stagedImageFiles{disk: diskTempPath, machine: payload}
 	if payload != nil {
-		err = forkvm.CopyRegularFile(payload.Disk, diskTempPath)
-		if err == nil {
-			// Registry-supplied modes must not expose the canonical disk to other local users.
-			err = os.Chmod(diskTempPath, 0600)
-		}
-		if err == nil {
-			var info os.FileInfo
-			info, err = os.Stat(diskTempPath)
-			if err == nil {
-				diskSize = info.Size()
-			}
-		}
+		staged.aux = filepath.Join(layout.dir, "aux.img.tmp-"+buildID)
+		defer os.Remove(staged.aux)
+		staged.sizeBytes, err = stageMacOSMachine(payload, diskTempPath, staged.aux)
 	} else {
-		diskSize, err = ExportRootfs(tempDir, diskTempPath, DefaultImageFormat)
+		staged.sizeBytes, err = ExportRootfs(tempDir, diskTempPath, DefaultImageFormat)
 	}
 	m.recordImageBuildPhase(ctx, ref.Digest(), "filesystem_export", time.Since(convertStart), phaseStatus(err), "not_applicable")
 	if err != nil {
@@ -549,30 +539,8 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef, credentials 
 		return
 	}
 
-	// Copy auxiliary storage before taking createMu; finalization only renames it.
-	auxTempPath := ""
-	if payload != nil {
-		auxTempPath = filepath.Join(layout.dir, "aux.img.tmp-"+buildID)
-		defer os.Remove(auxTempPath)
-		if err = forkvm.CopyRegularFile(payload.Aux, auxTempPath); err == nil {
-			err = os.Chmod(auxTempPath, 0600)
-		}
-		if err == nil {
-			var info os.FileInfo
-			info, err = os.Stat(auxTempPath)
-			if err == nil {
-				// Accounting covers every file the image occupies, not only the boot disk.
-				diskSize += info.Size()
-			}
-		}
-		if err != nil {
-			m.updateStatusByDigest(ref, StatusFailed, fmt.Errorf("stage macOS auxiliary storage: %w", err), buildID)
-			return
-		}
-	}
-
 	finalizeStart := time.Now()
-	err = m.finalizeImage(ref, result, diskSize, buildID, diskTempPath, auxTempPath, payload)
+	err = m.finalizeImage(ref, result, buildID, staged)
 	m.recordImageBuildPhase(ctx, ref.Digest(), "finalize", time.Since(finalizeStart), phaseStatus(err), "not_applicable")
 	if err != nil {
 		if errors.Is(err, errStaleBuild) {
@@ -585,7 +553,16 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef, credentials 
 	buildStatus = "success"
 }
 
-func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, diskSize int64, buildID, diskTempPath, auxTempPath string, payload *macOSMachinePayload) error {
+// stagedImageFiles are the build outputs written before finalization takes createMu.
+// Finalization only renames them into place and commits metadata.
+type stagedImageFiles struct {
+	disk      string               // staged disk, beside its final path
+	aux       string               // staged auxiliary storage; macOS machine images only
+	machine   *macOSMachinePayload // nil for rootfs images
+	sizeBytes int64                // bytes the staged files occupy, recorded for accounting
+}
+
+func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, buildID string, staged stagedImageFiles) error {
 	m.createMu.Lock()
 	defer m.createMu.Unlock()
 
@@ -607,13 +584,13 @@ func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, diskSize i
 		return err
 	}
 
-	if actualPlatform.OS == "darwin" && payload == nil {
+	if actualPlatform.OS == "darwin" && staged.machine == nil {
 		return fmt.Errorf("macOS image requires a validated machine bundle")
 	}
 	auxCommitted := false
-	if payload != nil {
+	if staged.machine != nil {
 		auxPath := filepath.Join(layout.dir, "aux.img")
-		if err := os.Rename(auxTempPath, auxPath); err != nil {
+		if err := os.Rename(staged.aux, auxPath); err != nil {
 			return err
 		}
 		defer func() {
@@ -621,14 +598,14 @@ func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, diskSize i
 				_ = os.Remove(auxPath)
 			}
 		}()
-		meta.MacOS = payload.Platform
+		meta.MacOS = staged.machine.Platform
 	}
 	modelPath := manifestModelPath(m.paths, layout, ref.DigestHex())
 	diskInstalled := false
 	modelWritten := false
 
 	if err := installAtomically(layout.disk, func(path string) error {
-		return os.Rename(diskTempPath, path)
+		return os.Rename(staged.disk, path)
 	}); err != nil {
 		return fmt.Errorf("install image disk: %w", err)
 	}
@@ -649,7 +626,7 @@ func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, diskSize i
 	meta.Status = StatusReady
 	meta.Error = nil
 	meta.Platform = actualPlatform.String()
-	meta.SizeBytes = diskSize
+	meta.SizeBytes = staged.sizeBytes
 	meta.Entrypoint = result.Metadata.Entrypoint
 	meta.Cmd = result.Metadata.Cmd
 	meta.Env = result.Metadata.Env
