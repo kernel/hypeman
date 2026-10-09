@@ -24,10 +24,15 @@ type imageManifestModel struct {
 	Platform      string            `json:"platform"` // os/arch[/variant]
 	Config        manifestConfigRef `json:"config"`
 	RootFSType    string            `json:"rootfs_type,omitempty"`
+	RuntimeFSType string            `json:"runtime_rootfs_type,omitempty"`
 	Layers        []layerDescriptor `json:"layers"` // manifest order, base layer first
 }
 
-const manifestModelSchemaVersion = 1
+const (
+	manifestModelSchemaVersion = 1
+	runtimeRootfsFlat          = "flat"
+	runtimeRootfsFsmerge       = "fsmerge"
+)
 
 type manifestConfigRef struct {
 	Digest    string   `json:"digest"` // config blob digest, sha256:...
@@ -78,6 +83,9 @@ func validateManifestModel(digestHex string, model *imageManifestModel) error {
 	}
 	if model.RootFSType != "" && model.RootFSType != "layers" {
 		return fmt.Errorf("unsupported manifest rootfs type: %q", model.RootFSType)
+	}
+	if model.RuntimeFSType != "" && model.RuntimeFSType != runtimeRootfsFlat && model.RuntimeFSType != runtimeRootfsFsmerge {
+		return fmt.Errorf("unsupported runtime rootfs type: %q", model.RuntimeFSType)
 	}
 	if err := validateManifestConfig(model); err != nil {
 		return err
@@ -144,7 +152,11 @@ func writeManifestModelAt(path, digestHex string, model *imageManifestModel) err
 // Missing models return (nil, nil): images converted before the manifest model
 // existed only have a flattened rootfs.
 func readManifestModel(p *paths.Paths, digestHex string) (*imageManifestModel, error) {
-	data, err := os.ReadFile(p.ImageContentManifestModel(digestHex))
+	return readManifestModelAt(p.ImageContentManifestModel(digestHex), digestHex)
+}
+
+func readManifestModelAt(path, digestHex string) (*imageManifestModel, error) {
+	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil

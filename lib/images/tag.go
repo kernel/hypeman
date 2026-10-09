@@ -72,7 +72,7 @@ func (m *manager) installTag(source, target *NormalizedRef, digest string, meta 
 }
 
 func (m *manager) cleanupUnclaimedImage(ref *ResolvedRef) {
-	if err := removeDigestIfUnreferenced(m.paths, ref.Repository(), ref.DigestHex(), true); err != nil {
+	if err := m.removeDigestIfUnreferenced(ref.Repository(), ref.DigestHex(), true); err != nil {
 		slog.Warn("failed to collect stale image", "repository", ref.Repository(), "digest", ref.DigestHex(), "error", err)
 	}
 }
@@ -89,7 +89,7 @@ func (m *manager) cleanupReplacedTag(ref *NormalizedRef, previousDigest, digestH
 	if count > 0 {
 		return
 	}
-	if err := removeDigestIfUnreferenced(m.paths, ref.Repository(), previousDigest, true); err != nil {
+	if err := m.removeDigestIfUnreferenced(ref.Repository(), previousDigest, true); err != nil {
 		slog.Warn("failed to collect replaced image content", "repository", ref.Repository(), "digest", previousDigest, "error", err)
 	}
 	m.layers.refreshDiskUsageTotals()
