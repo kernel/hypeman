@@ -35,6 +35,17 @@ func TestMacOSExecRejectedBeforeWebsocketUpgrade(t *testing.T) {
 	require.Contains(t, w.Body.String(), "not implemented")
 }
 
+func TestMacOSStatRejectedBeforeGuestDial(t *testing.T) {
+	s := &ApiService{}
+	inst := &instances.Instance{StoredMetadata: instances.StoredMetadata{MacOS: &images.MacOSImage{}}, State: instances.StateRunning}
+	ctx := mw.WithResolvedInstance(context.Background(), "test", inst)
+	resp, err := s.StatInstancePath(ctx, oapi.StatInstancePathRequestObject{Id: "test"})
+	require.NoError(t, err)
+	unsupported, ok := resp.(oapi.StatInstancePath501JSONResponse)
+	require.True(t, ok, "macOS stat must be rejected with 501, got %T", resp)
+	require.Equal(t, "unsupported", unsupported.Code)
+}
+
 func TestMacOSSchemaDefersTemplateDefaults(t *testing.T) {
 	spec, err := oapi.GetSwagger()
 	require.NoError(t, err)
