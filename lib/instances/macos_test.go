@@ -104,6 +104,27 @@ func TestMacOSAgentReadyMarkerPersisted(t *testing.T) {
 	require.True(t, meta.MacOS.GuestAgent)
 }
 
+func TestMacOSAgentReadyMarkerPersistedByPublicRead(t *testing.T) {
+	p := paths.New(t.TempDir())
+	now := time.Now().UTC()
+	m := &manager{paths: p, now: func() time.Time { return now }, guestAgentReadyProbe: func(context.Context, *StoredMetadata) bool { return true }}
+	require.NoError(t, m.ensureDirectories("mac"))
+	socket := filepath.Join(p.InstanceDir("mac"), "vz.sock")
+	require.NoError(t, os.WriteFile(socket, nil, 0600))
+	image := testMacImage()
+	image.MacOS.GuestAgent = true
+	stored := StoredMetadata{Id: "mac", DataDir: p.InstanceDir("mac"), SocketPath: socket, MacOS: image.MacOS, HypervisorType: hypervisor.TypeVZ, CreatedAt: now}
+	require.NoError(t, m.saveMetadata(&metadata{StoredMetadata: stored}))
+	m.storeCachedHypervisorState("mac", hypervisor.StateRunning)
+
+	inst, err := m.GetInstance(context.Background(), "mac")
+	require.NoError(t, err)
+	require.NotNil(t, inst.GuestAgentReadyAt)
+	meta, err := m.loadMetadata("mac")
+	require.NoError(t, err)
+	require.NotNil(t, meta.GuestAgentReadyAt, "readiness must reach metadata through the normal read path")
+}
+
 func TestMacOSBootConfigNoLinuxDevices(t *testing.T) {
 	p := paths.New(t.TempDir())
 	m := &manager{paths: p}

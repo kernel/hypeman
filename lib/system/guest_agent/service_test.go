@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -129,6 +131,93 @@ func TestGuestServiceExecCancellation(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return syscall.Kill(pid, 0) == syscall.ESRCH
 	}, 5*time.Second, 10*time.Millisecond, "disconnect must cancel the command, not leave it running")
+}
+
+func TestGuestServiceExecCancellationKillsDescendants(t *testing.T) {
+	for _, tty := range []bool{false, true} {
+		t.Run(map[bool]string{false: "pipes", true: "tty"}[tty], func(t *testing.T) {
+			client := testGuestClient(t)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			pidPath := filepath.Join(t.TempDir(), "pid")
+			stream, err := client.Exec(ctx)
+			require.NoError(t, err)
+			require.NoError(t, stream.Send(&pb.ExecRequest{Request: &pb.ExecRequest_Start{Start: &pb.ExecStart{
+				Command: []string{"/bin/sh", "-c", "sleep 30 & printf '%s' \"$!\" > \"$HYPEMAN_PID_FILE\"; wait"},
+				Env:     map[string]string{"HYPEMAN_PID_FILE": pidPath},
+				Tty:     tty,
+			}}}))
+			require.NoError(t, stream.CloseSend())
+			var pid int
+			require.Eventually(t, func() bool {
+				data, err := os.ReadFile(pidPath)
+				if err != nil {
+					return false
+				}
+				pid, err = strconv.Atoi(string(data))
+				return err == nil && pid > 0
+			}, 5*time.Second, 10*time.Millisecond)
+			defer syscall.Kill(pid, syscall.SIGKILL)
+			cancel()
+			require.Eventually(t, func() bool {
+				return processGone(pid)
+			}, 5*time.Second, 10*time.Millisecond, "cancellation must reach descendants, not only the shell")
+		})
+	}
+}
+
+// processGone reports whether pid no longer runs. A zombie counts as gone.
+func processGone(pid int) bool {
+	if errors.Is(syscall.Kill(pid, 0), syscall.ESRCH) {
+		return true
+	}
+	out, err := exec.Command("ps", "-o", "stat=", "-p", strconv.Itoa(pid)).Output()
+	return err != nil || strings.HasPrefix(strings.TrimSpace(string(out)), "Z")
+}
+
+// stalledExecStream models a client that stopped reading: Send blocks until release closes.
+type stalledExecStream struct {
+	grpc.ServerStream
+	ctx     context.Context
+	start   *pb.ExecRequest
+	release chan struct{}
+}
+
+func (s *stalledExecStream) Context() context.Context { return s.ctx }
+func (s *stalledExecStream) Recv() (*pb.ExecRequest, error) {
+	if s.start != nil {
+		req := s.start
+		s.start = nil
+		return req, nil
+	}
+	<-s.ctx.Done()
+	return nil, s.ctx.Err()
+}
+func (s *stalledExecStream) Send(*pb.ExecResponse) error {
+	<-s.release
+	return nil
+}
+
+func TestGuestServiceExecTimeoutFinishesWhenClientStopsReading(t *testing.T) {
+	restore := execDrainGrace
+	execDrainGrace = 100 * time.Millisecond
+	t.Cleanup(func() { execDrainGrace = restore })
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	stream := &stalledExecStream{ctx: ctx, release: release, start: &pb.ExecRequest{Request: &pb.ExecRequest_Start{Start: &pb.ExecStart{
+		Command:        []string{"/bin/sh", "-c", "yes"},
+		TimeoutSeconds: 1,
+	}}}}
+	done := make(chan error, 1)
+	go func() { done <- (&guestServer{}).Exec(stream) }()
+	select {
+	case err := <-done:
+		require.ErrorContains(t, err, "did not drain")
+	case <-time.After(10 * time.Second):
+		t.Fatal("exec stayed blocked behind a stalled client after its timeout")
+	}
 }
 
 func TestGuestServiceFileRoundTrip(t *testing.T) {

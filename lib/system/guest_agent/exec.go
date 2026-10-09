@@ -2,12 +2,14 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
 	"os/exec"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/creack/pty"
@@ -65,6 +67,8 @@ func (s *guestServer) executeNoTTY(ctx context.Context, stream pb.GuestService_E
 	cmd.Env = s.buildEnv(start.Env, false)
 	cmd.Dir = start.Cwd
 	cmd.WaitDelay = 2 * time.Second
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return killProcessGroup(cmd) }
 	var sendMu sync.Mutex
 	cmd.Stdout = &execStreamWriter{stream: stream, mu: &sendMu, cancel: cancel}
 	cmd.Stderr = &execStreamWriter{stream: stream, mu: &sendMu, cancel: cancel, stderr: true}
@@ -90,8 +94,16 @@ func (s *guestServer) executeNoTTY(ctx context.Context, stream pb.GuestService_E
 		}
 	}()
 
-	// os/exec drains stdout/stderr through bounded writers before Wait returns.
-	waitErr := cmd.Wait()
+	// cmd.Wait also waits for the stdout/stderr copies, which can block in stream.Send.
+	waitDone := make(chan struct{})
+	var waitErr error
+	go func() {
+		waitErr = cmd.Wait()
+		close(waitDone)
+	}()
+	if err := awaitDrain(ctx, waitDone); err != nil {
+		return err
+	}
 	if waitErr != nil {
 		if _, exited := waitErr.(*exec.ExitError); !exited {
 			return fmt.Errorf("stream command output: %w", waitErr)
@@ -112,6 +124,37 @@ func (s *guestServer) executeNoTTY(ctx context.Context, stream pb.GuestService_E
 	return stream.Send(&pb.ExecResponse{
 		Response: &pb.ExecResponse_ExitCode{ExitCode: exitCode},
 	})
+}
+
+// execDrainGrace bounds how long a cancelled command may take to finish. A descendant that
+// holds the terminal or output, or a client that stopped reading, must not block the handler.
+var execDrainGrace = 5 * time.Second
+
+// awaitDrain waits for done. After ctx ends it allows execDrainGrace more, then returns an
+// error so the handler returns, ending the RPC and releasing any output send still blocked on it.
+func awaitDrain(ctx context.Context, done <-chan struct{}) error {
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+	}
+	timer := time.NewTimer(execDrainGrace)
+	defer timer.Stop()
+	select {
+	case <-done:
+		return nil
+	case <-timer.C:
+		return fmt.Errorf("command output did not drain after cancellation: %w", ctx.Err())
+	}
+}
+
+// killProcessGroup kills the command and its descendants. Both exec paths start the command
+// as a group leader (Setpgid for no-TTY, Setsid for TTY), so the group id is its pid.
+func killProcessGroup(cmd *exec.Cmd) error {
+	if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+		return err
+	}
+	return nil
 }
 
 type execStreamWriter struct {
@@ -150,6 +193,7 @@ func (s *guestServer) executeTTY(ctx context.Context, stream pb.GuestService_Exe
 	}
 
 	cmd := exec.CommandContext(ctx, start.Command[0], start.Command[1:]...)
+	cmd.Cancel = func() error { return killProcessGroup(cmd) }
 
 	// Set up environment (TTY mode adds TERM default)
 	cmd.Env = s.buildEnv(start.Env, true)
@@ -226,11 +270,25 @@ func (s *guestServer) executeTTY(ctx context.Context, stream pb.GuestService_Exe
 		}
 	}()
 
-	// Wait for command or context cancellation
-	waitErr := cmd.Wait()
+	waitDone := make(chan struct{})
+	var waitErr error
+	go func() {
+		waitErr = cmd.Wait()
+		close(waitDone)
+	}()
+	if err := awaitDrain(ctx, waitDone); err != nil {
+		return err
+	}
 
 	// Wait for all output to be sent
-	wg.Wait()
+	outputDone := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(outputDone)
+	}()
+	if err := awaitDrain(ctx, outputDone); err != nil {
+		return err
+	}
 
 	exitCode := int32(0)
 	if cmd.ProcessState != nil {

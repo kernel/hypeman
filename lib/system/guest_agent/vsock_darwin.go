@@ -100,7 +100,11 @@ func (l *vmListener) Accept() (net.Conn, error) {
 			l.mu.Unlock()
 			return nil, net.ErrClosed
 		}
+		// Darwin has no accept4: the accepted fd is inheritable until accept_vm sets FD_CLOEXEC.
+		// Holding the fork lock across that window keeps a concurrent fork from copying it.
+		syscall.ForkLock.RLock()
 		fd, err := C.accept_vm(l.fd)
+		syscall.ForkLock.RUnlock()
 		l.mu.Unlock()
 		if fd >= 0 {
 			return &vmConn{file: os.NewFile(uintptr(fd), "guest-vsock"), local: l.Addr()}, nil

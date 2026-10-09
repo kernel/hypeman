@@ -137,7 +137,7 @@ func (m *manager) deriveStateWithOptions(ctx context.Context, stored *StoredMeta
 		return stateResult{State: StateCreated}
 	case hypervisor.StateRunning:
 		hydrated := false
-		if hydrateBootMarkers && stored.MacOS == nil {
+		if hydrateBootMarkers {
 			hydrated = m.hydrateBootMarkersFromLogs(ctx, stored)
 		}
 		return stateResult{
