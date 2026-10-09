@@ -10,9 +10,9 @@ import (
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 	gcr "github.com/google/go-containerregistry/pkg/v1"
-	"github.com/google/go-containerregistry/pkg/v1/empty"
 	"github.com/google/go-containerregistry/pkg/v1/layout"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
+	"github.com/kernel/hypeman/lib/ocicache"
 	digest "github.com/opencontainers/go-digest"
 	"github.com/opencontainers/image-spec/specs-go"
 	v1 "github.com/opencontainers/image-spec/specs-go/v1"
@@ -318,23 +318,7 @@ func (c *ociClient) pullToOCILayoutWithPlatformAuth(ctx context.Context, imageRe
 		return fmt.Errorf("fetch image manifest: %w", ClassifyRegistryError(err))
 	}
 
-	// Open or create OCI layout directory
-	path, err := layout.FromPath(c.cacheDir)
-	if err != nil {
-		// If layout doesn't exist, create it
-		path, err = layout.Write(c.cacheDir, empty.Index)
-		if err != nil {
-			return fmt.Errorf("create oci layout: %w", err)
-		}
-	}
-
-	// Append image to layout - THIS is where actual layer data is downloaded
-	// Streams layers from registry and writes to blobs/sha256/ directory
-	// Automatically deduplicates shared layers across images
-	// Rate limits during layer download also fail immediately (no retries)
-	err = path.AppendImage(img, layout.WithAnnotations(map[string]string{
-		"org.opencontainers.image.ref.name": layoutTag,
-	}))
+	err = ocicache.AppendImage(c.cacheDir, img, layoutTag)
 	if err != nil {
 		return fmt.Errorf("download and write image layers: %w", err)
 	}
