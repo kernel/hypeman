@@ -21,8 +21,7 @@ func testMacImage() *images.Image {
 func TestMacOSRequestDefaultsAndRejections(t *testing.T) {
 	caps := hypervisor.Capabilities{SupportsMacOSBoot: true}
 	req := CreateInstanceRequest{}
-	require.NoError(t, validateMacOSCreate(req, testMacImage(), caps))
-	applyMacOSDefaults(&req, testMacImage())
+	require.NoError(t, prepareMacOSCreate(&req, testMacImage(), caps))
 	require.Equal(t, int64(8<<30), req.Size)
 	require.Equal(t, 4, req.Vcpus)
 	require.Equal(t, int64(64<<30), req.OverlaySize)
@@ -30,9 +29,11 @@ func TestMacOSRequestDefaultsAndRejections(t *testing.T) {
 	for _, r := range []CreateInstanceRequest{
 		{Env: map[string]string{"X": "Y"}}, {Cmd: []string{"sh"}}, {HotplugSize: 1}, {OverlaySize: 1}, {DiskIOBps: 1}, {Size: 1 << 30}, {Volumes: []VolumeAttachment{{VolumeID: "v"}}},
 	} {
-		require.ErrorIs(t, validateMacOSCreate(r, testMacImage(), caps), ErrInvalidRequest)
+		original := r
+		require.ErrorIs(t, prepareMacOSCreate(&r, testMacImage(), caps), ErrInvalidRequest)
+		require.Equal(t, original, r)
 	}
-	require.ErrorIs(t, validateMacOSCreate(CreateInstanceRequest{}, testMacImage(), hypervisor.Capabilities{}), ErrInvalidRequest)
+	require.ErrorIs(t, prepareMacOSCreate(&CreateInstanceRequest{}, testMacImage(), hypervisor.Capabilities{}), ErrInvalidRequest)
 }
 func TestMacOSBootConfigNoLinuxDevices(t *testing.T) {
 	p := paths.New(t.TempDir())

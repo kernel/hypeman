@@ -30,17 +30,11 @@ func ImportMacOSImage(ctx context.Context, p *paths.Paths, name, source string) 
 	if ref.IsDigest() {
 		return nil, fmt.Errorf("%w: import requires a tagged name", ErrInvalidName)
 	}
-	b, err := os.ReadFile(filepath.Join(source, "config.json"))
+	bundle, err := readMacOSMachineBundle(source, "disk.img", "aux.img", "config.json", false)
 	if err != nil {
 		return nil, err
 	}
-	var mac MacOSImage
-	if err = json.Unmarshal(b, &mac); err != nil {
-		return nil, err
-	}
-	if err = mac.Validate(); err != nil {
-		return nil, err
-	}
+	mac := bundle.Platform
 	for _, file := range []string{"disk.img", "aux.img"} {
 		file = filepath.Join(source, file)
 		info, e := os.Lstat(file)
@@ -66,8 +60,8 @@ func ImportMacOSImage(ctx context.Context, p *paths.Paths, name, source string) 
 		return nil, err
 	}
 	defer os.RemoveAll(stage)
-	for src, dst := range map[string]string{"disk.img": "rootfs.raw", "aux.img": "aux.img"} {
-		if err = unix.Clonefile(filepath.Join(source, src), filepath.Join(stage, dst), unix.CLONE_NOFOLLOW|unix.CLONE_NOOWNERCOPY); err != nil {
+	for src, dst := range map[string]string{bundle.Disk: "rootfs.raw", bundle.Aux: "aux.img"} {
+		if err = unix.Clonefile(src, filepath.Join(stage, dst), unix.CLONE_NOFOLLOW|unix.CLONE_NOOWNERCOPY); err != nil {
 			return nil, fmt.Errorf("clone bundle: %w", err)
 		}
 		if err = os.Chmod(filepath.Join(stage, dst), 0600); err != nil {
@@ -98,7 +92,7 @@ func ImportMacOSImage(ctx context.Context, p *paths.Paths, name, source string) 
 	}
 	digestHex := hex.EncodeToString(h.Sum(nil))
 	digest := "sha256:" + digestHex
-	meta := &imageMetadata{Name: ref.Repository() + "@" + digest, Digest: digest, Platform: "darwin/arm64", MacOS: &mac, Status: StatusReady, SizeBytes: logicalSize, CreatedAt: time.Now().UTC()}
+	meta := &imageMetadata{Name: ref.Repository() + "@" + digest, Digest: digest, Platform: "darwin/arm64", MacOS: mac, Status: StatusReady, SizeBytes: logicalSize, CreatedAt: time.Now().UTC()}
 	if err = writeMetadataFile(filepath.Join(stage, "metadata.json"), meta); err != nil {
 		return nil, err
 	}

@@ -17,9 +17,9 @@ import (
 	"github.com/kernel/hypeman/lib/network"
 )
 
-// validateMacOSCreate rejects requests a macOS guest cannot honor. It reads only the
-// request, the image and the backend's capabilities, so it runs on any host.
-func validateMacOSCreate(req CreateInstanceRequest, img *images.Image, caps hypervisor.Capabilities) error {
+// prepareMacOSCreate validates explicit options before applying machine defaults.
+// Rejected requests are unchanged; effective CPU and memory are resolved once.
+func prepareMacOSCreate(req *CreateInstanceRequest, img *images.Image, caps hypervisor.Capabilities) error {
 	if img.MacOS == nil {
 		return fmt.Errorf("%w: image is not a macOS disk bundle", ErrInvalidRequest)
 	}
@@ -42,21 +42,11 @@ func validateMacOSCreate(req CreateInstanceRequest, img *images.Image, caps hype
 	if size < 4<<30 || vcpus < 2 {
 		return fmt.Errorf("%w: macOS requires at least 4 GiB and 2 vCPUs", ErrInvalidRequest)
 	}
-	return nil
-}
-
-// applyMacOSDefaults fills unspecified CPU and memory from the imported template and
-// sets the guest flags. Call it only after validateMacOSCreate accepted the request.
-func applyMacOSDefaults(req *CreateInstanceRequest, img *images.Image) {
-	if req.Size == 0 {
-		req.Size = int64(img.MacOS.Memory)
-	}
-	if req.Vcpus == 0 {
-		req.Vcpus = int(img.MacOS.CPUs)
-	}
+	req.Size, req.Vcpus = size, vcpus
 	req.OverlaySize = *img.SizeBytes // Reserve the writable boot disk, not a Linux overlay.
 	req.SkipGuestAgent = true
 	req.SkipKernelHeaders = true
+	return nil
 }
 func (m *manager) prepareBootStorage(stored *StoredMetadata, img *images.Image) error {
 	if stored.MacOS == nil {

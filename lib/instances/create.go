@@ -166,10 +166,9 @@ func (m *manager) createInstance(
 	}
 	if imageInfo.MacOS != nil {
 		caps, _ := hypervisor.CapabilitiesForType(hvType)
-		if err := validateMacOSCreate(req, imageInfo, caps); err != nil {
+		if err := prepareMacOSCreate(&req, imageInfo, caps); err != nil {
 			return nil, err
 		}
-		applyMacOSDefaults(&req, imageInfo)
 	}
 
 	// A guest whose architecture differs from the host kernel can only boot via
