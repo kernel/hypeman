@@ -4683,6 +4683,16 @@ paths:
                 dockerfile:
                   type: string
                   description: Dockerfile content. Required if not included in the source tarball.
+                machine_base_image:
+                  type: string
+                  description: |
+                    Experimental installed darwin/arm64 base pinned by sha256 digest.
+                    Requires server macos_only and macos_builds. Source must contain
+                    hypeman-macos-build.json (version 1). Machine source is limited to
+                    64 MiB compressed; only timeout_seconds, memory_mb, cpus and tags
+                    are accepted alongside source and this selector. CPU/memory zero
+                    inherit the base. Linux/cache/secrets/admin options are rejected.
+                    Output retains the base identity and cannot run concurrently with it.
                 base_image_digest:
                   type: string
                   description: Optional pinned base image digest
