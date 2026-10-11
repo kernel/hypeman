@@ -87,6 +87,12 @@ type Manager interface {
 
 // Config holds configuration for the build manager
 type Config struct {
+	// MachineBuild is an opt-in internal executor. No HTTP recipe mode is exposed.
+	MachineBuild *MachineBuildBackend
+
+	// MachineBuildOnly disables Linux builder preparation and recovery.
+	MachineBuildOnly bool
+
 	// MaxConcurrentBuilds is the maximum number of concurrent builds
 	MaxConcurrentBuilds int
 
@@ -149,6 +155,7 @@ type manager struct {
 	logger          *slog.Logger
 	metrics         *Metrics
 	createMu        sync.Mutex
+	machineBuilds   sync.Map // build ID -> *machineBuildControl
 	builderReady    atomic.Bool
 	// pendingRecovered is set once RecoverPendingBuilds has re-enqueued
 	// persisted pending builds; until then BuilderHasBuilds also scans
@@ -204,6 +211,10 @@ func NewManager(
 
 // Start starts the build manager's background services
 func (m *manager) Start(ctx context.Context) error {
+	if m.config.MachineBuildOnly {
+		m.RecoverPendingBuilds()
+		return nil
+	}
 	go func() {
 		for {
 			m.ensureBuilderImage(ctx)
@@ -444,7 +455,12 @@ func (m *manager) CreateBuild(ctx context.Context, req CreateBuildRequest, sourc
 
 	// Apply defaults to build policy
 	policy := req.BuildPolicy
-	if policy == nil {
+	if req.MachineBaseImage != "" {
+		var err error
+		if policy, err = m.admitMachineBuild(&req, sourceData); err != nil {
+			return nil, err
+		}
+	} else if policy == nil {
 		defaultPolicy := DefaultBuildPolicy()
 		policy = &defaultPolicy
 	} else {
@@ -484,6 +500,15 @@ func (m *manager) CreateBuild(ctx context.Context, req CreateBuildRequest, sourc
 	// Write initial metadata
 	if err := writeMetadata(m.paths, meta); err != nil {
 		return nil, fmt.Errorf("write metadata: %w", err)
+	}
+
+	if req.MachineBaseImage != "" {
+		// Machine builds publish with their own scoped token, not a builder config.
+		if err := m.storeMachineSource(ctx, meta, sourceData); err != nil {
+			deleteBuild(m.paths, id)
+			return nil, err
+		}
+		return m.enqueueMachineBuild(meta, req, policy), nil
 	}
 
 	// Store source data
@@ -678,18 +703,23 @@ func (m *manager) runBuild(ctx context.Context, id string, req CreateBuildReques
 	start := time.Now()
 	m.logger.Info("starting build", "id", id)
 
-	// Update status to building
-	m.updateStatus(id, StatusBuilding, nil)
-
-	// Create timeout context
+	// Register machine cancellation before exposing the running status. Ordinary
+	// Linux builder cancellation retains its existing instance-delete behavior.
 	buildCtx, cancel := context.WithTimeout(ctx, time.Duration(policy.TimeoutSeconds)*time.Second)
 	defer cancel()
+	if req.MachineBaseImage != "" {
+		m.machineBuilds.Store(id, &machineBuildControl{cancel: cancel})
+		defer m.machineBuilds.Delete(id)
+	}
+	m.updateStatus(id, StatusBuilding, nil)
 
 	// Mirror base images to the local registry before launching the VM.
 	// BuildKit is configured with our registry as a mirror for docker.io,
 	// so pre-cached images will be served locally without pulling from Docker Hub.
-	if err := m.mirrorBaseImagesForBuild(buildCtx, id, req); err != nil {
-		m.logger.Warn("failed to mirror base images", "id", id, "error", err)
+	if req.MachineBaseImage == "" {
+		if err := m.mirrorBaseImagesForBuild(buildCtx, id, req); err != nil {
+			m.logger.Warn("failed to mirror base images", "id", id, "error", err)
+		}
 	}
 
 	// Run the build in a builder VM
@@ -783,6 +813,9 @@ func (m *manager) runBuild(ctx context.Context, id string, req CreateBuildReques
 	duration = time.Since(start)
 	durationMS = duration.Milliseconds()
 
+	if req.MachineBaseImage != "" {
+		m.removeMachineSource(id)
+	}
 	m.updateBuildComplete(id, StatusReady, &result.ImageDigest, nil, &result.Provenance, &durationMS)
 
 	// Update with image ref
@@ -798,6 +831,9 @@ func (m *manager) runBuild(ctx context.Context, id string, req CreateBuildReques
 
 // executeBuild runs the build in a builder VM
 func (m *manager) executeBuild(ctx context.Context, id string, req CreateBuildRequest, policy *BuildPolicy) (*BuildResult, error) {
+	if req.MachineBaseImage != "" {
+		return m.executeMachineBuild(ctx, id, req, policy)
+	}
 	if !m.builderReady.Load() {
 		return nil, fmt.Errorf("builder image is being prepared, please retry shortly")
 	}
@@ -1106,6 +1142,11 @@ func (m *manager) updateStatus(id string, status string, err error) {
 
 // updateBuildComplete updates the build with final results
 func (m *manager) updateBuildComplete(id string, status string, digest *string, errMsg *string, provenance *BuildProvenance, durationMS *int64) {
+	if active, ok := m.machineBuilds.Load(id); ok {
+		control := active.(*machineBuildControl)
+		control.mu.Lock()
+		defer control.mu.Unlock()
+	}
 	meta, readErr := readMetadata(m.paths, id)
 	if readErr != nil {
 		m.logger.Error("read metadata for completion", "id", id, "error", readErr)
@@ -1252,6 +1293,9 @@ func (m *manager) CancelBuild(ctx context.Context, id string) error {
 		return ErrBuildInProgress // Was already picked up
 
 	case StatusBuilding, StatusPushing:
+		if meta.Request != nil && meta.Request.MachineBaseImage != "" {
+			return m.cancelMachineBuild(id)
+		}
 		// Can't cancel a running build easily
 		// Would need to terminate the builder instance
 		if meta.BuilderInstance != nil {
@@ -1458,6 +1502,9 @@ func (m *manager) RecoverPendingBuilds() {
 	for _, meta := range pending {
 		meta := meta // Shadow loop variable for closure capture
 		m.logger.Info("recovering build", "id", meta.ID, "status", meta.Status)
+		if m.skipMachineBuildRecovery(meta) {
+			continue
+		}
 
 		// Re-enqueue the build
 		if meta.Request != nil {
@@ -1485,11 +1532,16 @@ func (m *manager) RecoverPendingBuilds() {
 	if len(pending) > 0 {
 		m.logger.Info("recovered pending builds", "count", len(pending))
 	}
-	m.pendingRecovered.Store(true)
+	if !m.config.MachineBuildOnly {
+		m.pendingRecovered.Store(true)
+	}
 }
 
 // refreshBuildToken regenerates the registry token for a build and updates the config file
 func (m *manager) refreshBuildToken(buildID string, req *CreateBuildRequest) error {
+	if req.MachineBaseImage != "" {
+		return nil // Machine builds have no builder config or registry token.
+	}
 	// Read existing build config
 	config, err := readBuildConfig(m.paths, buildID)
 	if err != nil {

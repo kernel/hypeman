@@ -42,6 +42,10 @@ func hasVFIODevices(stored *StoredMetadata) bool {
 // tryGracefulGuestShutdown asks guest init to shut down and waits for the
 // hypervisor process to exit. Returns true if the process exited in time.
 func (m *manager) tryGracefulGuestShutdown(ctx context.Context, inst *Instance, stopTimeout int) bool {
+	return m.tryGuestShutdown(ctx, inst, stopTimeout, false)
+}
+
+func (m *manager) tryGuestShutdown(ctx context.Context, inst *Instance, stopTimeout int, strict bool) bool {
 	log := logger.FromContext(ctx)
 
 	if inst.SkipGuestAgent {
@@ -65,7 +69,7 @@ func (m *manager) tryGracefulGuestShutdown(ctx context.Context, inst *Instance, 
 		return false
 	}
 	if pid == 0 {
-		return true
+		return !strict
 	}
 	inst.HypervisorProcessIdentity.Set(pid)
 
@@ -99,10 +103,18 @@ func (m *manager) tryGracefulGuestShutdown(ctx context.Context, inst *Instance, 
 		// If we couldn't signal the guest, don't burn the full graceful timeout.
 		waitTimeout = shutdownFailureFallbackWait
 	}
+	if strict {
+		if ctx.Err() != nil {
+			return false
+		}
+		if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < waitTimeout {
+			waitTimeout = max(0, time.Until(deadline))
+		}
+	}
 
 	if WaitForProcessExit(pid, waitTimeout) {
 		log.DebugContext(ctx, "VM shut down gracefully", "instance_id", inst.Id)
-		return true
+		return shutdownSent || !strict
 	}
 
 	log.WarnContext(ctx, "graceful shutdown timed out, falling back to hypervisor shutdown", "instance_id", inst.Id)
@@ -116,7 +128,11 @@ func (m *manager) tryGracefulGuestShutdown(ctx context.Context, inst *Instance, 
 func (m *manager) stopInstance(
 	ctx context.Context,
 	id string,
-) (_ *Instance, retErr error) {
+) (*Instance, error) {
+	return m.stopInstanceWithFallback(ctx, id, false)
+}
+
+func (m *manager) stopInstanceWithFallback(ctx context.Context, id string, strict bool) (_ *Instance, retErr error) {
 	start := time.Now()
 	log := logger.FromContext(ctx)
 	log.InfoContext(ctx, "stopping instance", "instance_id", id)
@@ -170,7 +186,7 @@ func (m *manager) stopInstance(
 		attribute.Int("stop_timeout_seconds", stopTimeout),
 	)
 	macOSVMMLive := inst.MacOS != nil && hypervisorProcessLive(&inst)
-	gracefulShutdown := m.tryGracefulGuestShutdown(gracefulCtx, &inst, stopTimeout)
+	gracefulShutdown := m.tryGuestShutdown(gracefulCtx, &inst, stopTimeout, strict)
 	if gracefulShutdown {
 		gracefulSpanEnd(nil)
 	} else {
@@ -179,6 +195,10 @@ func (m *manager) stopInstance(
 
 	// 5. Fallback hypervisor shutdown if guest graceful shutdown didn't work
 	if !gracefulShutdown {
+		// Export callers must never turn a forced stop into a graceful receipt.
+		if strict {
+			return nil, errGracefulShutdownFailed
+		}
 		log.DebugContext(ctx, "shutting down hypervisor (fallback)", "instance_id", id)
 		shutdownCtx, shutdownSpanEnd := m.startLifecycleStep(ctx, "shutdown_hypervisor",
 			attribute.String("instance_id", id),
