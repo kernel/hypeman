@@ -73,8 +73,13 @@ no Linux kernel, initrd, configuration disk, overlay filesystem or balloon is
 attached. NAT uses the preserved MAC. The IP is observed from the host's VZ
 DHCP leases, which may retain an old lease before the guest is ready.
 
-**`Running` means the VMM is running, not that SSH, the desktop or Chrome is
-ready.** Readiness is currently tested over SSH. Startup does not launch Chrome.
+**Without the guest agent, `Running` means the VMM is running, not that SSH,
+the desktop or Chrome is ready.** Unmanaged templates still need an external
+readiness check. Templates provisioned with the shared Darwin GuestService can opt
+in with `guest_agent: true` in their platform configuration; those instances stay
+`Initializing` until the agent answers, as Linux guests do, so waiting for
+`Running` waits for the agent. See [Darwin GuestService](macos-guest-agent.md).
+Startup does not launch Chrome.
 A shim killed without cleanup (for example, SIGKILL) leaves its control socket
 behind; when nothing accepts on it and the recorded shim is gone, the instance
 reads as Stopped and its resources are released for admission. If the API dies
@@ -86,8 +91,9 @@ instance with a given Mac identifier is allowed. Do not run the source bundle
 or an external clone concurrently. Production provisioning needs identity and
 credential rekeying; this spike is not a multi-tenant image format.
 
-`POST /instances/{id}/stop` shuts down the VMM; without a Darwin guest agent,
-it does **not** guarantee an orderly guest OS/application shutdown. Use a human
+`POST /instances/{id}/stop` attempts orderly GuestService shutdown for opted-in
+images, then falls back to VMM shutdown if necessary. Without an enabled Darwin
+guest agent it does **not** guarantee an orderly guest OS/application shutdown. Use a human
 or an authorized guest shutdown workflow before destructive operations when
 application consistency matters. Start cold-boots the instance's existing disk.
 Delete removes instance storage, not the imported image. Deleting the imported

@@ -36,6 +36,9 @@ type MacOSImage struct {
 	MAC               string `json:"mac"`
 	CPUs              uint   `json:"cpus"`
 	Memory            uint64 `json:"memory"`
+	// GuestAgent declares a provisioned system GuestService on vsock 2222.
+	// Readiness is probed separately; old templates remain unmanaged.
+	GuestAgent bool `json:"guest_agent,omitempty"`
 }
 
 // Validate checks the platform fields every macOS bundle must carry, whether it

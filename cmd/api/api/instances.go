@@ -988,11 +988,8 @@ func (s *ApiService) StatInstancePath(ctx context.Context, request oapi.StatInst
 		}, nil
 	}
 
-	if inst.MacOS != nil {
-		return oapi.StatInstancePath501JSONResponse{
-			Code:    "unsupported",
-			Message: "stat is not implemented for experimental macOS instances",
-		}, nil
+	if reason := inst.GuestOperationUnsupportedReason(instances.GuestOpStat); reason != "" {
+		return oapi.StatInstancePath501JSONResponse{Code: "unsupported", Message: reason}, nil
 	}
 
 	if inst.State != instances.StateRunning {

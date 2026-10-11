@@ -10,6 +10,7 @@ import (
 
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/images"
+	"github.com/kernel/hypeman/lib/instances/phasetracking"
 	"github.com/kernel/hypeman/lib/paths"
 	"github.com/stretchr/testify/require"
 )
@@ -35,6 +36,103 @@ func TestMacOSRequestDefaultsAndRejections(t *testing.T) {
 	}
 	require.ErrorIs(t, prepareMacOSCreate(&CreateInstanceRequest{}, testMacImage(), hypervisor.Capabilities{}), ErrInvalidRequest)
 }
+func TestMacOSGuestAgentOptIn(t *testing.T) {
+	caps := hypervisor.Capabilities{SupportsMacOSBoot: true}
+	image := testMacImage()
+	image.MacOS.GuestAgent = true
+	request := CreateInstanceRequest{}
+	require.NoError(t, prepareMacOSCreate(&request, image, caps))
+	require.False(t, request.SkipGuestAgent)
+	request = CreateInstanceRequest{SkipGuestAgent: true}
+	require.NoError(t, prepareMacOSCreate(&request, image, caps))
+	require.True(t, request.SkipGuestAgent)
+}
+
+func TestMacOSAgentReadinessGatesRunning(t *testing.T) {
+	for _, tc := range []struct {
+		name                     string
+		declared, skipped, ready bool
+	}{
+		{"legacy image", false, true, false},
+		{"disabled", true, true, false},
+		{"not ready", true, false, false},
+		{"ready", true, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			image := testMacImage()
+			image.MacOS.GuestAgent = tc.declared
+			stored := StoredMetadata{Id: "mac", MacOS: image.MacOS, SkipGuestAgent: tc.skipped}
+			now := time.Now().UTC()
+			calls := 0
+			m := &manager{paths: paths.New(t.TempDir()), now: func() time.Time { return now }, guestAgentReadyProbe: func(context.Context, *StoredMetadata) bool {
+				calls++
+				return tc.ready
+			}}
+			agent := tc.declared && !tc.skipped
+			initial := StateRunning
+			if agent {
+				initial = StateInitializing
+			}
+			require.Equal(t, initial, deriveRunningState(&stored))
+			hydrated := m.hydrateBootMarkersFromLogs(context.Background(), &stored)
+			require.Equal(t, tc.ready, hydrated)
+			final := StateRunning
+			if agent && !tc.ready {
+				final = StateInitializing
+			}
+			require.Equal(t, final, deriveRunningState(&stored), "an agent-enabled guest is Running once the agent is ready")
+			require.Nil(t, stored.ProgramStartedAt, "macOS does not invent a Linux workload marker")
+			if tc.ready {
+				require.Equal(t, &now, stored.GuestAgentReadyAt)
+			} else {
+				require.Nil(t, stored.GuestAgentReadyAt)
+			}
+			if tc.declared && !tc.skipped {
+				require.Equal(t, 1, calls)
+			} else {
+				require.Zero(t, calls)
+			}
+		})
+	}
+}
+
+func TestMacOSAgentReadyMarkerPersisted(t *testing.T) {
+	p := paths.New(t.TempDir())
+	now := time.Now().UTC()
+	m := &manager{paths: p, now: func() time.Time { return now }, guestAgentReadyProbe: func(context.Context, *StoredMetadata) bool { return true }}
+	require.NoError(t, m.ensureDirectories("mac"))
+	image := testMacImage()
+	image.MacOS.GuestAgent = true
+	require.NoError(t, m.saveMetadata(&metadata{StoredMetadata: StoredMetadata{Id: "mac", DataDir: p.InstanceDir("mac"), MacOS: image.MacOS}}))
+	m.persistBootMarkers(context.Background(), "mac")
+	meta, err := m.loadMetadata("mac")
+	require.NoError(t, err)
+	require.Equal(t, &now, meta.GuestAgentReadyAt)
+	require.Nil(t, meta.ProgramStartedAt)
+	require.True(t, meta.MacOS.GuestAgent)
+}
+
+func TestMacOSAgentReadyMarkerPersistedByPublicRead(t *testing.T) {
+	p := paths.New(t.TempDir())
+	now := time.Now().UTC()
+	m := &manager{paths: p, now: func() time.Time { return now }, guestAgentReadyProbe: func(context.Context, *StoredMetadata) bool { return true }}
+	require.NoError(t, m.ensureDirectories("mac"))
+	socket := filepath.Join(p.InstanceDir("mac"), "vz.sock")
+	require.NoError(t, os.WriteFile(socket, nil, 0600))
+	image := testMacImage()
+	image.MacOS.GuestAgent = true
+	stored := StoredMetadata{Id: "mac", DataDir: p.InstanceDir("mac"), SocketPath: socket, MacOS: image.MacOS, HypervisorType: hypervisor.TypeVZ, CreatedAt: now}
+	require.NoError(t, m.saveMetadata(&metadata{StoredMetadata: stored}))
+	m.storeCachedHypervisorState("mac", hypervisor.StateRunning)
+
+	inst, err := m.GetInstance(context.Background(), "mac")
+	require.NoError(t, err)
+	require.NotNil(t, inst.GuestAgentReadyAt)
+	meta, err := m.loadMetadata("mac")
+	require.NoError(t, err)
+	require.NotNil(t, meta.GuestAgentReadyAt, "readiness must reach metadata through the normal read path")
+}
+
 func TestMacOSBootConfigNoLinuxDevices(t *testing.T) {
 	p := paths.New(t.TempDir())
 	m := &manager{paths: p}
@@ -100,4 +198,22 @@ func TestMacOSPreservedIdentityAdmission(t *testing.T) {
 	require.NoError(t, os.Remove(socket))
 	require.NoError(t, m.checkMacOSIdentityAvailable(context.Background(), &other))
 	require.ErrorIs(t, (&manager{}).admitGuestOperation(&stored, "snapshot schedules"), ErrInvalidRequest)
+}
+
+func TestMacOSRunningPhaseFollowsReadiness(t *testing.T) {
+	image := testMacImage()
+	image.MacOS.GuestAgent = true
+	stored := StoredMetadata{MacOS: image.MacOS}
+	phase, _ := runningPhaseFromMarkers(&stored)
+	require.Equal(t, phasetracking.PhaseInitializing, phase)
+
+	ready := time.Date(2026, 10, 14, 1, 0, 0, 0, time.UTC)
+	stored.GuestAgentReadyAt = &ready
+	phase, at := runningPhaseFromMarkers(&stored)
+	require.Equal(t, phasetracking.PhaseRunning, phase)
+	require.Equal(t, ready, at)
+
+	stored = StoredMetadata{MacOS: image.MacOS, SkipGuestAgent: true}
+	phase, _ = runningPhaseFromMarkers(&stored)
+	require.Equal(t, phasetracking.PhaseRunning, phase, "a guest without the agent runs from boot")
 }

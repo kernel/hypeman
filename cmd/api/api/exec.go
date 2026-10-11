@@ -71,8 +71,8 @@ func (s *ApiService) ExecHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if inst.MacOS != nil {
-		http.Error(w, `{"code":"unsupported","message":"exec is not implemented for experimental macOS instances"}`, http.StatusNotImplemented)
+	if reason := inst.GuestOperationUnsupportedReason(instances.GuestOpExec); reason != "" {
+		writeGuestUnsupported(w, reason)
 		return
 	}
 
@@ -151,6 +151,14 @@ func (s *ApiService) ExecHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Create WebSocket read/writer wrapper that handles resize messages
 	wsConn := &wsReadWriter{ws: ws, ctx: ctx, resizeChan: resizeChan}
+	if inst.MacOS != nil {
+		// The macOS guest agent cancels a command when its stream ends, so a lost
+		// websocket ends the session instead of leaving the command running.
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithCancel(ctx)
+		defer cancel()
+		wsConn.ctx, wsConn.cancel = ctx, cancel
+	}
 
 	dialer, err := s.InstanceManager.GetVsockDialer(ctx, inst.Id)
 	if err != nil {
@@ -221,6 +229,7 @@ type wsReadWriter struct {
 	reader     io.Reader
 	mu         sync.Mutex
 	resizeChan chan<- *guest.WindowSize // Channel to send resize events (nil if not TTY)
+	cancel     context.CancelFunc       // ends a macOS exec session when the websocket fails
 }
 
 func (w *wsReadWriter) Read(p []byte) (n int, err error) {
@@ -241,6 +250,7 @@ func (w *wsReadWriter) Read(p []byte) (n int, err error) {
 		// Read next WebSocket message
 		messageType, data, err := w.ws.ReadMessage()
 		if err != nil {
+			w.cancelSession()
 			return 0, err
 		}
 
@@ -273,7 +283,14 @@ func (w *wsReadWriter) Read(p []byte) (n int, err error) {
 
 func (w *wsReadWriter) Write(p []byte) (n int, err error) {
 	if err := w.ws.WriteMessage(websocket.BinaryMessage, p); err != nil {
+		w.cancelSession()
 		return 0, err
 	}
 	return len(p), nil
+}
+
+func (w *wsReadWriter) cancelSession() {
+	if w.cancel != nil {
+		w.cancel()
+	}
 }

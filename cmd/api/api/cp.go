@@ -104,6 +104,11 @@ func (s *ApiService) CpHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if reason := inst.GuestOperationUnsupportedReason(instances.GuestOpFileCopy); reason != "" {
+		writeGuestUnsupported(w, reason)
+		return
+	}
+
 	if inst.State != instances.StateRunning {
 		http.Error(w, fmt.Sprintf(`{"code":"invalid_state","message":"instance must be running (current state: %s)"}`, inst.State), http.StatusConflict)
 		return

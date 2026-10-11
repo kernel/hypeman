@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/kernel/hypeman/lib/healthcheck"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/instances/phasetracking"
@@ -81,10 +82,13 @@ func prepareMacOSCreate(req *CreateInstanceRequest, img *images.Image, caps hype
 	if img.Platform != "darwin/arm64" || img.SizeBytes == nil || *img.SizeBytes <= 0 {
 		return fmt.Errorf("%w: incomplete macOS image", ErrImageNotReady)
 	}
-	if req.HotplugSize != 0 || req.OverlaySize != 0 || len(req.Volumes) != 0 || len(req.Devices) != 0 || req.GPU != nil || len(req.Env) != 0 || len(req.Entrypoint) != 0 || len(req.Cmd) != 0 || req.NetworkEgress != nil || len(req.Credentials) != 0 || req.AutoStandby != nil || req.HealthCheck != nil || req.SnapshotPolicy != nil || req.DiskIOBps != 0 || req.NetworkBandwidthDownload != 0 || req.NetworkBandwidthUpload != 0 {
-		return fmt.Errorf("%w: experimental macOS supports local disk clone, CPU/RAM, tags, expiration and NAT only; Linux commands/env/volumes, overlays, agents, auto-standby/snapshot policies and I/O shaping are unsupported", ErrInvalidRequest)
+	if req.HotplugSize != 0 || req.OverlaySize != 0 || len(req.Volumes) != 0 || len(req.Devices) != 0 || req.GPU != nil || len(req.Env) != 0 || len(req.Entrypoint) != 0 || len(req.Cmd) != 0 || req.NetworkEgress != nil || len(req.Credentials) != 0 || req.AutoStandby != nil || req.SnapshotPolicy != nil || req.DiskIOBps != 0 || req.NetworkBandwidthDownload != 0 || req.NetworkBandwidthUpload != 0 {
+		return fmt.Errorf("%w: experimental macOS supports local disk clone, CPU/RAM, tags, expiration and NAT only; Linux commands/env/volumes, overlays, auto-standby/snapshot policies and I/O shaping are unsupported", ErrInvalidRequest)
 	}
 	if err := validateMacOSRestartPolicy(req.RestartPolicy); err != nil {
+		return err
+	}
+	if err := validateMacOSHealthCheck(req.HealthCheck, img.MacOS.GuestAgent && !req.SkipGuestAgent); err != nil {
 		return err
 	}
 	size, vcpus := req.Size, req.Vcpus
@@ -99,7 +103,7 @@ func prepareMacOSCreate(req *CreateInstanceRequest, img *images.Image, caps hype
 	}
 	req.Size, req.Vcpus = size, vcpus
 	req.OverlaySize = *img.SizeBytes // Reserve the writable boot disk, not a Linux overlay.
-	req.SkipGuestAgent = true
+	req.SkipGuestAgent = req.SkipGuestAgent || !img.MacOS.GuestAgent
 	req.SkipKernelHeaders = true
 	return nil
 }
@@ -124,10 +128,27 @@ func checkMacOSUpdate(stored *StoredMetadata, req UpdateInstanceRequest) error {
 	if stored.MacOS == nil {
 		return nil
 	}
-	if len(req.Env) != 0 || req.AutoStandby != nil || req.HealthCheck != nil {
-		return fmt.Errorf("%w: macOS updates support expiration and VM restart policy only", ErrInvalidRequest)
+	if len(req.Env) != 0 || req.AutoStandby != nil {
+		return fmt.Errorf("%w: macOS updates support expiration, exec health checks and VM restart policy only", ErrInvalidRequest)
+	}
+	if err := validateMacOSHealthCheck(req.HealthCheck, stored.GuestAgentEnabled()); err != nil {
+		return err
 	}
 	return validateMacOSRestartPolicy(req.RestartPolicy)
+}
+
+func validateMacOSHealthCheck(policy *healthcheck.Policy, agentEnabled bool) error {
+	normalized, err := normalizeHealthCheckPolicy(policy)
+	if err != nil {
+		return err
+	}
+	if !healthcheck.Enabled(normalized) {
+		return nil
+	}
+	if normalized.Type != healthcheck.TypeExec || !agentEnabled {
+		return fmt.Errorf("%w: macOS supports exec health checks with an enabled guest agent only", ErrInvalidRequest)
+	}
+	return nil
 }
 
 // checkMacOSStart refuses starts a macOS-only server or a macOS guest cannot honor.
@@ -174,7 +195,8 @@ func (m *manager) macOSVMConfig(inst *Instance) hypervisor.VMConfig {
 }
 func initialBootPhase(stored *StoredMetadata) phasetracking.Phase {
 	if stored.MacOS != nil {
-		return phasetracking.PhaseRunning
+		phase, _ := macOSRunningPhase(stored)
+		return phase
 	}
 	return phasetracking.PhaseInitializing
 }
@@ -224,6 +246,32 @@ func (m *manager) checkMacOSIdentityAvailable(ctx context.Context, stored *Store
 	}
 	return nil
 }
+
+// GuestAgentEnabled reports whether exec, copy, readiness and shutdown may use the
+// shared guest agent. A macOS image must declare it; hand-written metadata that
+// leaves SkipGuestAgent unset does not enable it.
+func (s *StoredMetadata) GuestAgentEnabled() bool {
+	return !s.SkipGuestAgent && (s.MacOS == nil || s.MacOS.GuestAgent)
+}
+
+// programMarkerSettled reports that no workload-start marker is awaited. macOS
+// guests have no Linux workload marker, so only agent readiness is probed.
+func programMarkerSettled(stored *StoredMetadata) bool {
+	return stored.MacOS != nil || stored.ProgramStartedAt != nil
+}
+
+// guestAgentReadyExecutable is the readiness probe command. Darwin provides true
+// in /usr/bin, not /bin.
+func guestAgentReadyExecutable(stored *StoredMetadata) string {
+	if stored.MacOS != nil {
+		return "/usr/bin/true"
+	}
+	return "/bin/true"
+}
+
+// macOSMinStopTimeout is the shortest graceful stop window, in seconds, given to a
+// macOS guest, so a normal stop can record a graceful receipt and strict export waits.
+const macOSMinStopTimeout = 30
 
 // admitGuestOperation refuses an operation this server cannot run for the guest:
 // any Linux operation on a macOS-only server, and operations macOS guests do not
@@ -390,4 +438,17 @@ func macOSShimRefusing(stored *StoredMetadata) bool {
 	}
 	conn.Close()
 	return false
+}
+
+// macOSRunningPhase matches deriveRunningState: an agent-enabled guest runs once
+// the agent is ready; otherwise it runs from boot. A zero time is clamped to the
+// phase start by the caller.
+func macOSRunningPhase(stored *StoredMetadata) (phasetracking.Phase, time.Time) {
+	if !stored.GuestAgentEnabled() {
+		return phasetracking.PhaseRunning, time.Time{}
+	}
+	if stored.GuestAgentReadyAt == nil {
+		return phasetracking.PhaseInitializing, time.Time{}
+	}
+	return phasetracking.PhaseRunning, *stored.GuestAgentReadyAt
 }
