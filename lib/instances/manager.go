@@ -86,6 +86,7 @@ type ResourceLimits struct {
 
 // ManagerConfig holds non-resource manager behavior settings.
 type ManagerConfig struct {
+	MacOSOnly                         bool
 	LifecycleEventBufferSize          int
 	FirecrackerSnapshotMemoryBackend  string
 	FirecrackerUFFDCacheMaxBytes      int64
@@ -174,6 +175,8 @@ type manager struct {
 	resourceValidator         ResourceValidator // Optional validator for aggregate resource limits
 	instanceLocks             sync.Map          // map[string]*sync.RWMutex - per-instance locks
 	forkMetadataMu            sync.Mutex
+	macOSBootMu               sync.Mutex // Serialize admission for preserved Mac identities.
+	macOSOnly                 bool
 	bootMarkerScans           sync.Map      // map[string]time.Time next allowed boot-marker rescan
 	hypervisorStateCache      sync.Map      // map[string]hypervisorStateCacheEntry - last observed hypervisor state per instance
 	hostTopology              *HostTopology // Cached host CPU topology
@@ -285,6 +288,7 @@ func NewManagerWithConfigE(p *paths.Paths, imageManager images.Manager, systemMa
 
 	m := &manager{
 		paths:                            p,
+		macOSOnly:                        managerConfig.MacOSOnly,
 		imageManager:                     imageManager,
 		systemManager:                    systemManager,
 		networkManager:                   networkManager,
@@ -922,9 +926,10 @@ func (m *manager) ListRunningInstancesInfo(ctx context.Context) ([]resources.Ins
 		}
 
 		// Derive TAP device name if networking is enabled
-		if inst.NetworkEnabled {
+		if inst.NetworkEnabled && inst.MacOS == nil {
 			info.TAPDevice = network.GenerateTAPName(inst.Id)
 		}
+		info.StoragePath = inst.VMStoragePath()
 
 		infos = append(infos, info)
 	}

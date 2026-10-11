@@ -63,6 +63,15 @@ func (s *ApiService) ListInstances(ctx context.Context, request oapi.ListInstanc
 func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInstanceRequestObject) (oapi.CreateInstanceResponseObject, error) {
 	log := logger.FromContext(ctx)
 
+	macOSCreate, err := s.isMacOSImage(ctx, request.Body.Image)
+	if err != nil {
+		log.ErrorContext(ctx, "failed to look up image for create", "error", err, "image", request.Body.Image)
+		return oapi.CreateInstance500JSONResponse{Code: "internal_error", Message: "failed to look up image"}, nil
+	}
+	if macOSCreate {
+		ignoreLinuxCreateDefaults(ctx, request.Body)
+	}
+
 	// Parse size (default: 1GB)
 	size := int64(0)
 	if request.Body.Size != nil && *request.Body.Size != "" {
@@ -273,12 +282,17 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 		}
 	}
 
+	// macOS guests take CPU and memory from their image and have no I/O shaping.
+	if macOSCreate && request.Body.Vcpus == nil {
+		vcpus = 0
+	}
+
 	// Calculate default resource limits when not specified (0 = auto)
 	// Uses proportional allocation based on CPU: (vcpus / cpuCapacity) * resourceCapacity
-	if diskIOBps == 0 {
+	if !macOSCreate && diskIOBps == 0 {
 		diskIOBps, _ = s.ResourceManager.DefaultDiskIOBandwidth(vcpus)
 	}
-	if networkBandwidthDownload == 0 || networkBandwidthUpload == 0 {
+	if !macOSCreate && (networkBandwidthDownload == 0 || networkBandwidthUpload == 0) {
 		defaultDown, defaultUp := s.ResourceManager.DefaultNetworkBandwidth(vcpus)
 		if networkBandwidthDownload == 0 {
 			networkBandwidthDownload = defaultDown
@@ -459,6 +473,7 @@ func (s *ApiService) GetInstanceStats(ctx context.Context, request oapi.GetInsta
 		inst.Vcpus,
 		inst.Size+inst.HotplugSize,
 	)
+	info.StoragePath = inst.VMStoragePath()
 
 	// Collect stats using vm_metrics manager
 	vmStats := s.VMMetricsManager.GetInstanceStats(ctx, info)
@@ -671,6 +686,11 @@ func (s *ApiService) RestoreInstance(ctx context.Context, request oapi.RestoreIn
 			return oapi.RestoreInstance404JSONResponse{
 				Code:    "not_found",
 				Message: "instance not found",
+			}, nil
+		case errors.Is(err, instances.ErrInvalidRequest):
+			return oapi.RestoreInstance400JSONResponse{
+				Code:    "invalid_request",
+				Message: err.Error(),
 			}, nil
 		case errors.Is(err, instances.ErrInvalidState):
 			return oapi.RestoreInstance409JSONResponse{
@@ -938,6 +958,11 @@ func (s *ApiService) GetInstanceLogs(ctx context.Context, request oapi.GetInstan
 				Code:    "log_not_found",
 				Message: "requested log file does not exist yet",
 			}, nil
+		case errors.Is(err, instances.ErrNotSupported):
+			return oapi.GetInstanceLogs501JSONResponse{
+				Code:    "not_supported",
+				Message: err.Error(),
+			}, nil
 		default:
 			return oapi.GetInstanceLogs500JSONResponse{
 				Code:    "internal_error",
@@ -960,6 +985,13 @@ func (s *ApiService) StatInstancePath(ctx context.Context, request oapi.StatInst
 		return oapi.StatInstancePath500JSONResponse{
 			Code:    "internal_error",
 			Message: "resource not resolved",
+		}, nil
+	}
+
+	if inst.MacOS != nil {
+		return oapi.StatInstancePath501JSONResponse{
+			Code:    "unsupported",
+			Message: "stat is not implemented for experimental macOS instances",
 		}, nil
 	}
 

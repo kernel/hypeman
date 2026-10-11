@@ -288,6 +288,12 @@ func (p *Paths) InstanceAppLog(id string) string {
 	return filepath.Join(p.InstanceLogs(id), "app.log")
 }
 
+// InstanceVZShimLog returns the path to the Virtualization.framework shim log, which
+// is the VMM log for VZ guests.
+func (p *Paths) InstanceVZShimLog(id string) string {
+	return filepath.Join(p.InstanceLogs(id), "vz-shim.log")
+}
+
 // InstanceVMMLog returns the path to instance VMM log (Cloud Hypervisor stdout+stderr).
 func (p *Paths) InstanceVMMLog(id string) string {
 	return filepath.Join(p.InstanceLogs(id), "vmm.log")

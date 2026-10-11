@@ -42,6 +42,9 @@ func (m *manager) forkInstance(ctx context.Context, id string, req ForkInstanceR
 	if err != nil {
 		return nil, "", false, err
 	}
+	if err := m.admitGuestOperation(&meta.StoredMetadata, "fork"); err != nil {
+		return nil, "", false, err
+	}
 	source := m.toInstance(ctx, meta)
 	targetState, err := resolveForkTargetState(req.TargetState, source.State)
 	if err != nil {

@@ -37,6 +37,7 @@ func (a *InstanceManagerAdapter) ListRunningInstancesForMetrics() ([]InstanceInf
 			Name:                 info.Name,
 			HypervisorPID:        info.HypervisorPID,
 			TAPDevice:            info.TAPDevice,
+			StoragePath:          info.StoragePath,
 			AllocatedVcpus:       info.AllocatedVcpus,
 			AllocatedMemoryBytes: info.AllocatedMemoryBytes,
 		}

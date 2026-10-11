@@ -164,7 +164,7 @@ func admissionSocketActive(stored *StoredMetadata) bool {
 		return false
 	}
 	_, err := os.Stat(stored.SocketPath)
-	return err == nil
+	return err == nil && !macOSShimRefusing(stored)
 }
 
 func (m *manager) StartAdmissionAllocationReconciler(ctx context.Context, interval time.Duration) {

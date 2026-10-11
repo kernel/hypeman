@@ -75,6 +75,9 @@ func (MicroVMProfile) requiresStoredMachineType() bool { return true }
 func (MicroVMProfile) requiresStoredVersion() bool     { return true }
 
 func validateProfileCapabilities(name hypervisor.Type, caps hypervisor.Capabilities, cfg hypervisor.VMConfig) error {
+	if cfg.EffectiveBootMode() == hypervisor.BootModeMacOS {
+		return fmt.Errorf("%s does not support macOS boot", name)
+	}
 	if cfg.EffectiveBootMode() == hypervisor.BootModeUEFI && !caps.SupportsUEFIBoot {
 		return fmt.Errorf("%s does not support UEFI boot on this host", name)
 	}

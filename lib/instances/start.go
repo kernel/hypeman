@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/egressproxy"
-	"github.com/kernel/hypeman/lib/instances/phasetracking"
+	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/logger"
 	"github.com/kernel/hypeman/lib/network"
 	"go.opentelemetry.io/otel/attribute"
@@ -41,6 +41,10 @@ func (m *manager) startInstance(
 	stored := &meta.StoredMetadata
 	ctx = enrichInstancesTrace(ctx, attribute.String("hypervisor", string(stored.HypervisorType)))
 	log.DebugContext(ctx, "loaded instance", "instance_id", id, "state", inst.State)
+
+	if err := m.checkMacOSStart(stored, req); err != nil {
+		return nil, err
+	}
 
 	// 2. Validate state (must be Stopped to start)
 	if inst.State != StateStopped {
@@ -94,18 +98,23 @@ func (m *manager) startInstance(
 
 	// 3. Get image info (needed for buildHypervisorConfig). Resolve by the
 	// digest-pinned boot reference so a moved tag can't drift the rootfs/arch.
-	bootImage := bootImageRef(stored)
-	log.DebugContext(ctx, "getting image info", "instance_id", id, "image", bootImage)
-	imageCtx, imageSpanEnd := m.startLifecycleStep(ctx, "resolve_image",
-		attribute.String("instance_id", id),
-		attribute.String("hypervisor", string(stored.HypervisorType)),
-		attribute.String("operation", "resolve_image"),
-	)
-	imageInfo, err := m.imageManager.GetImage(imageCtx, bootImage)
-	imageSpanEnd(err)
-	if err != nil {
-		log.ErrorContext(ctx, "failed to get image", "instance_id", id, "image", bootImage, "error", err)
-		return nil, fmt.Errorf("get image: %w", err)
+	// macOS boots the disk and aux storage cloned at create time, so it does not
+	// depend on the template image after create.
+	var imageInfo *images.Image
+	if stored.MacOS == nil {
+		bootImage := bootImageRef(stored)
+		log.DebugContext(ctx, "getting image info", "instance_id", id, "image", bootImage)
+		imageCtx, imageSpanEnd := m.startLifecycleStep(ctx, "resolve_image",
+			attribute.String("instance_id", id),
+			attribute.String("hypervisor", string(stored.HypervisorType)),
+			attribute.String("operation", "resolve_image"),
+		)
+		imageInfo, err = m.imageManager.GetImage(imageCtx, bootImage)
+		imageSpanEnd(err)
+		if err != nil {
+			log.ErrorContext(ctx, "failed to get image", "instance_id", id, "image", bootImage, "error", err)
+			return nil, fmt.Errorf("get image: %w", err)
+		}
 	}
 
 	// Setup cleanup stack for automatic rollback on errors
@@ -114,7 +123,9 @@ func (m *manager) startInstance(
 
 	// 4. Allocate fresh network if network enabled
 	var netConfig *network.NetworkConfig
-	if stored.NetworkEnabled {
+	if stored.MacOS != nil && stored.NetworkEnabled {
+		netConfig = applyMacOSNetwork(stored)
+	} else if stored.NetworkEnabled {
 		log.DebugContext(ctx, "allocating network for start", "instance_id", id, "network", "default")
 		networkCtx, networkSpanEnd := m.startLifecycleStep(ctx, "allocate_network",
 			attribute.String("instance_id", id),
@@ -231,7 +242,7 @@ func (m *manager) startInstance(
 
 	// 7. Update metadata (set PID, StartedAt). Boot markers were cleared at
 	// the top of this function, so we are in Initializing until they hydrate.
-	stored.Phases.Record(phasetracking.PhaseInitializing, time.Now().UTC())
+	stored.Phases.Record(initialBootPhase(stored), time.Now().UTC())
 	meta = &metadata{StoredMetadata: *stored}
 	if err := m.saveMetadata(meta); err != nil {
 		// VM is running but metadata failed - log but don't fail
