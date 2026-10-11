@@ -42,6 +42,9 @@ func (m *manager) validateStoredVMConfig(starter hypervisor.VMStarter, snapshotK
 }
 
 func (m *manager) plannedStoredVMConfig(snapshotKind SnapshotKind, meta StoredMetadata) hypervisor.VMConfig {
+	if meta.MacOS != nil {
+		return m.macOSVMConfig(&Instance{StoredMetadata: meta})
+	}
 	hasVGPU := storedVGPUDevicePath(&meta) != "" || meta.GPUProfile != ""
 	config := m.plannedVMConfig(
 		meta.HotplugSize,

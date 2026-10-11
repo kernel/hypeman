@@ -1,5 +1,3 @@
-//go:build darwin
-
 // Package shimconfig defines the configuration types shared between
 // the hypeman API server and the vz-shim subprocess.
 package shimconfig

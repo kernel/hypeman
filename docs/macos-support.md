@@ -15,14 +15,18 @@ owns the behavior.
 | Memory reclaim | Unsupported | Reported per guest as `unsupported`. No balloon change. | PR 1 |
 | Guest port forwarding | Agent-gated | HTTP and WebSocket to a guest loopback port at `/instances/{id}/ports/{port}/*`. The image starts its own services. See [macos-guest-ports.md](macos-guest-ports.md). | PR 5 |
 | Builds | Partial | Opt-in `macos_builds`. Restricted recipe. Linux Dockerfile builds unsupported. | PR 6 |
-| Stopped snapshots, same-instance restore | Partial | Graceful stop required. Running restore has an open readiness issue. | PR 4 |
-| Standby, memory snapshot, memory fork | Unsupported | Rejected with a stable error. | — |
-| Stopped clones, fork from snapshot | Unsupported | Needs identity rebinding and guest rekeying. | PR 4 (later) |
+| Stopped snapshots, same-instance restore | Experimental | Graceful stop required. Stopped and Running targets; restored metadata and storage are staged together. | PR 4 |
+| Standby and restore (same instance) | Experimental | Saves memory, restores the same instance. Restore can fail (about 2% observed, cause unknown); a failed restore leaves the instance in Standby. Recover by deleting, as on Linux. Standby auto-policies rejected: no host-visible connection tracking on NAT. | PR 4 |
+| Same-instance memory snapshots | Experimental | Running/Standby capture, with exact VZ configuration validation and an uncompressed disk/aux/memory bundle. Same-instance restore only; new path needs native QA. | PR 4 |
+| Independent warm memory forks | Unsupported | VZ restores saved state only into an identical configuration (same machine identifier and MAC), and Apple documents concurrent VMs sharing an identifier as undefined. Repeated same-instance restore is the warm start. | — |
+| Stopped clones (fork from stopped) | Experimental | Rebinds machine identifier and MAC; rekeys SSH host keys on first start. Hostname and credentials not yet checked. | PR 4 |
+| Fork from stopped snapshot | Experimental | Graceful receipt and enabled agent required. Fresh machine identifier/MAC; SSH rekey on first cold boot. Stopped and Running targets supported. | PR 4 |
 | Update (PATCH), VM restart policy | Partial | Expiration/TTL and `restart_policy: always` or `never` are supported. Manual stop suppresses automatic restart. A shim that dies without removing its socket (for example, SIGKILL) reads as Stopped, so `always` restarts it. `on_failure` is rejected: no workload exit status is available. | PR 1 |
 | Exec health checks | Agent-gated | Supported at create and PATCH; `type: none` disables them. HTTP/TCP checks remain unsupported. | PR 3 |
 | Volumes, env and commands, credentials and auto-standby policies, passthrough, shaping | Unsupported | Rejected at create, start, or update. | — |
 | Ingress | Unsupported | Refused in macOS-only mode and for macOS targets. | — |
-| Snapshot schedules | Unsupported | Refused at admission. | — |
+| Snapshot schedules | Experimental | State-based stopped or memory capture, existing cadence/retention, host save/restore gate and live configuration probe. New path needs native QA. | PR 4 |
 
-Limits that apply everywhere: preserved machine identity (one active instance per
-identifier, no rekeying), no clean-base sanitation audit, and no external review verdict.
+Limits that apply everywhere: one active VM per machine identifier, no clean-base
+sanitation audit, and no external review verdict. Same-instance memory restore
+preserves identity; stopped clones get fresh machine identifiers and SSH host keys.

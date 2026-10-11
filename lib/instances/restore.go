@@ -45,6 +45,13 @@ func (m *manager) restoreInstance(
 	if err := m.admitGuestOperation(&meta.StoredMetadata, "restore"); err != nil {
 		return nil, err
 	}
+	if meta.MacOS != nil {
+		m.macOSBootMu.Lock()
+		defer m.macOSBootMu.Unlock()
+		if err := m.checkMacOSBootAvailable(ctx, &meta.StoredMetadata); err != nil {
+			return nil, err
+		}
+	}
 
 	inst := m.toInstance(ctx, meta)
 	stored := &meta.StoredMetadata
@@ -138,8 +145,9 @@ func (m *manager) restoreInstance(
 		}
 	}
 
-	// 4. Recreate or allocate network if network enabled
-	if stored.NetworkEnabled {
+	// 4. Recreate or allocate network if network enabled. A macOS guest keeps the MAC
+	// in its saved configuration, and vmnet supplies the address, so no TAP is allocated.
+	if stored.NetworkEnabled && stored.MacOS == nil {
 		networkCtx, networkSpanEnd := m.startLifecycleStep(ctx, "restore_network",
 			attribute.String("instance_id", id),
 			attribute.String("hypervisor", string(stored.HypervisorType)),
