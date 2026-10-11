@@ -297,7 +297,7 @@ func TestReuseExistingImageUpdatesResourceTags(t *testing.T) {
 	ref, err := ParseNormalizedRef(repository + "@sha256:" + digest)
 	require.NoError(t, err)
 	resolved := NewResolvedRef(ref, "sha256:"+digest)
-	img, found, err := m.reuseExistingImage(resolved, nil, tags.Tags{"team": "payments"})
+	img, found, err := m.reuseExistingImage(resolved, nil, tags.Tags{"team": "payments"}, nil)
 	require.NoError(t, err)
 	require.True(t, found)
 	require.Equal(t, "payments", img.Tags["team"])
