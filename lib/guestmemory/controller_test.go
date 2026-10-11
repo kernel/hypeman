@@ -277,3 +277,23 @@ func TestTriggerReclaimDryRunDoesNotReportAppliedReclaim(t *testing.T) {
 	assert.Equal(t, int64(0), resp.Actions[0].AppliedReclaimBytes, "dry-run actions should not report applied reclaim")
 	assert.Equal(t, int64(1024*mib), hv.target, "dry-run should not mutate the hypervisor target")
 }
+
+func TestTriggerReclaimSkipsMacOSGuestsAsUnsupported(t *testing.T) {
+	const mib = int64(1024 * 1024)
+	src := &stubSource{vms: []BalloonVM{
+		{ID: "mac", Name: "mac", HypervisorType: hypervisor.TypeVZ, SocketPath: "mac", AssignedMemoryBytes: 4096 * mib, MacOS: true},
+	}}
+	hv := &stubHypervisor{target: 4096 * mib, capabilities: hypervisor.Capabilities{SupportsBalloonControl: true}}
+	c := NewController(Policy{Enabled: true, ReclaimEnabled: true}, ActiveBallooningConfig{
+		Enabled: true, ProtectedFloorPercent: 50, MinAdjustmentBytes: 1, PerVMMaxStepBytes: 4096 * mib, PerVMCooldown: time.Second,
+	}, src, slog.New(slog.NewTextHandler(io.Discard, nil))).(*controller)
+	c.sampler = &stubSampler{sample: HostPressureSample{TotalBytes: 4096 * mib, AvailableBytes: 1024 * mib, AvailablePercent: 25}}
+	c.reconcileMu.newClient = func(hypervisor.Type, string) (hypervisor.Hypervisor, error) { return hv, nil }
+
+	resp, err := c.TriggerReclaim(context.Background(), ManualReclaimRequest{ReclaimBytes: 512 * mib, DryRun: true})
+	require.NoError(t, err)
+	require.Len(t, resp.Actions, 1)
+	assert.Equal(t, "unsupported", resp.Actions[0].Status)
+	assert.Zero(t, resp.PlannedReclaimBytes)
+	assert.Equal(t, int64(4096*mib), hv.target, "a macOS guest's balloon target must not be read or changed")
+}

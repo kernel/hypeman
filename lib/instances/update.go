@@ -27,6 +27,12 @@ func (m *manager) updateInstance(ctx context.Context, id string, req UpdateInsta
 		log.ErrorContext(ctx, "failed to load instance metadata", "instance_id", id, "error", err)
 		return nil, err
 	}
+	if err := m.admitGuestOperation(&meta.StoredMetadata, "update"); err != nil {
+		return nil, err
+	}
+	if err := checkMacOSUpdate(&meta.StoredMetadata, req); err != nil {
+		return nil, err
+	}
 
 	inst, err := m.getInstance(ctx, id)
 	if err != nil {

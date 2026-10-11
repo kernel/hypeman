@@ -94,6 +94,8 @@ type BalloonVM struct {
 	HypervisorType      hypervisor.Type
 	SocketPath          string
 	AssignedMemoryBytes int64
+	// MacOS guests have no traditional balloon device to query or change.
+	MacOS bool
 }
 
 // Source lists reclaim-eligible VMs.

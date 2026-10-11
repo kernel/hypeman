@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -335,9 +336,13 @@ func run() error {
 
 	// Ensure system files (kernel, initrd) exist before starting server
 	logger.Info("Ensuring system files...")
-	if err := app.SystemManager.EnsureSystemFiles(app.Ctx); err != nil {
-		logger.Error("failed to ensure system files", "error", err)
-		os.Exit(1)
+	if !cfg.MacOSOnly {
+		if err := app.SystemManager.EnsureSystemFiles(app.Ctx); err != nil {
+			logger.Error("failed to ensure system files", "error", err)
+			os.Exit(1)
+		}
+	} else {
+		logger.Info("macOS-only mode: skipping Linux kernel/initrd downloads")
 	}
 	kernelVer := app.SystemManager.GetDefaultKernelVersion()
 	logger.Info("System files ready",
@@ -402,11 +407,15 @@ func run() error {
 
 	// Initialize ingress manager (starts Caddy daemon and DNS server for dynamic upstreams)
 	logger.Info("Initializing ingress manager...")
-	if err := app.IngressManager.Initialize(app.Ctx); err != nil {
-		logger.Error("failed to initialize ingress manager", "error", err)
-		return fmt.Errorf("initialize ingress manager: %w", err)
+	if !cfg.MacOSOnly {
+		if err := app.IngressManager.Initialize(app.Ctx); err != nil {
+			logger.Error("failed to initialize ingress manager", "error", err)
+			return fmt.Errorf("initialize ingress manager: %w", err)
+		}
+		logger.Info("Ingress manager initialized", "listen_addr", cfg.Caddy.ListenAddress, "admin", app.IngressManager.AdminURL())
+	} else {
+		logger.Info("macOS-only mode: ingress is unsupported; skipping Caddy and DNS startup")
 	}
-	logger.Info("Ingress manager initialized", "listen_addr", cfg.Caddy.ListenAddress, "admin", app.IngressManager.AdminURL())
 
 	// Create router
 	r := chi.NewRouter()
@@ -525,6 +534,11 @@ func run() error {
 		// even though the build is still running.
 		r.Use(timeoutNonStreamingRequests(60 * time.Second))
 
+		// Record sent create fields before the validator fills in Linux defaults.
+		if runtime.GOOS == "darwin" {
+			r.Use(api.RecordCreateFields)
+		}
+
 		// OpenAPI request validation with authentication
 		validatorOptions := &nethttpmiddleware.Options{
 			Options: openapi3filter.Options{
@@ -572,7 +586,7 @@ func run() error {
 
 	// Create HTTP server
 	srv := &http.Server{
-		Addr:    fmt.Sprintf(":%s", app.Config.Port),
+		Addr:    net.JoinHostPort(app.Config.ListenAddress, app.Config.Port),
 		Handler: r,
 	}
 
@@ -616,16 +630,16 @@ func run() error {
 		)
 	}
 
-	// Start builders manager (reconcile builder state, idle reaper)
-	if err := app.BuilderManager.Start(gctx); err != nil {
-		logger.Error("failed to start builders manager", "error", err)
-		return err
-	}
-
-	// Start build manager background services (vsock handler for builder VMs)
-	if err := app.BuildManager.Start(gctx); err != nil {
-		logger.Error("failed to start build manager", "error", err)
-		return err
+	if !cfg.MacOSOnly {
+		// Linux builder VMs and their guest-agent service are not part of macOS-only mode.
+		if err := app.BuilderManager.Start(gctx); err != nil {
+			logger.Error("failed to start builders manager", "error", err)
+			return err
+		}
+		if err := app.BuildManager.Start(gctx); err != nil {
+			logger.Error("failed to start build manager", "error", err)
+			return err
+		}
 	}
 
 	grp.Go(func() error {

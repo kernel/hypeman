@@ -149,6 +149,10 @@ func (c *controller) reconcile(ctx context.Context, req reconcileRequest) (Manua
 	actions := make([]ManualReclaimAction, 0, len(vms))
 	var currentTotalReclaim int64
 	for _, vm := range vms {
+		if vm.MacOS {
+			actions = append(actions, skippedAction(vm, "unsupported", "macOS guests have no runtime balloon control"))
+			continue
+		}
 		hv, err := state.newClient(vm.HypervisorType, vm.SocketPath)
 		if err != nil {
 			actions = append(actions, skippedAction(vm, "error", fmt.Sprintf("create hypervisor client: %v", err)))
