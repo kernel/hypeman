@@ -56,7 +56,7 @@ func Collect(p *paths.Paths) (Breakdown, error) {
 			return false
 		}
 		name := entry.Name()
-		return name == "rootfs.erofs" || name == "rootfs.ext4"
+		return name == "rootfs.erofs" || name == "rootfs.ext4" || name == "rootfs.raw"
 	})
 	if err != nil {
 		return Breakdown{}, err

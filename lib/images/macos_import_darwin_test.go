@@ -40,12 +40,13 @@ func TestMacOSOfflineImport(t *testing.T) {
 	_, err = ImportMacOSImage(ctx, p, "localhost/macos:cancelled", source)
 	require.Error(t, err)
 }
-func TestMacOSPlatformLocalOnly(t *testing.T) {
+func TestMacOSPlatform(t *testing.T) {
 	p, err := ParsePlatform("darwin/arm64")
 	require.NoError(t, err)
 	require.Equal(t, "darwin", p.OS)
 	_, err = ParsePlatform("darwin/amd64")
 	require.Error(t, err)
-	_, err = resolveManifestPlatform(&containerMetadata{OS: "darwin", Architecture: "arm64"}, "")
-	require.ErrorIs(t, err, ErrInvalidPlatform)
+	manifest, err := resolveManifestPlatform(&containerMetadata{OS: "darwin", Architecture: "arm64"}, "")
+	require.NoError(t, err)
+	require.Equal(t, "darwin/arm64", manifest.String())
 }

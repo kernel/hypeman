@@ -86,7 +86,7 @@ func (p Platform) validate() error {
 		return nil
 	}
 	if p.OS != "linux" {
-		return fmt.Errorf("%w: unsupported os %q: use linux or locally imported darwin/arm64", ErrInvalidPlatform, p.OS)
+		return fmt.Errorf("%w: unsupported os %q: use linux or darwin/arm64", ErrInvalidPlatform, p.OS)
 	}
 	switch p.Architecture {
 	case "amd64", "arm64":
@@ -166,10 +166,6 @@ func resolveManifestPlatform(meta *containerMetadata, requested string) (Platfor
 		Architecture: meta.Architecture,
 		Variant:      meta.Variant,
 	}.Normalize()
-
-	if actual.OS == "darwin" {
-		return Platform{}, fmt.Errorf("%w: macOS must be imported as a local disk bundle", ErrInvalidPlatform)
-	}
 
 	// An explicit request is authoritative for the match check and, when the
 	// manifest omits its own platform, for the recorded value too.

@@ -133,12 +133,12 @@ func resolveImageLayout(p *paths.Paths, repository, digestHex string) imageLayou
 }
 
 func contentLayout(p *paths.Paths, digestHex string) imageLayout {
-	return imageLayout{
+	return withMachineDisk(imageLayout{
 		dir:      p.ImageContentDir(digestHex),
 		metadata: p.ImageContentMetadata(digestHex),
 		disk:     p.ImageContentPath(digestHex),
 		content:  true,
-	}
+	})
 }
 
 func pathExists(path string) bool {
@@ -151,10 +151,17 @@ func digestDir(p *paths.Paths, repository, digestHex string) string {
 }
 
 func legacyLayout(p *paths.Paths, repository, digestHex string) imageLayout {
-	layout := imageLayout{dir: p.ImageDigestDir(repository, digestHex), metadata: p.ImageMetadata(repository, digestHex), disk: p.ImageDigestPath(repository, digestHex)}
-	// Locally imported machine images keep a raw disk beside their metadata. Linux
-	// legacy layouts never have one, so a stat is enough to pick the file.
-	if raw := filepath.Join(layout.dir, "rootfs.raw"); pathExists(raw) {
+	return withMachineDisk(imageLayout{dir: p.ImageDigestDir(repository, digestHex), metadata: p.ImageMetadata(repository, digestHex), disk: p.ImageDigestPath(repository, digestHex)})
+}
+
+// machineDiskFile is a macOS machine image's raw boot disk, whether imported locally
+// or pulled. Rootfs images use erofs or ext4 instead.
+const machineDiskFile = "rootfs.raw"
+
+// withMachineDisk points layout at a machine image's raw disk when the directory has
+// one. Rootfs layouts never do, so a stat is enough to pick the file.
+func withMachineDisk(layout imageLayout) imageLayout {
+	if raw := filepath.Join(layout.dir, machineDiskFile); pathExists(raw) {
 		layout.disk = raw
 	}
 	return layout

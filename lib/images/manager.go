@@ -173,9 +173,8 @@ func (m *manager) CreateImage(ctx context.Context, req CreateImageRequest) (*Ima
 	if err != nil {
 		return nil, err
 	}
-
-	if platform.OS == "darwin" {
-		return nil, fmt.Errorf("%w: macOS images must be imported locally with import-macos, not pulled as Linux containers", ErrInvalidPlatform)
+	if err := checkMachinePlatformHost(platform); err != nil {
+		return nil, err
 	}
 
 	// Parse and normalize
@@ -211,6 +210,11 @@ func (m *manager) CreateImage(ctx context.Context, req CreateImageRequest) (*Ima
 		if err := validateDigestPlatform(req.Platform, platform, actual); err != nil {
 			return nil, err
 		}
+		// A digest names its platform, so a darwin image is refused here even when
+		// the request named none, instead of failing later in the worker.
+		if err := checkMachinePlatformHost(actual); err != nil {
+			return nil, err
+		}
 	} else {
 		// inspectManifestWithPlatform already classifies registry errors via
 		// ClassifyRegistryError, so just propagate with %w to keep the errors.Is chain.
@@ -223,6 +227,11 @@ func (m *manager) CreateImage(ctx context.Context, req CreateImageRequest) (*Ima
 	m.createMu.Lock()
 	defer m.createMu.Unlock()
 
+	if strings.TrimSpace(req.Platform) != "" {
+		if err := checkCachedMachinePlatform(m.paths, ref, platform); err != nil {
+			return nil, err
+		}
+	}
 	if img, found, err := m.reuseExistingImage(ref, req.Credentials, req.Tags); found || err != nil {
 		return img, err
 	}
@@ -509,22 +518,29 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef, credentials 
 
 	m.updateStatusByDigest(ref, StatusConverting, nil, buildID)
 
-	diskPath := resolveImageLayout(m.paths, ref.Repository(), ref.DigestHex()).disk
+	layout := resolveImageLayout(m.paths, ref.Repository(), ref.DigestHex())
+	diskPath := layout.disk
 	// Keep the temporary filesystem beside its final path so finalization stays
 	// atomic even when system/builds and images are on different filesystems.
-	diskTempPath := diskPath + ".tmp-" + buildID
-	defer os.Remove(diskTempPath)
-	// Use default image format (erofs on Linux, ext4 on Darwin)
-	convertStart := time.Now()
-	diskSize, err := ExportRootfs(tempDir, diskTempPath, DefaultImageFormat)
-	m.recordImageBuildPhase(ctx, ref.Digest(), "filesystem_export", time.Since(convertStart), phaseStatus(err), "not_applicable")
+	staged, err := m.stageMacOSOutputs(ctx, ref.Digest(), tempDir, result.Metadata, layout.dir, diskPath+".tmp-"+buildID, buildID)
+	defer staged.remove()
 	if err != nil {
-		m.updateStatusByDigest(ref, StatusFailed, fmt.Errorf("convert to %s: %w", DefaultImageFormat, err), buildID)
+		m.updateStatusByDigest(ref, StatusFailed, err, buildID)
 		return
+	}
+	if staged.macos == nil {
+		// Use default image format (erofs on Linux, ext4 on Darwin)
+		convertStart := time.Now()
+		staged.sizeBytes, err = ExportRootfs(tempDir, staged.disk, DefaultImageFormat)
+		m.recordImageBuildPhase(ctx, ref.Digest(), "filesystem_export", time.Since(convertStart), phaseStatus(err), "not_applicable")
+		if err != nil {
+			m.updateStatusByDigest(ref, StatusFailed, fmt.Errorf("convert to %s: %w", DefaultImageFormat, err), buildID)
+			return
+		}
 	}
 
 	finalizeStart := time.Now()
-	err = m.finalizeImage(ref, result, diskSize, buildID, diskTempPath)
+	err = m.finalizeImage(ref, result, buildID, staged)
 	m.recordImageBuildPhase(ctx, ref.Digest(), "finalize", time.Since(finalizeStart), phaseStatus(err), "not_applicable")
 	if err != nil {
 		if errors.Is(err, errStaleBuild) {
@@ -535,94 +551,6 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef, credentials 
 	}
 
 	buildStatus = "success"
-}
-
-func (m *manager) finalizeImage(ref *ResolvedRef, result *pullResult, diskSize int64, buildID, diskTempPath string) error {
-	m.createMu.Lock()
-	defer m.createMu.Unlock()
-
-	layout := resolveImageLayout(m.paths, ref.Repository(), ref.DigestHex())
-
-	// Read current metadata to preserve request info and reject stale builds.
-	meta, err := readMetadataAt(layout)
-	if err != nil || meta.BuildID != buildID {
-		return errStaleBuild
-	}
-
-	// The pulled image config is the source of truth for the platform.
-	var requestedPlatform string
-	if meta.Request != nil {
-		requestedPlatform = meta.Request.Platform
-	}
-	actualPlatform, err := resolveManifestPlatform(result.Metadata, requestedPlatform)
-	if err != nil {
-		return err
-	}
-
-	modelPath := manifestModelPath(m.paths, layout, ref.DigestHex())
-	diskInstalled := false
-	modelWritten := false
-
-	if err := installAtomically(layout.disk, func(path string) error {
-		return os.Rename(diskTempPath, path)
-	}); err != nil {
-		return fmt.Errorf("install image disk: %w", err)
-	}
-	diskInstalled = true
-
-	// Persist the manifest content model beside the shared content so later
-	// stages can recompose the image from per-layer artifacts and GC can tell
-	// which OCI blobs are still referenced.
-	if result.Manifest != nil {
-		model := *result.Manifest
-		model.Platform = actualPlatform.String()
-		if err := writeManifestModelAt(modelPath, ref.DigestHex(), &model); err != nil {
-			return rollbackFinalization(layout, modelPath, diskInstalled, modelWritten, fmt.Errorf("write manifest model: %w", err))
-		}
-		modelWritten = true
-	}
-
-	meta.Status = StatusReady
-	meta.Error = nil
-	meta.Platform = actualPlatform.String()
-	meta.SizeBytes = diskSize
-	meta.Entrypoint = result.Metadata.Entrypoint
-	meta.Cmd = result.Metadata.Cmd
-	meta.Env = result.Metadata.Env
-	meta.Labels = result.Metadata.Labels
-	meta.WorkingDir = result.Metadata.WorkingDir
-
-	if err := writeMetadataFile(layout.metadata, meta); err != nil {
-		return rollbackFinalization(layout, modelPath, diskInstalled, modelWritten, fmt.Errorf("write final metadata: %w", err))
-	}
-
-	m.notifyReady(ref.DigestHex(), StatusReady, nil)
-	if !m.claimRequestedTags(ref, meta) {
-		m.cleanupUnclaimedImage(ref)
-	}
-	m.layers.refreshDiskUsageTotals()
-	return nil
-}
-
-func manifestModelPath(p *paths.Paths, layout imageLayout, digestHex string) string {
-	if layout.content {
-		return p.ImageContentManifestModel(digestHex)
-	}
-	return filepath.Join(layout.dir, "manifest.json")
-}
-
-func rollbackFinalization(layout imageLayout, modelPath string, diskInstalled, modelWritten bool, cause error) error {
-	var rollbackErr error
-	if modelWritten {
-		rollbackErr = errors.Join(rollbackErr, os.Remove(modelPath))
-	}
-	if diskInstalled {
-		rollbackErr = errors.Join(rollbackErr, os.Remove(layout.disk))
-	}
-	if rollbackErr != nil {
-		return errors.Join(cause, fmt.Errorf("rollback finalization: %w", rollbackErr))
-	}
-	return cause
 }
 
 func phaseStatus(err error) string {
