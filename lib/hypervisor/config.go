@@ -30,6 +30,7 @@ type VMConfig struct {
 	// Boot configuration. Empty BootMode preserves the existing direct-kernel
 	// behavior for Linux callers.
 	BootMode BootMode
+	MacOS    *MacOSPlatform
 	Firmware *FirmwareConfig
 	TPM      *TPMConfig
 
@@ -65,6 +66,7 @@ type BootMode string
 const (
 	BootModeDirect BootMode = "direct"
 	BootModeUEFI   BootMode = "uefi"
+	BootModeMacOS  BootMode = "macos"
 )
 
 // EffectiveBootMode preserves direct Linux kernel boot for existing callers.
@@ -73,6 +75,14 @@ func (c VMConfig) EffectiveBootMode() BootMode {
 		return BootModeDirect
 	}
 	return c.BootMode
+}
+
+// MacOSPlatform carries the persistent Apple-silicon platform identity.
+// The auxiliary storage belongs to the instance, never to the image template.
+type MacOSPlatform struct {
+	HardwareModelData     []byte
+	MachineIdentifierData []byte
+	AuxStoragePath        string
 }
 
 // FirmwareConfig describes UEFI firmware files. CodePath is immutable firmware;

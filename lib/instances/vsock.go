@@ -2,6 +2,7 @@ package instances
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
 )
@@ -13,5 +14,8 @@ func (m *manager) GetVsockDialer(ctx context.Context, instanceID string) (hyperv
 		return nil, err
 	}
 
+	if inst.MacOS != nil {
+		return nil, fmt.Errorf("%w: macOS guest-agent exec/stat is not implemented", ErrInvalidRequest)
+	}
 	return hypervisor.NewVsockDialer(hypervisor.Type(inst.HypervisorType), inst.VsockSocket, inst.VsockCID)
 }

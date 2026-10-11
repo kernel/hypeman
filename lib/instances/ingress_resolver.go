@@ -35,6 +35,12 @@ func (r *IngressResolver) ResolveInstanceIP(ctx context.Context, nameOrID string
 		return "", fmt.Errorf("instance not found: %s", nameOrID)
 	}
 
+	// macOS guests sit behind vmnet NAT, and their addresses are observed leases. Ingress
+	// must not route to them, and the public route must not reach them either.
+	if inst.MacOS != nil {
+		return "", fmt.Errorf("instance %s is a macOS guest and is not an ingress target", nameOrID)
+	}
+
 	// Check if instance has network enabled
 	if !inst.NetworkEnabled {
 		return "", fmt.Errorf("instance %s has no network configured", nameOrID)

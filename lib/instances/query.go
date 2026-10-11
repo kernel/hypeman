@@ -101,6 +101,9 @@ func (m *manager) deriveStateWithOptions(ctx context.Context, stored *StoredMeta
 	} else {
 		span.SetAttributes(attribute.Bool("hypervisor_state.cache_hit", false))
 		hv, err := m.getHypervisor(stored.SocketPath, stored.HypervisorType)
+		if macOSShimGone(stored, err) {
+			return m.macOSStateWithoutShim(stored)
+		}
 		if err != nil {
 			// Failed to create client - this is unexpected if socket exists
 			errMsg := fmt.Sprintf("failed to create hypervisor client: %v", err)
@@ -115,6 +118,9 @@ func (m *manager) deriveStateWithOptions(ctx context.Context, stored *StoredMeta
 		queryCtx, cancel := context.WithTimeout(ctx, getVMInfoTimeout)
 		info, err := hv.GetVMInfo(queryCtx)
 		cancel()
+		if macOSShimGone(stored, err) {
+			return m.macOSStateWithoutShim(stored)
+		}
 		if err != nil {
 			// Socket exists but hypervisor query failed or timed out. The API
 			// socket serializes requests, so a snapshot in flight will trip
@@ -137,7 +143,7 @@ func (m *manager) deriveStateWithOptions(ctx context.Context, stored *StoredMeta
 		return stateResult{State: StateCreated}
 	case hypervisor.StateRunning:
 		hydrated := false
-		if hydrateBootMarkers {
+		if hydrateBootMarkers && stored.MacOS == nil {
 			hydrated = m.hydrateBootMarkersFromLogs(ctx, stored)
 		}
 		return stateResult{
@@ -219,6 +225,10 @@ func (m *manager) updateCachedHypervisorStateFromInstance(inst *Instance) {
 }
 
 func deriveRunningState(stored *StoredMetadata) State {
+	// For unmanaged macOS desktops, Running means VMM running, not app/agent ready.
+	if stored.MacOS != nil {
+		return StateRunning
+	}
 	if stored.ProgramStartedAt == nil {
 		return StateInitializing
 	}
@@ -555,6 +565,9 @@ func (m *manager) toInstanceWithStateDerivation(ctx context.Context, meta *metad
 		HealthCheckRuntime:  healthcheck.CloneRuntime(meta.HealthCheckRuntime),
 	}
 	refreshHypervisorPID(&inst.StoredMetadata, result.State)
+	if inst.MacOS != nil && inst.NetworkEnabled && inst.State.RequiresVMM() {
+		inst.IP = macOSGuestIP(inst.MAC)
+	}
 
 	// If VM is stopped and exit info isn't persisted yet, populate in-memory
 	// from the serial console log. This is read-only -- no metadata writes.

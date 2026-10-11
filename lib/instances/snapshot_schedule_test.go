@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/scheduledsnapshots"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -655,4 +656,24 @@ func markSnapshotScheduleDue(t *testing.T, mgr *manager, instanceID string) {
 	schedule.NextRunAt = mgr.now().UTC().Add(-time.Minute)
 	schedule.UpdatedAt = mgr.now().UTC()
 	require.NoError(t, mgr.saveSnapshotScheduleUnlocked(schedule))
+}
+
+func TestSnapshotScheduleRejectedForMacOSGuests(t *testing.T) {
+	t.Parallel()
+	mgr, _ := setupTestManager(t)
+	ctx := context.Background()
+	id := "snapshot-schedule-macos"
+	createStoppedSnapshotSourceFixture(t, mgr, id, id, mgr.defaultHypervisor)
+	meta, err := mgr.loadMetadata(id)
+	require.NoError(t, err)
+	meta.MacOS = &images.MacOSImage{HardwareModel: []byte{1}, MachineIdentifier: []byte{2}, MAC: "02:00:00:00:00:01", CPUs: 4, Memory: 8 << 30}
+	require.NoError(t, mgr.saveMetadata(meta))
+
+	_, err = mgr.SetSnapshotSchedule(ctx, id, SetSnapshotScheduleRequest{
+		Interval:   2 * time.Hour,
+		NamePrefix: "nightly",
+		Retention:  SnapshotScheduleRetention{MaxCount: 1},
+	})
+	require.ErrorIs(t, err, ErrInvalidRequest)
+	require.Contains(t, err.Error(), "snapshot schedules")
 }
