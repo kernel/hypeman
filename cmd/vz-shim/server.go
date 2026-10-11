@@ -59,6 +59,7 @@ func (s *ShimServer) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/v1/vm.resume", s.handleResume)
 	mux.HandleFunc("PUT /api/v1/vm.shutdown", s.handleShutdown)
 	mux.HandleFunc("PUT /api/v1/vm.snapshot", s.handleSnapshot)
+	mux.HandleFunc("GET /api/v1/vm.snapshot-support", s.handleSnapshotSupport)
 	mux.HandleFunc("GET /api/v1/vm.balloon", s.handleGetBalloon)
 	mux.HandleFunc("PUT /api/v1/vm.balloon", s.handleSetBalloon)
 	mux.HandleFunc("PUT /api/v1/vm.power-button", s.handlePowerButton)
@@ -136,6 +137,21 @@ func (s *ShimServer) handleShutdown(w http.ResponseWriter, r *http.Request) {
 
 	slog.Info("VM graceful shutdown requested (ACPI power button)")
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *ShimServer) handleSnapshotSupport(w http.ResponseWriter, r *http.Request) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	response := struct {
+		Supported bool   `json:"supported"`
+		Reason    string `json:"reason,omitempty"`
+	}{Supported: true}
+	if err := validateSaveRestoreSupport(s.vmConfig); err != nil {
+		response.Supported = false
+		response.Reason = err.Error()
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
 }
 
 func (s *ShimServer) handleSnapshot(w http.ResponseWriter, r *http.Request) {

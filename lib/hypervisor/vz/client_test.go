@@ -13,6 +13,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/kernel/hypeman/lib/hypervisor"
 )
 
 const connectionCloseTimeout = 2 * time.Second
@@ -81,6 +83,97 @@ func (f *unixHTTPFixture) waitForNoConnections(t *testing.T) {
 			t.Fatalf("temporary VZ server retained %d connection(s)", count)
 		}
 		time.Sleep(time.Millisecond)
+	}
+}
+
+func TestPauseWaitsForRawPausedStateBeforeSnapshot(t *testing.T) {
+	var reads atomic.Int32
+	fixture := newUnixHTTPFixture(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/vmm.ping":
+			_, _ = w.Write([]byte("OK"))
+		case "/api/v1/vm.pause":
+			w.WriteHeader(http.StatusNoContent)
+		case "/api/v1/vm.info":
+			state := "Pausing"
+			if reads.Add(1) >= 3 {
+				state = "Paused"
+			}
+			_, _ = w.Write([]byte(`{"state":"` + state + `"}`))
+		case "/api/v1/vm.snapshot":
+			if reads.Load() < 3 {
+				http.Error(w, "not paused", http.StatusBadRequest)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	client, err := NewClient(fixture.socketPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Pause(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Snapshot(context.Background(), "/snapshot"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPauseWaitHonorsCancellation(t *testing.T) {
+	fixture := newUnixHTTPFixture(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/vmm.ping":
+			_, _ = w.Write([]byte("OK"))
+		case "/api/v1/vm.pause":
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			_, _ = w.Write([]byte(`{"state":"Pausing"}`))
+		}
+	}))
+	client, err := NewClient(fixture.socketPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if err := client.Pause(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected deadline exceeded, got %v", err)
+	}
+}
+
+func TestValidateSnapshotSupportUsesConfigurationProbe(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		response string
+		wantErr  bool
+	}{
+		{"supported", `{"supported":true}`, false},
+		{"unsupported", `{"supported":false,"reason":"unsupported device"}`, true},
+		{"missing-result", `{}`, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newUnixHTTPFixture(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/api/v1/vmm.ping" {
+					_, _ = w.Write([]byte("OK"))
+					return
+				}
+				_, _ = w.Write([]byte(test.response))
+			}))
+			client, err := NewClient(fixture.socketPath())
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = client.ValidateSnapshotSupport(context.Background())
+			if test.wantErr && !errors.Is(err, hypervisor.ErrNotSupported) {
+				t.Fatalf("expected unsupported configuration, got %v", err)
+			}
+			if !test.wantErr && err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 
