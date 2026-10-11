@@ -278,14 +278,23 @@ func (c *ociClient) pullAndExportWithPlatformAuth(ctx context.Context, imageRef,
 	if err != nil {
 		return result, fmt.Errorf("extract metadata: %w", err)
 	}
+	// Reject malformed darwin artifacts before any layer is unpacked.
+	machine, err := checkMacOSMachineMetadata(bundle.Meta)
+	if err != nil {
+		return result, err
+	}
 	result.Metadata = bundle.Meta
 	result.Manifest = bundle.Model
 	result.LayerCount = bundle.LayerCount
 	result.CompressedBytes = bundle.CompressedBytes
 
 	// Unpack layers to the export directory
+	unpack := c.unpackLayers
+	if machine {
+		unpack = c.unpackMachineLayers
+	}
 	if err := result.measure("layer_unpack", func() error {
-		return c.unpackLayers(ctx, layoutTag, exportDir)
+		return unpack(ctx, layoutTag, exportDir)
 	}); err != nil {
 		return result, fmt.Errorf("unpack layers: %w", err)
 	}
