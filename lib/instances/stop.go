@@ -93,7 +93,9 @@ func (m *manager) tryGracefulGuestShutdown(ctx context.Context, inst *Instance, 
 	}
 
 	waitTimeout := time.Duration(stopTimeout) * time.Second
-	if !shutdownSent && waitTimeout > shutdownFailureFallbackWait {
+	// Darwin may close vsock before the reply while power-off is in progress, so a
+	// macOS guest keeps its full grace period. Success still requires VMM exit.
+	if !shutdownSent && inst.MacOS == nil && waitTimeout > shutdownFailureFallbackWait {
 		// If we couldn't signal the guest, don't burn the full graceful timeout.
 		waitTimeout = shutdownFailureFallbackWait
 	}
@@ -157,6 +159,10 @@ func (m *manager) stopInstance(
 	// 4. Graceful shutdown: send signal to guest init via Shutdown RPC,
 	// then wait for VM to power off cleanly. Fall back to hypervisor shutdown on timeout.
 	stopTimeout := resolveStopTimeout(stored)
+	if inst.MacOS != nil {
+		// macOS power-off can outlast the ordinary short stop default.
+		stopTimeout = max(stopTimeout, macOSMinStopTimeout)
+	}
 	gracefulCtx, gracefulSpanEnd := m.startLifecycleStep(ctx, "graceful_guest_shutdown",
 		attribute.String("instance_id", id),
 		attribute.String("hypervisor", string(stored.HypervisorType)),

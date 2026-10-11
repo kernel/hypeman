@@ -35,18 +35,48 @@ func TestMacOSExecRejectedBeforeWebsocketUpgrade(t *testing.T) {
 	w := httptest.NewRecorder()
 	s.ExecHandler(w, r)
 	require.Equal(t, http.StatusNotImplemented, w.Code)
-	require.Contains(t, w.Body.String(), "not implemented")
+	require.Contains(t, w.Body.String(), "requires the shared guest agent")
 }
 
-func TestMacOSStatRejectedBeforeGuestDial(t *testing.T) {
+func TestMacOSStatRequiresGuestAgentBeforeDial(t *testing.T) {
 	s := &ApiService{}
 	inst := &instances.Instance{StoredMetadata: instances.StoredMetadata{MacOS: &images.MacOSImage{}}, State: instances.StateRunning}
 	ctx := mw.WithResolvedInstance(context.Background(), "test", inst)
 	resp, err := s.StatInstancePath(ctx, oapi.StatInstancePathRequestObject{Id: "test"})
 	require.NoError(t, err)
 	unsupported, ok := resp.(oapi.StatInstancePath501JSONResponse)
-	require.True(t, ok, "macOS stat must be rejected with 501, got %T", resp)
+	require.True(t, ok, "macOS stat without the agent must be rejected with 501, got %T", resp)
 	require.Equal(t, "unsupported", unsupported.Code)
+}
+
+func TestMacOSGuestAgentAdmissionBeforeUpgrade(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		declared, skipped bool
+		status            int
+	}{
+		{"unmanaged", false, false, http.StatusNotImplemented},
+		{"disabled", true, true, http.StatusNotImplemented},
+		{"enabled but stopped", true, false, http.StatusConflict},
+	} {
+		for _, operation := range []string{"exec", "cp"} {
+			t.Run(tc.name+"/"+operation, func(t *testing.T) {
+				s := &ApiService{}
+				inst := &instances.Instance{StoredMetadata: instances.StoredMetadata{
+					MacOS: &images.MacOSImage{GuestAgent: tc.declared}, SkipGuestAgent: tc.skipped,
+				}, State: instances.StateStopped}
+				ctx := mw.WithResolvedInstance(context.Background(), "test", inst)
+				r := httptest.NewRequest(http.MethodGet, "/instances/test/"+operation, nil).WithContext(ctx)
+				w := httptest.NewRecorder()
+				if operation == "exec" {
+					s.ExecHandler(w, r)
+				} else {
+					s.CpHandler(w, r)
+				}
+				require.Equal(t, tc.status, w.Code)
+			})
+		}
+	}
 }
 
 func TestLinuxCreateDefaultsMatchSchema(t *testing.T) {

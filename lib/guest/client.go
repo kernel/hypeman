@@ -148,6 +148,9 @@ type ExecOptions struct {
 	Rows         uint32             // Initial terminal rows (0 = default 24)
 	Cols         uint32             // Initial terminal cols (0 = default 80)
 	ResizeChan   <-chan *WindowSize // Optional: channel to receive resize events (pointer to avoid copying mutex)
+	// KeepPooledConn stops a retryable error from evicting the shared pooled connection.
+	// Use it for probes that run concurrently with other callers on the same guest.
+	KeepPooledConn bool
 }
 
 type ReconfigureNetworkOptions struct {
@@ -266,7 +269,7 @@ func ExecIntoInstance(ctx context.Context, dialer hypervisor.VsockDialer, opts E
 	// we are waiting for the guest-agent to become reachable.
 	if opts.WaitForAgent == 0 {
 		exit, err := execIntoInstanceOnce(ctx, dialer, opts)
-		if err != nil && isRetryableConnectionError(err) {
+		if err != nil && isRetryableConnectionError(err) && !opts.KeepPooledConn {
 			CloseConn(dialer.Key())
 		}
 		return exit, err
@@ -306,7 +309,9 @@ func ExecIntoInstance(ctx context.Context, dialer hypervisor.VsockDialer, opts E
 			firstRetryableErrorType = errType
 		}
 		lastRetryableErrorType = errType
-		CloseConn(dialer.Key())
+		if !opts.KeepPooledConn {
+			CloseConn(dialer.Key())
+		}
 
 		// Connection error - check if we should retry
 		if time.Now().After(deadline) {

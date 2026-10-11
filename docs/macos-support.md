@@ -19,7 +19,8 @@ owns the behavior.
 | Standby, memory snapshot, memory fork | Unsupported | Rejected with a stable error. | — |
 | Stopped clones, fork from snapshot | Unsupported | Needs identity rebinding and guest rekeying. | PR 4 (later) |
 | Update (PATCH), VM restart policy | Partial | Expiration/TTL and `restart_policy: always` or `never` are supported. Manual stop suppresses automatic restart. A shim that dies without removing its socket (for example, SIGKILL) reads as Stopped, so `always` restarts it. `on_failure` is rejected: no workload exit status is available. | PR 1 |
-| Volumes, env and commands, credentials, health and auto-standby policies, passthrough, shaping | Unsupported | Rejected at create, start, or update. | — |
+| Exec health checks | Agent-gated | Supported at create and PATCH; `type: none` disables them. HTTP/TCP checks remain unsupported. | PR 3 |
+| Volumes, env and commands, credentials and auto-standby policies, passthrough, shaping | Unsupported | Rejected at create, start, or update. | — |
 | Ingress | Unsupported | Refused in macOS-only mode and for macOS targets. | — |
 | Snapshot schedules | Unsupported | Refused at admission. | — |
 
