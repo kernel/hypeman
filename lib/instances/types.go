@@ -94,6 +94,9 @@ type StoredMetadata struct {
 	// Read-only; echoed on the instance API.
 	Platform string
 	MacOS    *images.MacOSImage `json:"MacOS,omitempty"` // Non-nil for experimental local macOS disk guests.
+	// IdentityRekeyPending marks a macOS clone whose SSH host keys still come from its
+	// source. The next start rekeys them and clears the flag.
+	IdentityRekeyPending bool `json:"identity_rekey_pending,omitempty"`
 
 	// Resources (matching Cloud Hypervisor terminology)
 	Size                     int64 // Base memory in bytes
@@ -121,6 +124,9 @@ type StoredMetadata struct {
 	ExpiresAt *time.Time // Absolute expiration time; nil disables expiration
 	StartedAt *time.Time // Boot epoch start time (set on create/start; preserved across standby restore)
 	StoppedAt *time.Time // Last time VM was stopped
+	// StopGraceful records whether the last stop was an acknowledged guest shutdown with
+	// owned VMM exit. macOS stopped snapshots require it; a forced stop is not consistent.
+	StopGraceful bool `json:"stop_graceful,omitempty"`
 
 	// Boot progress markers (derived from guest serial log sentinels and persisted)
 	ProgramStartedAt  *time.Time // Set when guest program handoff/start boundary is reached

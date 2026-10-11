@@ -46,6 +46,11 @@ func (m *manager) forkInstance(ctx context.Context, id string, req ForkInstanceR
 		return nil, "", false, err
 	}
 	source := m.toInstance(ctx, meta)
+	// A macOS clone copies the source's disk and aux, so it is taken only from a
+	// gracefully stopped source, as stopped snapshots are.
+	if meta.MacOS != nil && (source.State != StateStopped || !meta.StopGraceful) {
+		return nil, "", false, fmt.Errorf("%w: macOS fork requires a gracefully stopped source (state %s)", ErrInvalidState, source.State)
+	}
 	targetState, err := resolveForkTargetState(req.TargetState, source.State)
 	if err != nil {
 		return nil, "", false, err
@@ -242,7 +247,7 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 	if existsByMetadata {
 		return nil, false, fmt.Errorf("%w: instance name '%s' already exists", ErrAlreadyExists, req.Name)
 	}
-	if stored.NetworkEnabled {
+	if stored.usesLinuxNetwork() {
 		exists, err := m.networkManager.NameExists(ctx, req.Name, "")
 		if err != nil {
 			return nil, false, fmt.Errorf("check instance name availability: %w", err)
@@ -329,6 +334,9 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 		forkMeta.IP = ""
 		forkMeta.MAC = ""
 	}
+	if err := prepareMacOSClone(&forkMeta); err != nil {
+		return nil, false, err
+	}
 
 	restoreNeedsSourceLock := false
 	if source.State == StateStandby {
@@ -410,7 +418,7 @@ func (m *manager) saveForkMetadata(ctx context.Context, meta *metadata) error {
 		retErr = fmt.Errorf("%w: instance name '%s' already exists", ErrAlreadyExists, name)
 		return retErr
 	}
-	if meta.NetworkEnabled {
+	if meta.usesLinuxNetwork() {
 		exists, err := m.networkManager.NameExists(holdCtx, name, "")
 		if err != nil {
 			retErr = fmt.Errorf("check instance name availability: %w", err)
@@ -420,6 +428,10 @@ func (m *manager) saveForkMetadata(ctx context.Context, meta *metadata) error {
 			retErr = fmt.Errorf("%w: instance name '%s' already exists in network", ErrAlreadyExists, name)
 			return retErr
 		}
+	}
+	if err := m.assignMacOSCloneMAC(&meta.StoredMetadata); err != nil {
+		retErr = err
+		return retErr
 	}
 	if err := m.saveMetadata(meta); err != nil {
 		retErr = fmt.Errorf("save fork metadata: %w", err)

@@ -2,6 +2,7 @@ package instances
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -174,13 +175,71 @@ func TestMacOSMACAdmission(t *testing.T) {
 	m.storeCachedHypervisorState("active", hypervisor.StateRunning)
 
 	other := StoredMetadata{Id: "other", DataDir: p.InstanceDir("other"), NetworkEnabled: true, MacOS: &images.MacOSImage{HardwareModel: []byte{1}, MachineIdentifier: []byte{3}, MAC: "02-00-00-00-00-01"}}
-	require.ErrorIs(t, m.checkMacOSIdentityAvailable(context.Background(), &other), ErrInsufficientResources, "a different identity on the same MAC is refused")
+	require.ErrorIs(t, m.checkMacOSBootAvailable(context.Background(), &other), ErrInsufficientResources, "a different identity on the same MAC is refused")
 
 	other.NetworkEnabled = false
-	require.NoError(t, m.checkMacOSIdentityAvailable(context.Background(), &other), "a guest without a NIC holds no MAC")
+	require.NoError(t, m.checkMacOSBootAvailable(context.Background(), &other), "a guest without a NIC holds no MAC")
 	other.NetworkEnabled = true
 	other.MacOS.MAC = "02:00:00:00:00:02"
-	require.NoError(t, m.checkMacOSIdentityAvailable(context.Background(), &other))
+	require.NoError(t, m.checkMacOSBootAvailable(context.Background(), &other))
+}
+
+func TestMacOSIdentityScanErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		prefix string
+		check  func(*manager, *StoredMetadata) error
+	}{
+		{"stored MACs", "", func(m *manager, stored *StoredMetadata) error {
+			macs, err := m.storedMACs(stored.Id)
+			require.Nil(t, macs)
+			return err
+		}},
+		{"MAC admission", "check macOS MAC availability: ", func(m *manager, stored *StoredMetadata) error {
+			return m.checkMacOSMACAvailable(context.Background(), stored)
+		}},
+		{"identity admission", "check Mac identity admission: ", func(m *manager, stored *StoredMetadata) error {
+			return m.checkMacOSIdentityAvailable(context.Background(), stored)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := paths.New(t.TempDir())
+			m := &manager{paths: p}
+			stored := StoredMetadata{Id: "self", MAC: "02:00:00:00:00:01", MacOS: testMacImage().MacOS}
+			_, readErr := os.ReadDir(p.GuestsDir())
+			require.EqualError(t, tc.check(m, &stored), readErr.Error())
+
+			require.NoError(t, m.ensureDirectories("a-valid"))
+			require.NoError(t, m.saveMetadata(&metadata{StoredMetadata: StoredMetadata{Id: "a-valid", MAC: "02:00:00:00:00:02"}}))
+			require.NoError(t, m.ensureDirectories("b-invalid"))
+			require.NoError(t, os.WriteFile(p.InstanceMetadata("b-invalid"), []byte("{not json"), 0600))
+			_, loadErr := m.loadMetadata("b-invalid")
+			err := tc.check(m, &stored)
+			require.EqualError(t, err, tc.prefix+loadErr.Error())
+			var syntaxErr *json.SyntaxError
+			require.ErrorAs(t, err, &syntaxErr)
+		})
+	}
+}
+
+func TestMacOSStoredMACsScan(t *testing.T) {
+	p := paths.New(t.TempDir())
+	m := &manager{paths: p}
+	for _, id := range []string{"self", "orphan", "a", "b", "empty"} {
+		require.NoError(t, m.ensureDirectories(id))
+	}
+	require.NoError(t, os.WriteFile(p.InstanceMetadata("self"), []byte("{not json"), 0600))
+	require.NoError(t, os.WriteFile(filepath.Join(p.GuestsDir(), "file"), nil, 0600))
+	for _, stored := range []StoredMetadata{
+		{Id: "a", MAC: "02:00:00:00:00:01"},
+		{Id: "b", MAC: "02:00:00:00:00:02", MacOS: testMacImage().MacOS},
+		{Id: "empty"},
+	} {
+		require.NoError(t, m.saveMetadata(&metadata{StoredMetadata: stored}))
+	}
+	macs, err := m.storedMACs("self")
+	require.NoError(t, err)
+	require.Equal(t, []string{"02:00:00:00:00:01", "02:00:00:00:00:02"}, macs)
 }
 
 func TestMacOSPreservedIdentityAdmission(t *testing.T) {
@@ -196,11 +255,17 @@ func TestMacOSPreservedIdentityAdmission(t *testing.T) {
 	other.Id = "other"
 	err := m.checkMacOSIdentityAvailable(context.Background(), &other)
 	require.True(t, errors.Is(err, ErrInsufficientResources))
+	stored.MAC = "02:00:00:00:00:01"
+	stored.NetworkEnabled = true
+	other.MAC = stored.MAC
+	require.NoError(t, m.saveMetadata(&metadata{StoredMetadata: stored}))
+	require.EqualError(t, m.checkMacOSMACAvailable(context.Background(), &other), ErrInsufficientResources.Error()+": MAC "+stored.MAC+" is already in use by instance active; stop it first")
+	require.NoError(t, m.checkMacOSMACAvailable(context.Background(), &stored))
 	require.NoError(t, m.checkMacOSIdentityAvailable(context.Background(), &stored))
 	require.NoError(t, os.Remove(socket))
 	require.NoError(t, m.checkMacOSIdentityAvailable(context.Background(), &other))
-	require.ErrorIs(t, (&manager{}).admitGuestOperation(&stored, "snapshot schedules"), ErrInvalidRequest)
-	require.ErrorIs(t, (&manager{}).admitGuestOperation(&stored, "fork snapshot"), ErrInvalidRequest)
+	require.NoError(t, m.checkMacOSMACAvailable(context.Background(), &other))
+	require.NoError(t, (&manager{}).admitGuestOperation(&stored, "snapshot schedules"))
 }
 
 func TestMacOSSocketPathLimit(t *testing.T) {
