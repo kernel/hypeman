@@ -13,10 +13,12 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/kernel/hypeman/lib/healthcheck"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/instances/phasetracking"
 	"github.com/kernel/hypeman/lib/network"
+	"github.com/kernel/hypeman/lib/paths"
 	restartpolicy "github.com/kernel/hypeman/lib/restart-policy"
 )
 
@@ -81,10 +83,13 @@ func prepareMacOSCreate(req *CreateInstanceRequest, img *images.Image, caps hype
 	if img.Platform != "darwin/arm64" || img.SizeBytes == nil || *img.SizeBytes <= 0 {
 		return fmt.Errorf("%w: incomplete macOS image", ErrImageNotReady)
 	}
-	if req.HotplugSize != 0 || req.OverlaySize != 0 || len(req.Volumes) != 0 || len(req.Devices) != 0 || req.GPU != nil || len(req.Env) != 0 || len(req.Entrypoint) != 0 || len(req.Cmd) != 0 || req.NetworkEgress != nil || len(req.Credentials) != 0 || req.AutoStandby != nil || req.HealthCheck != nil || req.SnapshotPolicy != nil || req.DiskIOBps != 0 || req.NetworkBandwidthDownload != 0 || req.NetworkBandwidthUpload != 0 {
-		return fmt.Errorf("%w: experimental macOS supports local disk clone, CPU/RAM, tags, expiration and NAT only; Linux commands/env/volumes, overlays, agents, auto-standby/snapshot policies and I/O shaping are unsupported", ErrInvalidRequest)
+	if req.HotplugSize != 0 || req.OverlaySize != 0 || len(req.Volumes) != 0 || len(req.Devices) != 0 || req.GPU != nil || len(req.Env) != 0 || len(req.Entrypoint) != 0 || len(req.Cmd) != 0 || req.NetworkEgress != nil || len(req.Credentials) != 0 || req.AutoStandby != nil || req.SnapshotPolicy != nil || req.DiskIOBps != 0 || req.NetworkBandwidthDownload != 0 || req.NetworkBandwidthUpload != 0 {
+		return fmt.Errorf("%w: experimental macOS supports local disk clone, CPU/RAM, tags, expiration and NAT only; Linux commands/env/volumes, overlays, auto-standby/snapshot policies and I/O shaping are unsupported", ErrInvalidRequest)
 	}
 	if err := validateMacOSRestartPolicy(req.RestartPolicy); err != nil {
+		return err
+	}
+	if err := validateMacOSHealthCheck(req.HealthCheck, img.MacOS.GuestAgent && !req.SkipGuestAgent); err != nil {
 		return err
 	}
 	size, vcpus := req.Size, req.Vcpus
@@ -99,7 +104,7 @@ func prepareMacOSCreate(req *CreateInstanceRequest, img *images.Image, caps hype
 	}
 	req.Size, req.Vcpus = size, vcpus
 	req.OverlaySize = *img.SizeBytes // Reserve the writable boot disk, not a Linux overlay.
-	req.SkipGuestAgent = true
+	req.SkipGuestAgent = req.SkipGuestAgent || !img.MacOS.GuestAgent
 	req.SkipKernelHeaders = true
 	return nil
 }
@@ -124,10 +129,27 @@ func checkMacOSUpdate(stored *StoredMetadata, req UpdateInstanceRequest) error {
 	if stored.MacOS == nil {
 		return nil
 	}
-	if len(req.Env) != 0 || req.AutoStandby != nil || req.HealthCheck != nil {
-		return fmt.Errorf("%w: macOS updates support expiration and VM restart policy only", ErrInvalidRequest)
+	if len(req.Env) != 0 || req.AutoStandby != nil {
+		return fmt.Errorf("%w: macOS updates support expiration, exec health checks and VM restart policy only", ErrInvalidRequest)
+	}
+	if err := validateMacOSHealthCheck(req.HealthCheck, stored.GuestAgentEnabled()); err != nil {
+		return err
 	}
 	return validateMacOSRestartPolicy(req.RestartPolicy)
+}
+
+func validateMacOSHealthCheck(policy *healthcheck.Policy, agentEnabled bool) error {
+	normalized, err := normalizeHealthCheckPolicy(policy)
+	if err != nil {
+		return err
+	}
+	if !healthcheck.Enabled(normalized) {
+		return nil
+	}
+	if normalized.Type != healthcheck.TypeExec || !agentEnabled {
+		return fmt.Errorf("%w: macOS supports exec health checks with an enabled guest agent only", ErrInvalidRequest)
+	}
+	return nil
 }
 
 // checkMacOSStart refuses starts a macOS-only server or a macOS guest cannot honor.
@@ -152,21 +174,49 @@ func (m *manager) createBootDisk(stored *StoredMetadata, img *images.Image) erro
 		return err
 	}
 	aux := filepath.Join(filepath.Dir(disk), "aux.img")
-	return cloneMacOSStorage(disk, aux, m.paths.InstanceOverlay(stored.Id), filepath.Join(stored.DataDir, macOSAuxStorageFile))
+	return cloneMacOSStorage(disk, aux, m.paths.InstanceMacOSBootDisk(stored.Id), filepath.Join(stored.DataDir, macOSAuxStorageFile))
 }
 
-// applyMacOSNetwork sets the template MAC on stored. vmnet assigns the address, which is
-// observed after boot, so no Linux TAP or static IP is allocated.
+// usesLinuxNetwork reports whether the instance's network is a hypeman TAP
+// allocation. Networked macOS guests use vmnet NAT instead.
+func (s *StoredMetadata) usesLinuxNetwork() bool {
+	return s.NetworkEnabled && s.MacOS == nil
+}
+
+// applyMacOSNetwork sets the template MAC on a networked macOS guest and returns its
+// network config. vmnet assigns the address, which is observed after boot, so no
+// Linux TAP or static IP is allocated. Other instances get nil.
 func applyMacOSNetwork(stored *StoredMetadata) *network.NetworkConfig {
+	if stored.MacOS == nil || !stored.NetworkEnabled {
+		return nil
+	}
 	stored.MAC = stored.MacOS.MAC
 	stored.IP = ""
 	return &network.NetworkConfig{MAC: stored.MAC}
 }
 
+// admitMacOSBoot holds the macOS boot lock and checks socket paths and identity
+// admission before a macOS guest boots. The returned release ends the hold; for
+// other guests it does nothing.
+func (m *manager) admitMacOSBoot(ctx context.Context, stored *StoredMetadata) (func(), error) {
+	if stored.MacOS == nil {
+		return func() {}, nil
+	}
+	if err := checkMacOSSocketPaths(stored); err != nil {
+		return nil, err
+	}
+	m.macOSBootMu.Lock()
+	if err := m.checkMacOSIdentityAvailable(ctx, stored); err != nil {
+		m.macOSBootMu.Unlock()
+		return nil, err
+	}
+	return m.macOSBootMu.Unlock, nil
+}
+
 func (m *manager) macOSVMConfig(inst *Instance) hypervisor.VMConfig {
 	c := hypervisor.VMConfig{BootMode: hypervisor.BootModeMacOS, VCPUs: inst.Vcpus, MemoryBytes: inst.Size, VsockCID: inst.VsockCID, VsockSocket: inst.VsockSocket,
 		MacOS: &hypervisor.MacOSPlatform{HardwareModelData: inst.MacOS.HardwareModel, MachineIdentifierData: inst.MacOS.MachineIdentifier, AuxStoragePath: filepath.Join(inst.DataDir, macOSAuxStorageFile)},
-		Disks: []hypervisor.DiskConfig{{Path: m.paths.InstanceOverlay(inst.Id)}}}
+		Disks: []hypervisor.DiskConfig{{Path: m.paths.InstanceMacOSBootDisk(inst.Id)}}}
 	if inst.NetworkEnabled {
 		c.Networks = []hypervisor.NetworkConfig{{MAC: inst.MAC}}
 	}
@@ -174,7 +224,8 @@ func (m *manager) macOSVMConfig(inst *Instance) hypervisor.VMConfig {
 }
 func initialBootPhase(stored *StoredMetadata) phasetracking.Phase {
 	if stored.MacOS != nil {
-		return phasetracking.PhaseRunning
+		phase, _ := macOSRunningPhase(stored)
+		return phase
 	}
 	return phasetracking.PhaseInitializing
 }
@@ -242,6 +293,32 @@ func checkMacOSSocketPaths(stored *StoredMetadata) error {
 	}
 	return nil
 }
+
+// GuestAgentEnabled reports whether exec, copy, readiness and shutdown may use the
+// shared guest agent. A macOS image must declare it; hand-written metadata that
+// leaves SkipGuestAgent unset does not enable it.
+func (s *StoredMetadata) GuestAgentEnabled() bool {
+	return !s.SkipGuestAgent && (s.MacOS == nil || s.MacOS.GuestAgent)
+}
+
+// programMarkerSettled reports that no workload-start marker is awaited. macOS
+// guests have no Linux workload marker, so only agent readiness is probed.
+func programMarkerSettled(stored *StoredMetadata) bool {
+	return stored.MacOS != nil || stored.ProgramStartedAt != nil
+}
+
+// guestAgentReadyExecutable is the readiness probe command. Darwin provides true
+// in /usr/bin, not /bin.
+func guestAgentReadyExecutable(stored *StoredMetadata) string {
+	if stored.MacOS != nil {
+		return "/usr/bin/true"
+	}
+	return "/bin/true"
+}
+
+// macOSMinStopTimeout is the shortest graceful stop window, in seconds, given to a
+// macOS guest, so a normal stop can record a graceful receipt and strict export waits.
+const macOSMinStopTimeout = 30
 
 // admitGuestOperation refuses an operation this server cannot run for the guest:
 // any Linux operation on a macOS-only server, and operations macOS guests do not
@@ -312,7 +389,7 @@ func (s *StoredMetadata) VMStoragePath() string {
 	if s.MacOS == nil || s.DataDir == "" {
 		return ""
 	}
-	return filepath.Join(s.DataDir, "overlay.raw")
+	return filepath.Join(s.DataDir, paths.MacOSBootDiskFile)
 }
 
 // requireMacOSGuest refuses Linux guests on a macOS-only server.
@@ -408,4 +485,17 @@ func macOSShimRefusing(stored *StoredMetadata) bool {
 	}
 	conn.Close()
 	return false
+}
+
+// macOSRunningPhase matches deriveRunningState: an agent-enabled guest runs once
+// the agent is ready; otherwise it runs from boot. A zero time is clamped to the
+// phase start by the caller.
+func macOSRunningPhase(stored *StoredMetadata) (phasetracking.Phase, time.Time) {
+	if !stored.GuestAgentEnabled() {
+		return phasetracking.PhaseRunning, time.Time{}
+	}
+	if stored.GuestAgentReadyAt == nil {
+		return phasetracking.PhaseInitializing, time.Time{}
+	}
+	return phasetracking.PhaseRunning, *stored.GuestAgentReadyAt
 }

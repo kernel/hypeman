@@ -96,25 +96,10 @@ func (m *manager) startInstance(
 		}()
 	}
 
-	// 3. Get image info (needed for buildHypervisorConfig). Resolve by the
-	// digest-pinned boot reference so a moved tag can't drift the rootfs/arch.
-	// macOS boots the disk and aux storage cloned at create time, so it does not
-	// depend on the template image after create.
-	var imageInfo *images.Image
-	if stored.MacOS == nil {
-		bootImage := bootImageRef(stored)
-		log.DebugContext(ctx, "getting image info", "instance_id", id, "image", bootImage)
-		imageCtx, imageSpanEnd := m.startLifecycleStep(ctx, "resolve_image",
-			attribute.String("instance_id", id),
-			attribute.String("hypervisor", string(stored.HypervisorType)),
-			attribute.String("operation", "resolve_image"),
-		)
-		imageInfo, err = m.imageManager.GetImage(imageCtx, bootImage)
-		imageSpanEnd(err)
-		if err != nil {
-			log.ErrorContext(ctx, "failed to get image", "instance_id", id, "image", bootImage, "error", err)
-			return nil, fmt.Errorf("get image: %w", err)
-		}
+	// 3. Get image info (needed for buildHypervisorConfig).
+	imageInfo, err := m.resolveBootImage(ctx, stored)
+	if err != nil {
+		return nil, err
 	}
 
 	// Setup cleanup stack for automatic rollback on errors
@@ -122,10 +107,8 @@ func (m *manager) startInstance(
 	defer cu.Clean()
 
 	// 4. Allocate fresh network if network enabled
-	var netConfig *network.NetworkConfig
-	if stored.MacOS != nil && stored.NetworkEnabled {
-		netConfig = applyMacOSNetwork(stored)
-	} else if stored.NetworkEnabled {
+	netConfig := applyMacOSNetwork(stored)
+	if stored.usesLinuxNetwork() {
 		log.DebugContext(ctx, "allocating network for start", "instance_id", id, "network", "default")
 		networkCtx, networkSpanEnd := m.startLifecycleStep(ctx, "allocate_network",
 			attribute.String("instance_id", id),
@@ -258,4 +241,28 @@ func (m *manager) startInstance(
 	}
 	log.InfoContext(ctx, "instance started successfully", "instance_id", id, "state", finalInst.State)
 	return &finalInst, nil
+}
+
+// resolveBootImage resolves the image a guest boots from by its digest-pinned
+// reference, so a moved tag can't drift the rootfs/arch. macOS boots the disk and
+// aux storage cloned at create time, so it has no boot image and gets nil.
+func (m *manager) resolveBootImage(ctx context.Context, stored *StoredMetadata) (*images.Image, error) {
+	if stored.MacOS != nil {
+		return nil, nil
+	}
+	log := logger.FromContext(ctx)
+	bootImage := bootImageRef(stored)
+	log.DebugContext(ctx, "getting image info", "instance_id", stored.Id, "image", bootImage)
+	imageCtx, imageSpanEnd := m.startLifecycleStep(ctx, "resolve_image",
+		attribute.String("instance_id", stored.Id),
+		attribute.String("hypervisor", string(stored.HypervisorType)),
+		attribute.String("operation", "resolve_image"),
+	)
+	imageInfo, err := m.imageManager.GetImage(imageCtx, bootImage)
+	imageSpanEnd(err)
+	if err != nil {
+		log.ErrorContext(ctx, "failed to get image", "instance_id", stored.Id, "image", bootImage, "error", err)
+		return nil, fmt.Errorf("get image: %w", err)
+	}
+	return imageInfo, nil
 }

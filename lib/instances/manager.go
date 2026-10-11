@@ -926,7 +926,7 @@ func (m *manager) ListRunningInstancesInfo(ctx context.Context) ([]resources.Ins
 		}
 
 		// Derive TAP device name if networking is enabled
-		if inst.NetworkEnabled && inst.MacOS == nil {
+		if inst.usesLinuxNetwork() {
 			info.TAPDevice = network.GenerateTAPName(inst.Id)
 		}
 		info.StoragePath = inst.VMStoragePath()

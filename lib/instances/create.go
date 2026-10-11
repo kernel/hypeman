@@ -466,8 +466,8 @@ func (m *manager) createInstance(
 		})
 	}
 
-	if stored.MacOS != nil && stored.NetworkEnabled {
-		netConfig = applyMacOSNetwork(stored)
+	if macOSNetwork := applyMacOSNetwork(stored); macOSNetwork != nil {
+		netConfig = macOSNetwork
 	}
 
 	// 15. Validate and attach volumes
@@ -808,16 +808,11 @@ func (m *manager) startAndBootVM(
 	refreshHostVersion bool,
 ) error {
 	log := logger.FromContext(ctx)
-	if stored.MacOS != nil {
-		if err := checkMacOSSocketPaths(stored); err != nil {
-			return err
-		}
-		m.macOSBootMu.Lock()
-		defer m.macOSBootMu.Unlock()
-		if err := m.checkMacOSIdentityAvailable(ctx, stored); err != nil {
-			return err
-		}
+	release, err := m.admitMacOSBoot(ctx, stored)
+	if err != nil {
+		return err
 	}
+	defer release()
 
 	// Get VM starter for this hypervisor type
 	starter, err := m.getVMStarter(stored.HypervisorType)

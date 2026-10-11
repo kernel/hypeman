@@ -88,7 +88,7 @@ func Collect(p *paths.Paths) (Breakdown, error) {
 
 		instanceID := guest.Name()
 
-		breakdown.RootfsOverlays += allocatedBytesForPath(p.InstanceOverlay(instanceID))
+		breakdown.RootfsOverlays += allocatedBytesForPath(p.InstanceOverlay(instanceID)) + allocatedBytesForPath(p.InstanceMacOSBootDisk(instanceID))
 
 		volumeOverlays, err := sumMatchingFilesAllocatedBytes(p.InstanceVolumeOverlaysDir(instanceID), func(path string, entry fs.DirEntry) bool {
 			return !entry.IsDir() && filepath.Ext(entry.Name()) == ".raw"

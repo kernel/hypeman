@@ -3,35 +3,40 @@ package main
 import (
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"time"
 
 	pb "github.com/kernel/hypeman/lib/guest"
-	"github.com/mdlayher/vsock"
 	"google.golang.org/grpc"
 )
 
 const (
-	readySentinelPrefix  = "HYPEMAN-AGENT-READY"
-	defaultReadyFilePath = "/run/hypeman/guest-agent-ready"
-	readyFDEnv           = "HYPEMAN_AGENT_READY_FD"
+	readySentinelPrefix = "HYPEMAN-AGENT-READY"
+	readyFDEnv          = "HYPEMAN_AGENT_READY_FD"
 )
 
 // guestServer implements the gRPC GuestService
 type guestServer struct {
 	pb.UnimplementedGuestServiceServer
 	gpuReporter *gpuInitReporter
+	// execLifecycle selects the macOS exec path: client disconnect cancels the command,
+	// cancellation kills its process group, and output drains are bounded.
+	execLifecycle bool
+	// drainGrace bounds how long a cancelled exec may take to finish; zero means defaultDrainGrace.
+	drainGrace time.Duration
 }
 
 func main() {
 	// Listen on vsock port 2222 with retries
-	var l *vsock.Listener
+	var l net.Listener
 	var err error
 
 	for i := 0; i < 10; i++ {
-		l, err = vsock.Listen(2222, nil)
+		l, err = listenVsock(2222)
 		if err == nil {
 			break
 		}
@@ -64,7 +69,7 @@ func main() {
 
 	// Create gRPC server
 	grpcServer := grpc.NewServer()
-	pb.RegisterGuestServiceServer(grpcServer, &guestServer{gpuReporter: reporter})
+	pb.RegisterGuestServiceServer(grpcServer, &guestServer{gpuReporter: reporter, execLifecycle: runtime.GOOS == "darwin"})
 
 	// Serve gRPC over vsock
 	if err := grpcServer.Serve(l); err != nil {

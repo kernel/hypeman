@@ -41,6 +41,10 @@ func TestCollect_UsesAllocatedBytesAndClassifiesSnapshots(t *testing.T) {
 	require.NoError(t, createSparseTestFile(rootfsOverlayPath, 64*1024*1024, []sparseWrite{
 		{offset: 4 * 1024 * 1024, data: bytes.Repeat([]byte("r"), 4096)},
 	}))
+	macOSBootDiskPath := p.InstanceMacOSBootDisk("inst-mac")
+	require.NoError(t, createSparseTestFile(macOSBootDiskPath, 64*1024*1024, []sparseWrite{
+		{offset: 0, data: bytes.Repeat([]byte("b"), 4096)},
+	}))
 
 	volumeOverlayPath := p.InstanceVolumeOverlay("inst-1", "vol-1")
 	require.NoError(t, createSparseTestFile(volumeOverlayPath, 64*1024*1024, []sparseWrite{
@@ -80,7 +84,7 @@ func TestCollect_UsesAllocatedBytesAndClassifiesSnapshots(t *testing.T) {
 
 	require.Equal(t, allocatedBytesForPath(imagePath)+allocatedBytesForPath(machineImagePath), utilization.Images)
 	require.Equal(t, allocatedBytesForPath(volumePath), utilization.Volumes)
-	require.Equal(t, allocatedBytesForPath(rootfsOverlayPath), utilization.RootfsOverlays)
+	require.Equal(t, allocatedBytesForPath(rootfsOverlayPath)+allocatedBytesForPath(macOSBootDiskPath), utilization.RootfsOverlays)
 	require.Equal(t, allocatedBytesForPath(volumeOverlayPath), utilization.VolumeOverlays)
 
 	require.Less(t, utilization.Volumes, fileSize(t, volumePath))
