@@ -449,9 +449,10 @@ func run() error {
 	// See: https://github.com/oapi-codegen/nethttp-middleware#usage
 	spec.Servers = nil
 
-	// Custom exec endpoint (outside OpenAPI spec, uses WebSocket)
+	// Exec and cp (WebSocket) and port forwarding (HTTP and WebSocket proxy) are
+	// outside the OpenAPI spec and share one middleware chain.
 	// Note: No otelchi here as WebSocket doesn't work well with tracing middleware
-	r.With(
+	guestRoutes := r.With(
 		middleware.RequestID,
 		middleware.RealIP,
 		middleware.Recoverer,
@@ -460,19 +461,12 @@ func run() error {
 		mw.JwtAuth(app.Config.JwtSecret),
 		scopes.RequireScope(scopes.InstanceWrite),
 		mw.ResolveResource(app.ApiService.NewResolvers(), api.ResolverErrorResponder),
-	).Get("/instances/{id}/exec", app.ApiService.ExecHandler)
-
-	// Custom cp endpoint (outside OpenAPI spec, uses WebSocket)
-	r.With(
-		middleware.RequestID,
-		middleware.RealIP,
-		middleware.Recoverer,
-		mw.InjectLogger(logger),
-		mw.AccessLogger(accessLogger),
-		mw.JwtAuth(app.Config.JwtSecret),
-		scopes.RequireScope(scopes.InstanceWrite),
-		mw.ResolveResource(app.ApiService.NewResolvers(), api.ResolverErrorResponder),
-	).Get("/instances/{id}/cp", app.ApiService.CpHandler)
+	)
+	guestRoutes.Get("/instances/{id}/exec", app.ApiService.ExecHandler)
+	guestRoutes.Get("/instances/{id}/cp", app.ApiService.CpHandler)
+	for _, method := range scopes.PortForwardMethods {
+		guestRoutes.MethodFunc(method, scopes.PortForwardRoute, app.ApiService.PortForwardHandler)
+	}
 
 	// Create builder VM resolver for secure token authentication
 	// This validates that token requests from builder VMs are for their authorized repos only

@@ -23,6 +23,9 @@ func TestAllRoutesHaveScopes(t *testing.T) {
 	// WebSocket endpoints registered outside OpenAPI (same as cmd/api/main.go)
 	r.Get("/instances/{id}/exec", noop)
 	r.Get("/instances/{id}/cp", noop)
+	for _, method := range scopes.PortForwardMethods {
+		r.MethodFunc(method, scopes.PortForwardRoute, noop)
+	}
 
 	// Public/unauthenticated endpoints
 	r.Get("/spec.yaml", noop)
@@ -88,6 +91,9 @@ func TestRouteScopesHaveNoStaleEntries(t *testing.T) {
 	// Mirror production routes
 	r.Get("/instances/{id}/exec", noop)
 	r.Get("/instances/{id}/cp", noop)
+	for _, method := range scopes.PortForwardMethods {
+		r.MethodFunc(method, scopes.PortForwardRoute, noop)
+	}
 	r.Get("/spec.yaml", noop)
 	r.Get("/spec.json", noop)
 	r.Get("/swagger", noop)
