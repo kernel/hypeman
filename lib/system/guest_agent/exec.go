@@ -38,8 +38,8 @@ func (s *guestServer) Exec(stream pb.GuestService_ExecServer) error {
 	log.Printf("[guest-agent] exec: command=%v tty=%v cwd=%s timeout=%d",
 		command, start.Tty, start.Cwd, start.TimeoutSeconds)
 
-	// Create context with timeout if specified
-	ctx := context.Background()
+	// Tie the command to the stream so a client disconnect kills it.
+	ctx := stream.Context()
 	if start.TimeoutSeconds > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, time.Duration(start.TimeoutSeconds)*time.Second)
@@ -52,12 +52,18 @@ func (s *guestServer) Exec(stream pb.GuestService_ExecServer) error {
 	return s.executeNoTTY(ctx, stream, start)
 }
 
+// execDrainTimeout bounds how long output may keep flowing after the command exits.
+var execDrainTimeout = 5 * time.Second
+
 // executeNoTTY executes command without TTY
 func (s *guestServer) executeNoTTY(ctx context.Context, stream pb.GuestService_ExecServer, start *pb.ExecStart) error {
 	// Run command directly - guest-agent is already running in container namespace
 	if len(start.Command) == 0 {
 		return fmt.Errorf("empty command")
 	}
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
 	cmd := exec.CommandContext(ctx, start.Command[0], start.Command[1:]...)
 
@@ -70,18 +76,35 @@ func (s *guestServer) executeNoTTY(ctx context.Context, stream pb.GuestService_E
 	}
 
 	stdin, _ := cmd.StdinPipe()
-	stdout, _ := cmd.StdoutPipe()
-	stderr, _ := cmd.StderrPipe()
 
-	if err := cmd.Start(); err != nil {
+	// Own the output pipes so cmd.Wait can reap the process without closing them mid-read.
+	stdoutR, stdoutW, err := os.Pipe()
+	if err != nil {
+		return fmt.Errorf("stdout pipe: %w", err)
+	}
+	defer stdoutR.Close()
+	stderrR, stderrW, err := os.Pipe()
+	if err != nil {
+		stdoutW.Close()
+		return fmt.Errorf("stderr pipe: %w", err)
+	}
+	defer stderrR.Close()
+	cmd.Stdout = stdoutW
+	cmd.Stderr = stderrW
+
+	err = cmd.Start()
+	stdoutW.Close()
+	stderrW.Close()
+	if err != nil {
 		return fmt.Errorf("start command: %w", err)
 	}
 
 	// Mutex to protect concurrent stream.Send calls (gRPC streams are not thread-safe)
 	var sendMu sync.Mutex
+	var sendErr error
 
 	// Stream output as it is produced so long-lived commands (relays, tails)
-	// deliver bytes before exit; drain both pipes before Wait closes them.
+	// deliver bytes before exit.
 	var wg sync.WaitGroup
 	pump := func(r io.Reader, wrap func([]byte) *pb.ExecResponse) {
 		defer wg.Done()
@@ -89,9 +112,13 @@ func (s *guestServer) executeNoTTY(ctx context.Context, stream pb.GuestService_E
 		for {
 			n, err := r.Read(buf)
 			if n > 0 {
-				chunk := append([]byte(nil), buf[:n]...)
 				sendMu.Lock()
-				_ = stream.Send(wrap(chunk))
+				if sendErr == nil {
+					if sendErr = stream.Send(wrap(append([]byte(nil), buf[:n]...))); sendErr != nil {
+						// Client is gone: kill the command, keep draining so it can't block on a full pipe.
+						cancel()
+					}
+				}
 				sendMu.Unlock()
 			}
 			if err != nil {
@@ -115,15 +142,31 @@ func (s *guestServer) executeNoTTY(ctx context.Context, stream pb.GuestService_E
 	}()
 
 	wg.Add(2)
-	go pump(stdout, func(b []byte) *pb.ExecResponse {
+	go pump(stdoutR, func(b []byte) *pb.ExecResponse {
 		return &pb.ExecResponse{Response: &pb.ExecResponse_Stdout{Stdout: b}}
 	})
-	go pump(stderr, func(b []byte) *pb.ExecResponse {
+	go pump(stderrR, func(b []byte) *pb.ExecResponse {
 		return &pb.ExecResponse{Response: &pb.ExecResponse_Stderr{Stderr: b}}
 	})
-	wg.Wait()
+	pumpsDone := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(pumpsDone)
+	}()
 
+	// Reap first: a stalled client backpressures the command but never leaks it.
 	waitErr := cmd.Wait()
+
+	select {
+	case <-pumpsDone:
+	case <-time.After(execDrainTimeout):
+		// Returning cancels the stream, which unblocks a Send stuck on flow control.
+		log.Printf("[guest-agent] exec output not drained %s after exit; abandoning stream", execDrainTimeout)
+		return fmt.Errorf("exec output not drained within %s of command exit", execDrainTimeout)
+	}
+	if sendErr != nil {
+		return fmt.Errorf("send output: %w", sendErr)
+	}
 
 	exitCode := int32(0)
 	if cmd.ProcessState != nil {
