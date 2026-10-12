@@ -15,12 +15,17 @@ const agentProtocolVersion = 1
 var agentVersion = "dev"
 
 // agentCapabilities lists optional features this agent supports.
-var agentCapabilities []pb.AgentCapability
+func agentCapabilities() []pb.AgentCapability {
+	if portForwardSupported {
+		return []pb.AgentCapability{pb.AgentCapability_AGENT_CAPABILITY_PORT_FORWARD}
+	}
+	return nil
+}
 
 func (s *guestServer) GetAgentInfo(context.Context, *pb.GetAgentInfoRequest) (*pb.GetAgentInfoResponse, error) {
 	return &pb.GetAgentInfoResponse{
 		ProtocolVersion: agentProtocolVersion,
 		Version:         agentVersion,
-		Capabilities:    agentCapabilities,
+		Capabilities:    agentCapabilities(),
 	}, nil
 }

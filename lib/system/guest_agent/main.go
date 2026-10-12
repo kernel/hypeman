@@ -50,6 +50,9 @@ func main() {
 	defer l.Close()
 
 	log.Println("[guest-agent] listening on vsock port 2222")
+	if portForwardSupported {
+		startPortForwards()
+	}
 	log.Printf("[guest-agent] %s ts=%s", readySentinelPrefix, time.Now().UTC().Format(time.RFC3339Nano))
 	if err := signalReadyFD(); err != nil {
 		log.Printf("[guest-agent] warning: failed to signal readiness fd: %v", err)
