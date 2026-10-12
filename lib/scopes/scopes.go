@@ -198,6 +198,19 @@ var DirectScopeRoutes = map[string]Scope{
 	"GET /instances/{id}/cp":   InstanceWrite,
 }
 
+// PortForwardRoute forwards HTTP and WebSocket requests to a port on a macOS guest.
+// It needs the same scope as exec, for each method in PortForwardMethods.
+const PortForwardRoute = "/instances/{id}/ports/{port}/*"
+
+// PortForwardMethods are the HTTP methods PortForwardRoute accepts.
+var PortForwardMethods = []string{http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete}
+
+func init() {
+	for _, method := range PortForwardMethods {
+		DirectScopeRoutes[method+" "+PortForwardRoute] = InstanceWrite
+	}
+}
+
 // RouteScopes maps "METHOD /path-pattern" to the required scope.
 // Path patterns use chi-style {param} placeholders.
 var RouteScopes = map[string]Scope{
