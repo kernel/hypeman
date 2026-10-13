@@ -4,6 +4,7 @@ package registry
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -165,6 +166,9 @@ func (h *TokenHandler) validateJWT(tokenString string) (jwt.MapClaims, error) {
 	token, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (interface{}, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+		}
+		if h.jwtSecret == "" {
+			return nil, errors.New("JWT secret not configured")
 		}
 		return []byte(h.jwtSecret), nil
 	})

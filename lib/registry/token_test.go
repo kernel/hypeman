@@ -228,3 +228,15 @@ func TestParseScope(t *testing.T) {
 		})
 	}
 }
+
+func TestTokenHandler_RejectsEmptySecret(t *testing.T) {
+	forged, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"sub": "attacker",
+		"exp": time.Now().Add(time.Hour).Unix(),
+	}).SignedString([]byte(""))
+	require.NoError(t, err)
+
+	handler := NewTokenHandler("")
+	_, err = handler.validateJWT(forged)
+	assert.Error(t, err)
+}

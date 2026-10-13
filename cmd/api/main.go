@@ -307,9 +307,9 @@ func run() error {
 		logger.Info("OpenTelemetry push disabled; Prometheus pull metrics remain available")
 	}
 
-	// Validate JWT secret is configured
+	// Refuse to start without a JWT secret: an empty HMAC key makes forged tokens valid
 	if app.Config.JwtSecret == "" {
-		logger.Warn("JWT_SECRET not configured - API authentication will fail")
+		return errors.New("JWT_SECRET must be set")
 	}
 
 	// Verify hypervisor access (KVM on Linux, Virtualization.framework on macOS)

@@ -559,3 +559,17 @@ func TestOapiAuthenticationFunc_ScopedPermissions(t *testing.T) {
 		assert.False(t, scopes.HasScope(ctx, scopes.InstanceRead))
 	})
 }
+
+func TestValidateTokens_RejectEmptySecret(t *testing.T) {
+	forged, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"sub": "attacker",
+		"exp": time.Now().Add(time.Hour).Unix(),
+	}).SignedString([]byte(""))
+	require.NoError(t, err)
+
+	_, err = validateUserToken(forged, "")
+	assert.Error(t, err)
+
+	_, err = validateRegistryToken(forged, "", "/v2/", http.MethodGet)
+	assert.Error(t, err)
+}

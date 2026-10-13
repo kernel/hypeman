@@ -240,6 +240,9 @@ func validateRegistryToken(tokenString, jwtSecret, requestPath, method string) (
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 		}
+		if jwtSecret == "" {
+			return nil, errors.New("JWT secret not configured")
+		}
 		return []byte(jwtSecret), nil
 	})
 
@@ -311,6 +314,9 @@ func validateUserToken(tokenString, jwtSecret string) (jwt.MapClaims, error) {
 	parsedToken, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (interface{}, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+		}
+		if jwtSecret == "" {
+			return nil, errors.New("JWT secret not configured")
 		}
 		return []byte(jwtSecret), nil
 	})
