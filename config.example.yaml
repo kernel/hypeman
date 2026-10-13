@@ -10,7 +10,8 @@
 #   3. Built-in defaults
 # =============================================================================
 
-# Required - used to sign and verify API tokens
+# Required - used to sign and verify API tokens. Use at least 32 random bytes,
+# e.g. `openssl rand -hex 32`. The API will not start with an empty value.
 jwt_secret: ""
 
 # Data directory (default: /var/lib/hypeman)
