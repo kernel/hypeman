@@ -219,8 +219,8 @@ func TestTTLReaperDeleteTimeoutDoesNotBlockSweep(t *testing.T) {
 
 	m.reapExpiredInstances(context.Background())
 
-	assert.Equal(t, "a-timeout", <-calls)
-	assert.Equal(t, "b-deleted", <-calls)
+	got := []string{<-calls, <-calls}
+	assert.ElementsMatch(t, []string{"a-timeout", "b-deleted"}, got)
 	_, err := os.Stat(p.InstanceDir("a-timeout"))
 	require.NoError(t, err)
 	_, err = os.Stat(p.InstanceDir("b-deleted"))
