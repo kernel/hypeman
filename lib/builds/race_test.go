@@ -121,6 +121,63 @@ func TestWaitForImageReady_WaitsForConversion(t *testing.T) {
 	assert.GreaterOrEqual(t, elapsed, 200*time.Millisecond, "should have waited for conversion")
 }
 
+// TestWaitForImageReady_RetriesWhileImportInFlight tests that waitForImageReady
+// keeps waiting when the image doesn't exist yet. The registry imports pushed
+// images asynchronously, so under concurrent build bursts the image record can
+// appear well after the builder reports success — "not found" at this point
+// means the import is still in flight, not that the push failed.
+func TestWaitForImageReady_RetriesWhileImportInFlight(t *testing.T) {
+	mgr, _, _, imageMgr, tempDir := setupTestManagerWithImageMgr(t)
+	defer os.RemoveAll(tempDir)
+
+	prevInterval := imageImportRetryInterval
+	imageImportRetryInterval = 20 * time.Millisecond
+	defer func() { imageImportRetryInterval = prevInterval }()
+
+	ctx := context.Background()
+	buildID := "test-build-late-import"
+	imageRef := "builds/" + buildID
+
+	// Image does not exist at all yet. Simulate the registry's async import
+	// registering it (pending) and conversion completing shortly after.
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		imageMgr.mu.Lock()
+		imageMgr.images[imageRef] = &images.Image{
+			Name:   imageRef,
+			Status: images.StatusPending,
+		}
+		imageMgr.mu.Unlock()
+		time.Sleep(100 * time.Millisecond)
+		imageMgr.SetImageStatus(imageRef, images.StatusReady)
+	}()
+
+	start := time.Now()
+	err := mgr.waitForImageReady(ctx, imageRef)
+	elapsed := time.Since(start)
+
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, elapsed, 200*time.Millisecond, "should have waited for the import to land")
+}
+
+// TestWaitForImageReady_NotFoundUntilContextExpires tests that a build whose
+// image never gets imported still fails once the build context expires.
+func TestWaitForImageReady_NotFoundUntilContextExpires(t *testing.T) {
+	mgr, _, _, _, tempDir := setupTestManagerWithImageMgr(t)
+	defer os.RemoveAll(tempDir)
+
+	prevInterval := imageImportRetryInterval
+	imageImportRetryInterval = 20 * time.Millisecond
+	defer func() { imageImportRetryInterval = prevInterval }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	err := mgr.waitForImageReady(ctx, "builds/test-build-never-imported")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, images.ErrNotFound)
+}
+
 // TestWaitForImageReady_Timeout tests that waitForImageReady times out if image never becomes ready
 func TestWaitForImageReady_ContextCancelled(t *testing.T) {
 	mgr, _, _, imageMgr, tempDir := setupTestManagerWithImageMgr(t)
