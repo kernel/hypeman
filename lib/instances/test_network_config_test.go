@@ -1,6 +1,7 @@
 package instances
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -41,13 +42,29 @@ const testIPTablesWaitSeconds = "5"
 // transient lock contention before giving up.
 const iptablesDeleteAttempts = 3
 
+// testNetworkCommandTimeout bounds a single ip/iptables cleanup invocation.
+// The -w flag only caps waiting for the xtables lock; a process stuck past
+// that would otherwise hang the cleanup (and the test-binary timeout) —
+// callers log the error and continue.
+const testNetworkCommandTimeout = 30 * time.Second
+
+func testNetworkCommand(name string, args ...string) *exec.Cmd {
+	ctx, cancel := context.WithTimeout(context.Background(), testNetworkCommandTimeout)
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Cancel = func() error {
+		defer cancel()
+		return cmd.Process.Kill()
+	}
+	return cmd
+}
+
 // newTestIPTablesCommand builds an iptables command with the -w wait flag so it
 // waits for the xtables lock rather than failing immediately.
 func newTestIPTablesCommand(args ...string) *exec.Cmd {
 	fullArgs := make([]string, 0, len(args)+2)
 	fullArgs = append(fullArgs, "-w", testIPTablesWaitSeconds)
 	fullArgs = append(fullArgs, args...)
-	return exec.Command("iptables", fullArgs...)
+	return testNetworkCommand("iptables", fullArgs...)
 }
 
 // logTestNetworkErr surfaces a real cleanup failure to stderr. These helpers run
@@ -545,13 +562,13 @@ func cleanupTestNetworkArtifacts(bridgeName, subnetCIDR string) {
 	if subnetCIDR != "" && bridgeName != "" {
 		// The route may already be gone (linkdown cleanup, prior pass) — that is
 		// not a real failure, so only surface unexpected errors.
-		out, err := exec.Command("ip", "-4", "route", "del", subnetCIDR, "dev", bridgeName).CombinedOutput()
+		out, err := testNetworkCommand("ip", "-4", "route", "del", subnetCIDR, "dev", bridgeName).CombinedOutput()
 		if err != nil && !isNoSuchObjectErr(out) {
 			logTestNetworkErr(fmt.Sprintf("ip route del %s dev %s: %s", subnetCIDR, bridgeName, strings.TrimSpace(string(out))), err)
 		}
 	}
 	if bridgeName != "" {
-		out, err := exec.Command("ip", "link", "delete", bridgeName, "type", "bridge").CombinedOutput()
+		out, err := testNetworkCommand("ip", "link", "delete", bridgeName, "type", "bridge").CombinedOutput()
 		if err != nil && !isNoSuchObjectErr(out) {
 			logTestNetworkErr(fmt.Sprintf("ip link delete %s: %s", bridgeName, strings.TrimSpace(string(out))), err)
 		}
