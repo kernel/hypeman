@@ -6,6 +6,10 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"time"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
 )
@@ -35,7 +39,7 @@ func init() {
 	if _, err := microVMMachineType(); err == nil {
 		hypervisor.RegisterRuntime(hypervisor.TypeQEMUMicroVM, hypervisor.RuntimeRegistration{
 			Capabilities: MicroVMProfile{}.capabilities,
-			LaunchCheck:  launchPrereqCache.Check,
+			LaunchCheck:  microVMPrereqCache.Check,
 		})
 	}
 }
@@ -46,6 +50,61 @@ func init() {
 // concurrent capability requests coalesce onto it. Changing those host
 // prerequisites requires restarting Hypeman.
 var launchPrereqCache = newLaunchCheckCache(checkLaunchPrerequisites)
+
+// microVMPrereqCache adds the microvm-only firmware prerequisite on top of
+// the shared QEMU prerequisites: microvm guests boot with a pinned firmware
+// file (microVMFirmware), so a host missing it must not report qemu-microvm
+// available.
+var microVMPrereqCache = newLaunchCheckCache(checkMicroVMLaunchPrerequisites)
+
+func checkMicroVMLaunchPrerequisites() error {
+	if err := checkLaunchPrerequisites(); err != nil {
+		return err
+	}
+	binaryPath, err := (&Starter{}).GetBinaryPath(nil, "")
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), versionProbeTimeout)
+	defer cancel()
+	dirs, err := firmwareSearchDirs(ctx, binaryPath)
+	if err != nil {
+		return fmt.Errorf("qemu binary %s: %w", binaryPath, err)
+	}
+	return requireMicroVMFirmware(dirs)
+}
+
+// firmwareSearchDirs returns the directories QEMU searches for firmware
+// files such as the one named by -bios.
+func firmwareSearchDirs(ctx context.Context, binaryPath string) ([]string, error) {
+	cmd := exec.CommandContext(ctx, binaryPath, "-L", "help")
+	cmd.WaitDelay = time.Second
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("list firmware search path: %w", err)
+	}
+	dirs := make([]string, 0, 4)
+	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			dirs = append(dirs, line)
+		}
+	}
+	if len(dirs) == 0 {
+		return nil, fmt.Errorf("list firmware search path: empty output")
+	}
+	return dirs, nil
+}
+
+// requireMicroVMFirmware verifies the pinned microvm firmware file exists on
+// QEMU's firmware search path, as launches resolve it by name.
+func requireMicroVMFirmware(dirs []string) error {
+	for _, dir := range dirs {
+		if info, err := os.Stat(filepath.Join(dir, microVMFirmware)); err == nil && !info.IsDir() {
+			return nil
+		}
+	}
+	return fmt.Errorf("microvm firmware %s not found on the QEMU firmware search path %v; install the QEMU data files (qemu-system-data) for the host QEMU", microVMFirmware, dirs)
+}
 
 // checkLaunchPrerequisites is the capability registry's side-effect-free
 // launch check for both QEMU boards (via launchPrereqCache): it resolves the

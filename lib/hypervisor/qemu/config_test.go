@@ -1,6 +1,7 @@
 package qemu
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
@@ -249,7 +250,10 @@ func TestBuildArgs_MicroVM(t *testing.T) {
 	args := buildArgs(cfg, MachineTypeMicroVM)
 	assert.Contains(t, args, "microvm,accel=kvm")
 	assert.Contains(t, args, "-no-user-config")
-	assert.Contains(t, args, "qboot.rom")
+	bios := slices.Index(args, "-bios")
+	if assert.GreaterOrEqual(t, bios, 0) && assert.Less(t, bios+1, len(args)) {
+		assert.Equal(t, microVMFirmware, args[bios+1], "-bios must be followed by the pinned firmware")
+	}
 	assert.Contains(t, args, "virtio-blk-device,drive=drive0")
 	assert.Contains(t, args, "virtio-net-device,netdev=net0,mac=02:00:00:ab:cd:ef")
 	assert.Contains(t, args, "vhost-vsock-device,guest-cid=123")

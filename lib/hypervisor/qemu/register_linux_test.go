@@ -37,10 +37,17 @@ func TestMicroVMRegistrationMatchesBoardSupport(t *testing.T) {
 func TestQEMUAvailabilityTracksLaunchPrerequisites(t *testing.T) {
 	t.Parallel()
 
-	prereqErr := checkLaunchPrerequisites()
+	standardErr := checkLaunchPrerequisites()
+	microVMErr := checkMicroVMLaunchPrerequisites()
 	checked := 0
 	for _, rt := range hypervisor.RegisteredRuntimes() {
-		if rt.Type != hypervisor.TypeQEMU && rt.Type != hypervisor.TypeQEMUMicroVM {
+		var prereqErr error
+		switch rt.Type {
+		case hypervisor.TypeQEMU:
+			prereqErr = standardErr
+		case hypervisor.TypeQEMUMicroVM:
+			prereqErr = microVMErr
+		default:
 			continue
 		}
 		checked++
@@ -53,6 +60,36 @@ func TestQEMUAvailabilityTracksLaunchPrerequisites(t *testing.T) {
 		}
 	}
 	require.GreaterOrEqual(t, checked, 1, "standard qemu must be registered on Linux")
+}
+
+// TestRequireMicroVMFirmware covers the microvm-only launch prerequisite:
+// the pinned firmware file must be present on QEMU's firmware search path,
+// or every microvm launch fails loading the BIOS.
+func TestRequireMicroVMFirmware(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	require.ErrorContains(t, requireMicroVMFirmware([]string{dir}), microVMFirmware)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, microVMFirmware), []byte("x"), 0o644))
+	require.NoError(t, requireMicroVMFirmware([]string{t.TempDir(), dir}))
+}
+
+// TestFirmwareSearchDirs parses the firmware search path printed by
+// `qemu -L help`, one directory per line.
+func TestFirmwareSearchDirs(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	binary := filepath.Join(dir, "qemu-system-fake")
+	script := "#!/bin/sh\nprintf '/usr/share/qemu\\n/usr/share/seabios\\n'\n"
+	require.NoError(t, os.WriteFile(binary, []byte(script), 0o755))
+	var dirs []string
+	require.NoError(t, retryingETXTBSY(t, func() error {
+		var err error
+		dirs, err = firmwareSearchDirs(context.Background(), binary)
+		return err
+	}))
+	require.Equal(t, []string{"/usr/share/qemu", "/usr/share/seabios"}, dirs)
 }
 
 // fakeQEMUBinary writes an executable script that mimics `qemu --version`
