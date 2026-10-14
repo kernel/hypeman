@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -19,6 +18,7 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/cmd/api/config"
+	"github.com/kernel/hypeman/lib/network/testsupport"
 )
 
 var testNetworkSeq atomic.Uint32
@@ -232,7 +232,7 @@ func cleanupStaleTestNetworks(routes []hostRoute) {
 			// Sweep iptables rules for test bridges that no longer exist. Once a
 			// bridge is fully deleted its route is gone too, so linkdown cleanup
 			// above can't catch these — they would otherwise leak forever.
-			sweepOrphanedTestIPTablesRules()
+			testsupport.SweepOrphanedRules()
 			return nil
 		})
 		logTestNetworkErr("stale network cleanup", err)
@@ -396,69 +396,6 @@ func cleanupStaleLinkDownRoutes(routes []hostRoute) {
 		}
 
 		cleanupTestNetworkArtifacts(route.device, route.cidr)
-	}
-}
-
-// testRuleCommentPattern matches hypeman test-harness iptables rule comments and
-// captures both the full comment and the referenced bridge name. We deliberately
-// anchor on the "hm" test prefix so we never touch "ha"-prefixed rules from a
-// real (non-test) hypeman process running on the same host.
-var testRuleCommentPattern = regexp.MustCompile(`^hypeman-(?:fwd-out|fwd-in|nat)-(hm[0-9a-f]+)$`)
-
-// sweepOrphanedTestIPTablesRules removes hypeman test iptables rules whose
-// referenced bridge interface no longer exists. Once a bridge is fully deleted,
-// its route disappears, so cleanupStaleLinkDownRoutes can't reach these rules and
-// they accumulate indefinitely on the shared CI runner, slowing every iptables
-// operation under the xtables lock.
-//
-// This is conservative and safe: a rule whose bridge interface is gone can never
-// affect live traffic, and we never delete a rule whose interface still exists.
-func sweepOrphanedTestIPTablesRules() {
-	sweepOrphanedTestRulesInChain("", "FORWARD")
-	sweepOrphanedTestRulesInChain("nat", "POSTROUTING")
-}
-
-func sweepOrphanedTestRulesInChain(table, chain string) {
-	args := []string{}
-	if table != "" {
-		args = append(args, "-t", table)
-	}
-	args = append(args, "-S", chain)
-	output, err := newTestIPTablesCommand(args...).Output()
-	if err != nil {
-		logTestNetworkErr(fmt.Sprintf("iptables -S %s/%s for orphan sweep", table, chain), err)
-		return
-	}
-
-	// Collect rules whose bridge interface is gone. Cache bridge existence, but
-	// retain duplicate rules so the sweep removes every copy.
-	exists := make(map[string]bool)
-	var orphanedRules [][]string
-	for _, line := range strings.Split(string(output), "\n") {
-		delArgs, comment, ok := parseIPTablesAppendRule(table, line)
-		if !ok {
-			continue
-		}
-		match := testRuleCommentPattern.FindStringSubmatch(comment)
-		if match == nil {
-			continue
-		}
-		bridge := match[1]
-
-		alive, checked := exists[bridge]
-		if !checked {
-			alive = bridgeExists(bridge)
-			exists[bridge] = alive
-		}
-		if alive {
-			// Never delete a rule whose bridge interface still exists.
-			continue
-		}
-		orphanedRules = append(orphanedRules, delArgs)
-	}
-
-	for _, delArgs := range orphanedRules {
-		deleteIPTablesRuleWithRetry(delArgs)
 	}
 }
 

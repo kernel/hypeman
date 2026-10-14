@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/cmd/api/config"
+	"github.com/kernel/hypeman/lib/network/testsupport"
 )
 
 var testNetworkSeq atomic.Uint32
@@ -17,6 +18,8 @@ var testNetworkRunSeed = uint32(time.Now().UnixNano()) ^ uint32(os.Getpid()<<8)
 
 func newParallelTestNetworkConfig(t *testing.T) config.NetworkConfig {
 	t.Helper()
+
+	testsupport.SweepOrphanedRulesOnce()
 
 	if cfg, ok := testNetworkByName.Load(t.Name()); ok {
 		return cfg.(config.NetworkConfig)
