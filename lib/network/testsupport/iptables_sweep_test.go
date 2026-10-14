@@ -156,3 +156,12 @@ func TestBatchRulesOversizedRuleGetsOwnBatch(t *testing.T) {
 	require.Len(t, batches, 3)
 	assert.Equal(t, "this line is longer than the limit", batches[1][0].deleteLine)
 }
+
+func TestIsTestBridgeName(t *testing.T) {
+	for _, name := range []string{"hm00c0a001", "ha00c0a001", "hi00c0a001"} {
+		assert.True(t, IsTestBridgeName(name), name)
+	}
+	for _, name := range []string{"vmbr0", "eth0", "docker0", "hm", "ha", "hi", "hmxyz", "hm00c0a001.1", "xhm00c0a001", ""} {
+		assert.False(t, IsTestBridgeName(name), name)
+	}
+}
