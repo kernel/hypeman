@@ -1,5 +1,5 @@
 SHELL := /bin/bash
-.PHONY: oapi-generate generate-vmm-client generate-wire generate-all dev build build-linux test test-linux test-darwin test-guestmemory-linux test-guestmemory-vz install-tools gen-jwt download-ch-binaries download-firecracker-binaries download-ch-spec ensure-ch-binaries ensure-firecracker-binaries build-caddy-binaries build-caddy ensure-caddy-binaries release-prep clean build-embedded
+.PHONY: oapi-generate generate-vmm-client generate-wire generate-all dev build build-linux test test-linux test-linux-shard test-shard-weights test-darwin test-guestmemory-linux test-guestmemory-vz install-tools gen-jwt download-ch-binaries download-firecracker-binaries download-ch-spec ensure-ch-binaries ensure-firecracker-binaries build-caddy-binaries build-caddy ensure-caddy-binaries release-prep clean build-embedded
 
 # Directory where local binaries will be installed
 BIN_DIR ?= $(CURDIR)/bin
@@ -291,39 +291,44 @@ else
 	$(MAKE) test-linux
 endif
 
+# Runs the command that follows as root, with the environment the Linux tests
+# need (network, KVM and systemd access).
+LINUX_TEST_SUDO = sudo env "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$$PATH" \
+	"DOCKER_CONFIG=$${DOCKER_CONFIG:-$$HOME/.docker}" "CI=$${CI:-}" \
+	"GITHUB_TOKEN=$${GITHUB_TOKEN:-}" \
+	"TMPDIR=$${TMPDIR:-/tmp}" \
+	"HYPEMAN_UFFD_PAGER_BINARY=$${HYPEMAN_UFFD_PAGER_BINARY:-$(UFFD_PAGER_BINARY)}" \
+	"HYPEMAN_UFFD_SYSTEMD_INSTANCE_PREFIX=$${HYPEMAN_UFFD_SYSTEMD_INSTANCE_PREFIX:-}" \
+	"HYPEMAN_TEST_PREWARM_DIR=$${HYPEMAN_TEST_PREWARM_DIR:-}" \
+	"HYPEMAN_TEST_PREWARM_STRICT=$${HYPEMAN_TEST_PREWARM_STRICT:-}" \
+	"HYPEMAN_TEST_REGISTRY=$${HYPEMAN_TEST_REGISTRY:-}" \
+	"HYPEMAN_HYPERVISOR_BOOT_BENCH=$${HYPEMAN_HYPERVISOR_BOOT_BENCH:-}" \
+	"HYPEMAN_HYPERVISOR_BOOT_BENCH_SAMPLES=$${HYPEMAN_HYPERVISOR_BOOT_BENCH_SAMPLES:-}" \
+	"HYPEMAN_HYPERVISOR_BOOT_BENCH_TYPES=$${HYPEMAN_HYPERVISOR_BOOT_BENCH_TYPES:-}"
+
 # Linux tests (as root for network capabilities)
 test-linux: ensure-ch-binaries ensure-firecracker-binaries ensure-caddy-binaries build-embedded $(BIN_DIR)/hypeman-uffd-pager
 	@VERBOSE_FLAG=""; \
-	TEST_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$$PATH"; \
 	if [ -n "$(VERBOSE)" ]; then VERBOSE_FLAG="-v"; fi; \
 	if [ -n "$(TEST)" ]; then \
 		echo "Running specific test: $(TEST)"; \
-		sudo env "PATH=$$TEST_PATH" "DOCKER_CONFIG=$${DOCKER_CONFIG:-$$HOME/.docker}" "CI=$${CI:-}" \
-			"GITHUB_TOKEN=$${GITHUB_TOKEN:-}" \
-			"TMPDIR=$${TMPDIR:-/tmp}" \
-			"HYPEMAN_UFFD_PAGER_BINARY=$${HYPEMAN_UFFD_PAGER_BINARY:-$(UFFD_PAGER_BINARY)}" \
-			"HYPEMAN_UFFD_SYSTEMD_INSTANCE_PREFIX=$${HYPEMAN_UFFD_SYSTEMD_INSTANCE_PREFIX:-}" \
-			"HYPEMAN_TEST_PREWARM_DIR=$${HYPEMAN_TEST_PREWARM_DIR:-}" \
-			"HYPEMAN_TEST_PREWARM_STRICT=$${HYPEMAN_TEST_PREWARM_STRICT:-}" \
-			"HYPEMAN_TEST_REGISTRY=$${HYPEMAN_TEST_REGISTRY:-}" \
-			"HYPEMAN_HYPERVISOR_BOOT_BENCH=$${HYPEMAN_HYPERVISOR_BOOT_BENCH:-}" \
-			"HYPEMAN_HYPERVISOR_BOOT_BENCH_SAMPLES=$${HYPEMAN_HYPERVISOR_BOOT_BENCH_SAMPLES:-}" \
-			"HYPEMAN_HYPERVISOR_BOOT_BENCH_TYPES=$${HYPEMAN_HYPERVISOR_BOOT_BENCH_TYPES:-}" \
-			go test -tags containers_image_openpgp -run=$(TEST) $$VERBOSE_FLAG -timeout=$(TEST_TIMEOUT) ./...; \
+		$(LINUX_TEST_SUDO) go test -tags containers_image_openpgp -run=$(TEST) $$VERBOSE_FLAG -timeout=$(TEST_TIMEOUT) ./...; \
 	else \
-		sudo env "PATH=$$TEST_PATH" "DOCKER_CONFIG=$${DOCKER_CONFIG:-$$HOME/.docker}" "CI=$${CI:-}" \
-			"GITHUB_TOKEN=$${GITHUB_TOKEN:-}" \
-			"TMPDIR=$${TMPDIR:-/tmp}" \
-			"HYPEMAN_UFFD_PAGER_BINARY=$${HYPEMAN_UFFD_PAGER_BINARY:-$(UFFD_PAGER_BINARY)}" \
-			"HYPEMAN_UFFD_SYSTEMD_INSTANCE_PREFIX=$${HYPEMAN_UFFD_SYSTEMD_INSTANCE_PREFIX:-}" \
-			"HYPEMAN_TEST_PREWARM_DIR=$${HYPEMAN_TEST_PREWARM_DIR:-}" \
-			"HYPEMAN_TEST_PREWARM_STRICT=$${HYPEMAN_TEST_PREWARM_STRICT:-}" \
-			"HYPEMAN_TEST_REGISTRY=$${HYPEMAN_TEST_REGISTRY:-}" \
-			"HYPEMAN_HYPERVISOR_BOOT_BENCH=$${HYPEMAN_HYPERVISOR_BOOT_BENCH:-}" \
-			"HYPEMAN_HYPERVISOR_BOOT_BENCH_SAMPLES=$${HYPEMAN_HYPERVISOR_BOOT_BENCH_SAMPLES:-}" \
-			"HYPEMAN_HYPERVISOR_BOOT_BENCH_TYPES=$${HYPEMAN_HYPERVISOR_BOOT_BENCH_TYPES:-}" \
-			go test -tags containers_image_openpgp $$VERBOSE_FLAG -timeout=$(TEST_TIMEOUT) ./...; \
+		$(LINUX_TEST_SUDO) go test -tags containers_image_openpgp $$VERBOSE_FLAG -timeout=$(TEST_TIMEOUT) ./...; \
 	fi
+
+# One shard of test-linux; CI runs every shard in parallel.
+# Usage: make test-linux-shard SHARD=instances-1 SHARD_COUNT=3
+# See scripts/test-shard.sh for how the suite is split.
+test-linux-shard: ensure-ch-binaries ensure-firecracker-binaries ensure-caddy-binaries build-embedded $(BIN_DIR)/hypeman-uffd-pager
+	@$(LINUX_TEST_SUDO) "TEST_TIMEOUT=$(TEST_TIMEOUT)" "VERBOSE=$(VERBOSE)" \
+		bash scripts/test-shard.sh "$(SHARD)" "$(SHARD_COUNT)"
+
+# Rewrites scripts/test-shard-weights.txt from one full test-linux run.
+test-shard-weights: ensure-ch-binaries ensure-firecracker-binaries ensure-caddy-binaries build-embedded $(BIN_DIR)/hypeman-uffd-pager
+	@$(LINUX_TEST_SUDO) go test -tags containers_image_openpgp -json -timeout=30m ./... | \
+		bash scripts/test-shard.sh weights > scripts/test-shard-weights.txt.new
+	@mv scripts/test-shard-weights.txt.new scripts/test-shard-weights.txt
 
 # macOS tests (no sudo needed, adds e2fsprogs to PATH)
 # Uses 'go list' to discover compilable packages, then filters out packages
