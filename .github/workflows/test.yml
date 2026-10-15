@@ -487,9 +487,9 @@ jobs:
         env:
           HYPEMAN_RUN_BUILDER_INTEGRATION_TEST: "1"
         run: |
-          # Self-hosted runners retain Docker layers across jobs. Reclaim them so
-          # the builder image and two VZ builds have predictable disk headroom.
-          docker system prune --all --force --volumes
+          # Self-hosted runners retain Docker layers across jobs. Prune only
+          # what is stale, and fall back to a full prune when host disk is low.
+          bash scripts/docker-ci-cleanup.sh
           PATH="/opt/homebrew/opt/e2fsprogs/sbin:$PATH" \
             go test -count=1 -tags containers_image_openpgp \
               -run='^TestBuilderPersistentCacheReuse$' -timeout=20m -v ./integration
@@ -533,9 +533,9 @@ jobs:
             sleep 2
           done
           docker info >/dev/null
-          # Self-hosted runners retain Docker layers across jobs. Start the
-          # install E2E with deterministic headroom for its builder image.
-          docker system prune --all --force --volumes
+          # Self-hosted runners retain Docker layers across jobs. Prune only
+          # what is stale, and fall back to a full prune when host disk is low.
+          bash scripts/docker-ci-cleanup.sh
       - name: Login to Docker Hub
         uses: docker/login-action@v3
         with:
