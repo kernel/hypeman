@@ -74,6 +74,13 @@ func (m *manager) startInstance(
 		stored.Cmd = req.Cmd
 	}
 
+	if stored.GPUProfile != "" {
+		if err := m.checkVGPUCapacity(stored.GPUProfile); err != nil {
+			log.WarnContext(ctx, "vGPU capacity check failed for start", "instance_id", id, "profile", stored.GPUProfile, "error", err)
+			return nil, err
+		}
+	}
+
 	// 2b. Validate aggregate resource limits before allocating resources (if configured)
 	reservedResources := false
 	if m.resourceValidator != nil {

@@ -5,7 +5,11 @@ package instances
 import (
 	"context"
 	"errors"
+	"fmt"
+	"math/rand/v2"
+	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -235,7 +239,7 @@ func TestVGPUClaimRepairSkipsClaimedVFs(t *testing.T) {
 			return devices.VGPUFrameworkVendorVFIO, vfs, nil
 		},
 		vendorVFIOProfiles: func([]devices.VirtualFunction) (map[string][]devices.VGPUProfileType, error) {
-			return map[string][]devices.VGPUProfileType{}, nil
+			return map[string][]devices.VGPUProfileType{"0000:82:00.4": {}}, nil
 		},
 		destroyVGPU: func(context.Context, devices.VGPUAssignment) error {
 			t.Fatal("must not reset a VF claimed by another instance")
@@ -249,7 +253,7 @@ func TestVGPUClaimRepairSkipsClaimedVFs(t *testing.T) {
 	meta := saveTestVGPUInstance(t, m, "new")
 
 	_, err := m.claimVGPU(context.Background(), meta, testVGPUProfile)
-	require.Error(t, err)
+	require.ErrorIs(t, err, ErrInsufficientResources)
 }
 
 func TestVGPUCrashAfterClaimIsReconciled(t *testing.T) {
@@ -314,4 +318,233 @@ func TestVGPUClaimFallsBackWhenDirtyVFRefusesReset(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "0000:82:00.5", device.VFAddress)
 	assert.Equal(t, []string{testVFDevicePath, "/sys/bus/pci/devices/0000:82:00.5"}, resets)
+}
+
+// fakeVGPUHost models a vendor VFIO host whose GPUs run out of framebuffer
+// before they run out of VFs: a free VF advertises the profile only while its
+// parent GPU has framebuffer left, and every allocated VF consumes one unit.
+type fakeVGPUHost struct {
+	mu          sync.Mutex
+	vfs         []devices.VirtualFunction
+	free        map[string]int
+	unreadable  map[string]bool
+	quarantined map[string]struct{}
+	resetFails  map[string]bool
+}
+
+func (h *fakeVGPUHost) discover() (devices.VGPUFramework, []devices.VirtualFunction, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return devices.VGPUFrameworkVendorVFIO, append([]devices.VirtualFunction(nil), h.vfs...), nil
+}
+
+func (h *fakeVGPUHost) profiles(vfs []devices.VirtualFunction) (map[string][]devices.VGPUProfileType, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	out := make(map[string][]devices.VGPUProfileType, len(vfs))
+	for _, vf := range vfs {
+		if h.unreadable[vf.PCIAddress] {
+			continue
+		}
+		out[vf.PCIAddress] = []devices.VGPUProfileType{}
+		if !vf.Allocated && h.free[vf.ParentGPU] > 0 {
+			out[vf.PCIAddress] = []devices.VGPUProfileType{{TypeName: testVFProfileType, Name: testVGPUProfile, FramebufferMB: 2048}}
+		}
+	}
+	return out, nil
+}
+
+func (h *fakeVGPUHost) configure(address string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for i := range h.vfs {
+		if h.vfs[i].PCIAddress != address {
+			continue
+		}
+		if h.free[h.vfs[i].ParentGPU] == 0 {
+			return false
+		}
+		h.free[h.vfs[i].ParentGPU]--
+		h.vfs[i].Allocated = true
+		h.vfs[i].ProfileType = testVFProfileType
+		return true
+	}
+	return false
+}
+
+func (h *fakeVGPUHost) destroy(_ context.Context, assignment devices.VGPUAssignment) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	address := filepath.Base(assignment.DevicePath)
+	if h.resetFails[address] {
+		return errors.New("VF in use")
+	}
+	for i := range h.vfs {
+		if h.vfs[i].PCIAddress == address && h.vfs[i].Allocated {
+			h.vfs[i].Allocated = false
+			h.vfs[i].ProfileType = "0"
+			h.free[h.vfs[i].ParentGPU]++
+		}
+	}
+	return nil
+}
+
+func (h *fakeVGPUHost) manager(t *testing.T, dir string) *manager {
+	t.Helper()
+	return &manager{
+		paths:              paths.New(dir),
+		discoverVGPU:       h.discover,
+		vendorVFIOProfiles: h.profiles,
+		destroyVGPU:        h.destroy,
+		quarantinedVFs: func() (map[string]struct{}, error) {
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			out := make(map[string]struct{}, len(h.quarantined))
+			for address := range h.quarantined {
+				out[address] = struct{}{}
+			}
+			return out, nil
+		},
+	}
+}
+
+// TestCheckVGPUCapacityRefusalImpliesClaimRefusal checks, across random host
+// states, that whenever the pre-check refuses, a claim on the same state also
+// fails with ErrInsufficientResources.
+func TestCheckVGPUCapacityRefusalImpliesClaimRefusal(t *testing.T) {
+	rng := rand.New(rand.NewPCG(1, 2))
+	gpus := []string{"0000:82:00.0", "0000:e3:00.0"}
+	refusals := 0
+	const iterations = 1000
+	for iter := 0; iter < iterations; iter++ {
+		host := &fakeVGPUHost{
+			free:        map[string]int{},
+			unreadable:  map[string]bool{},
+			quarantined: map[string]struct{}{},
+			resetFails:  map[string]bool{},
+		}
+		var claimedAddresses []string
+		for g, gpu := range gpus {
+			host.free[gpu] = rng.IntN(3)
+			for v := 0; v < 1+rng.IntN(4); v++ {
+				vf := devices.VirtualFunction{PCIAddress: fmt.Sprintf("0000:%02x:00.%d", 0x82+g*0x61, 4+v), ParentGPU: gpu, ProfileType: "0"}
+				// 0 free, 1 claimed and configured, 2 dirty (allocated, unclaimed),
+				// 3 claimed but not yet configured.
+				switch rng.IntN(4) {
+				case 1:
+					vf.Allocated, vf.ProfileType = true, testVFProfileType
+					claimedAddresses = append(claimedAddresses, vf.PCIAddress)
+				case 2:
+					vf.Allocated, vf.ProfileType = true, testVFProfileType
+				case 3:
+					claimedAddresses = append(claimedAddresses, vf.PCIAddress)
+				}
+				if rng.IntN(8) == 0 {
+					host.quarantined[vf.PCIAddress] = struct{}{}
+				}
+				if rng.IntN(10) == 0 {
+					host.unreadable[vf.PCIAddress] = true
+				}
+				if rng.IntN(4) == 0 {
+					host.resetFails[vf.PCIAddress] = true
+				}
+				host.vfs = append(host.vfs, vf)
+			}
+		}
+
+		m := host.manager(t, t.TempDir())
+		for i, address := range claimedAddresses {
+			owner := saveTestVGPUInstance(t, m, fmt.Sprintf("owner-%d", i))
+			owner.GPUFramework = devices.VGPUFrameworkVendorVFIO
+			owner.GPUDevicePath = "/sys/bus/pci/devices/" + address
+			require.NoError(t, m.saveMetadata(owner))
+		}
+
+		err := m.checkVGPUCapacity(testVGPUProfile)
+		if err == nil {
+			continue
+		}
+		require.ErrorIs(t, err, ErrInsufficientResources)
+		refusals++
+		meta := saveTestVGPUInstance(t, m, "new")
+		_, claimErr := m.claimVGPU(context.Background(), meta, testVGPUProfile)
+		require.ErrorIs(t, claimErr, ErrInsufficientResources, "iteration %d: pre-check refused but claim returned %v", iter, claimErr)
+	}
+	require.Greater(t, refusals, iterations/20, "generator should produce full hosts")
+}
+
+// TestCheckVGPUCapacityConcurrentWithClaimsAndReleases runs pre-checks,
+// claims, and releases in parallel against one host. Run with -race.
+func TestCheckVGPUCapacityConcurrentWithClaimsAndReleases(t *testing.T) {
+	host := &fakeVGPUHost{
+		free:        map[string]int{"0000:82:00.0": 1, "0000:e3:00.0": 1},
+		unreadable:  map[string]bool{},
+		quarantined: map[string]struct{}{},
+		resetFails:  map[string]bool{},
+	}
+	for g, gpu := range []string{"0000:82:00.0", "0000:e3:00.0"} {
+		for v := 0; v < 4; v++ {
+			host.vfs = append(host.vfs, devices.VirtualFunction{PCIAddress: fmt.Sprintf("0000:%02x:00.%d", 0x82+g*0x61, 4+v), ParentGPU: gpu, ProfileType: "0"})
+		}
+	}
+	m := host.manager(t, t.TempDir())
+
+	var liveMu sync.Mutex
+	live := map[string]string{}
+	var refused, claimed atomic.Int64
+	var wg sync.WaitGroup
+	for w := 0; w < 8; w++ {
+		wg.Add(1)
+		go func(w int) {
+			defer wg.Done()
+			for i := 0; i < 15; i++ {
+				func() {
+					id := fmt.Sprintf("w%d-%d", w, i)
+					meta := saveTestVGPUInstance(t, m, id)
+					defer m.deleteInstanceData(id)
+					if err := m.checkVGPUCapacity(testVGPUProfile); err != nil {
+						assert.ErrorIs(t, err, ErrInsufficientResources)
+						refused.Add(1)
+						return
+					}
+					device, err := m.claimVGPU(context.Background(), meta, testVGPUProfile)
+					if err != nil {
+						assert.ErrorIs(t, err, ErrInsufficientResources)
+						return
+					}
+					if !host.configure(device.VFAddress) {
+						// Another claim used the last framebuffer first; roll back.
+						assert.NoError(t, m.releaseStoredVGPUPersisted(context.Background(), meta))
+						return
+					}
+					claimed.Add(1)
+					liveMu.Lock()
+					if owner, ok := live[device.VFAddress]; ok {
+						t.Errorf("VF %s assigned to %s and %s", device.VFAddress, owner, id)
+					}
+					live[device.VFAddress] = id
+					liveMu.Unlock()
+
+					time.Sleep(10 * time.Millisecond)
+
+					liveMu.Lock()
+					delete(live, device.VFAddress)
+					liveMu.Unlock()
+					assert.NoError(t, m.releaseStoredVGPUPersisted(context.Background(), meta))
+				}()
+			}
+		}(w)
+	}
+	wg.Wait()
+	t.Logf("pre-check refusals: %d, configured claims: %d", refused.Load(), claimed.Load())
+	assert.Positive(t, claimed.Load())
+	assert.Positive(t, refused.Load())
+
+	host.mu.Lock()
+	defer host.mu.Unlock()
+	for _, vf := range host.vfs {
+		assert.False(t, vf.Allocated, "VF %s still allocated after all releases", vf.PCIAddress)
+	}
+	assert.Equal(t, 1, host.free["0000:82:00.0"])
+	assert.Equal(t, 1, host.free["0000:e3:00.0"])
 }

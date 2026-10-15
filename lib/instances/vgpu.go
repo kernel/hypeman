@@ -2,6 +2,7 @@ package instances
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand/v2"
 	"path/filepath"
@@ -131,19 +132,61 @@ func (m *manager) claimVGPU(ctx context.Context, meta *metadata, profileName str
 	return device, nil
 }
 
-// resetDirtyUnclaimedVFs resets allocated VFs that no instance claims,
-// restoring the framebuffer their leftover type consumes. The reset is
-// gated on the open-VFIO-handle in-use check inside destroy. Reports
-// whether any VF was reset. Callers must hold vgpuAllocationMu.
-func (m *manager) resetDirtyUnclaimedVFs(ctx context.Context, vfs []devices.VirtualFunction, allMetadata []StoredMetadata) bool {
+// checkVGPUCapacity returns ErrInsufficientResources when no VF can take
+// profileName, so create and start refuse a full host before allocating
+// anything else. It runs the claim's placement without claiming, under the
+// allocation lock so it reads the same host state a claim starting now
+// would. A dirty unclaimed VF may be hiding capacity the claim can reclaim
+// by resetting it, so its presence admits the request. Errors reading host
+// state also admit it; the claim reports them.
+func (m *manager) checkVGPUCapacity(profileName string) error {
+	framework, _, err := m.discoverVGPUDevices()
+	if err != nil || framework != devices.VGPUFrameworkVendorVFIO {
+		return nil
+	}
+
+	m.vgpuAllocationMu.Lock()
+	defer m.vgpuAllocationMu.Unlock()
+
+	_, vfs, err := m.discoverVGPUDevices()
+	if err != nil {
+		return nil
+	}
+	allMetadata, err := m.listMetadataForReconcile()
+	if err != nil {
+		return nil
+	}
+	if len(dirtyUnclaimedVFs(vfs, allMetadata)) > 0 {
+		return nil
+	}
+	listProfiles := m.vendorVFIOProfiles
+	if listProfiles == nil {
+		listProfiles = devices.ListVendorVFIOProfileTypes
+	}
+	profilesByVF, err := listProfiles(vfs)
+	if err != nil {
+		return nil
+	}
+	quarantined, err := m.quarantinedVFAddresses()
+	if err != nil {
+		return nil
+	}
+	candidates := vendorVFIOCandidates{vfs: vfs, profilesByVF: profilesByVF, claims: allMetadata, quarantined: quarantined}
+	if _, _, err := selectVendorVFIOVF(candidates, profileName, nil); errors.Is(err, ErrInsufficientResources) {
+		return err
+	}
+	return nil
+}
+
+// dirtyUnclaimedVFs returns allocated VFs that no instance claims.
+func dirtyUnclaimedVFs(vfs []devices.VirtualFunction, allMetadata []StoredMetadata) []devices.VirtualFunction {
 	claimed := make(map[string]struct{}, len(allMetadata))
 	for i := range allMetadata {
 		if path := allMetadata[i].GPUDevicePath; path != "" {
 			claimed[filepath.Base(path)] = struct{}{}
 		}
 	}
-	log := logger.FromContext(ctx)
-	reset := false
+	var dirty []devices.VirtualFunction
 	for _, vf := range vfs {
 		if !vf.Allocated {
 			continue
@@ -151,6 +194,19 @@ func (m *manager) resetDirtyUnclaimedVFs(ctx context.Context, vfs []devices.Virt
 		if _, ok := claimed[vf.PCIAddress]; ok {
 			continue
 		}
+		dirty = append(dirty, vf)
+	}
+	return dirty
+}
+
+// resetDirtyUnclaimedVFs resets allocated VFs that no instance claims,
+// restoring the framebuffer their leftover type consumes. The reset is
+// gated on the open-VFIO-handle in-use check inside destroy. Reports
+// whether any VF was reset. Callers must hold vgpuAllocationMu.
+func (m *manager) resetDirtyUnclaimedVFs(ctx context.Context, vfs []devices.VirtualFunction, allMetadata []StoredMetadata) bool {
+	log := logger.FromContext(ctx)
+	reset := false
+	for _, vf := range dirtyUnclaimedVFs(vfs, allMetadata) {
 		assignment := devices.VGPUAssignment{
 			Framework:  devices.VGPUFrameworkVendorVFIO,
 			DevicePath: filepath.Clean(devices.GetDeviceSysfsPath(vf.PCIAddress)),
@@ -196,12 +252,23 @@ func selectVendorVFIOVF(c vendorVFIOCandidates, profileName string, pick func(n 
 			advertises[vfAddress][profile.TypeName] = struct{}{}
 		}
 	}
+	// Unreadable VFs are absent from profilesByVF. A placement failure while
+	// any VF went unread is not evidence that the host is full.
+	unread := 0
+	for _, vf := range c.vfs {
+		if _, ok := c.profilesByVF[vf.PCIAddress]; !ok {
+			unread++
+		}
+	}
 	requested, found := profilesByName[profileName]
 	if !found {
-		if len(profilesByName) == 0 && len(c.vfs) > 0 {
-			return "", "", fmt.Errorf("no creatable vGPU profiles on any VF (GPUs at capacity or dirty VFs consuming framebuffer): profile %q", profileName)
+		if unread > 0 {
+			return "", "", fmt.Errorf("profile %q is not creatable on any readable VF (%d of %d VFs unreadable)", profileName, unread, len(c.vfs))
 		}
-		return "", "", fmt.Errorf("profile %q is not creatable on any VF (unknown profile or insufficient capacity)", profileName)
+		if len(profilesByName) == 0 && len(c.vfs) > 0 {
+			return "", "", fmt.Errorf("%w: no creatable vGPU profiles on any VF (GPUs at capacity or dirty VFs consuming framebuffer): profile %q", ErrInsufficientResources, profileName)
+		}
+		return "", "", fmt.Errorf("%w: profile %q is not creatable on any VF (unknown profile or insufficient capacity)", ErrInsufficientResources, profileName)
 	}
 
 	vfsByAddress := make(map[string]devices.VirtualFunction, len(c.vfs))
@@ -280,7 +347,10 @@ func selectVendorVFIOVF(c vendorVFIOCandidates, profileName string, pick func(n 
 		return usageByGPU[gpus[i]] < usageByGPU[gpus[j]]
 	})
 	if len(gpus) == 0 {
-		return "", "", fmt.Errorf("no available VF for profile %q", profileName)
+		if unread > 0 {
+			return "", "", fmt.Errorf("no available VF for profile %q (%d of %d VFs unreadable)", profileName, unread, len(c.vfs))
+		}
+		return "", "", fmt.Errorf("%w: no available VF for profile %q", ErrInsufficientResources, profileName)
 	}
 	// Candidates are sorted clean-first, so the leading run with the same
 	// Allocated state is the set of equally ranked VFs.

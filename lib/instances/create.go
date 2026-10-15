@@ -102,6 +102,12 @@ func (m *manager) createInstance(
 	if req.GPU != nil && req.GPU.Profile != "" && !devices.Capabilities().SupportsVGPU {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidRequest, devices.ErrVGPUNotSupportedOnMacOS)
 	}
+	if req.GPU != nil && req.GPU.Profile != "" {
+		if err := m.checkVGPUCapacity(req.GPU.Profile); err != nil {
+			log.WarnContext(ctx, "vGPU capacity check failed", "profile", req.GPU.Profile, "error", err)
+			return nil, err
+		}
+	}
 	hvType := req.Hypervisor
 	if hvType == "" {
 		hvType = m.defaultHypervisor

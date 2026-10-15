@@ -140,6 +140,148 @@ func pickFirst(int) int { return 0 }
 
 func pickLast(n int) int { return n - 1 }
 
+func TestSelectVendorVFIOVFReportsCapacityAsInsufficientResources(t *testing.T) {
+	vf := devices.VirtualFunction{PCIAddress: "0000:82:00.4", ParentGPU: "0000:82:00.0"}
+	tests := []struct {
+		name       string
+		candidates vendorVFIOCandidates
+	}{
+		{
+			name:       "no profile creatable on any VF",
+			candidates: vendorVFIOCandidates{vfs: []devices.VirtualFunction{vf}, profilesByVF: map[string][]devices.VGPUProfileType{vf.PCIAddress: {}}},
+		},
+		{
+			name: "requested profile no longer creatable",
+			candidates: vendorVFIOCandidates{vfs: []devices.VirtualFunction{vf}, profilesByVF: map[string][]devices.VGPUProfileType{
+				vf.PCIAddress: {{TypeName: "1147", Name: "NVIDIA L40S-1Q", FramebufferMB: 1024}},
+			}},
+		},
+		{
+			name: "every VF claimed",
+			candidates: vendorVFIOCandidates{
+				vfs:          []devices.VirtualFunction{vf},
+				profilesByVF: testVFProfiles(vf.PCIAddress),
+				claims:       []StoredMetadata{{GPUDevicePath: testVFDevicePath}},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, _, err := selectVendorVFIOVF(tt.candidates, testVGPUProfile, nil)
+			require.ErrorIs(t, err, ErrInsufficientResources)
+			assert.ErrorIs(t, wrapCreateVGPUErr(testVGPUProfile, err), ErrInsufficientResources)
+		})
+	}
+}
+
+func TestSelectVendorVFIOVFDoesNotReportUnreadableVFsAsCapacity(t *testing.T) {
+	vfs := []devices.VirtualFunction{
+		{PCIAddress: "0000:82:00.4", ParentGPU: "0000:82:00.0"},
+		{PCIAddress: "0000:82:00.5", ParentGPU: "0000:82:00.0"},
+	}
+	tests := []struct {
+		name     string
+		profiles map[string][]devices.VGPUProfileType
+		claims   []StoredMetadata
+	}{
+		{name: "no VF readable", profiles: map[string][]devices.VGPUProfileType{}},
+		{name: "readable VFs advertise nothing", profiles: map[string][]devices.VGPUProfileType{"0000:82:00.4": {}}},
+		{
+			name:     "only claimed VF readable",
+			profiles: testVFProfiles("0000:82:00.4"),
+			claims:   []StoredMetadata{{GPUDevicePath: testVFDevicePath}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, _, err := selectVendorVFIOVF(vendorVFIOCandidates{vfs: vfs, profilesByVF: tt.profiles, claims: tt.claims}, testVGPUProfile, nil)
+			require.Error(t, err)
+			assert.NotErrorIs(t, err, ErrInsufficientResources)
+		})
+	}
+}
+
+func TestCheckVGPUCapacity(t *testing.T) {
+	clean := devices.VirtualFunction{PCIAddress: "0000:82:00.4", ParentGPU: "0000:82:00.0"}
+	dirty := devices.VirtualFunction{PCIAddress: "0000:82:00.5", ParentGPU: "0000:82:00.0", Allocated: true, ProfileType: testVFProfileType}
+	tests := []struct {
+		name       string
+		framework  devices.VGPUFramework
+		vfs        []devices.VirtualFunction
+		profiles   map[string][]devices.VGPUProfileType
+		claimDirty bool
+		wantErr    error
+	}{
+		{
+			name:      "profile creatable",
+			framework: devices.VGPUFrameworkVendorVFIO,
+			vfs:       []devices.VirtualFunction{clean},
+			profiles:  testVFProfiles(clean.PCIAddress),
+		},
+		{
+			name:       "host full",
+			framework:  devices.VGPUFrameworkVendorVFIO,
+			vfs:        []devices.VirtualFunction{clean, dirty},
+			profiles:   map[string][]devices.VGPUProfileType{clean.PCIAddress: {}, dirty.PCIAddress: {}},
+			claimDirty: true,
+			wantErr:    ErrInsufficientResources,
+		},
+		{
+			name:       "creatable types unreadable",
+			framework:  devices.VGPUFrameworkVendorVFIO,
+			vfs:        []devices.VirtualFunction{clean, dirty},
+			profiles:   map[string][]devices.VGPUProfileType{},
+			claimDirty: true,
+		},
+		{
+			name:       "free VF unreadable",
+			framework:  devices.VGPUFrameworkVendorVFIO,
+			vfs:        []devices.VirtualFunction{clean, dirty},
+			profiles:   map[string][]devices.VGPUProfileType{dirty.PCIAddress: {}},
+			claimDirty: true,
+		},
+		{
+			name:      "dirty unclaimed VF may hide capacity",
+			framework: devices.VGPUFrameworkVendorVFIO,
+			vfs:       []devices.VirtualFunction{clean, dirty},
+			profiles:  map[string][]devices.VGPUProfileType{clean.PCIAddress: {}, dirty.PCIAddress: {}},
+		},
+		{
+			name:      "mdev framework is left to the claim",
+			framework: devices.VGPUFrameworkMdev,
+			vfs:       []devices.VirtualFunction{clean},
+			profiles:  map[string][]devices.VGPUProfileType{clean.PCIAddress: {}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := &manager{
+				paths: paths.New(t.TempDir()),
+				discoverVGPU: func() (devices.VGPUFramework, []devices.VirtualFunction, error) {
+					return tt.framework, tt.vfs, nil
+				},
+				vendorVFIOProfiles: func([]devices.VirtualFunction) (map[string][]devices.VGPUProfileType, error) {
+					return tt.profiles, nil
+				},
+				quarantinedVFs: func() (map[string]struct{}, error) { return nil, nil },
+			}
+			if tt.claimDirty {
+				owner := saveTestVGPUInstance(t, m, "owner")
+				owner.GPUFramework = devices.VGPUFrameworkVendorVFIO
+				owner.GPUDevicePath = "/sys/bus/pci/devices/" + dirty.PCIAddress
+				require.NoError(t, m.saveMetadata(owner))
+			}
+
+			err := m.checkVGPUCapacity(testVGPUProfile)
+			if tt.wantErr != nil {
+				require.ErrorIs(t, err, tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}
+
 func TestSelectVendorVFIOVFSkipsQuarantinedVF(t *testing.T) {
 	vfs := []devices.VirtualFunction{
 		{PCIAddress: "0000:82:00.4", ParentGPU: "0000:82:00.0"},
@@ -240,4 +382,32 @@ func TestSelectVendorVFIOVFPrefersGPUWithKnownLoad(t *testing.T) {
 	vf, _, err = selectVendorVFIOVF(vendorVFIOCandidates{vfs: vfs[:2], profilesByVF: profiles, claims: claims[:1]}, testVGPUProfile, nil)
 	require.NoError(t, err)
 	assert.Equal(t, "0000:82:00.5", vf)
+}
+
+func TestCreateInstanceRejectsFullVGPUHostBeforeResourceReservation(t *testing.T) {
+	if !devices.Capabilities().SupportsVGPU {
+		t.Skip("host platform does not support vGPU")
+	}
+	vf := devices.VirtualFunction{PCIAddress: "0000:82:00.4", ParentGPU: "0000:82:00.0"}
+	validator := &recordingResourceValidator{}
+	m := &manager{
+		paths:             paths.New(t.TempDir()),
+		resourceValidator: validator,
+		discoverVGPU: func() (devices.VGPUFramework, []devices.VirtualFunction, error) {
+			return devices.VGPUFrameworkVendorVFIO, []devices.VirtualFunction{vf}, nil
+		},
+		vendorVFIOProfiles: func([]devices.VirtualFunction) (map[string][]devices.VGPUProfileType, error) {
+			return map[string][]devices.VGPUProfileType{vf.PCIAddress: {}}, nil
+		},
+		quarantinedVFs: func() (map[string]struct{}, error) { return nil, nil },
+	}
+
+	_, err := m.createInstance(context.Background(), CreateInstanceRequest{
+		Name:  "instance",
+		Image: "image",
+		GPU:   &GPUConfig{Profile: testVGPUProfile},
+	})
+
+	require.ErrorIs(t, err, ErrInsufficientResources)
+	assert.Zero(t, validator.reserveCalls)
 }
