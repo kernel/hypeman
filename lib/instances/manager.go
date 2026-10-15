@@ -25,6 +25,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
+	"golang.org/x/sync/singleflight"
 )
 
 type Manager interface {
@@ -174,8 +175,10 @@ type manager struct {
 	resourceValidator         ResourceValidator // Optional validator for aggregate resource limits
 	instanceLocks             sync.Map          // map[string]*sync.RWMutex - per-instance locks
 	forkMetadataMu            sync.Mutex
-	bootMarkerScans           sync.Map      // map[string]time.Time next allowed boot-marker rescan
-	hypervisorStateCache      sync.Map      // map[string]hypervisorStateCacheEntry - last observed hypervisor state per instance
+	bootMarkerScans           sync.Map // map[string]time.Time next allowed boot-marker rescan
+	hypervisorStateCache      sync.Map // map[string]hypervisorStateCacheEntry - last observed hypervisor state per instance
+	hypervisorStateQueryLocks sync.Map // map[string]*sync.RWMutex - serializes state probes against snapshots
+	hypervisorStateQueries    singleflight.Group
 	hostTopology              *HostTopology // Cached host CPU topology
 	metrics                   *Metrics
 	meter                     metric.Meter
@@ -358,6 +361,7 @@ func (m *manager) notifyLifecycleEvent(ctx context.Context, action LifecycleEven
 
 func (m *manager) notifyLifecycleDelete(ctx context.Context, instanceID string) {
 	m.invalidateCachedHypervisorState(instanceID)
+	m.hypervisorStateQueryLocks.Delete(instanceID)
 	m.lifecycleEvents.Notify(ctx, LifecycleEvent{
 		Action:     LifecycleEventDelete,
 		InstanceID: instanceID,
