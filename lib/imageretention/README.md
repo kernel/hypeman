@@ -19,7 +19,7 @@ When auto-delete is enabled:
 - Shared OCI cache data under `data_dir/system/oci-cache` is not modified by this feature; see `lib/ocicachegc` for a separate mark-and-sweep collector that reclaims orphaned blobs from that directory.
 - An image repository must also match at least one `allowed` pattern before any retention state is recorded or deletion is attempted.
 
-An image is considered in use if any persisted instance metadata or snapshot record still references it. As long as at least one such reference exists, the image is protected from deletion.
+An image is considered in use if any persisted instance metadata or snapshot record still references it. As long as at least one such reference exists, the image is protected from deletion. Protection applies to the digest, so every repository whose image resolves to a referenced digest is kept, including a build's `builds/<id>` image after the same content was pushed elsewhere and an instance was created from the pushed name.
 
 The retention timer starts only after the last persisted reference disappears and the image repository is allowed by policy. At that point the server records `unused_since` for the image digest. Once `unused_since + unused_for` has elapsed, the cached image digest is deleted.
 

@@ -122,6 +122,31 @@ func TestSweepDeletesExpiredImageDigestAndAllTags(t *testing.T) {
 	require.True(t, os.IsNotExist(err))
 }
 
+func TestSweepProtectsAliasOfReferencedDigest(t *testing.T) {
+	controller, p, _ := newTestController(t, 24*time.Hour, []string{"*"})
+	const digest = "sha256:7777777777777777777777777777777777777777777777777777777777777777"
+	published := "123456789012.dkr.ecr.us-east-1.amazonaws.com/quickbox/apps@" + digest
+	seedReadyImage(t, p, "docker.io/builds/abc:latest", digest)
+	seedReadyImage(t, p, published, digest)
+	writeStateAt(t, p, "docker.io/builds/abc", digest, time.Date(2026, 3, 20, 0, 0, 0, 0, time.UTC))
+	writeInstanceMetadata(t, p, "inst-1", instances.StoredMetadata{
+		Id:    "inst-1",
+		Name:  "instance-1",
+		Image: published,
+	})
+
+	controller.now = func() time.Time {
+		return time.Date(2026, 3, 26, 0, 0, 0, 0, time.UTC)
+	}
+
+	require.NoError(t, controller.Sweep(context.Background()))
+
+	_, err := os.Stat(p.ImageDigestPath("docker.io/builds/abc", stringsTrimDigest(digest)))
+	require.NoError(t, err)
+	_, err = os.Stat(p.ImageRetentionState("docker.io/builds/abc", stringsTrimDigest(digest)))
+	require.True(t, os.IsNotExist(err))
+}
+
 func TestSweepProtectedImageClearsPriorState(t *testing.T) {
 	controller, p, _ := newTestController(t, 24*time.Hour, []string{"*"})
 	const digest = "sha256:5555555555555555555555555555555555555555555555555555555555555555"

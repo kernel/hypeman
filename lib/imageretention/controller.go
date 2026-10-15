@@ -193,6 +193,14 @@ func (c *Controller) sweep(ctx context.Context) (sweepStats, error) {
 	stats.protectedImages = len(protected)
 	stats.staleReferences = staleRefs
 
+	// Converted content is shared by digest across repositories, so every
+	// image that resolves to a referenced digest must survive, not only the
+	// repository the reference names.
+	protectedDigests := make(map[string]struct{}, len(protected))
+	for _, ref := range protected {
+		protectedDigests[ref.DigestHex] = struct{}{}
+	}
+
 	for _, ref := range protected {
 		removed, err := c.deleteStateIfExists(ref)
 		if err != nil {
@@ -232,7 +240,16 @@ func (c *Controller) sweep(ctx context.Context) (sweepStats, error) {
 
 	now := c.now().UTC()
 	for key, ref := range ready {
-		if _, ok := protected[key]; ok {
+		if _, ok := protectedDigests[ref.DigestHex]; ok {
+			if _, direct := protected[key]; !direct {
+				removed, err := c.deleteStateIfExists(ref)
+				if err != nil {
+					return stats, err
+				}
+				if removed {
+					stats.clearedStates++
+				}
+			}
 			continue
 		}
 		if !c.isAllowed(ref.Repository) {
