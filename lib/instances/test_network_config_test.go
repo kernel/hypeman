@@ -413,8 +413,23 @@ func pruneStaleLeases(leases map[string]subnetLease, routes []hostRoute) {
 		if bridgeExists(lease.BridgeName) {
 			continue
 		}
+		// A test holds its lease before its bridge exists, which can take tens
+		// of seconds. While the owner runs, the lease is not stale.
+		if processAlive(lease.PID) {
+			continue
+		}
 		delete(leases, subnet)
 	}
+}
+
+// processAlive reports whether pid names a running process. EPERM means the
+// process exists under another user, so it counts as alive.
+func processAlive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	err := syscall.Kill(pid, 0)
+	return err == nil || errors.Is(err, syscall.EPERM)
 }
 
 func bridgeExists(name string) bool {
