@@ -25,21 +25,10 @@ const (
 	maxBatchBytes = 16 << 10
 )
 
-// testBridgeName is the bridge name shape the test helpers generate: an hm, ha
-// or hi prefix followed by hex digits. Production bridges come from config
-// (default vmbr0) and never match.
-const testBridgeName = `(?:hm|ha|hi)[0-9a-f]+`
-
 // ruleCommentPattern matches the comments lib/network puts on hypeman's FORWARD
-// and nat rules when the bridge is a test bridge.
-var ruleCommentPattern = regexp.MustCompile(`^hypeman-(?:fwd-in|fwd-out|nat)-(` + testBridgeName + `)$`)
-
-var testBridgePattern = regexp.MustCompile(`^` + testBridgeName + `$`)
-
-// IsTestBridgeName reports whether name is a bridge the test helpers create.
-func IsTestBridgeName(name string) bool {
-	return testBridgePattern.MatchString(name)
-}
+// and nat rules when the bridge is one of the test-harness prefixes. Production
+// bridges come from config (default vmbr0) and never match.
+var ruleCommentPattern = regexp.MustCompile(`^hypeman-(?:fwd-in|fwd-out|nat)-((?:hm|ha|hi)[0-9a-f]+)$`)
 
 // rule is a test-owned iptables rule parsed from `iptables -S` output.
 type rule struct {

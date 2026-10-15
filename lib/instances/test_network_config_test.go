@@ -391,7 +391,7 @@ func cleanupStaleLinkDownRoutes(routes []hostRoute) {
 		if !isTestCIDR(route.cidr) {
 			continue
 		}
-		if !testsupport.IsTestBridgeName(route.device) {
+		if !strings.HasPrefix(route.device, "hm") && !strings.HasPrefix(route.device, "ha") {
 			continue
 		}
 
