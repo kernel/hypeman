@@ -4,13 +4,22 @@
 # full prune these jobs used before.
 set -euo pipefail
 
-# Host free space in GB below which everything unused is removed. The runner's
-# disk size is not recorded in this repo; tune this from the logged free space.
+# Free space in GB on the disk the daemon stores images on. Docker runs in a VM
+# with its own disk, so the host's free space does not show when that disk fills.
+# Measure it from a container. If the measurement fails, prune fully.
 min_free_gb="${DOCKER_CI_MIN_FREE_GB:-40}"
 
-free_gb="$(df -g / | awk 'NR == 2 {print $4}')"
-echo "host free space: ${free_gb}G (floor: ${min_free_gb}G)"
+free_kb="$(docker run --rm alpine:3.21 df -Pk / 2>/dev/null | awk 'NR == 2 {print $4}')" || free_kb=""
 docker system df
+
+if [ -z "$free_kb" ]; then
+  echo "daemon free space: unknown; removing all unused images, volumes and build cache"
+  docker system prune --all --force --volumes
+  exit 0
+fi
+
+free_gb=$((free_kb / 1024 / 1024))
+echo "daemon free space: ${free_gb}G (floor: ${min_free_gb}G)"
 
 if [ "$free_gb" -lt "$min_free_gb" ]; then
   echo "below floor: removing all unused images, volumes and build cache"
