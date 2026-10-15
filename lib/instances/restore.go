@@ -45,6 +45,13 @@ func (m *manager) restoreInstance(
 	if err := m.admitGuestOperation(&meta.StoredMetadata, "restore"); err != nil {
 		return nil, err
 	}
+	if meta.MacOS != nil {
+		m.macOSBootMu.Lock()
+		defer m.macOSBootMu.Unlock()
+		if err := m.checkMacOSBootAvailable(ctx, &meta.StoredMetadata); err != nil {
+			return nil, err
+		}
+	}
 
 	inst := m.toInstance(ctx, meta)
 	stored := &meta.StoredMetadata
@@ -67,16 +74,19 @@ func (m *manager) restoreInstance(
 	// deep in storage configuration ("disk image not found"), retrying for ~60s
 	// and surfacing as an opaque 500; resolving it up front (mirroring start)
 	// returns images.ErrNotFound fast so the handler maps it to 404.
-	imageCtx, imageSpanEnd := m.startLifecycleStep(ctx, "resolve_image",
-		attribute.String("instance_id", id),
-		attribute.String("hypervisor", string(stored.HypervisorType)),
-		attribute.String("operation", "resolve_image"),
-	)
-	_, err = m.imageManager.GetImage(imageCtx, bootImageRef(stored))
-	imageSpanEnd(err)
-	if err != nil {
-		log.ErrorContext(ctx, "failed to resolve image for restore", "instance_id", id, "image", bootImageRef(stored), "error", err)
-		return nil, fmt.Errorf("get image: %w", err)
+	// macOS boots the disk and aux storage cloned at create time, as in start.
+	if stored.MacOS == nil {
+		imageCtx, imageSpanEnd := m.startLifecycleStep(ctx, "resolve_image",
+			attribute.String("instance_id", id),
+			attribute.String("hypervisor", string(stored.HypervisorType)),
+			attribute.String("operation", "resolve_image"),
+		)
+		_, err = m.imageManager.GetImage(imageCtx, bootImageRef(stored))
+		imageSpanEnd(err)
+		if err != nil {
+			log.ErrorContext(ctx, "failed to resolve image for restore", "instance_id", id, "image", bootImageRef(stored), "error", err)
+			return nil, fmt.Errorf("get image: %w", err)
+		}
 	}
 
 	// 2b. Validate aggregate resource limits before allocating resources (if configured)
@@ -138,8 +148,9 @@ func (m *manager) restoreInstance(
 		}
 	}
 
-	// 4. Recreate or allocate network if network enabled
-	if stored.NetworkEnabled {
+	// 4. Recreate or allocate network if network enabled. A macOS guest keeps the MAC
+	// in its saved configuration, and vmnet supplies the address, so no TAP is allocated.
+	if stored.NetworkEnabled && stored.MacOS == nil {
 		networkCtx, networkSpanEnd := m.startLifecycleStep(ctx, "restore_network",
 			attribute.String("instance_id", id),
 			attribute.String("hypervisor", string(stored.HypervisorType)),
@@ -367,6 +378,13 @@ func (m *manager) restoreInstance(
 		retainedBaseDir := m.paths.InstanceSnapshotBase(id)
 		if err := restoreRetainedSnapshotBase(snapshotDir, retainedBaseDir); err != nil {
 			log.WarnContext(ctx, "failed to retain snapshot base after restore", "instance_id", id, "error", err)
+		}
+	} else if stored.MacOS != nil {
+		// A checkpoint left behind would read as Standby if the shim later died, and
+		// restoring it would replay old memory onto a newer disk. The guest is running;
+		// a retried restore removes it.
+		if err := os.RemoveAll(snapshotDir); err != nil {
+			return nil, fmt.Errorf("remove consumed snapshot: %w", err)
 		}
 	} else {
 		log.InfoContext(ctx, "deleting snapshot after successful restore", "instance_id", id)

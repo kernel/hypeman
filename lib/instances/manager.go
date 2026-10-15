@@ -329,6 +329,11 @@ func NewManagerWithConfigE(p *paths.Paths, imageManager images.Manager, systemMa
 	if err := m.recoverPendingStandbyCompressionJobs(context.Background()); err != nil {
 		logger.FromContext(context.Background()).WarnContext(context.Background(), "failed to recover pending standby compression jobs", "error", err)
 	}
+	// An interrupted macOS restore can leave the previous disk parked in staging. Failure
+	// is logged here; each restore retries recovery for its own instance before swapping.
+	if err := m.recoverMacOSRestoreStaging(""); err != nil {
+		logger.FromContext(context.Background()).ErrorContext(context.Background(), "macOS restore staging recovery failed", "error", err)
+	}
 
 	return m, nil
 }
@@ -636,6 +641,14 @@ func (m *manager) RestoreInstance(ctx context.Context, id string) (*Instance, er
 		return nil, err
 	}
 	if current.State == StateRunning || current.State == StateInitializing {
+		// A running macOS guest has consumed its checkpoint. One still on disk means an
+		// earlier resume failed before removing it, so finish that resume now.
+		if current.MacOS != nil && current.HasSnapshot {
+			if err := m.finishMacOSResume(id); err != nil {
+				return nil, fmt.Errorf("finish resumed restore: %w", err)
+			}
+			return m.currentInstanceWithoutHydration(ctx, id)
+		}
 		return current, nil
 	}
 	if current.State == StatePaused {
@@ -648,6 +661,11 @@ func (m *manager) RestoreInstance(ctx context.Context, id string) (*Instance, er
 			return nil, fmt.Errorf("resume paused vm: %w", err)
 		}
 		m.storeCachedHypervisorState(id, hypervisor.StateRunning)
+		if current.MacOS != nil {
+			if err := m.finishMacOSResume(id); err != nil {
+				return nil, fmt.Errorf("finish resumed restore: %w", err)
+			}
+		}
 		current, err = m.currentInstanceWithoutHydration(ctx, id)
 		if err != nil {
 			return nil, err

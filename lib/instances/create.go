@@ -811,7 +811,7 @@ func (m *manager) startAndBootVM(
 	if stored.MacOS != nil {
 		m.macOSBootMu.Lock()
 		defer m.macOSBootMu.Unlock()
-		if err := m.checkMacOSIdentityAvailable(ctx, stored); err != nil {
+		if err := m.checkMacOSBootAvailable(ctx, stored); err != nil {
 			return err
 		}
 	}

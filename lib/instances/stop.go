@@ -169,6 +169,7 @@ func (m *manager) stopInstance(
 		attribute.String("operation", "graceful_guest_shutdown"),
 		attribute.Int("stop_timeout_seconds", stopTimeout),
 	)
+	macOSVMMLive := inst.MacOS != nil && hypervisorProcessLive(&inst)
 	gracefulShutdown := m.tryGracefulGuestShutdown(gracefulCtx, &inst, stopTimeout)
 	if gracefulShutdown {
 		gracefulSpanEnd(nil)
@@ -285,6 +286,10 @@ func (m *manager) stopInstance(
 	// 10. Update metadata (clear PID, set StoppedAt)
 	now := time.Now().UTC()
 	stored.StoppedAt = &now
+	if stored.MacOS != nil {
+		// A VMM that was already gone exits "gracefully" without a guest shutdown.
+		stored.StopGraceful = gracefulShutdown && macOSVMMLive
+	}
 	stored.HypervisorProcessIdentity.Clear()
 	// Boot markers are per-boot-run and must not carry across stop/restore/start.
 	stored.ProgramStartedAt = nil
