@@ -147,6 +147,32 @@ func TestSweepProtectsAliasOfReferencedDigest(t *testing.T) {
 	require.True(t, os.IsNotExist(err))
 }
 
+func TestSweepProtectsResolvedDigestAfterTagMoves(t *testing.T) {
+	controller, p, _ := newTestController(t, 24*time.Hour, []string{"*"})
+	const oldDigest = "sha256:8888888888888888888888888888888888888888888888888888888888888888"
+	const newDigest = "sha256:9999999999999999999999999999999999999999999999999999999999999999"
+	seedReadyImage(t, p, "docker.io/library/alpine@"+oldDigest, oldDigest)
+	seedReadyImage(t, p, "docker.io/library/alpine:latest", newDigest)
+	writeStateAt(t, p, "docker.io/library/alpine", oldDigest, time.Date(2026, 3, 20, 0, 0, 0, 0, time.UTC))
+	writeInstanceMetadata(t, p, "inst-1", instances.StoredMetadata{
+		Id:            "inst-1",
+		Name:          "instance-1",
+		Image:         "docker.io/library/alpine:latest",
+		ResolvedImage: "docker.io/library/alpine@" + oldDigest,
+	})
+
+	controller.now = func() time.Time {
+		return time.Date(2026, 3, 26, 0, 0, 0, 0, time.UTC)
+	}
+
+	require.NoError(t, controller.Sweep(context.Background()))
+
+	_, err := os.Stat(p.ImageDigestPath("docker.io/library/alpine", stringsTrimDigest(oldDigest)))
+	require.NoError(t, err)
+	_, err = os.Stat(p.ImageRetentionState("docker.io/library/alpine", stringsTrimDigest(oldDigest)))
+	require.True(t, os.IsNotExist(err))
+}
+
 func TestSweepProtectedImageClearsPriorState(t *testing.T) {
 	controller, p, _ := newTestController(t, 24*time.Hour, []string{"*"})
 	const digest = "sha256:5555555555555555555555555555555555555555555555555555555555555555"

@@ -378,6 +378,9 @@ func (c *Controller) collectReferencedImageNames(ctx context.Context) (map[strin
 			if stored.Image != "" {
 				refs[stored.Image] = struct{}{}
 			}
+			if stored.ResolvedImage != "" {
+				refs[stored.ResolvedImage] = struct{}{}
+			}
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("read guests directory: %w", err)
@@ -399,6 +402,9 @@ func (c *Controller) collectReferencedImageNames(ctx context.Context) (map[strin
 		}
 		if stored.Image != "" {
 			refs[stored.Image] = struct{}{}
+		}
+		if stored.ResolvedImage != "" {
+			refs[stored.ResolvedImage] = struct{}{}
 		}
 	}
 
