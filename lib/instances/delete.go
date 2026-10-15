@@ -76,7 +76,7 @@ func (m *manager) deleteInstanceWithOptions(
 
 	// 2. Get network allocation BEFORE killing VMM (while we can still query it)
 	var networkAlloc *network.Allocation
-	if inst.NetworkEnabled {
+	if inst.NetworkEnabled && inst.MacOS == nil {
 		log.DebugContext(ctx, "getting network allocation", "instance_id", id)
 		networkAlloc, err = m.networkManager.GetAllocation(ctx, id)
 		if err != nil {
@@ -154,7 +154,7 @@ func (m *manager) deleteInstanceWithOptions(
 	}
 
 	// 6. Release network allocation
-	if inst.NetworkEnabled {
+	if inst.NetworkEnabled && inst.MacOS == nil {
 		m.unregisterEgressProxyInstance(ctx, id)
 		log.DebugContext(ctx, "releasing network", "instance_id", id, "network", "default")
 		releaseNetworkCtx, releaseNetworkSpanEnd := m.startLifecycleStep(ctx, "release_network",

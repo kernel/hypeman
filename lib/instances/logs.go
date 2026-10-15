@@ -62,8 +62,14 @@ func (m *manager) streamInstanceLogs(ctx context.Context, id string, tail int, f
 		return nil, ErrTailNotFound
 	}
 
-	if _, err := m.loadMetadata(id); err != nil {
+	meta, err := m.loadMetadata(id)
+	if err != nil {
 		return nil, err
+	}
+	// macOS guests have no serial console, so the app log is never written. Say so
+	// instead of implying the file may still appear.
+	if meta.MacOS != nil && source == LogSourceApp {
+		return nil, fmt.Errorf("%w: app logs are not available for macOS guests", ErrNotSupported)
 	}
 
 	// Determine log path based on source
@@ -72,7 +78,7 @@ func (m *manager) streamInstanceLogs(ctx context.Context, id string, tail int, f
 	case LogSourceApp:
 		logPath = m.paths.InstanceAppLog(id)
 	case LogSourceVMM:
-		logPath = m.paths.InstanceVMMLog(id)
+		logPath = m.vmmLogPath(meta)
 	case LogSourceHypeman:
 		logPath = m.paths.InstanceHypemanLog(id)
 	case LogSourceSWTPM:
@@ -209,4 +215,13 @@ func (m *manager) archiveAppLogForBoot(id string) error {
 		return err
 	}
 	return nil
+}
+
+// vmmLogPath maps the VMM source to the file the hypervisor writes. macOS guests
+// log through the VZ shim, not Cloud Hypervisor's vmm.log.
+func (m *manager) vmmLogPath(meta *metadata) string {
+	if meta.MacOS != nil {
+		return m.paths.InstanceVZShimLog(meta.Id)
+	}
+	return m.paths.InstanceVMMLog(meta.Id)
 }

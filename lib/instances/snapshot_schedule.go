@@ -36,7 +36,12 @@ func (m *manager) SetSnapshotSchedule(ctx context.Context, instanceID string, re
 	lock.Lock()
 	defer lock.Unlock()
 
-	if _, err := m.loadMetadata(instanceID); err != nil {
+	meta, err := m.loadMetadata(instanceID)
+	if err != nil {
+		return nil, err
+	}
+	// Schedules run the snapshot path, which macOS guests reject; refuse up front.
+	if err := m.admitGuestOperation(&meta.StoredMetadata, "snapshot schedules"); err != nil {
 		return nil, err
 	}
 

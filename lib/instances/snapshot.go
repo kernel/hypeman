@@ -63,6 +63,9 @@ func (m *manager) createSnapshot(ctx context.Context, id string, req CreateSnaps
 	if err != nil {
 		return nil, err
 	}
+	if err := m.admitGuestOperation(&meta.StoredMetadata, "snapshot"); err != nil {
+		return nil, err
+	}
 	inst := m.toInstance(ctx, meta)
 	stored := &meta.StoredMetadata
 
@@ -259,6 +262,9 @@ func (m *manager) restoreSnapshot(ctx context.Context, id string, snapshotID str
 	if err != nil {
 		return nil, err
 	}
+	if err := m.admitGuestOperation(&sourceMeta.StoredMetadata, "restore snapshot"); err != nil {
+		return nil, err
+	}
 	sourceInst := m.toInstance(ctx, sourceMeta)
 	if sourceInst.State == StateRunning {
 		return nil, fmt.Errorf("%w: cannot restore snapshot while source is %s", ErrInvalidState, sourceInst.State)
@@ -376,6 +382,9 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 
 	rec, err := m.loadSnapshotRecord(snapshotID)
 	if err != nil {
+		return nil, err
+	}
+	if err := m.admitGuestOperation(&rec.StoredMetadata, "fork snapshot"); err != nil {
 		return nil, err
 	}
 	if err := validateForkVolumeSafety(rec.StoredMetadata.Volumes); err != nil {

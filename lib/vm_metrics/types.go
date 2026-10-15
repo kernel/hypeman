@@ -47,6 +47,8 @@ type InstanceInfo struct {
 	Name          string
 	HypervisorPID *int   // PID of the hypervisor process (nil if not running)
 	TAPDevice     string // Name of the TAP device (e.g., "hype-01234567")
+	// StoragePath is a file the guest's VM process holds open; see resources.InstanceUtilizationInfo.
+	StoragePath string
 
 	// Allocated resources
 	AllocatedVcpus       int   // Number of allocated vCPUs

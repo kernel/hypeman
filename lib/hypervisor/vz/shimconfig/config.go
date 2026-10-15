@@ -32,6 +32,11 @@ type ShimConfig struct {
 	InitrdPath string `json:"initrd_path"`
 	KernelArgs string `json:"kernel_args"`
 
+	// macOS boot mode: all three fields must be supplied together.
+	MacHardwareModelData     string `json:"mac_hardware_model_data,omitempty"`
+	MacMachineIdentifierData string `json:"mac_machine_identifier_data,omitempty"`
+	MacAuxStoragePath        string `json:"mac_aux_storage_path,omitempty"`
+
 	// Guest memory reclaim
 	EnableMemoryBalloon  bool `json:"enable_memory_balloon,omitempty"`
 	RequireMemoryBalloon bool `json:"require_memory_balloon,omitempty"`
