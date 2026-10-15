@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -418,15 +419,20 @@ func ProvideBuildManager(p *paths.Paths, cfg *config.Config, instanceManager ins
 		log.Info("registry CA certificate loaded", "file", cfg.Registry.CACertFile)
 	}
 
-	registryURL, err := builderRegistryURL(cfg.Registry.URL, networkManager)
-	if err != nil {
-		return nil, err
+	registryURL := cfg.Registry.URL
+	if !cfg.MacOSBuilds {
+		var err error
+		registryURL, err = builderRegistryURL(registryURL, networkManager)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if registryURL != cfg.Registry.URL {
 		log.Info("resolved registry URL for builder VMs", "original", cfg.Registry.URL, "resolved", registryURL)
 	}
 
 	buildConfig := builds.Config{
+		MachineBuildOnly:    cfg.MacOSOnly,
 		MaxConcurrentBuilds: cfg.Build.MaxConcurrentSourceBuilds,
 		BuilderImage:        cfg.Build.BuilderImage,
 		RegistryURL:         registryURL,
@@ -435,6 +441,20 @@ func ProvideBuildManager(p *paths.Paths, cfg *config.Config, instanceManager ins
 		DefaultTimeout:      cfg.Build.Timeout,
 		RegistrySecret:      cfg.JwtSecret, // Use same secret for registry tokens
 		DockerSocket:        cfg.Build.DockerSocket,
+	}
+
+	if cfg.MacOSBuilds {
+		if !cfg.MacOSOnly || registryURL == "" {
+			return nil, fmt.Errorf("machine builds require macOS-only mode and an explicit host registry URL")
+		}
+		workDir := filepath.Join(p.BuildsDir(), "machine-work")
+		if err := os.MkdirAll(workDir, 0700); err != nil {
+			return nil, err
+		}
+		buildConfig.MachineBuild = &builds.MachineBuildBackend{
+			Driver:    &builds.GuestMachineBuildDriver{Instances: instanceManager, WorkDir: workDir},
+			Publisher: &builds.StreamingMachinePublisher{RegistryURL: registryURL, Tokens: builds.NewRegistryTokenGenerator(cfg.JwtSecret)},
+		}
 	}
 
 	// Configure secret provider (use NoOpSecretProvider as fallback to avoid nil panics)

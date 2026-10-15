@@ -2,6 +2,8 @@ package config
 
 import (
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -281,7 +283,8 @@ type Config struct {
 	JwtSecret     string `koanf:"jwt_secret"`
 	Env           string `koanf:"env"`
 	Version       string `koanf:"version"`
-	MacOSOnly     bool   `koanf:"macos_only"` // Experimental: omit Linux boot downloads and reject Linux creates.
+	MacOSBuilds   bool   `koanf:"macos_builds"` // Experimental: enable machine builds on the macOS-only server.
+	MacOSOnly     bool   `koanf:"macos_only"`   // Experimental: omit Linux boot downloads and reject Linux creates.
 
 	Network          NetworkConfig          `koanf:"network"`
 	Caddy            CaddyConfig            `koanf:"caddy"`
@@ -593,6 +596,9 @@ func (c *Config) Validate() error {
 	if c.MacOSOnly && (runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" || c.Hypervisor.Default != "vz") {
 		return fmt.Errorf("macos_only requires vz on Apple silicon")
 	}
+	if err := c.validateMacOSBuilds(); err != nil {
+		return err
+	}
 	if strings.TrimSpace(c.Metrics.ListenAddress) == "" {
 		return fmt.Errorf("metrics.listen_address must not be empty")
 	}
@@ -838,4 +844,28 @@ func (c *Config) validateFirecrackerUFFDGraduation() error {
 
 func intPtr(v int) *int {
 	return &v
+}
+
+// validateMacOSBuilds enforces the experimental machine-build registry boundary.
+func (c *Config) validateMacOSBuilds() error {
+	if c.MacOSBuilds && !c.MacOSOnly {
+		return fmt.Errorf("macos_builds requires macos_only")
+	}
+	if c.MacOSBuilds && c.Registry.CACertFile != "" {
+		return fmt.Errorf("macos_builds requires system-trusted registry TLS or loopback HTTP")
+	}
+	if c.MacOSBuilds && c.Registry.Insecure && strings.HasPrefix(c.Registry.URL, "https://") {
+		return fmt.Errorf("macos_builds requires system-trusted registry TLS or loopback HTTP")
+	}
+	if c.MacOSBuilds && strings.HasPrefix(c.Registry.URL, "http://") {
+		u, err := url.Parse(c.Registry.URL)
+		if err != nil {
+			return fmt.Errorf("macos_builds registry URL: %w", err)
+		}
+		host := u.Hostname()
+		if host != "localhost" && !net.ParseIP(host).IsLoopback() {
+			return fmt.Errorf("macos_builds plaintext registry must be loopback")
+		}
+	}
+	return nil
 }
