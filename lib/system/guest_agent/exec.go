@@ -29,6 +29,9 @@ func (s *guestServer) Exec(stream pb.GuestService_ExecServer) error {
 	if start == nil {
 		return fmt.Errorf("first message must be ExecStart")
 	}
+	if s.execLifecycle {
+		return s.execWithLifecycle(stream, start)
+	}
 
 	command := start.Command
 	if len(command) == 0 {
