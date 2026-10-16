@@ -28,6 +28,7 @@ type vendorVFIOSysfs struct {
 	vfioDevicesPath   string
 	openVFIOPathsFunc func() (map[string]struct{}, error)
 	writeFileFunc     func(name string, data []byte, perm os.FileMode) error
+	nvidiaSMIFunc     func(ctx context.Context, args ...string) ([]byte, error)
 }
 
 var hostVendorVFIO = vendorVFIOSysfs{
@@ -211,6 +212,7 @@ func (s vendorVFIOSysfs) configure(ctx context.Context, vfAddress, profileType s
 		return fmt.Errorf("verify vGPU on VF %s: type is %s, want %s", vfAddress, currentType, profileType)
 	}
 	logger.FromContext(ctx).InfoContext(ctx, "configured vendor VFIO vGPU", "profile_type", profileType, "vf", vfAddress)
+	s.packPlacement(ctx, vfAddress, profileType)
 	return nil
 }
 

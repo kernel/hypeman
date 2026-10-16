@@ -1,0 +1,662 @@
+GPU 00000000:82:00.0
+    vGPU Type ID                          : 0x479
+        Name                              : NVIDIA L40S-1B
+        Class                             : NVS
+        GPU Instance Profile ID           : N/A
+        Max Instances                     : 32
+        Max Instances Per VM              : 1
+        Max Instances Per GI              : N/A
+        Multi vGPU Exclusive              : True
+        vGPU Exclusive Type               : False
+        vGPU Exclusive Size               : False
+        Device ID                         : 0x26b910de
+        Sub System ID                     : 0x188910de
+        FB Memory                         : 1024 MiB
+        BAR1 size                         : 256 MB
+        Display Heads                     : 4
+        Maximum X Resolution              : 5120
+        Maximum Y Resolution              : 2880
+        Frame Rate Limit                  : 45 FPS
+        Placement Size                    : 1
+        Heterogeneous Placement IDs       : 0 5 6 11 12 17 18 23 24 29 30 35 36 41 42 47 
+        Homogeneous Placement IDs         : 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 
+        GRID License                      : GRID-Virtual-PC,2.0;Quadro-Virtual-DWS,5.0;GRID-Virtual-WS,2.0;GRID-Virtual-WS-Ext,2.0
+    vGPU Type ID                          : 0x47a
+        Name                              : NVIDIA L40S-2B
+        Class                             : NVS
+        GPU Instance Profile ID           : N/A
+        Max Instances                     : 24
+        Max Instances Per VM              : 1
+        Max Instances Per GI              : N/A
+        Multi vGPU Exclusive              : True
+        vGPU Exclusive Type               : False
+        vGPU Exclusive Size               : False
+        Device ID                         : 0x26b910de
+        Sub System ID                     : 0x188a10de
+        FB Memory                         : 2048 MiB
+        BAR1 size                         : 256 MB
+        Display Heads                     : 4
+        Maximum X Resolution              : 5120
+        Maximum Y Resolution              : 2880
+        Frame Rate Limit                  : 45 FPS
+        Placement Size                    : 2
+        Heterogeneous Placement IDs       : 0 4 6 10 12 16 18 22 24 28 30 34 36 40 42 46 
+        Homogeneous Placement IDs         : 0 2 4 6 8 10 12 14 16 18 20 22 24 26 28 30 32 34 36 38 40 42 44 46 
+        GRID License                      : GRID-Virtual-PC,2.0;Quadro-Virtual-DWS,5.0;GRID-Virtual-WS,2.0;GRID-Virtual-WS-Ext,2.0
+    vGPU Type ID                          : 0x47b
+        Name                              : NVIDIA L40S-1Q
+        Class                             : Quadro
+        GPU Instance Profile ID           : N/A
+        Max Instances                     : 32
+        Max Instances Per VM              : 16
+        Max Instances Per GI              : N/A
+        Multi vGPU Exclusive              : False
+        vGPU Exclusive Type               : False
+        vGPU Exclusive Size               : False
+        Device ID                         : 0x26b910de
+        Sub System ID                     : 0x188b10de
+        FB Memory                         : 1024 MiB
+        BAR1 size                         : 256 MB
+        Display Heads                     : 4
+        Maximum X Resolution              : 5120
+        Maximum Y Resolution              : 2880
+        Frame Rate Limit                  : 60 FPS
+        Placement Size                    : 1
+        Heterogeneous Placement IDs       : 0 5 6 11 12 17 18 23 24 29 30 35 36 41 42 47 
+        Homogeneous Placement IDs         : 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 
+        GRID License                      : Quadro-Virtual-DWS,5.0;GRID-Virtual-WS,2.0;GRID-Virtual-WS-Ext,2.0
+    vGPU Type ID                          : 0x47c
+        Name                              : NVIDIA L40S-2Q
+        Class                             : Quadro
+        GPU Instance Profile ID           : N/A
+        Max Instances                     : 24
+        Max Instances Per VM              : 16
+        Max Instances Per GI              : N/A
+        Multi vGPU Exclusive              : False
+        vGPU Exclusive Type               : False
+        vGPU Exclusive Size               : False
+        Device ID                         : 0x26b910de
+        Sub System ID                     : 0x188c10de
+        FB Memory                         : 2048 MiB
+        BAR1 size                         : 256 MB
+        Display Heads                     : 4
+        Maximum X Resolution              : 7680
+        Maximum Y Resolution              : 4320
+        Frame Rate Limit                  : 60 FPS
+        Placement Size                    : 2
+        Heterogeneous Placement IDs       : 0 4 6 10 12 16 18 22 24 28 30 34 36 40 42 46 
+        Homogeneous Placement IDs         : 0 2 4 6 8 10 12 14 16 18 20 22 24 26 28 30 32 34 36 38 40 42 44 46 
+        GRID License                      : Quadro-Virtual-DWS,5.0;GRID-Virtual-WS,2.0;GRID-Virtual-WS-Ext,2.0
+    vGPU Type ID                          : 0x47d
+        Name                              : NVIDIA L40S-3Q
+        Class                             : Quadro
+        GPU Instance Profile ID           : N/A
+        Max Instances                     : 16
+        Max Instances Per VM              : 16
+        Max Instances Per GI              : N/A
+        Multi vGPU Exclusive              : False
+        vGPU Exclusive Type               : False
+        vGPU Exclusive Size               : False
+        Device ID                         : 0x26b910de
+        Sub System ID                     : 0x188d10de
+        FB Memory                         : 3072 MiB
+        BAR1 size                         : 256 MB
+        Display Heads                     : 4
+        Maximum X Resolution              : 7680
+        Maximum Y Resolution              : 4320
+        Frame Rate Limit                  : 60 FPS
+        Placement Size                    : 3
+        Heterogeneous Placement IDs       : 0 3 6 9 12 15 18 21 24 27 30 33 36 39 42 45 
+        Homogeneous Placement IDs         : 0 3 6 9 12 15 18 21 24 27 30 33 36 39 42 45 
+        GRID License                      : Quadro-Virtual-DWS,5.0;GRID-Virtual-WS,2.0;GRID-Virtual-WS-Ext,2.0
+    vGPU Type ID                          : 0x47e
+        Name                              : NVIDIA L40S-4Q
+        Class                             : Quadro
+        GPU Instance Profile ID           : N/A
+        Max Instances                     : 12
+        Max Instances Per VM              : 16
+        Max Instances Per GI              : N/A
+        Multi vGPU Exclusive              : False
+        vGPU Exclusive Type               : False
+        vGPU Exclusive Size               : False
+        Device ID                         : 0x26b910de
+        Sub System ID                     : 0x188e10de
+        FB Memory                         : 4096 MiB
+        BAR1 size                         : 256 MB
+        Display Heads                     : 4
+        Maximum X Resolution              : 7680
+        Maximum Y Resolution              : 4320
+        Frame Rate Limit                  : 60 FPS
+        Placement Size                    : 4
+        Heterogeneous Placement IDs       : 0 8 12 20 24 32 36 44 
+        Homogeneous Placement IDs         : 0 4 8 12 16 20 24 28 32 36 40 44 
+        GRID License                      : Quadro-Virtual-DWS,5.0;GRID-Virtual-WS,2.0;GRID-Virtual-WS-Ext,2.0
+    vGPU Type ID                          : 0x47f
+        Name                              : NVIDIA L40S-6Q
+        Class                             : Quadro
+        GPU Instance Profile ID           : N/A
+        Max Instances                     : 8
+        Max Instances Per VM              : 16
+        Max Instances Per GI              : N/A
+        Multi vGPU Exclusive              : False
+        vGPU Exclusive Type               : False
+        vGPU Exclusive Size               : False
+        Device ID                         : 0x26b910de
+        Sub System ID                     : 0x188f10de
+        FB Memory                         : 6144 MiB
+        BAR1 size                         : 256 MB
+        Display Heads                     : 4
+        Maximum X Resolution              : 7680
+        Maximum Y Resolution              : 4320
+        Frame Rate Limit                  : 60 FPS
+        Placement Size                    : 6
+        Heterogeneous Placement IDs       : 0 6 12 18 24 30 36 42 
+        Homogeneous Placement IDs         : 0 6 12 18 24 30 36 42 
+        GRID License                      : Quadro-Virtual-DWS,5.0;GRID-Virtual-WS,2.0;GRID-Virtual-WS-Ext,2.0
+    vGPU Type ID                          : 0x480
+        Name                              : NVIDIA L40S-8Q
+        Class                             : Quadro
+        GPU Instance Profile ID           : N/A
+        Max Instances                     : 6
+        Max Instances Per VM              : 16
+        Max Instances Per GI              : N/A
+        Multi vGPU Exclusive              : False
+        vGPU Exclusive Type               : False
+        vGPU Exclusive Size               : False
+        Device ID                         : 0x26b910de
+        Sub System ID                     : 0x189010de
+        FB Memory                         : 8192 MiB
+        BAR1 size                         : 256 MB
+        Display Heads                     : 4
+        Maximum X Resolution              : 7680
+        Maximum Y Resolution              : 4320
+        Frame Rate Limit                  : 60 FPS
+        Placement Size                    : 8
+        Heterogeneous Placement IDs       : 0 16 24 40 
+        Homogeneous Placement IDs         : 0 8 16 24 32 40 
+        GRID License                      : Quadro-Virtual-DWS,5.0;GRID-Virtual-WS,2.0;GRID-Virtual-WS-Ext,2.0
+    vGPU Type ID                          : 0x481
+        Name                              : NVIDIA L40S-12Q
+        Class                             : Quadro
+        GPU Instance Profile ID           : N/A
+        Max Instances                     : 4
+        Max Instances Per VM              : 16
+        Max Instances Per GI              : N/A
+        Multi vGPU Exclusive              : False
+        vGPU Exclusive Type               : False
+        vGPU Exclusive Size               : False
+        Device ID                         : 0x26b910de
+        Sub System ID                     : 0x189110de
+        FB Memory                         : 12288 MiB
+        BAR1 size                         : 256 MB
+        Display Heads                     : 4
+        Maximum X Resolution              : 7680
+        Maximum Y Resolution              : 4320
+        Frame Rate Limit                  : 60 FPS
+        Placement Size                    : 12
+        Heterogeneous Placement IDs       : 0 12 24 36 
+        Homogeneous Placement IDs         : 0 12 24 36 
+        GRID License                      : Quadro-Virtual-DWS,5.0;GRID-Virtual-WS,2.0;GRID-Virtual-WS-Ext,2.0
+    vGPU Type ID                          : 0x482
+        Name                              : NVIDIA L40S-16Q
+        Class                             : Quadro
+        GPU Instance Profile ID           : N/A
+        Max Instances                     : 3
+        Max Instances Per VM              : 16
+        Max Instances Per GI              : N/A
+        Multi vGPU Exclusive              : False
+        vGPU Exclusive Type               : False
+        vGPU Exclusive Size               : False
+        Device ID                         : 0x26b910de
+        Sub System ID                     : 0x189210de
+        FB Memory                         : 16384 MiB
+        BAR1 size                         : 256 MB
+        Display Heads                     : 4
+        Maximum X Resolution              : 7680
+        Maximum Y Resolution              : 4320
+        Frame Rate Limit                  : 60 FPS
+        Placement Size                    : 16
+        Heterogeneous Placement IDs       : 0 32 
+        Homogeneous Placement IDs         : 0 16 32 
+        GRID License                      : Quadro-Virtual-DWS,5.0;GRID-Virtual-WS,2.0;GRID-Virtual-WS-Ext,2.0
+    vGPU Type ID                          : 0x483
+        Name                              : NVIDIA L40S-24Q
+        Class                             : Quadro
+        GPU Instance Profile ID           : N/A
+        Max Instances                     : 2
+        Max Instances Per VM              : 16
+        Max Instances Per GI              : N/A
+        Multi vGPU Exclusive              : False
+        vGPU Exclusive Type               : False
+        vGPU Exclusive Size               : False
+        Device ID                         : 0x26b910de
+        Sub System ID                     : 0x189310de
+        FB Memory                         : 24576 MiB
+        BAR1 size                         : 256 MB
+        Display Heads                     : 4
+        Maximum X Resolution              : 7680
+        Maximum Y Resolution              : 4320
+        Frame Rate Limit                  : 60 FPS
+        Placement Size                    : 24
+        Heterogeneous Placement IDs       : 0 24 
+        Homogeneous Placement IDs         : 0 24 
+        GRID License                      : Quadro-Virtual-DWS,5.0;GRID-Virtual-WS,2.0;GRID-Virtual-WS-Ext,2.0
+    vGPU Type ID                          : 0x484
+        Name                              : NVIDIA L40S-48Q
+        Class                             : Quadro
+        GPU Instance Profile ID           : N/A
+        Max Instances                     : 1
+        Max Instances Per VM              : 16
+        Max Instances Per GI              : N/A
+        Multi vGPU Exclusive              : False
+        vGPU Exclusive Type               : False
+        vGPU Exclusive Size               : False
+        Device ID                         : 0x26b910de
+        Sub System ID                     : 0x189410de
+        FB Memory                         : 49152 MiB
+        BAR1 size                         : 256 MB
+        Display Heads                     : 4
+        Maximum X Resolution              : 7680
+        Maximum Y Resolution              : 4320
+        Frame Rate Limit                  : 60 FPS
+        Placement Size                    : 48
+        Heterogeneous Placement IDs       : 0 
+        Homogeneous Placement IDs         : 0 
+        GRID License                      : Quadro-Virtual-DWS,5.0;GRID-Virtual-WS,2.0;GRID-Virtual-WS-Ext,2.0
+    vGPU Type ID                          : 0x485
+        Name                              : NVIDIA L40S-1A
+        Class                             : NVS
+        GPU Instance Profile ID           : N/A
+        Max Instances                     : 32
+        Max Instances Per VM              : 1
+        Max Instances Per GI              : N/A
+        Multi vGPU Exclusive              : True
+        vGPU Exclusive Type               : False
+        vGPU Exclusive Size               : False
+        Device ID                         : 0x26b910de
+        Sub System ID                     : 0x189510de
+        FB Memory                         : 1024 MiB
+        BAR1 size                         : 256 MB
+        Display Heads                     : 1
+        Maximum X Resolution              : 1280
+        Maximum Y Resolution              : 1024
+        Frame Rate Limit                  : 60 FPS
+        Placement Size                    : 1
+        Heterogeneous Placement IDs       : 0 5 6 11 12 17 18 23 24 29 30 35 36 41 42 47 
+        Homogeneous Placement IDs         : 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 
+        GRID License                      : GRID-Virtual-Apps,3.0
+    vGPU Type ID                          : 0x486
+        Name                              : NVIDIA L40S-2A
+        Class                             : NVS
+        GPU Instance Profile ID           : N/A
+        Max Instances                     : 24
+        Max Instances Per VM              : 1
+        Max Instances Per GI              : N/A
+        Multi vGPU Exclusive              : True
+        vGPU Exclusive Type               : False
+        vGPU Exclusive Size               : False
+        Device ID                         : 0x26b910de
+        Sub System ID                     : 0x189610de
+        FB Memory                         : 2048 MiB
+        BAR1 size                         : 256 MB
+        Display Heads                     : 1
+        Maximum X Resolution              : 1280
+        Maximum Y Resolution              : 1024
+        Frame Rate Limit                  : 60 FPS
+        Placement Size                    : 2
+        Heterogeneous Placement IDs       : 0 4 6 10 12 16 18 22 24 28 30 34 36 40 42 46 
+        Homogeneous Placement IDs         : 0 2 4 6 8 10 12 14 16 18 20 22 24 26 28 30 32 34 36 38 40 42 44 46 
+        GRID License                      : GRID-Virtual-Apps,3.0
+    vGPU Type ID                          : 0x487
+        Name                              : NVIDIA L40S-3A
+        Class                             : NVS
+        GPU Instance Profile ID           : N/A
+        Max Instances                     : 16
+        Max Instances Per VM              : 1
+        Max Instances Per GI              : N/A
+        Multi vGPU Exclusive              : True
+        vGPU Exclusive Type               : False
+        vGPU Exclusive Size               : False
+        Device ID                         : 0x26b910de
+        Sub System ID                     : 0x189710de
+        FB Memory                         : 3072 MiB
+        BAR1 size                         : 256 MB
+        Display Heads                     : 1
+        Maximum X Resolution              : 1280
+        Maximum Y Resolution              : 1024
+        Frame Rate Limit                  : 60 FPS
+        Placement Size                    : 3
+        Heterogeneous Placement IDs       : 0 3 6 9 12 15 18 21 24 27 30 33 36 39 42 45 
+        Homogeneous Placement IDs         : 0 3 6 9 12 15 18 21 24 27 30 33 36 39 42 45 
+        GRID License                      : GRID-Virtual-Apps,3.0
+    vGPU Type ID                          : 0x488
+        Name                              : NVIDIA L40S-4A
+        Class                             : NVS
+        GPU Instance Profile ID           : N/A
+        Max Instances                     : 12
+        Max Instances Per VM              : 1
+        Max Instances Per GI              : N/A
+        Multi vGPU Exclusive              : True
+        vGPU Exclusive Type               : False
+        vGPU Exclusive Size               : False
+        Device ID                         : 0x26b910de
+        Sub System ID                     : 0x189810de
+        FB Memory                         : 4096 MiB
+        BAR1 size                         : 256 MB
+        Display Heads                     : 1
+        Maximum X Resolution              : 1280
+        Maximum Y Resolution              : 1024
+        Frame Rate Limit                  : 60 FPS
+        Placement Size                    : 4
+        Heterogeneous Placement IDs       : 0 8 12 20 24 32 36 44 
+        Homogeneous Placement IDs         : 0 4 8 12 16 20 24 28 32 36 40 44 
+        GRID License                      : GRID-Virtual-Apps,3.0
+    vGPU Type ID                          : 0x489
+        Name                              : NVIDIA L40S-6A
+        Class                             : NVS
+        GPU Instance Profile ID           : N/A
+        Max Instances                     : 8
+        Max Instances Per VM              : 1
+        Max Instances Per GI              : N/A
+        Multi vGPU Exclusive              : True
+        vGPU Exclusive Type               : False
+        vGPU Exclusive Size               : False
+        Device ID                         : 0x26b910de
+        Sub System ID                     : 0x189910de
+        FB Memory                         : 6144 MiB
+        BAR1 size                         : 256 MB
+        Display Heads                     : 1
+        Maximum X Resolution              : 1280
+        Maximum Y Resolution              : 1024
+        Frame Rate Limit                  : 60 FPS
+        Placement Size                    : 6
+        Heterogeneous Placement IDs       : 0 6 12 18 24 30 36 42 
+        Homogeneous Placement IDs         : 0 6 12 18 24 30 36 42 
+        GRID License                      : GRID-Virtual-Apps,3.0
+    vGPU Type ID                          : 0x48a
+        Name                              : NVIDIA L40S-8A
+        Class                             : NVS
+        GPU Instance Profile ID           : N/A
+        Max Instances                     : 6
+        Max Instances Per VM              : 1
+        Max Instances Per GI              : N/A
+        Multi vGPU Exclusive              : True
+        vGPU Exclusive Type               : False
+        vGPU Exclusive Size               : False
+        Device ID                         : 0x26b910de
+        Sub System ID                     : 0x189a10de
+        FB Memory                         : 8192 MiB
+        BAR1 size                         : 256 MB
+        Display Heads                     : 1
+        Maximum X Resolution              : 1280
+        Maximum Y Resolution              : 1024
+        Frame Rate Limit                  : 60 FPS
+        Placement Size                    : 8
+        Heterogeneous Placement IDs       : 0 16 24 40 
+        Homogeneous Placement IDs         : 0 8 16 24 32 40 
+        GRID License                      : GRID-Virtual-Apps,3.0
+    vGPU Type ID                          : 0x48b
+        Name                              : NVIDIA L40S-12A
+        Class                             : NVS
+        GPU Instance Profile ID           : N/A
+        Max Instances                     : 4
+        Max Instances Per VM              : 1
+        Max Instances Per GI              : N/A
+        Multi vGPU Exclusive              : True
+        vGPU Exclusive Type               : False
+        vGPU Exclusive Size               : False
+        Device ID                         : 0x26b910de
+        Sub System ID                     : 0x189b10de
+        FB Memory                         : 12288 MiB
+        BAR1 size                         : 256 MB
+        Display Heads                     : 1
+        Maximum X Resolution              : 1280
+        Maximum Y Resolution              : 1024
+        Frame Rate Limit                  : 60 FPS
+        Placement Size                    : 12
+        Heterogeneous Placement IDs       : 0 12 24 36 
+        Homogeneous Placement IDs         : 0 12 24 36 
+        GRID License                      : GRID-Virtual-Apps,3.0
+    vGPU Type ID                          : 0x48c
+        Name                              : NVIDIA L40S-16A
+        Class                             : NVS
+        GPU Instance Profile ID           : N/A
+        Max Instances                     : 3
+        Max Instances Per VM              : 1
+        Max Instances Per GI              : N/A
+        Multi vGPU Exclusive              : True
+        vGPU Exclusive Type               : False
+        vGPU Exclusive Size               : False
+        Device ID                         : 0x26b910de
+        Sub System ID                     : 0x189c10de
+        FB Memory                         : 16384 MiB
+        BAR1 size                         : 256 MB
+        Display Heads                     : 1
+        Maximum X Resolution              : 1280
+        Maximum Y Resolution              : 1024
+        Frame Rate Limit                  : 60 FPS
+        Placement Size                    : 16
+        Heterogeneous Placement IDs       : 0 32 
+        Homogeneous Placement IDs         : 0 16 32 
+        GRID License                      : GRID-Virtual-Apps,3.0
+    vGPU Type ID                          : 0x48d
+        Name                              : NVIDIA L40S-24A
+        Class                             : NVS
+        GPU Instance Profile ID           : N/A
+        Max Instances                     : 2
+        Max Instances Per VM              : 1
+        Max Instances Per GI              : N/A
+        Multi vGPU Exclusive              : True
+        vGPU Exclusive Type               : False
+        vGPU Exclusive Size               : False
+        Device ID                         : 0x26b910de
+        Sub System ID                     : 0x189d10de
+        FB Memory                         : 24576 MiB
+        BAR1 size                         : 256 MB
+        Display Heads                     : 1
+        Maximum X Resolution              : 1280
+        Maximum Y Resolution              : 1024
+        Frame Rate Limit                  : 60 FPS
+        Placement Size                    : 24
+        Heterogeneous Placement IDs       : 0 24 
+        Homogeneous Placement IDs         : 0 24 
+        GRID License                      : GRID-Virtual-Apps,3.0
+    vGPU Type ID                          : 0x48e
+        Name                              : NVIDIA L40S-48A
+        Class                             : NVS
+        GPU Instance Profile ID           : N/A
+        Max Instances                     : 1
+        Max Instances Per VM              : 1
+        Max Instances Per GI              : N/A
+        Multi vGPU Exclusive              : True
+        vGPU Exclusive Type               : False
+        vGPU Exclusive Size               : False
+        Device ID                         : 0x26b910de
+        Sub System ID                     : 0x189e10de
+        FB Memory                         : 49152 MiB
+        BAR1 size                         : 256 MB
+        Display Heads                     : 1
+        Maximum X Resolution              : 1280
+        Maximum Y Resolution              : 1024
+        Frame Rate Limit                  : 60 FPS
+        Placement Size                    : 48
+        Heterogeneous Placement IDs       : 0 
+        Homogeneous Placement IDs         : 0 
+        GRID License                      : GRID-Virtual-Apps,3.0
+    vGPU Type ID                          : 0x49b
+        Name                              : NVIDIA L40S-4C
+        Class                             : Compute
+        GPU Instance Profile ID           : N/A
+        Max Instances                     : 12
+        Max Instances Per VM              : 16
+        Max Instances Per GI              : N/A
+        Multi vGPU Exclusive              : False
+        vGPU Exclusive Type               : False
+        vGPU Exclusive Size               : False
+        Device ID                         : 0x26b910de
+        Sub System ID                     : 0x18ab10de
+        FB Memory                         : 4096 MiB
+        BAR1 size                         : 2048 MB
+        Display Heads                     : 1
+        Maximum X Resolution              : 4096
+        Maximum Y Resolution              : 2400
+        Frame Rate Limit                  : 60 FPS
+        Placement Size                    : 4
+        Heterogeneous Placement IDs       : 0 8 12 20 24 32 36 44 
+        Homogeneous Placement IDs         : 0 4 8 12 16 20 24 28 32 36 40 44 
+        GRID License                      : NVIDIA-vComputeServer,9.0
+    vGPU Type ID                          : 0x49c
+        Name                              : NVIDIA L40S-6C
+        Class                             : Compute
+        GPU Instance Profile ID           : N/A
+        Max Instances                     : 8
+        Max Instances Per VM              : 16
+        Max Instances Per GI              : N/A
+        Multi vGPU Exclusive              : False
+        vGPU Exclusive Type               : False
+        vGPU Exclusive Size               : False
+        Device ID                         : 0x26b910de
+        Sub System ID                     : 0x18ac10de
+        FB Memory                         : 6144 MiB
+        BAR1 size                         : 2048 MB
+        Display Heads                     : 1
+        Maximum X Resolution              : 4096
+        Maximum Y Resolution              : 2400
+        Frame Rate Limit                  : 60 FPS
+        Placement Size                    : 6
+        Heterogeneous Placement IDs       : 0 6 12 18 24 30 36 42 
+        Homogeneous Placement IDs         : 0 6 12 18 24 30 36 42 
+        GRID License                      : NVIDIA-vComputeServer,9.0
+    vGPU Type ID                          : 0x49d
+        Name                              : NVIDIA L40S-8C
+        Class                             : Compute
+        GPU Instance Profile ID           : N/A
+        Max Instances                     : 6
+        Max Instances Per VM              : 16
+        Max Instances Per GI              : N/A
+        Multi vGPU Exclusive              : False
+        vGPU Exclusive Type               : False
+        vGPU Exclusive Size               : False
+        Device ID                         : 0x26b910de
+        Sub System ID                     : 0x18ad10de
+        FB Memory                         : 8192 MiB
+        BAR1 size                         : 2048 MB
+        Display Heads                     : 1
+        Maximum X Resolution              : 4096
+        Maximum Y Resolution              : 2400
+        Frame Rate Limit                  : 60 FPS
+        Placement Size                    : 8
+        Heterogeneous Placement IDs       : 0 16 24 40 
+        Homogeneous Placement IDs         : 0 8 16 24 32 40 
+        GRID License                      : NVIDIA-vComputeServer,9.0
+    vGPU Type ID                          : 0x49e
+        Name                              : NVIDIA L40S-12C
+        Class                             : Compute
+        GPU Instance Profile ID           : N/A
+        Max Instances                     : 4
+        Max Instances Per VM              : 16
+        Max Instances Per GI              : N/A
+        Multi vGPU Exclusive              : False
+        vGPU Exclusive Type               : False
+        vGPU Exclusive Size               : False
+        Device ID                         : 0x26b910de
+        Sub System ID                     : 0x18ae10de
+        FB Memory                         : 12288 MiB
+        BAR1 size                         : 2048 MB
+        Display Heads                     : 1
+        Maximum X Resolution              : 4096
+        Maximum Y Resolution              : 2400
+        Frame Rate Limit                  : 60 FPS
+        Placement Size                    : 12
+        Heterogeneous Placement IDs       : 0 12 24 36 
+        Homogeneous Placement IDs         : 0 12 24 36 
+        GRID License                      : NVIDIA-vComputeServer,9.0
+    vGPU Type ID                          : 0x49f
+        Name                              : NVIDIA L40S-16C
+        Class                             : Compute
+        GPU Instance Profile ID           : N/A
+        Max Instances                     : 3
+        Max Instances Per VM              : 16
+        Max Instances Per GI              : N/A
+        Multi vGPU Exclusive              : False
+        vGPU Exclusive Type               : False
+        vGPU Exclusive Size               : False
+        Device ID                         : 0x26b910de
+        Sub System ID                     : 0x18af10de
+        FB Memory                         : 16384 MiB
+        BAR1 size                         : 2048 MB
+        Display Heads                     : 1
+        Maximum X Resolution              : 4096
+        Maximum Y Resolution              : 2400
+        Frame Rate Limit                  : 60 FPS
+        Placement Size                    : 16
+        Heterogeneous Placement IDs       : 0 32 
+        Homogeneous Placement IDs         : 0 16 32 
+        GRID License                      : NVIDIA-vComputeServer,9.0
+    vGPU Type ID                          : 0x4a0
+        Name                              : NVIDIA L40S-24C
+        Class                             : Compute
+        GPU Instance Profile ID           : N/A
+        Max Instances                     : 2
+        Max Instances Per VM              : 16
+        Max Instances Per GI              : N/A
+        Multi vGPU Exclusive              : False
+        vGPU Exclusive Type               : False
+        vGPU Exclusive Size               : False
+        Device ID                         : 0x26b910de
+        Sub System ID                     : 0x18b010de
+        FB Memory                         : 24576 MiB
+        BAR1 size                         : 2048 MB
+        Display Heads                     : 1
+        Maximum X Resolution              : 4096
+        Maximum Y Resolution              : 2400
+        Frame Rate Limit                  : 60 FPS
+        Placement Size                    : 24
+        Heterogeneous Placement IDs       : 0 24 
+        Homogeneous Placement IDs         : 0 24 
+        GRID License                      : NVIDIA-vComputeServer,9.0
+    vGPU Type ID                          : 0x4a1
+        Name                              : NVIDIA L40S-48C
+        Class                             : Compute
+        GPU Instance Profile ID           : N/A
+        Max Instances                     : 1
+        Max Instances Per VM              : 16
+        Max Instances Per GI              : N/A
+        Multi vGPU Exclusive              : False
+        vGPU Exclusive Type               : False
+        vGPU Exclusive Size               : False
+        Device ID                         : 0x26b910de
+        Sub System ID                     : 0x18b110de
+        FB Memory                         : 49152 MiB
+        BAR1 size                         : 2048 MB
+        Display Heads                     : 1
+        Maximum X Resolution              : 4096
+        Maximum Y Resolution              : 2400
+        Frame Rate Limit                  : 60 FPS
+        Placement Size                    : 48
+        Heterogeneous Placement IDs       : 0 
+        Homogeneous Placement IDs         : 0 
+        GRID License                      : NVIDIA-vComputeServer,9.0
+    vGPU Type ID                          : 0x874
+        Name                              : NVIDIA L40S-3B
+        Class                             : NVS
+        GPU Instance Profile ID           : N/A
+        Max Instances                     : 16
+        Max Instances Per VM              : 1
+        Max Instances Per GI              : N/A
+        Multi vGPU Exclusive              : True
+        vGPU Exclusive Type               : False
+        vGPU Exclusive Size               : False
+        Device ID                         : 0x26b910de
+        Sub System ID                     : 0x21fe10de
+        FB Memory                         : 3072 MiB
+        BAR1 size                         : 256 MB
+        Display Heads                     : 4
+        Maximum X Resolution              : 5120
+        Maximum Y Resolution              : 2880
+        Frame Rate Limit                  : 45 FPS
+        Placement Size                    : 3
+        Heterogeneous Placement IDs       : 0 3 6 9 12 15 18 21 24 27 30 33 36 39 42 45 
+        Homogeneous Placement IDs         : 0 3 6 9 12 15 18 21 24 27 30 33 36 39 42 45 
+        GRID License                      : GRID-Virtual-PC,2.0;Quadro-Virtual-DWS,5.0;GRID-Virtual-WS,2.0;GRID-Virtual-WS-Ext,2.0
+

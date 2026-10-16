@@ -4,6 +4,7 @@ package devices
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -177,6 +178,9 @@ func newTestVendorVFIOSysfs(t *testing.T) testVendorVFIOSysfs {
 		pciDevicesPath:  pci,
 		procPath:        proc,
 		vfioDevicesPath: vfio,
+		nvidiaSMIFunc: func(context.Context, ...string) ([]byte, error) {
+			return nil, errors.New("nvidia-smi not available in tests")
+		},
 	}}
 }
 
