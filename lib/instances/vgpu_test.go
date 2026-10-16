@@ -241,3 +241,182 @@ func TestSelectVendorVFIOVFPrefersGPUWithKnownLoad(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "0000:82:00.5", vf)
 }
+
+const (
+	testLargeVGPUProfile = "NVIDIA L40S-4Q"
+	testLargeProfileType = "1150"
+)
+
+var (
+	testSmallProfile = devices.VGPUProfileType{TypeName: testVFProfileType, Name: testVGPUProfile, FramebufferMB: 2048}
+	testLargeProfile = devices.VGPUProfileType{TypeName: testLargeProfileType, Name: testLargeVGPUProfile, FramebufferMB: 4096}
+)
+
+// testSupported reports both profiles as supported on every listed GPU.
+func testSupported(gpus ...string) map[string]map[string]devices.VGPUProfileType {
+	supported := make(map[string]map[string]devices.VGPUProfileType, len(gpus))
+	for _, gpu := range gpus {
+		supported[gpu] = map[string]devices.VGPUProfileType{
+			testVGPUProfile:      testSmallProfile,
+			testLargeVGPUProfile: testLargeProfile,
+		}
+	}
+	return supported
+}
+
+func TestSelectVendorVFIOVFOffersSupportedProfileItsGPUHides(t *testing.T) {
+	// Both GPUs are busy enough that the driver hides 4Q from every
+	// creatable list, but both have supported it. The less loaded GPU wins.
+	vfs := []devices.VirtualFunction{
+		{PCIAddress: "0000:82:00.4", ParentGPU: "0000:82:00.0", Allocated: true, ProfileType: testVFProfileType},
+		{PCIAddress: "0000:82:00.5", ParentGPU: "0000:82:00.0", Allocated: true, ProfileType: testVFProfileType},
+		{PCIAddress: "0000:82:00.6", ParentGPU: "0000:82:00.0"},
+		{PCIAddress: "0000:e3:00.4", ParentGPU: "0000:e3:00.0", Allocated: true, ProfileType: testVFProfileType},
+		{PCIAddress: "0000:e3:00.5", ParentGPU: "0000:e3:00.0"},
+	}
+	claims := []StoredMetadata{
+		{GPUProfile: testVGPUProfile, GPUDevicePath: testVFDevicePath},
+		{GPUProfile: testVGPUProfile, GPUDevicePath: "/sys/bus/pci/devices/0000:82:00.5"},
+		{GPUProfile: testVGPUProfile, GPUDevicePath: "/sys/bus/pci/devices/0000:e3:00.4"},
+	}
+	c := vendorVFIOCandidates{
+		vfs:          vfs,
+		profilesByVF: testVFProfiles("0000:82:00.6", "0000:e3:00.5"),
+		supported:    testSupported("0000:82:00.0", "0000:e3:00.0"),
+		claims:       claims,
+	}
+
+	vf, profileType, err := selectVendorVFIOVF(c, testLargeVGPUProfile, nil)
+	require.NoError(t, err)
+	assert.Equal(t, "0000:e3:00.5", vf)
+	assert.Equal(t, testLargeProfileType, profileType)
+
+	// Without a remembered profile the request fails.
+	c.supported = nil
+	_, _, err = selectVendorVFIOVF(c, testLargeVGPUProfile, nil)
+	require.ErrorContains(t, err, "is not creatable on any VF")
+}
+
+func TestSelectVendorVFIOVFPrefersGPUThatAdvertisesProfile(t *testing.T) {
+	// GPU 82 is idle but hides 4Q in this snapshot; GPU e3 is busier but
+	// still advertises it. A certain placement beats a lighter load.
+	vfs := []devices.VirtualFunction{
+		{PCIAddress: "0000:82:00.4", ParentGPU: "0000:82:00.0"},
+		{PCIAddress: "0000:e3:00.4", ParentGPU: "0000:e3:00.0", Allocated: true, ProfileType: testVFProfileType},
+		{PCIAddress: "0000:e3:00.5", ParentGPU: "0000:e3:00.0"},
+	}
+	profiles := testVFProfiles("0000:82:00.4")
+	profiles["0000:e3:00.5"] = []devices.VGPUProfileType{testSmallProfile, testLargeProfile}
+	claims := []StoredMetadata{{GPUProfile: testVGPUProfile, GPUDevicePath: "/sys/bus/pci/devices/0000:e3:00.4"}}
+
+	vf, _, err := selectVendorVFIOVF(vendorVFIOCandidates{
+		vfs:          vfs,
+		profilesByVF: profiles,
+		supported:    testSupported("0000:82:00.0", "0000:e3:00.0"),
+		claims:       claims,
+	}, testLargeVGPUProfile, nil)
+	require.NoError(t, err)
+	assert.Equal(t, "0000:e3:00.5", vf)
+}
+
+func TestSelectVendorVFIOVFOffersHiddenProfileOnlyWhereSupported(t *testing.T) {
+	// GPU 82 is idle but has never advertised 4Q, so it is not offered it.
+	vfs := []devices.VirtualFunction{
+		{PCIAddress: "0000:82:00.4", ParentGPU: "0000:82:00.0"},
+		{PCIAddress: "0000:e3:00.4", ParentGPU: "0000:e3:00.0", Allocated: true, ProfileType: testVFProfileType},
+		{PCIAddress: "0000:e3:00.5", ParentGPU: "0000:e3:00.0"},
+	}
+	vf, _, err := selectVendorVFIOVF(vendorVFIOCandidates{
+		vfs:          vfs,
+		profilesByVF: testVFProfiles("0000:82:00.4", "0000:e3:00.5"),
+		supported:    testSupported("0000:e3:00.0"),
+		claims:       []StoredMetadata{{GPUProfile: testVGPUProfile, GPUDevicePath: "/sys/bus/pci/devices/0000:e3:00.4"}},
+	}, testLargeVGPUProfile, nil)
+	require.NoError(t, err)
+	assert.Equal(t, "0000:e3:00.5", vf)
+}
+
+func TestSelectVendorVFIOVFSkipsUnreadableVFForHiddenProfile(t *testing.T) {
+	// VF .4's creatable types could not be read, so it is absent from the
+	// listing. Its readable sibling says the GPU still has placements, but
+	// that says nothing about the unreadable VF itself.
+	vfs := []devices.VirtualFunction{
+		{PCIAddress: "0000:82:00.4", ParentGPU: "0000:82:00.0"},
+		{PCIAddress: "0000:82:00.5", ParentGPU: "0000:82:00.0"},
+	}
+	vf, _, err := selectVendorVFIOVF(vendorVFIOCandidates{
+		vfs:          vfs,
+		profilesByVF: testVFProfiles("0000:82:00.5"),
+		supported:    testSupported("0000:82:00.0"),
+	}, testLargeVGPUProfile, pickFirst)
+	require.NoError(t, err)
+	assert.Equal(t, "0000:82:00.5", vf)
+}
+
+func TestSelectVendorVFIOVFCountsHiddenProfileClaimsAsKnownLoad(t *testing.T) {
+	// GPU 82 runs one 4Q that no VF advertises any more; GPU e3 runs three
+	// 2Q. The remembered 4Q makes 82's load known and lighter (4 GB vs 6 GB),
+	// instead of ranking 82 last for unknown load.
+	vfs := []devices.VirtualFunction{
+		{PCIAddress: "0000:82:00.4", ParentGPU: "0000:82:00.0", Allocated: true, ProfileType: testLargeProfileType},
+		{PCIAddress: "0000:82:00.5", ParentGPU: "0000:82:00.0"},
+		{PCIAddress: "0000:e3:00.4", ParentGPU: "0000:e3:00.0", Allocated: true, ProfileType: testVFProfileType},
+		{PCIAddress: "0000:e3:00.5", ParentGPU: "0000:e3:00.0", Allocated: true, ProfileType: testVFProfileType},
+		{PCIAddress: "0000:e3:00.6", ParentGPU: "0000:e3:00.0", Allocated: true, ProfileType: testVFProfileType},
+		{PCIAddress: "0000:e3:00.7", ParentGPU: "0000:e3:00.0"},
+	}
+	c := vendorVFIOCandidates{
+		vfs:          vfs,
+		profilesByVF: testVFProfiles("0000:82:00.5", "0000:e3:00.7"),
+		supported:    testSupported("0000:82:00.0", "0000:e3:00.0"),
+		claims: []StoredMetadata{
+			{GPUProfile: testLargeVGPUProfile, GPUDevicePath: testVFDevicePath},
+			{GPUProfile: testVGPUProfile, GPUDevicePath: "/sys/bus/pci/devices/0000:e3:00.4"},
+			{GPUProfile: testVGPUProfile, GPUDevicePath: "/sys/bus/pci/devices/0000:e3:00.5"},
+			{GPUProfile: testVGPUProfile, GPUDevicePath: "/sys/bus/pci/devices/0000:e3:00.6"},
+		},
+	}
+
+	vf, _, err := selectVendorVFIOVF(c, testVGPUProfile, nil)
+	require.NoError(t, err)
+	assert.Equal(t, "0000:82:00.5", vf)
+
+	c.supported = nil
+	vf, _, err = selectVendorVFIOVF(c, testVGPUProfile, nil)
+	require.NoError(t, err)
+	assert.Equal(t, "0000:e3:00.7", vf, "without the remembered profile 82's load is unknown")
+}
+
+func TestSelectVendorVFIOVFSkipsGPUThatAdvertisesNothing(t *testing.T) {
+	// A free VF that advertises no profile at all means the GPU has no
+	// placement left for any size, so it is not worth asking the driver.
+	vfs := []devices.VirtualFunction{
+		{PCIAddress: "0000:82:00.4", ParentGPU: "0000:82:00.0", Allocated: true, ProfileType: testVFProfileType},
+		{PCIAddress: "0000:82:00.5", ParentGPU: "0000:82:00.0"},
+	}
+	_, _, err := selectVendorVFIOVF(vendorVFIOCandidates{
+		vfs:          vfs,
+		profilesByVF: map[string][]devices.VGPUProfileType{"0000:82:00.5": {}},
+		supported:    testSupported("0000:82:00.0"),
+		claims:       []StoredMetadata{{GPUProfile: testVGPUProfile, GPUDevicePath: testVFDevicePath}},
+	}, testLargeVGPUProfile, nil)
+	require.ErrorContains(t, err, "no creatable vGPU profiles on any VF")
+}
+
+func TestSelectVendorVFIOVFOffersHiddenProfileOnlyOnCleanVF(t *testing.T) {
+	// GPU 82 hides 4Q and its only free VF is dirty. A configured VF lists
+	// nothing on L40S, but a hidden profile is only offered on a clean VF
+	// regardless of what the dirty one lists; claimVGPU resets unclaimed
+	// dirty VFs and selects again when this fails.
+	vfs := []devices.VirtualFunction{
+		{PCIAddress: "0000:82:00.4", ParentGPU: "0000:82:00.0", Allocated: true, ProfileType: testVFProfileType},
+		{PCIAddress: "0000:82:00.5", ParentGPU: "0000:82:00.0", Allocated: true, ProfileType: testVFProfileType},
+	}
+	_, _, err := selectVendorVFIOVF(vendorVFIOCandidates{
+		vfs:          vfs,
+		profilesByVF: testVFProfiles("0000:82:00.5"),
+		supported:    testSupported("0000:82:00.0"),
+		claims:       []StoredMetadata{{GPUProfile: testVGPUProfile, GPUDevicePath: testVFDevicePath}},
+	}, testLargeVGPUProfile, nil)
+	require.ErrorContains(t, err, "is not creatable on any VF")
+}

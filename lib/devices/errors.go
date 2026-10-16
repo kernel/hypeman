@@ -38,4 +38,9 @@ var (
 
 	// ErrVGPUNotSupportedOnMacOS is returned for vGPU operations on macOS
 	ErrVGPUNotSupportedOnMacOS = errors.New("vGPU (mdev) is not supported on macOS")
+
+	// ErrVGPUTypeRejected is returned when the driver refuses a vendor VFIO
+	// current_vgpu_type write, which is how it reports that the VF's GPU has
+	// no placement left for the type
+	ErrVGPUTypeRejected = errors.New("driver rejected vGPU type")
 )

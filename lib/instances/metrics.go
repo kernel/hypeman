@@ -105,6 +105,7 @@ type Metrics struct {
 	vgpuReconcileFailuresTotal           metric.Int64Counter
 	vgpuStaleReleaseFailuresTotal        metric.Int64Counter
 	vgpuLivenessUncertainTotal           metric.Int64Counter
+	vgpuDriverRejectionsTotal            metric.Int64Counter
 	tracer                               trace.Tracer
 }
 
@@ -300,6 +301,14 @@ func newInstanceMetrics(meter metric.Meter, tracer trace.Tracer, m *manager) (*M
 	vgpuLivenessUncertainTotal, err := meter.Int64Counter(
 		"hypeman_instances_vgpu_liveness_uncertain_total",
 		metric.WithDescription("Total vGPU release checks that preserved an assignment because hypervisor liveness was uncertain"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	vgpuDriverRejectionsTotal, err := meter.Int64Counter(
+		"hypeman_instances_vgpu_driver_rejections_total",
+		metric.WithDescription("Total times a GPU was skipped during vendor VFIO vGPU placement because the driver refused the type, counted once per claim and GPU"),
 	)
 	if err != nil {
 		return nil, err
@@ -535,6 +544,7 @@ func newInstanceMetrics(meter metric.Meter, tracer trace.Tracer, m *manager) (*M
 		vgpuReconcileFailuresTotal:           vgpuReconcileFailuresTotal,
 		vgpuStaleReleaseFailuresTotal:        vgpuStaleReleaseFailuresTotal,
 		vgpuLivenessUncertainTotal:           vgpuLivenessUncertainTotal,
+		vgpuDriverRejectionsTotal:            vgpuDriverRejectionsTotal,
 		tracer:                               tracer,
 	}, nil
 }
@@ -655,6 +665,15 @@ func (m *manager) recordVGPULivenessUncertain(ctx context.Context) {
 		return
 	}
 	m.metrics.vgpuLivenessUncertainTotal.Add(ctx, 1)
+}
+
+func (m *manager) recordVGPUDriverRejection(ctx context.Context, parentGPU string) {
+	if m.metrics == nil {
+		return
+	}
+	m.metrics.vgpuDriverRejectionsTotal.Add(ctx, 1, metric.WithAttributes(
+		attribute.String("gpu", parentGPU),
+	))
 }
 
 // recordStateTransition records a state transition with hypervisor label.

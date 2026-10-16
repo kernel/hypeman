@@ -6,6 +6,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -62,6 +63,29 @@ func TestVendorVFIOConfigure(t *testing.T) {
 	require.NoError(t, sysfs.configure(context.Background(), vfAddress, "1148"))
 	assertFileValue(t, filepath.Join(sysfs.pciDevicesPath, vfAddress, "nvidia", "current_vgpu_type"), "1148")
 	require.NoError(t, sysfs.configure(context.Background(), vfAddress, "1148"), "configuration must be idempotent")
+}
+
+func TestVendorVFIOConfigureReportsDriverRejection(t *testing.T) {
+	sysfs := newTestVendorVFIOSysfs(t)
+	const vfAddress = "0000:82:00.4"
+	sysfs.addVF(t, "0000:82:00.0", vfAddress, "42", "1159", testCreatableTypes)
+	sysfs.writeFileFunc = func(name string, data []byte, perm os.FileMode) error {
+		if string(data) != "0" {
+			return syscall.EINVAL
+		}
+		return os.WriteFile(name, data, perm)
+	}
+
+	err := sysfs.configure(context.Background(), vfAddress, "1148")
+	require.ErrorIs(t, err, ErrVGPUTypeRejected)
+	require.ErrorIs(t, err, syscall.EINVAL)
+	assertFileValue(t, filepath.Join(sysfs.pciDevicesPath, vfAddress, "nvidia", "current_vgpu_type"), "0")
+
+	sysfs.writeFileFunc = func(string, []byte, os.FileMode) error { return syscall.EIO }
+	sysfs.addVF(t, "0000:82:00.0", "0000:82:00.5", "43", "1159", testCreatableTypes)
+	err = sysfs.configure(context.Background(), "0000:82:00.5", "1148")
+	require.ErrorContains(t, err, "reset vGPU on VF 0000:82:00.5")
+	assert.NotErrorIs(t, err, ErrVGPUTypeRejected, "a failed reset is not a placement answer")
 }
 
 func TestVendorVFIOConfigureRepairsDirtyVF(t *testing.T) {

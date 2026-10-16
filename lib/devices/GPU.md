@@ -92,10 +92,10 @@ On an mdev host, the response also includes the assigned mdev UUID:
 
 ### Ephemeral vGPU Lifecycle
 
-vGPU assignments are created on instance start and released on stop or delete. Hypeman creates/removes an mdev on mdev hosts. On vendor VFIO hosts, it first reserves a VF by persisting its path in instance metadata, then writes the profile ID to `current_vgpu_type`. Metadata is the authoritative VF claim.
+vGPU assignments are created on instance start and released on stop or delete. Hypeman creates/removes an mdev on mdev hosts. On vendor VFIO hosts, it selects a VF and writes the profile ID to `current_vgpu_type` under the allocation lock, so the driver confirms a placement remains before any later claim can take it, then reserves the VF by persisting its path in instance metadata. Metadata is the authoritative VF claim; a configured VF without one is dirty and is reset by the allocator.
 
 ```
-Instance Create → Persist VF claim → Configure profile → Attach VF to VM → Instance Running
+Instance Create → Configure profile → Persist VF claim → Attach VF to VM → Instance Running
 Instance Stop/Delete → Reset profile → Remove VF claim → VF available again
 ```
 
@@ -105,6 +105,8 @@ with a vGPU or passthrough device get 5s so the guest can unload its GPU driver
 before the hypervisor is signalled.
 
 Hypeman reconciles metadata claims once at startup and every minute afterward, skipping hosts without GPUs. A claim whose VMM is confirmed dead is reset before the claim is removed. An ambiguous hypervisor ownership check preserves the claim, logs a warning, and increments `hypeman_instances_vgpu_liveness_uncertain_total`; the create and start cleanup paths preserve and count the same way. mdev hosts also sweep orphaned device-level assignments. Vendor VFIO hosts repair an unclaimed dirty VF when the allocator next selects it; repair checks for open VFIO handles before resetting `current_vgpu_type`. The allocator prefers VFs that are already clean, and a dirty VF that refuses its reset is skipped in favor of another candidate.
+
+In mixed-size (heterogeneous) mode, `creatable_vgpu_types` under-reports. The driver drops a profile from every VF's list once its GPU holds as many vGPUs as that profile's equal-size instance limit (12 for L40S-4Q), even while a placement for it remains, and still accepts a `current_vgpu_type` write for it. The allocator remembers every profile each GPU has advertised, and a clean VF on a GPU that supports the requested profile but no longer advertises it stays a candidate, ranked after every GPU with a free VF that advertises it. If the driver rejects the claim's write, unclaimed dirty VFs on that GPU are reset and the write is retried once before the next GPU is tried, and `hypeman_instances_vgpu_driver_rejections_total` is incremented with the GPU's address; any other configure error fails the claim. If no candidate VF is left, unclaimed dirty VFs on the GPUs not yet tried are reset once and selection runs again. A free VF that advertises nothing is skipped (on L40S its GPU has no placement left for any size), as is one whose list cannot be read. This assumes every GPU is in mixed-size mode (`nvidia-smi vgpu -i <GPU> -shm 1`): in equal-size mode a GPU running a smaller profile hides larger ones for good, so each request for one costs a refused write on that GPU.
 
 ### Hypervisor Support
 

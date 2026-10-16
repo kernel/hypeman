@@ -27,6 +27,7 @@ type vendorVFIOSysfs struct {
 	procPath          string
 	vfioDevicesPath   string
 	openVFIOPathsFunc func() (map[string]struct{}, error)
+	writeFileFunc     func(name string, data []byte, perm os.FileMode) error
 }
 
 var hostVendorVFIO = vendorVFIOSysfs{
@@ -188,7 +189,7 @@ func (s vendorVFIOSysfs) configure(ctx context.Context, vfAddress, profileType s
 		if inUse {
 			return fmt.Errorf("vendor VFIO vGPU on VF %s is still in use", vfAddress)
 		}
-		if err := os.WriteFile(currentTypePath, []byte("0"), 0200); err != nil {
+		if err := s.writeFile(currentTypePath, []byte("0"), 0200); err != nil {
 			return fmt.Errorf("reset vGPU on VF %s: %w", vfAddress, err)
 		}
 		currentType, err = readCurrentVGPUType(currentTypePath)
@@ -199,8 +200,8 @@ func (s vendorVFIOSysfs) configure(ctx context.Context, vfAddress, profileType s
 			return fmt.Errorf("verify reset vGPU on VF %s: type is %s, want 0", vfAddress, currentType)
 		}
 	}
-	if err := os.WriteFile(currentTypePath, []byte(profileType), 0200); err != nil {
-		return fmt.Errorf("configure vGPU on VF %s: %w", vfAddress, err)
+	if err := s.writeFile(currentTypePath, []byte(profileType), 0200); err != nil {
+		return fmt.Errorf("configure vGPU on VF %s: %w: %w", vfAddress, ErrVGPUTypeRejected, err)
 	}
 	currentType, err = readCurrentVGPUType(currentTypePath)
 	if err != nil {
@@ -242,11 +243,18 @@ func (s vendorVFIOSysfs) destroy(ctx context.Context, vfAddress, instanceID stri
 		return fmt.Errorf("vendor VFIO vGPU on VF %s is still in use", vfAddress)
 	}
 
-	if err := os.WriteFile(currentTypePath, []byte("0"), 0200); err != nil {
+	if err := s.writeFile(currentTypePath, []byte("0"), 0200); err != nil {
 		return fmt.Errorf("destroy vGPU on VF %s: %w", vfAddress, err)
 	}
 	log.InfoContext(ctx, "destroyed vendor VFIO vGPU", "vf", vfAddress, "instance_id", instanceID)
 	return nil
+}
+
+func (s vendorVFIOSysfs) writeFile(name string, data []byte, perm os.FileMode) error {
+	if s.writeFileFunc != nil {
+		return s.writeFileFunc(name, data, perm)
+	}
+	return os.WriteFile(name, data, perm)
 }
 
 func (s vendorVFIOSysfs) readCreatableProfiles(vfAddress string) ([]profileMetadata, error) {

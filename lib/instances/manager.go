@@ -192,6 +192,7 @@ type manager struct {
 	destroyVGPU               func(context.Context, devices.VGPUAssignment) error
 	reconcileVGPUDevices      func(context.Context, map[string]struct{}) error
 	vgpuAllocationMu          sync.Mutex
+	supportedVGPUProfiles     map[string]map[string]devices.VGPUProfileType // guarded by vgpuAllocationMu
 	deleteSnapshotFn          func(context.Context, string) error
 	ttlReaperDeleteTimeout    time.Duration
 	egressProxy               *egressproxy.Service
