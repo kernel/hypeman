@@ -395,6 +395,10 @@ jobs:
     env:
       DATA_DIR: /tmp/hypeman-ci-${{ github.run_id }}
     steps:
+      - name: Report macOS host version
+        run: |
+          sw_vers
+          sysctl -n machdep.cpu.brand_string
       - uses: actions/checkout@v4
         with:
           repository: ${{ env.TEST_SOURCE_REPO }}
