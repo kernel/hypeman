@@ -5,6 +5,7 @@ package devices
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -153,6 +154,9 @@ func newTestVendorVFIOSysfs(t *testing.T) testVendorVFIOSysfs {
 		pciDevicesPath:  pci,
 		procPath:        proc,
 		vfioDevicesPath: vfio,
+		nvidiaSMIFunc: func(context.Context, ...string) ([]byte, error) {
+			return nil, exec.ErrNotFound
+		},
 	}}
 }
 
