@@ -187,7 +187,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          for version in v49.0 v51.1; do
+          for version in v49.0 v51.1 v51.2; do
             for architecture in x86_64 aarch64; do
               if [ "$architecture" = "x86_64" ]; then
                 asset="cloud-hypervisor-static"
