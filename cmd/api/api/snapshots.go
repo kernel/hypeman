@@ -179,6 +179,9 @@ func (s *ApiService) ForkSnapshot(ctx context.Context, request oapi.ForkSnapshot
 	}
 
 	domainReq := instances.ForkSnapshotRequest{Name: request.Body.Name}
+	if request.Body.Tags != nil {
+		domainReq.Tags = toMapTags(request.Body.Tags)
+	}
 	if request.Body.TargetState != nil {
 		domainReq.TargetState = instances.State(*request.Body.TargetState)
 	}
