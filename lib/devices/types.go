@@ -121,7 +121,7 @@ type MdevDevice struct {
 type GPUProfile struct {
 	Name          string `json:"name"`           // user-facing name, e.g., "L40S-1Q"
 	FramebufferMB int    `json:"framebuffer_mb"` // frame buffer size in MB
-	Available     int    `json:"available"`      // number of VFs that can create this profile
+	Available     int    `json:"available"`      // more instances that fit if only this profile is added
 }
 
 // PassthroughDevice describes a physical GPU available for passthrough

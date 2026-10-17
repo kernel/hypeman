@@ -40,6 +40,11 @@ func ListVendorVFIOProfileTypes(vfs []VirtualFunction) (map[string][]VGPUProfile
 	return nil, ErrVGPUNotSupportedOnMacOS
 }
 
+// NvidiaSMIFallbacks returns nil on macOS.
+func NvidiaSMIFallbacks() map[string]int64 {
+	return nil
+}
+
 func ConfigureVGPU(ctx context.Context, vfAddress, profileType string) error {
 	return ErrVGPUNotSupportedOnMacOS
 }

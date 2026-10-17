@@ -35,7 +35,7 @@ func initVFHealthForTest(t *testing.T, state []byte) {
 func TestGetVGPUStatusFailsClosedWhenVFHealthIsUnavailable(t *testing.T) {
 	initVFHealthForTest(t, []byte("not json"))
 
-	status, err := getVGPUStatus(context.Background(), devices.VGPUFrameworkVendorVFIO, []devices.VirtualFunction{{PCIAddress: "0000:82:00.4"}})
+	status, err := getVGPUStatus(context.Background(), devices.VGPUFrameworkVendorVFIO, []devices.VirtualFunction{{PCIAddress: "0000:82:00.4"}}, false)
 	assert.Zero(t, status.AllocatableSlots)
 	assert.Zero(t, status.QuarantinedSlots)
 	require.ErrorContains(t, err, "VF health state unavailable")
@@ -53,12 +53,30 @@ func TestGetVGPUStatusReportsQuarantinedSlots(t *testing.T) {
 		{PCIAddress: "0000:82:00.4"},
 		{PCIAddress: "0000:82:00.5", Allocated: true},
 		{PCIAddress: "0000:82:00.6"},
-	})
+	}, false)
 	require.NoError(t, err)
 	assert.Equal(t, 3, status.TotalSlots)
 	assert.Equal(t, 1, status.UsedSlots)
 	assert.Equal(t, 1, status.AllocatableSlots)
 	assert.Equal(t, 1, status.QuarantinedSlots)
+	assert.Nil(t, status.Profiles)
+}
+
+func TestOnlyFullStatusListsGPUProfiles(t *testing.T) {
+	var withProfiles []bool
+	setGPUStatusProvider(func(_ context.Context, profiles bool) (*GPUResourceStatus, error) {
+		withProfiles = append(withProfiles, profiles)
+		return &GPUResourceStatus{Mode: string(devices.GPUModeVGPU), TotalSlots: 1, AllocatableSlots: 1}, nil
+	})
+	t.Cleanup(func() { setGPUStatusProvider(nil) })
+	ctx := context.Background()
+
+	mgr := NewManager(&config.Config{}, paths.New(t.TempDir()))
+	require.NoError(t, mgr.ValidateAllocation(ctx, 0, 0, 0, 0, 0, 0, true))
+	statusMgr, _, _ := monitoringTestManager(t)
+	_, err := statusMgr.GetFullStatus(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, []bool{false, true}, withProfiles)
 }
 
 func TestReserveAllocationUsesAllocatableGPUSlots(t *testing.T) {
@@ -68,7 +86,7 @@ func TestReserveAllocationUsesAllocatableGPUSlots(t *testing.T) {
 		UsedSlots:        1,
 		AllocatableSlots: 0,
 	}
-	setGPUStatusProvider(func(context.Context) (*GPUResourceStatus, error) { return status, nil })
+	setGPUStatusProvider(func(context.Context, bool) (*GPUResourceStatus, error) { return status, nil })
 	t.Cleanup(func() { setGPUStatusProvider(nil) })
 
 	mgr := NewManager(&config.Config{}, paths.New(t.TempDir()))
@@ -79,7 +97,7 @@ func TestReserveAllocationUsesAllocatableGPUSlots(t *testing.T) {
 
 	disabled := *status
 	disabled.PlacementDisabledReason = "VF health state unavailable: read failed"
-	setGPUStatusProvider(func(context.Context) (*GPUResourceStatus, error) {
+	setGPUStatusProvider(func(context.Context, bool) (*GPUResourceStatus, error) {
 		return &disabled, errors.New(disabled.PlacementDisabledReason)
 	})
 	err = mgr.ValidateAllocation(ctx, 0, 0, 0, 0, 0, 0, true)
@@ -89,7 +107,7 @@ func TestReserveAllocationUsesAllocatableGPUSlots(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, full.GPU)
 	assert.Equal(t, "VF health state unavailable: read failed", full.GPU.PlacementDisabledReason)
-	setGPUStatusProvider(func(context.Context) (*GPUResourceStatus, error) { return status, nil })
+	setGPUStatusProvider(func(context.Context, bool) (*GPUResourceStatus, error) { return status, nil })
 	full, err = statusMgr.GetFullStatus(ctx)
 	require.NoError(t, err)
 	assert.Empty(t, full.GPU.PlacementDisabledReason)

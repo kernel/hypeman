@@ -37,13 +37,13 @@ var (
 	gpuStatusProvider   = GetGPUStatus
 )
 
-func currentGPUStatusProvider() func(context.Context) (*GPUResourceStatus, error) {
+func currentGPUStatusProvider() func(context.Context, bool) (*GPUResourceStatus, error) {
 	gpuStatusProviderMu.RLock()
 	defer gpuStatusProviderMu.RUnlock()
 	return gpuStatusProvider
 }
 
-func setGPUStatusProvider(fn func(context.Context) (*GPUResourceStatus, error)) {
+func setGPUStatusProvider(fn func(context.Context, bool) (*GPUResourceStatus, error)) {
 	if fn == nil {
 		fn = GetGPUStatus
 	}
@@ -428,7 +428,7 @@ func (m *Manager) GetFullStatus(ctx context.Context) (*FullResourceStatus, error
 
 	// A GPU status error only means vGPU placement is disabled. The status
 	// carries the reason, so it is reported rather than failing the read.
-	gpuStatus, _ := currentGPUStatusProvider()(ctx)
+	gpuStatus, _ := currentGPUStatusProvider()(ctx, true)
 
 	return &FullResourceStatus{
 		CPU:         *cpuStatus,
@@ -633,7 +633,7 @@ func (m *Manager) gpuAdmissionFor(ctx context.Context, req pendingAllocation) gp
 	if req.GPUSlots == 0 {
 		return gpuAdmission{}
 	}
-	status, err := currentGPUStatusProvider()(ctx)
+	status, err := currentGPUStatusProvider()(ctx, false)
 	return gpuAdmission{status: status, err: err}
 }
 

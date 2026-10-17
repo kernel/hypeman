@@ -199,7 +199,7 @@ func TestStartMonitoringPublishesGPUMetrics(t *testing.T) {
 	mgr, _, _ := monitoringTestManager(t)
 
 	originalProvider := currentGPUStatusProvider()
-	setGPUStatusProvider(func(context.Context) (*GPUResourceStatus, error) {
+	setGPUStatusProvider(func(context.Context, bool) (*GPUResourceStatus, error) {
 		return &GPUResourceStatus{
 			Mode:             "vgpu",
 			TotalSlots:       8,
@@ -233,13 +233,16 @@ func TestStartMonitoringPublishesGPUMetrics(t *testing.T) {
 	require.Equal(t, int64(5), int64GaugeValue(t, rm, "hypeman_resources_gpu_profile_slots", map[string]string{"profile": "L40S-1Q", "kind": "available"}))
 	require.Equal(t, int64(2), int64GaugeValue(t, rm, "hypeman_resources_gpu_profile_slots", map[string]string{"profile": "L40S-2Q", "kind": "available"}))
 	require.Equal(t, int64(0), int64GaugeValue(t, rm, "hypeman_resources_gpu_placement_disabled", nil))
+	for reason, count := range devices.NvidiaSMIFallbacks() {
+		require.Equal(t, count, int64SumValue(t, rm, "hypeman_resources_gpu_nvidia_smi_fallbacks_total", map[string]string{"reason": reason}))
+	}
 }
 
 func TestStartMonitoringPublishesGPUPlacementDisabled(t *testing.T) {
 	mgr, _, _ := monitoringTestManager(t)
 
 	originalProvider := currentGPUStatusProvider()
-	setGPUStatusProvider(func(context.Context) (*GPUResourceStatus, error) {
+	setGPUStatusProvider(func(context.Context, bool) (*GPUResourceStatus, error) {
 		return &GPUResourceStatus{
 			Mode:                    "vgpu",
 			TotalSlots:              8,
@@ -367,6 +370,21 @@ func int64GaugeValue(t *testing.T, rm metricdata.ResourceMetrics, name string, w
 	gauge, ok := metric.Data.(metricdata.Gauge[int64])
 	require.True(t, ok, "expected int64 gauge metric data for %s", name)
 	for _, point := range gauge.DataPoints {
+		if metricAttrsMatch(point.Attributes, wantAttrs) {
+			return point.Value
+		}
+	}
+	t.Fatalf("metric %s with attrs %v not found", name, wantAttrs)
+	return 0
+}
+
+func int64SumValue(t *testing.T, rm metricdata.ResourceMetrics, name string, wantAttrs map[string]string) int64 {
+	t.Helper()
+
+	metric := findMonitoringMetric(t, rm, name)
+	sum, ok := metric.Data.(metricdata.Sum[int64])
+	require.True(t, ok, "expected int64 sum metric data for %s", name)
+	for _, point := range sum.DataPoints {
 		if metricAttrsMatch(point.Attributes, wantAttrs) {
 			return point.Value
 		}

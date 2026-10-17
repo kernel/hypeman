@@ -403,6 +403,8 @@ func (m *manager) createInstance(
 					"instance_id", id, "device_path", storedVGPUDevicePath(stored))
 			}
 		})
+		// On vendor VFIO hosts claimVGPU already wrote the type, so this only
+		// re-checks quarantine and confirms the type is still set.
 		if err := m.configureClaimedVGPU(ctx, gpuDevice); err != nil {
 			log.ErrorContext(ctx, "failed to configure vGPU", "profile", gpuProfile, "error", err)
 			return nil, wrapCreateVGPUErr(gpuProfile, err)

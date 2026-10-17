@@ -118,6 +118,17 @@ func (m *manager) claimVGPU(ctx context.Context, meta *metadata, profileName str
 		ProfileName: profileName,
 		SysfsPath:   filepath.Clean(devices.GetDeviceSysfsPath(vfAddress)),
 	}
+	assignment := devices.VGPUAssignment{Framework: device.Framework, DevicePath: device.SysfsPath}
+	// The type is written under the allocation lock, so the placement the
+	// driver reported as free is taken before the next claim asks again.
+	// Nothing else resets a VF without a saved claim, and the write may have
+	// landed before a later check failed, so a failed configure resets it.
+	if err := m.configureClaimedVGPU(ctx, device); err != nil {
+		if resetErr := m.destroyVGPUAssignment(ctx, assignment); resetErr != nil {
+			log.WarnContext(ctx, "failed to reset vGPU VF after configure failed", "vf", vfAddress, "error", resetErr)
+		}
+		return nil, err
+	}
 	setStoredVGPUDevice(&meta.StoredMetadata, device)
 	// Only vendor VFIO claims carry an assignment identity, so the claim time
 	// is set here rather than in setStoredVGPUDevice. clearStoredVGPUDevice
@@ -126,6 +137,9 @@ func (m *manager) claimVGPU(ctx context.Context, meta *metadata, profileName str
 	meta.GPUClaimedAt = &claimedAt
 	if err := m.saveMetadata(meta); err != nil {
 		clearStoredVGPUDevice(&meta.StoredMetadata)
+		if resetErr := m.destroyVGPUAssignment(ctx, assignment); resetErr != nil {
+			log.WarnContext(ctx, "failed to reset vGPU VF after claim save failed", "vf", vfAddress, "error", resetErr)
+		}
 		return nil, fmt.Errorf("save vGPU claim: %w", err)
 	}
 	return device, nil
