@@ -1,6 +1,7 @@
 package instances
 
 import (
+	"bytes"
 	"context"
 	"log/slog"
 	"os"
@@ -93,7 +94,7 @@ func TestNativeDecompressionArgs(t *testing.T) {
 	t.Parallel()
 
 	assert.Equal(t,
-		[]string{"-q", "-d", "-f", "-o", "/tmp/raw.tmp", "/tmp/raw.zst"},
+		[]string{"-q", "-d", "-f", "--sparse", "-o", "/tmp/raw.tmp", "/tmp/raw.zst"},
 		nativeDecompressionArgs("/tmp/raw.zst", "/tmp/raw.tmp", snapshotstore.SnapshotCompressionAlgorithmZstd),
 	)
 	assert.Equal(t,
@@ -479,6 +480,33 @@ func TestNativeCompressNativeDecompressRoundTrip(t *testing.T) {
 			assert.Equal(t, original, restored)
 		})
 	}
+}
+
+func TestNativeZstdDecompressSkipsZeroRanges(t *testing.T) {
+	binaryPath, err := exec.LookPath("zstd")
+	if err != nil {
+		t.Skipf("native zstd binary not available: %v", err)
+	}
+
+	const size = 64 << 20
+	original := make([]byte, size)
+	copy(original[size/2:], bytes.Repeat([]byte{0xab}, 1<<20))
+	rawPath := filepath.Join(t.TempDir(), "memory-ranges")
+	require.NoError(t, os.WriteFile(rawPath, original, 0o644))
+
+	runtime := nativeCodecRuntime{lookPath: func(string) (string, error) { return binaryPath, nil }}
+	cfg := snapshotstore.SnapshotCompressionConfig{Enabled: true, Algorithm: snapshotstore.SnapshotCompressionAlgorithmZstd, Level: intPtr(1)}
+	_, _, err = compressSnapshotMemoryFileWithRuntime(context.Background(), runtime, rawPath, cfg)
+	require.NoError(t, err)
+	require.NoError(t, decompressSnapshotMemoryFileWithRuntime(context.Background(), runtime, compressedPathFor(rawPath, cfg.Algorithm), cfg.Algorithm))
+
+	restored, err := os.ReadFile(rawPath)
+	require.NoError(t, err)
+	assert.True(t, bytes.Equal(original, restored))
+
+	var st syscall.Stat_t
+	require.NoError(t, syscall.Stat(rawPath, &st))
+	assert.Less(t, st.Blocks*512, int64(size/4), "decompressed zero ranges should not be allocated")
 }
 
 type compressionCompatibilityCase struct {
