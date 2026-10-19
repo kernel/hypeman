@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -133,6 +134,49 @@ func TestNVMLQueryShutsDownNVMLAfterEachQuery(t *testing.T) {
 	_, err := nvmlCreatableProfiles([]string{"0000:82:00.0"})
 	require.ErrorContains(t, err, "nvmlInit_v2: rc 9")
 	assert.Zero(t, initialized, "a failed initialization is not shut down")
+}
+
+func TestNVMLQueriesDoNotOverlap(t *testing.T) {
+	nvmlMu.Lock()
+	loaded := nvml
+	nvmlMu.Unlock()
+	t.Cleanup(func() {
+		nvmlMu.Lock()
+		nvml = loaded
+		nvmlMu.Unlock()
+	})
+
+	var active, overlaps atomic.Int32
+	nvmlMu.Lock()
+	nvml = &nvmlFuncs{
+		initialize: func() int32 {
+			if active.Add(1) > 1 {
+				overlaps.Add(1)
+			}
+			return nvmlSuccess
+		},
+		shutdown: func() int32 {
+			active.Add(-1)
+			return nvmlSuccess
+		},
+		errorString: func(rc int32) string { return fmt.Sprintf("rc %d", rc) },
+		deviceGetHandleByPCIBusID: func(string, *uintptr) int32 {
+			time.Sleep(time.Millisecond)
+			return 999
+		},
+	}
+	nvmlMu.Unlock()
+
+	var wg sync.WaitGroup
+	for range 20 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _ = nvmlCreatableProfiles([]string{"0000:82:00.0"})
+		}()
+	}
+	wg.Wait()
+	assert.Zero(t, overlaps.Load(), "a query initialized NVML while another held it")
 }
 
 func TestNVMLFallbackLogsOnlyWhenItChanges(t *testing.T) {

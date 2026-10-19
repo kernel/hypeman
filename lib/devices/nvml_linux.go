@@ -60,6 +60,11 @@ type nvmlFuncs struct {
 var (
 	nvmlMu sync.Mutex
 	nvml   *nvmlFuncs
+	// nvmlQueryMu serializes queries. NVML counts initializations, but
+	// queries that initialize and shut it down concurrently fail with errors
+	// such as Invalid Argument (driver 580.178.05), and concurrent queries on
+	// one initialization take no less time than serialized ones.
+	nvmlQueryMu sync.Mutex
 )
 
 // loadNVML loads the NVML library on first use and keeps it loaded for the
@@ -107,13 +112,14 @@ func loadNVML() (*nvmlFuncs, error) {
 //
 // NVML is initialized for each query and shut down after it. Initialized,
 // it holds the GPU device nodes open, which blocks cycling SR-IOV on a GPU
-// and unloading the driver; NVML counts initializations, so concurrent
-// queries each hold their own.
+// and unloading the driver.
 func nvmlCreatableProfiles(gpus []string) (map[string][]creatableProfile, error) {
 	f, err := loadNVML()
 	if err != nil {
 		return nil, err
 	}
+	nvmlQueryMu.Lock()
+	defer nvmlQueryMu.Unlock()
 	if err := f.check("nvmlInit_v2", f.initialize()); err != nil {
 		return nil, err
 	}
