@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -47,6 +48,16 @@ func NVMLFallbacks() map[string]int64 {
 	return counts
 }
 
+// nvmlFallbackLogged is the fallback error last logged, or "" while NVML
+// answers for every GPU.
+var nvmlFallbackLogged struct {
+	sync.Mutex
+	err string
+}
+
+// recordNVMLFallback counts every fallback but logs only when the fallback
+// starts or its error changes, since a host stuck on the sysfs lists would
+// otherwise log on every claim and resources read.
 func recordNVMLFallback(err error) {
 	reason := "error"
 	switch {
@@ -58,7 +69,23 @@ func recordNVMLFallback(err error) {
 		reason = "equal_size"
 	}
 	nvmlFallbacks[reason].Add(1)
+	nvmlFallbackLogged.Lock()
+	defer nvmlFallbackLogged.Unlock()
+	if nvmlFallbackLogged.err == err.Error() {
+		return
+	}
+	nvmlFallbackLogged.err = err.Error()
 	slog.Default().Warn("falling back to sysfs creatable vGPU types", "reason", reason, "error", err)
+}
+
+func recordNVMLRecovered() {
+	nvmlFallbackLogged.Lock()
+	defer nvmlFallbackLogged.Unlock()
+	if nvmlFallbackLogged.err == "" {
+		return
+	}
+	nvmlFallbackLogged.err = ""
+	slog.Default().Info("NVML creatable vGPU placements available for every GPU again")
 }
 
 // onlyEqualSize reports whether every GPU NVML failed for was left out only
@@ -116,6 +143,8 @@ func (s vendorVFIOSysfs) creatableOrSysfs(vfs []VirtualFunction) (map[string][]c
 	creatable, err := s.creatableProfiles(vfs)
 	if err != nil {
 		recordNVMLFallback(err)
+	} else {
+		recordNVMLRecovered()
 	}
 	sysfsVFs := make([]VirtualFunction, 0)
 	for _, vf := range vfs {

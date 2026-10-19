@@ -3,8 +3,11 @@
 package devices
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"log/slog"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -130,6 +133,51 @@ func TestNVMLQueryShutsDownNVMLAfterEachQuery(t *testing.T) {
 	_, err := nvmlCreatableProfiles([]string{"0000:82:00.0"})
 	require.ErrorContains(t, err, "nvmlInit_v2: rc 9")
 	assert.Zero(t, initialized, "a failed initialization is not shut down")
+}
+
+func TestNVMLFallbackLogsOnlyWhenItChanges(t *testing.T) {
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	nvmlFallbackLogged.Lock()
+	nvmlFallbackLogged.err = ""
+	nvmlFallbackLogged.Unlock()
+	t.Cleanup(func() {
+		slog.SetDefault(previous)
+		nvmlFallbackLogged.Lock()
+		nvmlFallbackLogged.err = ""
+		nvmlFallbackLogged.Unlock()
+	})
+	sysfs := newTestVendorVFIOSysfs(t)
+	sysfs.addVF(t, "0000:82:00.0", "0000:82:00.4", "42", "0", testCreatableTypes)
+	vfs, err := sysfs.discoverVFs()
+	require.NoError(t, err)
+	var queryErr error
+	sysfs.creatableFunc = func(gpus []string) (map[string][]creatableProfile, error) {
+		if queryErr != nil {
+			return nil, queryErr
+		}
+		return map[string][]creatableProfile{"0000:82:00.0": testCreatablePlacements()["0000:82:00.0"]}, nil
+	}
+	before := NVMLFallbacks()
+
+	equalSize := errors.Join(fmt.Errorf("GPU 0000:82:00.0: %w", errNVMLEqualSize))
+	failed := errors.Join(errors.New("GPU 0000:82:00.0: nvmlDeviceGetSupportedVgpus: Unknown Error"))
+	for _, err := range []error{equalSize, equalSize, failed, failed, nil, nil, equalSize} {
+		queryErr = err
+		_, err := sysfs.profileTypes(vfs)
+		require.NoError(t, err)
+	}
+
+	lines := strings.Split(strings.TrimSpace(logs.String()), "\n")
+	require.Len(t, lines, 4, logs.String())
+	assert.Contains(t, lines[0], "reason=equal_size")
+	assert.Contains(t, lines[1], "reason=error")
+	assert.Contains(t, lines[2], "available for every GPU again")
+	assert.Contains(t, lines[3], "reason=equal_size")
+	after := NVMLFallbacks()
+	assert.Equal(t, before["equal_size"]+3, after["equal_size"], "every fallback is counted")
+	assert.Equal(t, before["error"]+2, after["error"])
 }
 
 func TestVendorVFIOProfileTypesUseCreatablePlacements(t *testing.T) {
