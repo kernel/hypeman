@@ -208,7 +208,7 @@ func newMonitoringMetrics(meter metric.Meter, mgr *Manager) error {
 
 	gpuNVMLFallbacks, err := meter.Int64ObservableCounter(
 		"hypeman_resources_gpu_nvml_fallbacks_total",
-		metric.WithDescription("vGPU capacity queries answered from the sysfs creatable lists for at least one GPU because NVML failed (error), timed out (timeout), or an earlier timed-out query had not returned (stuck)"),
+		metric.WithDescription("vGPU capacity queries answered from the sysfs creatable lists for at least one GPU because NVML failed (error), every GPU it failed for was in equal-size mode (equal_size), it timed out (timeout), or an earlier timed-out query had not returned (stuck)"),
 	)
 	if err != nil {
 		return err

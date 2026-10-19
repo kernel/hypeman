@@ -135,7 +135,7 @@ func (f *nvmlFuncs) creatableProfiles(gpu string) ([]creatableProfile, error) {
 		return nil, err
 	}
 	if mode.mode != nvmlFeatureEnabled {
-		return nil, fmt.Errorf("not in mixed-size vGPU mode")
+		return nil, errNVMLEqualSize
 	}
 	typeIDs, err := f.supportedTypes(device)
 	if err != nil {

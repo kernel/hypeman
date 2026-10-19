@@ -17,8 +17,9 @@ import (
 var nvmlTimeout = 5 * time.Second
 
 var (
-	errNVMLTimeout = errors.New("NVML query timed out")
-	errNVMLStuck   = errors.New("an earlier NVML query is still running after its timeout")
+	errNVMLTimeout   = errors.New("NVML query timed out")
+	errNVMLStuck     = errors.New("an earlier NVML query is still running after its timeout")
+	errNVMLEqualSize = errors.New("not in mixed-size vGPU mode")
 )
 
 // nvmlStuck counts timed-out NVML queries that have not returned.
@@ -27,15 +28,17 @@ var nvmlStuck atomic.Int32
 // nvmlFallbacks counts creatable-placement queries answered from the sysfs
 // lists for at least one GPU, by reason.
 var nvmlFallbacks = map[string]*atomic.Int64{
-	"error":   {},
-	"timeout": {},
-	"stuck":   {},
+	"error":      {},
+	"equal_size": {},
+	"timeout":    {},
+	"stuck":      {},
 }
 
 // NVMLFallbacks returns how many creatable-placement queries have fallen back
 // to the sysfs lists for at least one GPU since startup, by reason: NVML
-// failed (error), timed out (timeout), or an earlier timed-out query had not
-// returned yet (stuck).
+// failed (error), every GPU it failed for is in equal-size mode (equal_size),
+// it timed out (timeout), or an earlier timed-out query had not returned yet
+// (stuck).
 func NVMLFallbacks() map[string]int64 {
 	counts := make(map[string]int64, len(nvmlFallbacks))
 	for reason, count := range nvmlFallbacks {
@@ -51,9 +54,27 @@ func recordNVMLFallback(err error) {
 		reason = "stuck"
 	case errors.Is(err, errNVMLTimeout):
 		reason = "timeout"
+	case onlyEqualSize(err):
+		reason = "equal_size"
 	}
 	nvmlFallbacks[reason].Add(1)
 	slog.Default().Warn("falling back to sysfs creatable vGPU types", "reason", reason, "error", err)
+}
+
+// onlyEqualSize reports whether every GPU NVML failed for was left out only
+// because it is in equal-size mode, which happens when a driver reload or
+// GPU reset drops mixed-size mode, rather than because NVML failed.
+func onlyEqualSize(err error) bool {
+	var joined interface{ Unwrap() []error }
+	if !errors.As(err, &joined) {
+		return errors.Is(err, errNVMLEqualSize)
+	}
+	for _, gpuErr := range joined.Unwrap() {
+		if !errors.Is(gpuErr, errNVMLEqualSize) {
+			return false
+		}
+	}
+	return true
 }
 
 // creatableProfile is a profile a GPU can still create, with the placement

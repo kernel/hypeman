@@ -4,6 +4,7 @@ package devices
 
 import (
 	"errors"
+	"fmt"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -205,14 +206,14 @@ func TestVendorVFIOFallsBackToSysfsOnlyForGPUsNVMLFails(t *testing.T) {
 	sysfs := newTestVendorVFIOSysfs(t)
 	sysfs.creatableFunc = func(gpus []string) (map[string][]creatableProfile, error) {
 		return map[string][]creatableProfile{"0000:82:00.0": testCreatablePlacements()["0000:82:00.0"]},
-			errors.New("GPU 0000:e3:00.0: not in mixed-size vGPU mode")
+			errors.Join(fmt.Errorf("GPU 0000:e3:00.0: %w", errNVMLEqualSize))
 	}
 	const hiddenFromSysfs = "ID    : vGPU Name\n1148  : NVIDIA L40S-2Q\n"
 	sysfs.addVF(t, "0000:82:00.0", "0000:82:00.4", "42", "0", hiddenFromSysfs)
 	sysfs.addVF(t, "0000:e3:00.0", "0000:e3:00.4", "43", "0", testCreatableTypes)
 	vfs, err := sysfs.discoverVFs()
 	require.NoError(t, err)
-	before := NVMLFallbacks()["error"]
+	before := NVMLFallbacks()
 
 	profilesByVF, err := sysfs.profileTypes(vfs)
 	require.NoError(t, err)
@@ -223,7 +224,9 @@ func TestVendorVFIOFallsBackToSysfsOnlyForGPUsNVMLFails(t *testing.T) {
 		{TypeName: "1148", Name: "NVIDIA L40S-2Q", FramebufferMB: 2048},
 		{TypeName: "1159", Name: "NVIDIA L40S-48Q", FramebufferMB: 49152},
 	}, profilesByVF["0000:e3:00.4"], "the failed GPU uses its sysfs list")
-	assert.Equal(t, before+1, NVMLFallbacks()["error"])
+	after := NVMLFallbacks()
+	assert.Equal(t, before["equal_size"]+1, after["equal_size"])
+	assert.Equal(t, before["error"], after["error"])
 
 	profiles, err := sysfs.listProfiles(vfs, nil)
 	require.NoError(t, err)
@@ -231,4 +234,33 @@ func TestVendorVFIOFallsBackToSysfsOnlyForGPUsNVMLFails(t *testing.T) {
 	assert.Equal(t, 2, profileAvailability(profiles, "NVIDIA L40S-2Q"))
 	assert.Equal(t, 1, profileAvailability(profiles, "NVIDIA L40S-4Q"))
 	assert.Equal(t, 1, profileAvailability(profiles, "NVIDIA L40S-48Q"))
+}
+
+func TestNVMLFallbackReasons(t *testing.T) {
+	equalSize := fmt.Errorf("GPU 0000:e3:00.0: %w", errNVMLEqualSize)
+	failed := errors.New("GPU 0000:82:00.0: nvmlDeviceGetSupportedVgpus: Unknown Error")
+	for _, tc := range []struct {
+		name   string
+		err    error
+		reason string
+	}{
+		{"every failed GPU is in equal-size mode", errors.Join(equalSize, equalSize), "equal_size"},
+		{"one failed GPU is not in equal-size mode", errors.Join(equalSize, failed), "error"},
+		{"NVML cannot load", errors.New("load libnvidia-ml.so.1: not found"), "error"},
+		{"timed out", errNVMLTimeout, "timeout"},
+		{"stuck", errNVMLStuck, "stuck"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			before := NVMLFallbacks()
+			recordNVMLFallback(fmt.Errorf("query creatable vGPU placements: %w", tc.err))
+			after := NVMLFallbacks()
+			for reason := range after {
+				want := before[reason]
+				if reason == tc.reason {
+					want++
+				}
+				assert.Equal(t, want, after[reason], reason)
+			}
+		})
+	}
 }
