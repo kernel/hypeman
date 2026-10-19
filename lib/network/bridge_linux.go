@@ -21,7 +21,10 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-const netlinkDumpRetryCount = 3
+// netlinkDumpRetryCount bounds interrupted-dump retries at about 2s total
+// (10ms per attempt). Parallel tests create and delete bridges constantly, so
+// a shorter budget is exhausted under contention.
+const netlinkDumpRetryCount = 200
 const iptablesWaitSeconds = "5"
 
 func newIPTablesCommand(args ...string) *exec.Cmd {
@@ -36,35 +39,37 @@ func newIPTablesCommand(args ...string) *exec.Cmd {
 }
 
 func listBridgeAddrsWithRetry(link netlink.Link) ([]netlink.Addr, error) {
-	var err error
-	for i := 0; i < netlinkDumpRetryCount; i++ {
-		addrs, listErr := netlink.AddrList(link, netlink.FAMILY_V4)
-		if listErr == nil {
-			return addrs, nil
-		}
-		if !errors.Is(listErr, netlink.ErrDumpInterrupted) {
-			return nil, listErr
-		}
-		err = listErr
-		time.Sleep(10 * time.Millisecond)
-	}
-	return nil, err
+	var addrs []netlink.Addr
+	err := retryNetlinkDump(func() error {
+		var listErr error
+		addrs, listErr = netlink.AddrList(link, netlink.FAMILY_V4)
+		return listErr
+	})
+	return addrs, err
 }
 
 func listLinksWithRetry() ([]netlink.Link, error) {
+	var links []netlink.Link
+	err := retryNetlinkDump(func() error {
+		var listErr error
+		links, listErr = netlink.LinkList()
+		return listErr
+	})
+	return links, err
+}
+
+// retryNetlinkDump reruns list while the kernel reports an interrupted dump,
+// which happens when links or addresses change mid-read.
+func retryNetlinkDump(list func() error) error {
 	var err error
 	for i := 0; i < netlinkDumpRetryCount; i++ {
-		links, listErr := netlink.LinkList()
-		if listErr == nil {
-			return links, nil
+		err = list()
+		if err == nil || !errors.Is(err, netlink.ErrDumpInterrupted) {
+			return err
 		}
-		if !errors.Is(listErr, netlink.ErrDumpInterrupted) {
-			return nil, listErr
-		}
-		err = listErr
 		time.Sleep(10 * time.Millisecond)
 	}
-	return nil, err
+	return err
 }
 
 // checkSubnetConflicts checks if the configured subnet conflicts with existing routes.

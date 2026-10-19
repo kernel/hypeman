@@ -3,9 +3,12 @@
 package network
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"github.com/vishvananda/netlink"
 )
 
 func TestParseBridgeFilters(t *testing.T) {
@@ -65,4 +68,42 @@ func TestPlanOrphanedBridgeTCBailsWhenNoRTIIFParses(t *testing.T) {
 	assert.False(t, safe)
 	assert.Nil(t, staleFilters)
 	assert.Nil(t, staleClasses)
+}
+
+func TestRetryNetlinkDumpRetriesInterruptedDump(t *testing.T) {
+	interrupts := 2
+	calls := 0
+	err := retryNetlinkDump(func() error {
+		calls++
+		if calls <= interrupts {
+			return netlink.ErrDumpInterrupted
+		}
+		return nil
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, interrupts+1, calls)
+}
+
+func TestRetryNetlinkDumpReturnsOtherErrorsImmediately(t *testing.T) {
+	calls := 0
+	errBoom := errors.New("boom")
+	err := retryNetlinkDump(func() error {
+		calls++
+		return errBoom
+	})
+
+	require.ErrorIs(t, err, errBoom)
+	assert.Equal(t, 1, calls)
+}
+
+func TestRetryNetlinkDumpGivesUpAfterBudget(t *testing.T) {
+	calls := 0
+	err := retryNetlinkDump(func() error {
+		calls++
+		return netlink.ErrDumpInterrupted
+	})
+
+	require.ErrorIs(t, err, netlink.ErrDumpInterrupted)
+	assert.Equal(t, netlinkDumpRetryCount, calls)
 }
