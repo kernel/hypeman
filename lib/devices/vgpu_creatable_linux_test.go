@@ -199,3 +199,36 @@ func TestVendorVFIOListProfilesCountsFreePlacements(t *testing.T) {
 	// 12Q: min(1 placement, 2 VFs) + min(2 placements, 1 VF).
 	assert.Equal(t, 2, profileAvailability(profiles, "NVIDIA L40S-12Q"))
 }
+
+func TestVendorVFIOFallsBackToSysfsOnlyForGPUsNVMLFails(t *testing.T) {
+	resetVFHealthStore(t)
+	sysfs := newTestVendorVFIOSysfs(t)
+	sysfs.creatableFunc = func(gpus []string) (map[string][]creatableProfile, error) {
+		return map[string][]creatableProfile{"0000:82:00.0": testCreatablePlacements()["0000:82:00.0"]},
+			errors.New("GPU 0000:e3:00.0: not in mixed-size vGPU mode")
+	}
+	const hiddenFromSysfs = "ID    : vGPU Name\n1148  : NVIDIA L40S-2Q\n"
+	sysfs.addVF(t, "0000:82:00.0", "0000:82:00.4", "42", "0", hiddenFromSysfs)
+	sysfs.addVF(t, "0000:e3:00.0", "0000:e3:00.4", "43", "0", testCreatableTypes)
+	vfs, err := sysfs.discoverVFs()
+	require.NoError(t, err)
+	before := NVMLFallbacks()["error"]
+
+	profilesByVF, err := sysfs.profileTypes(vfs)
+	require.NoError(t, err)
+	assert.Contains(t, profilesByVF["0000:82:00.4"], VGPUProfileType{TypeName: "1150", Name: "NVIDIA L40S-4Q", FramebufferMB: 4096},
+		"the GPU NVML answered for keeps the profile sysfs hides")
+	assert.Equal(t, []VGPUProfileType{
+		{TypeName: "1147", Name: "NVIDIA L40S-1Q", FramebufferMB: 1024},
+		{TypeName: "1148", Name: "NVIDIA L40S-2Q", FramebufferMB: 2048},
+		{TypeName: "1159", Name: "NVIDIA L40S-48Q", FramebufferMB: 49152},
+	}, profilesByVF["0000:e3:00.4"], "the failed GPU uses its sysfs list")
+	assert.Equal(t, before+1, NVMLFallbacks()["error"])
+
+	profiles, err := sysfs.listProfiles(vfs, nil)
+	require.NoError(t, err)
+	// 2Q: min(4 placements, 1 VF) on GPU 82 plus one advertising VF on e3.
+	assert.Equal(t, 2, profileAvailability(profiles, "NVIDIA L40S-2Q"))
+	assert.Equal(t, 1, profileAvailability(profiles, "NVIDIA L40S-4Q"))
+	assert.Equal(t, 1, profileAvailability(profiles, "NVIDIA L40S-48Q"))
+}

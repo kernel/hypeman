@@ -25,7 +25,7 @@ var (
 var nvmlStuck atomic.Int32
 
 // nvmlFallbacks counts creatable-placement queries answered from the sysfs
-// lists instead, by reason.
+// lists for at least one GPU, by reason.
 var nvmlFallbacks = map[string]*atomic.Int64{
 	"error":   {},
 	"timeout": {},
@@ -33,8 +33,9 @@ var nvmlFallbacks = map[string]*atomic.Int64{
 }
 
 // NVMLFallbacks returns how many creatable-placement queries have fallen back
-// to the sysfs lists since startup, by reason: NVML failed (error), timed out
-// (timeout), or an earlier timed-out query had not returned yet (stuck).
+// to the sysfs lists for at least one GPU since startup, by reason: NVML
+// failed (error), timed out (timeout), or an earlier timed-out query had not
+// returned yet (stuck).
 func NVMLFallbacks() map[string]int64 {
 	counts := make(map[string]int64, len(nvmlFallbacks))
 	for reason, count := range nvmlFallbacks {
@@ -65,7 +66,8 @@ type creatableProfile struct {
 // creatableProfiles asks the driver, through NVML, which profiles the GPU of
 // each VF can still create and at which placements, keyed by parent GPU
 // address. Unlike the per-VF creatable_vgpu_types lists, this stays accurate
-// on a busy GPU in mixed-size mode; see GPU.md.
+// on a busy GPU in mixed-size mode; see GPU.md. GPUs NVML could not answer
+// for are missing from the result, and the error says why.
 func (s vendorVFIOSysfs) creatableProfiles(vfs []VirtualFunction) (map[string][]creatableProfile, error) {
 	query := s.creatableFunc
 	if query == nil {
@@ -82,9 +84,25 @@ func (s vendorVFIOSysfs) creatableProfiles(vfs []VirtualFunction) (map[string][]
 	sort.Strings(gpus)
 	byGPU, err := runBounded(func() (map[string][]creatableProfile, error) { return query(gpus) })
 	if err != nil {
-		return nil, fmt.Errorf("query creatable vGPU placements: %w", err)
+		return byGPU, fmt.Errorf("query creatable vGPU placements: %w", err)
 	}
 	return byGPU, nil
+}
+
+// creatableOrSysfs returns the NVML creatable profiles by GPU and the VFs
+// whose GPU NVML could not answer for, which fall back to the sysfs lists.
+func (s vendorVFIOSysfs) creatableOrSysfs(vfs []VirtualFunction) (map[string][]creatableProfile, []VirtualFunction) {
+	creatable, err := s.creatableProfiles(vfs)
+	if err != nil {
+		recordNVMLFallback(err)
+	}
+	sysfsVFs := make([]VirtualFunction, 0)
+	for _, vf := range vfs {
+		if _, ok := creatable[vf.ParentGPU]; !ok {
+			sysfsVFs = append(sysfsVFs, vf)
+		}
+	}
+	return creatable, sysfsVFs
 }
 
 // runBounded returns at nvmlTimeout even if query has not: a call stuck in

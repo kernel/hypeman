@@ -95,11 +95,12 @@ func (s vendorVFIOSysfs) discoverVFs() ([]VirtualFunction, error) {
 // take if only that profile is added: per GPU, the smaller of its free
 // placements for the profile and its free, non-quarantined VFs. Counts for
 // different profiles are not additive, because their placements overlap.
+// GPUs NVML cannot answer for are counted from the sysfs lists instead.
 func (s vendorVFIOSysfs) listProfiles(vfs []VirtualFunction, quarantined map[string]struct{}) ([]GPUProfile, error) {
-	creatable, err := s.creatableProfiles(vfs)
+	creatable, sysfsVFs := s.creatableOrSysfs(vfs)
+	profilesByType, available, err := s.sysfsAvailability(sysfsVFs, quarantined)
 	if err != nil {
-		recordNVMLFallback(err)
-		return s.listSysfsProfiles(vfs, quarantined)
+		return nil, err
 	}
 	freeVFs := make(map[string]int)
 	for _, vf := range vfs {
@@ -107,8 +108,6 @@ func (s vendorVFIOSysfs) listProfiles(vfs []VirtualFunction, quarantined map[str
 			freeVFs[vf.ParentGPU]++
 		}
 	}
-	profilesByType := make(map[string]VGPUProfileType)
-	available := make(map[string]int)
 	for gpu, profiles := range creatable {
 		for _, profile := range profiles {
 			profilesByType[profile.TypeName] = profile.VGPUProfileType
@@ -118,17 +117,17 @@ func (s vendorVFIOSysfs) listProfiles(vfs []VirtualFunction, quarantined map[str
 	return gpuProfiles(profilesByType, available), nil
 }
 
-// listSysfsProfiles counts each free, non-quarantined VF advertising a type
+// sysfsAvailability counts each free, non-quarantined VF advertising a type
 // as one creatable instance, matching the driver-reported units that mdev
 // sums through available_instances. This is a best-effort snapshot because
 // creating on one VF may revoke the type from siblings that share its GPU
 // framebuffer.
-func (s vendorVFIOSysfs) listSysfsProfiles(vfs []VirtualFunction, quarantined map[string]struct{}) ([]GPUProfile, error) {
+func (s vendorVFIOSysfs) sysfsAvailability(vfs []VirtualFunction, quarantined map[string]struct{}) (map[string]VGPUProfileType, map[string]int, error) {
 	profilesByType := make(map[string]VGPUProfileType)
 	creatableVFs := make(map[string]int)
 	profilesByVF, err := s.sysfsProfileTypes(vfs)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	for _, vf := range vfs {
 		_, bad := quarantined[vf.PCIAddress]
@@ -139,7 +138,7 @@ func (s vendorVFIOSysfs) listSysfsProfiles(vfs []VirtualFunction, quarantined ma
 			}
 		}
 	}
-	return gpuProfiles(profilesByType, creatableVFs), nil
+	return profilesByType, creatableVFs, nil
 }
 
 func gpuProfiles(profilesByType map[string]VGPUProfileType, available map[string]int) []GPUProfile {
@@ -163,19 +162,22 @@ func gpuProfiles(profilesByType map[string]VGPUProfileType, available map[string
 // profileTypes returns the profiles each VF can be configured with. A free
 // VF can take any profile its GPU has a free placement for, as NVML reports
 // it, and a configured VF takes none. The sysfs creatable lists are only the
-// fallback when NVML fails, because in mixed-size mode they hide profiles
-// that still fit on a busy GPU.
+// fallback for GPUs NVML cannot answer for, because in mixed-size mode they
+// hide profiles that still fit on a busy GPU.
 func (s vendorVFIOSysfs) profileTypes(vfs []VirtualFunction) (map[string][]VGPUProfileType, error) {
-	creatable, err := s.creatableProfiles(vfs)
+	creatable, sysfsVFs := s.creatableOrSysfs(vfs)
+	profilesByVF, err := s.sysfsProfileTypes(sysfsVFs)
 	if err != nil {
-		recordNVMLFallback(err)
-		return s.sysfsProfileTypes(vfs)
+		return nil, err
 	}
-	profilesByVF := make(map[string][]VGPUProfileType, len(vfs))
 	for _, vf := range vfs {
+		gpuCreatable, ok := creatable[vf.ParentGPU]
+		if !ok {
+			continue
+		}
 		profiles := make([]VGPUProfileType, 0)
 		if !vf.Allocated {
-			for _, profile := range creatable[vf.ParentGPU] {
+			for _, profile := range gpuCreatable {
 				profiles = append(profiles, profile.VGPUProfileType)
 			}
 		}

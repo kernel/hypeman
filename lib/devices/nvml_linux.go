@@ -3,6 +3,7 @@
 package devices
 
 import (
+	"errors"
 	"fmt"
 	"runtime"
 	"strconv"
@@ -104,21 +105,24 @@ func openNVML() (*nvmlFuncs, error) {
 // nvmlCreatableProfiles asks NVML which profiles each GPU can still create
 // and at which placements, keyed by GPU address. This is the query behind
 // nvidia-smi vgpu -c -v. It fails for a GPU not in mixed-size mode, so
-// equal-size hosts keep the sysfs lists.
+// such a GPU keeps the sysfs lists. A GPU that fails is left out of the
+// result and its error joined into the returned one.
 func nvmlCreatableProfiles(gpus []string) (map[string][]creatableProfile, error) {
 	f, err := openNVML()
 	if err != nil {
 		return nil, err
 	}
 	byGPU := make(map[string][]creatableProfile, len(gpus))
+	var errs []error
 	for _, gpu := range gpus {
 		profiles, err := f.creatableProfiles(gpu)
 		if err != nil {
-			return nil, fmt.Errorf("GPU %s: %w", gpu, err)
+			errs = append(errs, fmt.Errorf("GPU %s: %w", gpu, err))
+			continue
 		}
 		byGPU[gpu] = profiles
 	}
-	return byGPU, nil
+	return byGPU, errors.Join(errs...)
 }
 
 func (f *nvmlFuncs) creatableProfiles(gpu string) ([]creatableProfile, error) {
