@@ -21,6 +21,8 @@ const (
 	nvmlSuccess          = 0
 	nvmlInsufficientSize = 7
 	nvmlFeatureEnabled   = 1
+	// nvmlHeterogeneousPlacements is NVML_VGPU_PGPU_HETEROGENEOUS_MODE.
+	nvmlHeterogeneousPlacements = 0
 )
 
 // nvmlPlacementList is nvmlVgpuPlacementList_v2_t.
@@ -121,8 +123,7 @@ func nvmlCreatableProfiles(gpus []string) (map[string][]creatableProfile, error)
 
 func (f *nvmlFuncs) creatableProfiles(gpu string) ([]creatableProfile, error) {
 	var device uintptr
-	// sysfs addresses have a four-digit domain; NVML bus IDs have eight.
-	if err := f.check("nvmlDeviceGetHandleByPciBusId_v2", f.deviceGetHandleByPCIBusID("0000"+gpu, &device)); err != nil {
+	if err := f.check("nvmlDeviceGetHandleByPciBusId_v2", f.deviceGetHandleByPCIBusID(gpu, &device)); err != nil {
 		return nil, err
 	}
 	mode := nvmlHeterogeneousMode{version: nvmlStructVersion(unsafe.Sizeof(nvmlHeterogeneousMode{}), 1)}
@@ -202,6 +203,7 @@ func (f *nvmlFuncs) placementList(device uintptr, typeID uint32, ids []uint32) (
 		version:      nvmlStructVersion(unsafe.Sizeof(nvmlPlacementList{}), 2),
 		count:        uint32(len(ids)),
 		placementIDs: &ids[0],
+		mode:         nvmlHeterogeneousPlacements,
 	}
 	rc := f.deviceGetCreatablePlacements(device, typeID, &list)
 	return list, rc

@@ -121,8 +121,9 @@ func (m *manager) claimVGPU(ctx context.Context, meta *metadata, profileName str
 	assignment := devices.VGPUAssignment{Framework: device.Framework, DevicePath: device.SysfsPath}
 	// The type is written under the allocation lock, so the placement the
 	// driver reported as free is taken before the next claim asks again.
-	// Nothing else resets a VF without a saved claim, and the write may have
-	// landed before a later check failed, so a failed configure resets it.
+	// The write may have landed before a later check failed, and without a
+	// saved claim the VF would hold its placement until the allocator next
+	// repairs it, so a failed configure resets it.
 	if err := m.configureClaimedVGPU(ctx, device); err != nil {
 		if resetErr := m.destroyVGPUAssignment(ctx, assignment); resetErr != nil {
 			log.WarnContext(ctx, "failed to reset vGPU VF after configure failed", "vf", vfAddress, "error", resetErr)
