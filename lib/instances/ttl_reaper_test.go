@@ -186,10 +186,13 @@ func TestTTLReaperDeleteTimeoutDoesNotBlockSweep(t *testing.T) {
 	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
 	p := paths.New(t.TempDir())
 	m := &manager{
-		paths:                  p,
-		now:                    func() time.Time { return now },
-		lifecycleEvents:        newLifecycleSubscribersWithBufferSize(defaultLifecycleEventBufferSize),
-		ttlReaperDeleteTimeout: 100 * time.Millisecond,
+		paths:           p,
+		now:             func() time.Time { return now },
+		lifecycleEvents: newLifecycleSubscribersWithBufferSize(defaultLifecycleEventBufferSize),
+		// The deadline also bounds the fast delete of b-deleted. It must stay
+		// well above real removal time on a loaded runner, or the reaper returns
+		// while that delete is still running.
+		ttlReaperDeleteTimeout: 2 * time.Second,
 	}
 	expiredAt := now.Add(-time.Minute)
 	for _, id := range []string{"a-timeout", "b-deleted"} {
