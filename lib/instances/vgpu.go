@@ -174,7 +174,7 @@ func (m *manager) resetDirtyUnclaimedVFs(ctx context.Context, vfs []devices.Virt
 			log.WarnContext(ctx, "failed to reset dirty vGPU VF", "vf", vf.PCIAddress, "error", err)
 			continue
 		}
-		log.InfoContext(ctx, "reset dirty vGPU VF during allocation", "vf", vf.PCIAddress)
+		log.InfoContext(ctx, "reset dirty unclaimed vGPU VF", "vf", vf.PCIAddress)
 		reset = true
 	}
 	return reset

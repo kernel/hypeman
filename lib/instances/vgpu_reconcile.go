@@ -11,9 +11,10 @@ import (
 
 const defaultVGPUReconcileInterval = time.Minute
 
-// StartVGPUReconciler runs one reconcile pass and then keeps reconciling
-// periodically until ctx is cancelled. Hosts without a vGPU framework skip
-// reconciliation entirely. A discovery failure starts the reconciler anyway.
+// StartVGPUReconciler resets unclaimed vendor VFIO VFs, runs one reconcile
+// pass and then keeps reconciling periodically until ctx is cancelled. Hosts
+// without a vGPU framework skip reconciliation entirely. A discovery failure
+// starts the reconciler anyway.
 func (m *manager) StartVGPUReconciler(ctx context.Context) {
 	framework, _, err := m.discoverVGPUDevices()
 	if err == nil && framework == devices.VGPUFrameworkNone {
@@ -22,6 +23,7 @@ func (m *manager) StartVGPUReconciler(ctx context.Context) {
 	if err != nil {
 		logger.FromContext(ctx).WarnContext(ctx, "failed to discover vGPU framework; starting vGPU reconciler anyway", "error", err)
 	}
+	m.resetUnclaimedVendorVFs(ctx)
 	m.ReconcileVGPUs(ctx)
 	m.vgpuReconcileOnce.Do(func() {
 		interval := m.vgpuReconcileInterval
@@ -44,8 +46,8 @@ func (m *manager) StartVGPUReconciler(ctx context.Context) {
 }
 
 // ReconcileVGPUs releases metadata claims whose VMM is confirmed dead. The
-// device-level pass remains for mdevs; vendor VFIO leftovers are repaired only
-// when the allocator claims that VF again.
+// device-level pass remains for mdevs; vendor VFIO leftovers are repaired at
+// startup and when the allocator claims that VF again.
 func (m *manager) ReconcileVGPUs(ctx context.Context) {
 	log := logger.FromContext(ctx)
 	protected, err := m.reconcileVGPUAssignments(ctx)
@@ -62,6 +64,25 @@ func (m *manager) ReconcileVGPUs(ctx context.Context) {
 		m.recordVGPUReconcileFailure(ctx, vgpuReconcileStageReconcileDevices)
 		log.WarnContext(ctx, "failed to reconcile mdev devices", "error", err)
 	}
+}
+
+// resetUnclaimedVendorVFs resets vendor VFIO VFs that are configured but
+// claimed by no instance. A claim writes the type before it saves the claim,
+// so a restart between the two leaves such a VF holding a placement that
+// /resources does not count until the allocator next repairs it.
+func (m *manager) resetUnclaimedVendorVFs(ctx context.Context) {
+	m.vgpuAllocationMu.Lock()
+	defer m.vgpuAllocationMu.Unlock()
+	framework, vfs, err := m.discoverVGPUDevices()
+	if err != nil || framework != devices.VGPUFrameworkVendorVFIO {
+		return
+	}
+	allMetadata, err := m.listMetadataForReconcile()
+	if err != nil {
+		logger.FromContext(ctx).WarnContext(ctx, "failed to list instances for unclaimed vGPU VF reset", "error", err)
+		return
+	}
+	m.resetDirtyUnclaimedVFs(ctx, vfs, allMetadata)
 }
 
 func (m *manager) reconcileVGPUAssignments(ctx context.Context) (map[string]struct{}, error) {

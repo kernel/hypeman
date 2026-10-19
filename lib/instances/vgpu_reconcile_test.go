@@ -135,3 +135,35 @@ func TestStartVGPUReconcilerRunsPeriodically(t *testing.T) {
 	m.StartVGPUReconciler(t.Context())
 	require.Eventually(t, func() bool { return passes.Load() >= 3 }, 5*time.Second, time.Millisecond)
 }
+
+func TestStartVGPUReconcilerResetsUnclaimedVendorVFs(t *testing.T) {
+	vfs := []devices.VirtualFunction{
+		{PCIAddress: "0000:82:00.4", ParentGPU: "0000:82:00.0", Allocated: true, ProfileType: testVFProfileType},
+		{PCIAddress: "0000:82:00.5", ParentGPU: "0000:82:00.0", Allocated: true, ProfileType: testVFProfileType},
+		{PCIAddress: "0000:82:00.6", ParentGPU: "0000:82:00.0"},
+	}
+	var destroyed []string
+	m := &manager{
+		paths: paths.New(t.TempDir()),
+		discoverVGPU: func() (devices.VGPUFramework, []devices.VirtualFunction, error) {
+			return devices.VGPUFrameworkVendorVFIO, vfs, nil
+		},
+		destroyVGPU: func(_ context.Context, assignment devices.VGPUAssignment) error {
+			destroyed = append(destroyed, assignment.DevicePath)
+			return nil
+		},
+		reconcileVGPUDevices:  func(context.Context, map[string]struct{}) error { return nil },
+		vgpuReconcileInterval: time.Hour,
+	}
+	liveIdentity := HypervisorProcessIdentity{}
+	liveIdentity.Set(os.Getpid())
+	owner := saveTestVGPUInstance(t, m, "owner")
+	owner.GPUFramework = devices.VGPUFrameworkVendorVFIO
+	owner.GPUDevicePath = testVFDevicePath
+	owner.HypervisorProcessIdentity = liveIdentity
+	require.NoError(t, m.saveMetadata(owner))
+
+	m.StartVGPUReconciler(t.Context())
+	assert.Equal(t, []string{"/sys/bus/pci/devices/0000:82:00.5"}, destroyed,
+		"only the configured VF no instance claims is reset")
+}
