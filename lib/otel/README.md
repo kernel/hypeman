@@ -99,7 +99,8 @@ This keeps pull and push views aligned because both are sourced from the same OT
 | `hypeman_disk_utilization_bytes` | gauge | component | Actual filesystem bytes allocated by disk component |
 | `hypeman_resources_image_storage_bytes` | gauge | kind | Current and maximum image storage bytes |
 | `hypeman_resources_gpu_slots` | gauge | kind | Total and used GPU slots |
-| `hypeman_resources_gpu_profile_slots` | gauge | profile, kind | Available GPU slots by profile |
+| `hypeman_resources_gpu_profile_slots` | gauge | profile, kind | How many more vGPUs of each profile fit if only that profile is added |
+| `hypeman_resources_gpu_nvml_fallbacks_total` | counter | reason | vGPU capacity queries answered from the sysfs creatable lists because NVML failed, timed out, or was stuck |
 
 ### Volumes
 | Metric | Type | Description |

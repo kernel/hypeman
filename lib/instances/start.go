@@ -170,6 +170,8 @@ func (m *manager) startInstance(
 		cu.Add(func() {
 			m.cleanupStartVGPU(ctx, stored, rollbackMeta)
 		})
+		// On vendor VFIO hosts claimVGPU already wrote the type, so this only
+		// re-checks quarantine and confirms the type is still set.
 		if err := m.configureClaimedVGPU(ctx, device); err != nil {
 			log.ErrorContext(ctx, "failed to configure vGPU", "instance_id", id, "profile", stored.GPUProfile, "error", err)
 			return nil, fmt.Errorf("configure vGPU for profile %s: %w", stored.GPUProfile, err)

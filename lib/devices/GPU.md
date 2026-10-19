@@ -59,6 +59,8 @@ curl -s http://localhost:4973/resources | jq .gpu
 }
 ```
 
+On vendor VFIO hosts, `available` is how many more vGPUs of that profile fit if only that profile is added: per GPU, the smaller of its free placements for the profile and its free, non-quarantined VFs. Counts for different profiles are not additive, because their placements overlap.
+
 ### Creating an Instance with vGPU
 
 Request a vGPU by specifying the profile name:
@@ -92,10 +94,10 @@ On an mdev host, the response also includes the assigned mdev UUID:
 
 ### Ephemeral vGPU Lifecycle
 
-vGPU assignments are created on instance start and released on stop or delete. Hypeman creates/removes an mdev on mdev hosts. On vendor VFIO hosts, it first reserves a VF by persisting its path in instance metadata, then writes the profile ID to `current_vgpu_type`. Metadata is the authoritative VF claim.
+vGPU assignments are created on instance start and released on stop or delete. Hypeman creates/removes an mdev on mdev hosts. On vendor VFIO hosts, it selects a VF on a GPU with a free placement for the profile and writes the profile ID to `current_vgpu_type` under the allocation lock, so the placement is taken before the next claim checks for one, then reserves the VF by persisting its path in instance metadata. Metadata is the authoritative VF claim; a configured VF without one is dirty and is reset by the allocator.
 
 ```
-Instance Create → Persist VF claim → Configure profile → Attach VF to VM → Instance Running
+Instance Create → Configure profile → Persist VF claim → Attach VF to VM → Instance Running
 Instance Stop/Delete → Reset profile → Remove VF claim → VF available again
 ```
 
@@ -105,6 +107,8 @@ with a vGPU or passthrough device get 5s so the guest can unload its GPU driver
 before the hypervisor is signalled.
 
 Hypeman reconciles metadata claims once at startup and every minute afterward, skipping hosts without GPUs. A claim whose VMM is confirmed dead is reset before the claim is removed. An ambiguous hypervisor ownership check preserves the claim, logs a warning, and increments `hypeman_instances_vgpu_liveness_uncertain_total`; the create and start cleanup paths preserve and count the same way. mdev hosts also sweep orphaned device-level assignments. Vendor VFIO hosts repair an unclaimed dirty VF when the allocator next selects it; repair checks for open VFIO handles before resetting `current_vgpu_type`. The allocator prefers VFs that are already clean, and a dirty VF that refuses its reset is skipped in favor of another candidate.
+
+Vendor VFIO placement and `/resources` both read the driver's creatable placements through NVML (`nvmlDeviceGetVgpuTypeCreatablePlacements`, the query behind `nvidia-smi vgpu -c -v`), which list the free placement IDs of every profile each GPU can still create. Hypeman loads `libnvidia-ml.so.1` at runtime on first use and keeps it initialized; a query for every profile on two L40S GPUs takes about 20 ms. A free VF can take any profile its GPU lists there, and a claim only writes a type the driver has just reported a free placement for; if that configure still fails, the VF is reset and the claim fails without trying another GPU. The per-VF `creatable_vgpu_types` lists are not used for this because in mixed-size (heterogeneous) mode they under-report: the driver drops a profile from them once its GPU holds as many vGPUs as that profile's equal-size instance limit (12 for L40S-4Q), even while a placement for it remains. If NVML cannot be loaded or initialized, fails, takes longer than 5 s, or reports a GPU not in mixed-size mode, placement and `/resources` fall back to those lists, so profiles they hide are refused until it recovers. A query that times out is abandoned rather than waited for, since a call stuck in the driver cannot be interrupted; until it returns, queries skip NVML and use the lists directly, so a hung driver costs one timeout rather than one per claim. Each fallback logs a warning and increments `hypeman_resources_gpu_nvml_fallbacks_total` with `reason` `error`, `timeout` or `stuck`. Admission only checks free VFs, so it does not query NVML.
 
 ### Hypervisor Support
 
@@ -442,6 +446,7 @@ Check the files for the framework detected on the host:
 cat /sys/class/mdev_bus/*/mdev_supported_types/*/available_instances
 
 # vendor VFIO
+nvidia-smi vgpu -c -v
 cat /sys/bus/pci/devices/*/nvidia/creatable_vgpu_types
 cat /sys/bus/pci/devices/*/nvidia/current_vgpu_type
 ```

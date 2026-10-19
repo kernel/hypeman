@@ -4,6 +4,7 @@ package devices
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -153,6 +154,9 @@ func newTestVendorVFIOSysfs(t *testing.T) testVendorVFIOSysfs {
 		pciDevicesPath:  pci,
 		procPath:        proc,
 		vfioDevicesPath: vfio,
+		creatableFunc: func([]string) (map[string][]creatableProfile, error) {
+			return nil, errors.New("NVML unavailable")
+		},
 	}}
 }
 
