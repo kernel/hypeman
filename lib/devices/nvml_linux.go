@@ -47,6 +47,8 @@ func nvmlStructVersion(size uintptr, version uint32) uint32 {
 }
 
 type nvmlFuncs struct {
+	initialize                   func() int32
+	shutdown                     func() int32
 	errorString                  func(rc int32) string
 	deviceGetHandleByPCIBusID    func(busID string, device *uintptr) int32
 	deviceGetHeterogeneousMode   func(device uintptr, mode *nvmlHeterogeneousMode) int32
@@ -60,10 +62,10 @@ var (
 	nvml   *nvmlFuncs
 )
 
-// openNVML loads and initializes NVML on first use and keeps it for the life
-// of the process. A failure is not kept, so a driver that loads later is
+// loadNVML loads the NVML library on first use and keeps it loaded for the
+// life of the process. A failure is not kept, so a driver that loads later is
 // picked up by the next query.
-func openNVML() (*nvmlFuncs, error) {
+func loadNVML() (*nvmlFuncs, error) {
 	nvmlMu.Lock()
 	defer nvmlMu.Unlock()
 	if nvml != nil {
@@ -74,11 +76,11 @@ func openNVML() (*nvmlFuncs, error) {
 		return nil, fmt.Errorf("load %s: %w", nvmlLibrary, err)
 	}
 	var f nvmlFuncs
-	var initialize func() int32
 	// purego.RegisterLibFunc panics on a missing symbol, which an older
 	// driver could cause, so each symbol is looked up first.
 	for name, fn := range map[string]any{
-		"nvmlInit_v2":                              &initialize,
+		"nvmlInit_v2":                              &f.initialize,
+		"nvmlShutdown":                             &f.shutdown,
 		"nvmlErrorString":                          &f.errorString,
 		"nvmlDeviceGetHandleByPciBusId_v2":         &f.deviceGetHandleByPCIBusID,
 		"nvmlDeviceGetVgpuHeterogeneousMode":       &f.deviceGetHeterogeneousMode,
@@ -93,11 +95,6 @@ func openNVML() (*nvmlFuncs, error) {
 		}
 		purego.RegisterFunc(fn, sym)
 	}
-	if rc := initialize(); rc != nvmlSuccess {
-		err := fmt.Errorf("nvmlInit_v2: %s", f.errorString(rc))
-		purego.Dlclose(lib)
-		return nil, err
-	}
 	nvml = &f
 	return nvml, nil
 }
@@ -107,11 +104,20 @@ func openNVML() (*nvmlFuncs, error) {
 // nvidia-smi vgpu -c -v. It fails for a GPU not in mixed-size mode, so
 // such a GPU keeps the sysfs lists. A GPU that fails is left out of the
 // result and its error joined into the returned one.
+//
+// NVML is initialized for each query and shut down after it. Initialized,
+// it holds the GPU device nodes open, which blocks cycling SR-IOV on a GPU
+// and unloading the driver; NVML counts initializations, so concurrent
+// queries each hold their own.
 func nvmlCreatableProfiles(gpus []string) (map[string][]creatableProfile, error) {
-	f, err := openNVML()
+	f, err := loadNVML()
 	if err != nil {
 		return nil, err
 	}
+	if err := f.check("nvmlInit_v2", f.initialize()); err != nil {
+		return nil, err
+	}
+	defer f.shutdown()
 	byGPU := make(map[string][]creatableProfile, len(gpus))
 	var errs []error
 	for _, gpu := range gpus {

@@ -11,9 +11,9 @@ import (
 	"time"
 )
 
-// nvmlTimeout bounds the creatable-placements query, which takes about 20 ms
-// on a two-GPU L40S host and stayed under 140 ms with every host core
-// saturated.
+// nvmlTimeout bounds the creatable-placements query, which takes about 55 ms
+// with NVML initialization on a two-GPU L40S host; the query alone stayed
+// under 140 ms with every host core saturated.
 var nvmlTimeout = 5 * time.Second
 
 var (

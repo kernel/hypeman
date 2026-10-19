@@ -85,6 +85,53 @@ func TestNVMLQueryFailsWithoutUsableLibrary(t *testing.T) {
 	assert.Nil(t, nvml)
 }
 
+func TestNVMLQueryShutsDownNVMLAfterEachQuery(t *testing.T) {
+	nvmlMu.Lock()
+	loaded := nvml
+	nvmlMu.Unlock()
+	t.Cleanup(func() {
+		nvmlMu.Lock()
+		nvml = loaded
+		nvmlMu.Unlock()
+	})
+
+	var initialized, inits int
+	initRC := int32(nvmlSuccess)
+	fake := &nvmlFuncs{
+		initialize: func() int32 {
+			inits++
+			if initRC == nvmlSuccess {
+				initialized++
+			}
+			return initRC
+		},
+		shutdown: func() int32 {
+			initialized--
+			return nvmlSuccess
+		},
+		errorString: func(rc int32) string { return fmt.Sprintf("rc %d", rc) },
+		deviceGetHandleByPCIBusID: func(string, *uintptr) int32 {
+			require.Equal(t, 1, initialized, "queried without NVML initialized")
+			return 999
+		},
+	}
+	nvmlMu.Lock()
+	nvml = fake
+	nvmlMu.Unlock()
+
+	for range 2 {
+		_, err := nvmlCreatableProfiles([]string{"0000:82:00.0", "0000:e3:00.0"})
+		require.ErrorContains(t, err, "GPU 0000:e3:00.0: nvmlDeviceGetHandleByPciBusId_v2: rc 999")
+	}
+	assert.Equal(t, 2, inits, "NVML is initialized for each query")
+	assert.Zero(t, initialized, "NVML is shut down after each query")
+
+	initRC = 9
+	_, err := nvmlCreatableProfiles([]string{"0000:82:00.0"})
+	require.ErrorContains(t, err, "nvmlInit_v2: rc 9")
+	assert.Zero(t, initialized, "a failed initialization is not shut down")
+}
+
 func TestVendorVFIOProfileTypesUseCreatablePlacements(t *testing.T) {
 	sysfs := newTestVendorVFIOSysfs(t)
 	sysfs.useCreatablePlacements(t)
