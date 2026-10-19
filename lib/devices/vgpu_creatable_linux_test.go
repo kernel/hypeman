@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -87,96 +86,6 @@ func TestNVMLQueryFailsWithoutUsableLibrary(t *testing.T) {
 	_, err = nvmlCreatableProfiles([]string{"0000:82:00.0"})
 	require.ErrorContains(t, err, "from libc.so.6")
 	assert.Nil(t, nvml)
-}
-
-func TestNVMLQueryShutsDownNVMLAfterEachQuery(t *testing.T) {
-	nvmlMu.Lock()
-	loaded := nvml
-	nvmlMu.Unlock()
-	t.Cleanup(func() {
-		nvmlMu.Lock()
-		nvml = loaded
-		nvmlMu.Unlock()
-	})
-
-	var initialized, inits int
-	initRC := int32(nvmlSuccess)
-	fake := &nvmlFuncs{
-		initialize: func() int32 {
-			inits++
-			if initRC == nvmlSuccess {
-				initialized++
-			}
-			return initRC
-		},
-		shutdown: func() int32 {
-			initialized--
-			return nvmlSuccess
-		},
-		errorString: func(rc int32) string { return fmt.Sprintf("rc %d", rc) },
-		deviceGetHandleByPCIBusID: func(string, *uintptr) int32 {
-			require.Equal(t, 1, initialized, "queried without NVML initialized")
-			return 999
-		},
-	}
-	nvmlMu.Lock()
-	nvml = fake
-	nvmlMu.Unlock()
-
-	for range 2 {
-		_, err := nvmlCreatableProfiles([]string{"0000:82:00.0", "0000:e3:00.0"})
-		require.ErrorContains(t, err, "GPU 0000:e3:00.0: nvmlDeviceGetHandleByPciBusId_v2: rc 999")
-	}
-	assert.Equal(t, 2, inits, "NVML is initialized for each query")
-	assert.Zero(t, initialized, "NVML is shut down after each query")
-
-	initRC = 9
-	_, err := nvmlCreatableProfiles([]string{"0000:82:00.0"})
-	require.ErrorContains(t, err, "nvmlInit_v2: rc 9")
-	assert.Zero(t, initialized, "a failed initialization is not shut down")
-}
-
-func TestNVMLQueriesDoNotOverlap(t *testing.T) {
-	nvmlMu.Lock()
-	loaded := nvml
-	nvmlMu.Unlock()
-	t.Cleanup(func() {
-		nvmlMu.Lock()
-		nvml = loaded
-		nvmlMu.Unlock()
-	})
-
-	var active, overlaps atomic.Int32
-	nvmlMu.Lock()
-	nvml = &nvmlFuncs{
-		initialize: func() int32 {
-			if active.Add(1) > 1 {
-				overlaps.Add(1)
-			}
-			return nvmlSuccess
-		},
-		shutdown: func() int32 {
-			active.Add(-1)
-			return nvmlSuccess
-		},
-		errorString: func(rc int32) string { return fmt.Sprintf("rc %d", rc) },
-		deviceGetHandleByPCIBusID: func(string, *uintptr) int32 {
-			time.Sleep(time.Millisecond)
-			return 999
-		},
-	}
-	nvmlMu.Unlock()
-
-	var wg sync.WaitGroup
-	for range 20 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			_, _ = nvmlCreatableProfiles([]string{"0000:82:00.0"})
-		}()
-	}
-	wg.Wait()
-	assert.Zero(t, overlaps.Load(), "a query initialized NVML while another held it")
 }
 
 func TestNVMLFallbackLogsOnlyWhenItChanges(t *testing.T) {
