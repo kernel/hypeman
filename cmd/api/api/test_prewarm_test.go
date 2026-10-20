@@ -69,9 +69,10 @@ func apiTestImageRef(t *testing.T, source string) string {
 	return mapped
 }
 
-// prepareAPITestDataDir links the CI prewarm cache into a test data dir so
-// each test reuses the kernels and initrd instead of downloading and building
-// them from scratch.
+// prepareAPITestDataDir links the CI prewarm kernels, initrd, and binaries into
+// a test data dir so each test skips downloading and building them. The OCI
+// cache is deliberately not shared: the registry dedupes blobs against it, so
+// one test's pushes would make another test's first push upload nothing.
 func prepareAPITestDataDir(t *testing.T, dataDir string) {
 	t.Helper()
 
@@ -99,7 +100,6 @@ func prepareAPITestDataDir(t *testing.T, dataDir string) {
 	linkAPITestSubdir(t, srcSystemDir, dstSystemDir, "kernel", true)
 	linkAPITestSubdir(t, srcSystemDir, dstSystemDir, "initrd", true)
 	linkAPITestSubdir(t, srcSystemDir, dstSystemDir, "binaries", runtime.GOOS == "linux")
-	linkAPITestSubdir(t, srcSystemDir, dstSystemDir, "oci-cache", runtime.GOOS == "linux")
 }
 
 func linkAPITestSubdir(t *testing.T, srcSystemDir, dstSystemDir, subdir string, required bool) {
@@ -127,7 +127,7 @@ func isTestPrewarmStrict() bool {
 func TestPrepareAPITestDataDirLinksPrewarmCache(t *testing.T) {
 	prewarmDir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(prewarmDir, "prewarm-manifest.json"), []byte("{}"), 0o644))
-	for _, subdir := range []string{"kernel", "initrd"} {
+	for _, subdir := range []string{"kernel", "initrd", "binaries", "oci-cache"} {
 		require.NoError(t, os.MkdirAll(filepath.Join(prewarmDir, "system", subdir), 0o755))
 	}
 	t.Setenv(testPrewarmDirEnv, prewarmDir)
@@ -135,9 +135,11 @@ func TestPrepareAPITestDataDirLinksPrewarmCache(t *testing.T) {
 	dataDir := t.TempDir()
 	prepareAPITestDataDir(t, dataDir)
 
-	for _, subdir := range []string{"kernel", "initrd"} {
+	for _, subdir := range []string{"kernel", "initrd", "binaries"} {
 		target, err := os.Readlink(filepath.Join(dataDir, "system", subdir))
 		require.NoError(t, err)
 		assert.Equal(t, filepath.Join(prewarmDir, "system", subdir), target)
 	}
+	_, err := os.Lstat(filepath.Join(dataDir, "system", "oci-cache"))
+	assert.ErrorIs(t, err, os.ErrNotExist)
 }
