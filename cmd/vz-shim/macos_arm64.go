@@ -49,7 +49,8 @@ func configureMacPlatform(vc *vz.VirtualMachineConfiguration, c *shimconfig.Shim
 	if e != nil {
 		return e
 	}
-	display, e := vz.NewMacGraphicsDisplayConfiguration(1280, 800, 80)
+	// 3024x1964 pixels at 2x: 1512x982 points, the logical size of a 14-inch MacBook Pro.
+	display, e := vz.NewMacGraphicsDisplayConfiguration(3024, 1964, 160)
 	if e != nil {
 		return e
 	}
