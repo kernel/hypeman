@@ -1,6 +1,6 @@
 module github.com/kernel/hypeman
 
-go 1.25.4
+go 1.26.10
 
 require (
 	al.essio.dev/pkg/shellescape v1.6.0

@@ -6,7 +6,7 @@
 FROM moby/buildkit:latest AS buildkit
 
 # Build the builder-agent and guest-agent (multi-stage build from hypeman repo)
-FROM golang:1.25-alpine AS agent-builder
+FROM golang:1.26.10-alpine AS agent-builder
 
 WORKDIR /app
 

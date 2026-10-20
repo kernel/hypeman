@@ -52,7 +52,7 @@ echo "[4/10] Installing Go..."
 if go version 2>/dev/null | grep -q "go1.2"; then
     echo "Go already installed: $(go version)"
 else
-    GO_VERSION="1.25.4"
+    GO_VERSION="1.26.10"
     curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-arm64.tar.gz" | sudo tar -C /usr/local -xzf -
     echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.bashrc
     export PATH=$PATH:/usr/local/go/bin
