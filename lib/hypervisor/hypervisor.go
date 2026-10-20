@@ -351,6 +351,9 @@ type Hypervisor interface {
 // Capabilities indicates which optional features a hypervisor supports.
 // Callers should check these before calling optional methods.
 type Capabilities struct {
+	// SupportsMacOSBoot indicates the backend can cold-boot an imported macOS disk bundle.
+	SupportsMacOSBoot bool
+
 	// SupportsSnapshot indicates if Snapshot/Restore are available
 	SupportsSnapshot bool
 

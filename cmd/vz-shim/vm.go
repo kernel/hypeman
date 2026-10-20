@@ -17,6 +17,10 @@ import (
 
 // createVM creates and configures a vz.VirtualMachine from ShimConfig.
 func createVM(config *shimconfig.ShimConfig) (*vz.VirtualMachine, *vz.VirtualMachineConfiguration, error) {
+	if isMacGuest(config) {
+		return createMacVM(config)
+	}
+
 	// Prepare kernel command line (vz uses hvc0 for serial console)
 	kernelArgs := config.KernelArgs
 	if kernelArgs == "" {

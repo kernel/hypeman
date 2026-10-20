@@ -557,11 +557,11 @@ components:
         platform:
           type: string
           pattern: '^[a-z0-9]+/[a-z0-9]+(/[a-z0-9.]+)?$'
-          description: 'Target platform as os/arch[/variant] (e.g. "linux/amd64"), matching Docker --platform. Omit for the host platform. Not a fixed enum: the os/arch[/variant] grammar is validated server-side and invalid values return 400 invalid_platform. Only os "linux" with arch amd64 or arm64 is accepted today.'
+          description: 'Target platform as os/arch[/variant]. Linux container guests support amd64 and arm64. Experimental darwin/arm64 guests require an offline-imported macOS disk image and vz on Apple silicon. Omit to use the cached native image or host platform.'
           example: linux/amd64
         size:
           type: string
-          description: Base memory size (human-readable format like "1GB", "512MB", "2G")
+          description: Base memory size (human-readable format like "1GB", "512MB", "2G"). macOS guests default to their image's memory; explicit sizes must be at least 4 GiB in whole MiB and within VZ host limits.
           default: "1GB"
           example: "2GB"
         hotplug_size:
@@ -570,7 +570,7 @@ components:
           example: "2GB"
         overlay_size:
           type: string
-          description: Writable overlay disk size (human-readable format like "10GB", "50G")
+          description: Writable overlay disk size (human-readable format like "10GB", "50G"). Omit this field for macOS guests, which clone the image's complete boot disk instead.
           default: "10GB"
           example: "20GB"
         disk_io_bps:
@@ -579,7 +579,7 @@ components:
           example: "100MB/s"
         vcpus:
           type: integer
-          description: Number of virtual CPUs
+          description: Number of virtual CPUs. macOS guests default to their image's vCPUs; explicit counts must be at least 2 and within VZ host limits.
           default: 2
           example: 2
         env:
@@ -1249,7 +1249,7 @@ components:
         network_rx_bytes:
           type: integer
           format: int64
-          description: Total network bytes received by the VM (from TAP interface)
+          description: Total network bytes received by the VM (from TAP interface). Always 0 for macOS guests, which use NAT with no per-instance interface.
           example: 12345678
         network_tx_bytes:
           type: integer
@@ -3078,6 +3078,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+        400:
+          description: Request not supported for this guest type
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         409:
           description: Conflict - instance not in standby or no snapshot
           content:
@@ -3702,6 +3708,12 @@ paths:
             text/event-stream:
               schema:
                 type: string
+        501:
+          description: Not implemented - this log source does not exist for this guest type
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         404:
           description: Instance not found
           content:
@@ -3761,6 +3773,12 @@ paths:
                 $ref: "#/components/schemas/Error"
         409:
           description: Instance not in running state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        501:
+          description: Not implemented for this guest type
           content:
             application/json:
               schema:
@@ -4514,6 +4532,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+        501:
+          description: Not implemented - unsupported in macOS-only mode
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         409:
           description: Conflict - ingress with this name already exists or hostname in use
           content:
@@ -4728,6 +4752,12 @@ paths:
                 $ref: "#/components/schemas/Error"
         404:
           description: Builder not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        501:
+          description: Not implemented - unsupported in macOS-only mode
           content:
             application/json:
               schema:

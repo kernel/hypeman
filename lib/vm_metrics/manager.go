@@ -147,6 +147,18 @@ func (m *Manager) GetInstanceStats(ctx context.Context, info InstanceInfo) *VMSt
 		}
 	}
 
+	// Virtualization.framework runs guest CPU and memory in a separate XPC process,
+	// not the shim. Add those processes so the totals describe the whole guest.
+	for _, pid := range relatedVMPIDs(info.StoragePath) {
+		if cpuUsec, err := ReadProcStat(pid); err == nil {
+			stats.CPUUsec += cpuUsec
+		}
+		if rssBytes, vmsBytes, err := ReadProcStatm(pid); err == nil {
+			stats.MemoryRSSBytes += rssBytes
+			stats.MemoryVMSBytes += vmsBytes
+		}
+	}
+
 	// Read TAP stats if we have a TAP device
 	if info.TAPDevice != "" {
 		rxBytes, txBytes, err := ReadTAPStats(info.TAPDevice)

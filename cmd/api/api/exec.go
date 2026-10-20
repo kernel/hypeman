@@ -71,6 +71,11 @@ func (s *ApiService) ExecHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if inst.MacOS != nil {
+		http.Error(w, `{"code":"unsupported","message":"exec is not implemented for experimental macOS instances"}`, http.StatusNotImplemented)
+		return
+	}
+
 	if inst.State != instances.StateRunning {
 		http.Error(w, fmt.Sprintf(`{"code":"invalid_state","message":"instance must be running (current state: %s)"}`, inst.State), http.StatusConflict)
 		return

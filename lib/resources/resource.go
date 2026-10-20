@@ -149,6 +149,9 @@ type InstanceUtilizationInfo struct {
 	Name          string
 	HypervisorPID *int   // PID of the hypervisor process
 	TAPDevice     string // Name of the TAP device (e.g., "hype-01234567")
+	// StoragePath is a file the guest's VM process holds open, used to find processes
+	// that do the guest's work outside the hypervisor PID (macOS VZ). Empty otherwise.
+	StoragePath string
 
 	// Allocated resources (for computing utilization ratios)
 	AllocatedVcpus       int   // Number of allocated vCPUs
