@@ -300,6 +300,11 @@ func run() error {
 	}); ok {
 		reconciler.StartTAPGCReconciler(ctx)
 	}
+	if reconciler, ok := app.ImageManager.(interface {
+		StartFsmergeReconciler(context.Context)
+	}); ok {
+		reconciler.StartFsmergeReconciler(ctx)
+	}
 
 	// Log OTel status
 	if cfg.Otel.Enabled {

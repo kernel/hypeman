@@ -299,32 +299,33 @@ func contentIsDigestOnly(p *paths.Paths, digestHex string) bool {
 	return err == nil && ref.IsDigest()
 }
 
-func removeDigestIfUnreferenced(p *paths.Paths, repository, digestHex string, preserveDigestOnly bool) error {
+func removeDigestIfUnreferenced(p *paths.Paths, repository, digestHex string, preserveDigestOnly bool) (bool, error) {
 	contentDir := p.ImageContentDir(digestHex)
 	contentExists := false
 	if _, err := os.Stat(contentDir); err == nil {
 		contentExists = true
 	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("stat content digest directory: %w", err)
+		return false, fmt.Errorf("stat content digest directory: %w", err)
 	}
 
 	if err := os.RemoveAll(p.ImageDigestDir(repository, digestHex)); err != nil {
-		return fmt.Errorf("remove legacy digest directory: %w", err)
-	}
-	if !contentExists {
-		return nil
+		return false, fmt.Errorf("remove legacy digest directory: %w", err)
 	}
 
 	tagCount, err := contentTagCount(p, digestHex)
 	if err != nil {
-		return err
+		return false, err
 	}
-	if tagCount > 0 || contentPullInProgress(p, digestHex) || (preserveDigestOnly && contentIsDigestOnly(p, digestHex)) {
-		return nil
+	unreferenced := tagCount == 0 && !contentPullInProgress(p, digestHex) && !(preserveDigestOnly && contentIsDigestOnly(p, digestHex))
+	if !unreferenced {
+		return false, nil
+	}
+	if !contentExists {
+		return true, nil
 	}
 
 	if err := os.RemoveAll(contentDir); err != nil {
-		return fmt.Errorf("remove content digest directory: %w", err)
+		return false, fmt.Errorf("remove content digest directory: %w", err)
 	}
-	return nil
+	return true, nil
 }
