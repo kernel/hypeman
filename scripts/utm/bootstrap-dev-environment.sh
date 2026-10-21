@@ -49,13 +49,17 @@ fi
 
 # Install Go
 echo "[4/10] Installing Go..."
-if go version 2>/dev/null | grep -q "go1.2"; then
+GO_VERSION="1.26.10"
+if [ "$(GOTOOLCHAIN=local go env GOVERSION 2>/dev/null)" = "go${GO_VERSION}" ]; then
     echo "Go already installed: $(go version)"
 else
-    GO_VERSION="1.26.10"
-    curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-arm64.tar.gz" | sudo tar -C /usr/local -xzf -
-    echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.bashrc
-    export PATH=$PATH:/usr/local/go/bin
+    archive=$(mktemp)
+    curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-arm64.tar.gz" -o "$archive"
+    sudo rm -rf /usr/local/go
+    sudo tar -C /usr/local -xzf "$archive"
+    rm -f "$archive"
+    echo 'export PATH=/usr/local/go/bin:$PATH' >> ~/.bashrc
+    export PATH=/usr/local/go/bin:$PATH
     echo "Go ${GO_VERSION} installed"
 fi
 

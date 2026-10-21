@@ -23,7 +23,7 @@ jobs:
           # Not necessary to upload cache on self-hosted runner(s)
           # ~/go/pkg/mod and ~/.cache/go-build stay on disk between runs automatically.
           cache: false
-          go-version: '1.26.10'
+          go-version-file: go.mod
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
@@ -49,7 +49,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.26.10'
+          go-version-file: go.mod
 
       - name: Build server and token tool
         run: |
