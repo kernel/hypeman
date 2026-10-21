@@ -160,6 +160,16 @@ func newTestVendorVFIOSysfs(t *testing.T) testVendorVFIOSysfs {
 	}}
 }
 
+// listProfiles counts profiles from a fresh driver query, as a capacity
+// cache load does.
+func (s testVendorVFIOSysfs) listProfiles(vfs []VirtualFunction, quarantined map[string]struct{}) ([]GPUProfile, error) {
+	snapshot, err := s.creatableSnapshot(vfs)
+	if err != nil {
+		return nil, err
+	}
+	return snapshot.profiles(vfs, quarantined), nil
+}
+
 func (s testVendorVFIOSysfs) addVF(t *testing.T, parent, address, vfioID, currentType, creatableTypes string) {
 	t.Helper()
 	parentPath := filepath.Join(s.pciDevicesPath, parent)

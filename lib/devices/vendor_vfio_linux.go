@@ -91,54 +91,59 @@ func (s vendorVFIOSysfs) discoverVFs() ([]VirtualFunction, error) {
 	return vfs, nil
 }
 
-// listProfiles reports how many more vGPUs of each profile the host can
-// take if only that profile is added: per GPU, the smaller of its free
-// placements for the profile and its free, non-quarantined VFs. Counts for
-// different profiles are not additive, because their placements overlap.
-// GPUs NVML cannot answer for are counted from the sysfs lists instead.
-func (s vendorVFIOSysfs) listProfiles(vfs []VirtualFunction, quarantined map[string]struct{}) ([]GPUProfile, error) {
+// creatableSnapshot is what the driver reports vendor VFIO profile counts
+// are computed from: NVML's creatable placements for each GPU it answered
+// for, and the sysfs creatable lists of the VFs on every other GPU.
+type creatableSnapshot struct {
+	byGPU     map[string][]creatableProfile
+	sysfsByVF map[string][]VGPUProfileType
+}
+
+func (s vendorVFIOSysfs) creatableSnapshot(vfs []VirtualFunction) (creatableSnapshot, error) {
 	creatable, sysfsVFs := s.creatableOrSysfs(vfs)
-	profilesByType, available, err := s.sysfsAvailability(sysfsVFs, quarantined)
+	sysfsByVF, err := s.sysfsProfileTypes(sysfsVFs)
 	if err != nil {
-		return nil, err
+		return creatableSnapshot{}, err
 	}
+	return creatableSnapshot{byGPU: creatable, sysfsByVF: sysfsByVF}, nil
+}
+
+// profiles counts, per GPU, the smaller of its free placements for each
+// profile and its free, non-quarantined VFs. Counts for different profiles
+// are not additive, because their placements overlap. On a GPU counted from
+// the sysfs lists, each free, non-quarantined VF advertising a type is one
+// creatable instance, matching the driver-reported units that mdev sums
+// through available_instances; that is best-effort, because creating on one
+// VF may revoke the type from siblings that share its GPU framebuffer. vfs
+// may be newer than the snapshot, so a VF claimed or released since it was
+// taken already counts as such.
+func (c creatableSnapshot) profiles(vfs []VirtualFunction, quarantined map[string]struct{}) []GPUProfile {
+	profilesByType := make(map[string]VGPUProfileType)
+	available := make(map[string]int)
 	freeVFs := make(map[string]int)
 	for _, vf := range vfs {
-		if _, bad := quarantined[vf.PCIAddress]; !vf.Allocated && !bad {
+		_, bad := quarantined[vf.PCIAddress]
+		free := !vf.Allocated && !bad
+		if free {
 			freeVFs[vf.ParentGPU]++
 		}
+		if _, ok := c.byGPU[vf.ParentGPU]; ok {
+			continue
+		}
+		for _, profile := range c.sysfsByVF[vf.PCIAddress] {
+			profilesByType[profile.TypeName] = profile
+			if free {
+				available[profile.TypeName]++
+			}
+		}
 	}
-	for gpu, profiles := range creatable {
+	for gpu, profiles := range c.byGPU {
 		for _, profile := range profiles {
 			profilesByType[profile.TypeName] = profile.VGPUProfileType
 			available[profile.TypeName] += min(len(profile.placements), freeVFs[gpu])
 		}
 	}
-	return gpuProfiles(profilesByType, available), nil
-}
-
-// sysfsAvailability counts each free, non-quarantined VF advertising a type
-// as one creatable instance, matching the driver-reported units that mdev
-// sums through available_instances. This is a best-effort snapshot because
-// creating on one VF may revoke the type from siblings that share its GPU
-// framebuffer.
-func (s vendorVFIOSysfs) sysfsAvailability(vfs []VirtualFunction, quarantined map[string]struct{}) (map[string]VGPUProfileType, map[string]int, error) {
-	profilesByType := make(map[string]VGPUProfileType)
-	creatableVFs := make(map[string]int)
-	profilesByVF, err := s.sysfsProfileTypes(vfs)
-	if err != nil {
-		return nil, nil, err
-	}
-	for _, vf := range vfs {
-		_, bad := quarantined[vf.PCIAddress]
-		for _, profile := range profilesByVF[vf.PCIAddress] {
-			profilesByType[profile.TypeName] = profile
-			if !vf.Allocated && !bad {
-				creatableVFs[profile.TypeName]++
-			}
-		}
-	}
-	return profilesByType, creatableVFs, nil
+	return gpuProfiles(profilesByType, available)
 }
 
 func gpuProfiles(profilesByType map[string]VGPUProfileType, available map[string]int) []GPUProfile {
