@@ -74,6 +74,7 @@ func TestStartVGPUReconcilerResetsUnclaimedVendorVFs(t *testing.T) {
 			return nil
 		},
 		reconcileVGPUDevices:  func(context.Context, map[string]struct{}) error { return nil },
+		refreshVGPUCapacity:   func() {},
 		vgpuReconcileInterval: time.Hour,
 	}
 	liveIdentity := HypervisorProcessIdentity{}

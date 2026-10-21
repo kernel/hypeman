@@ -35,7 +35,8 @@ func newVGPUAllocationManager(t *testing.T, vfs []devices.VirtualFunction) *mana
 			}
 			return profiles, nil
 		},
-		configureVGPU: func(context.Context, string, string) error { return nil },
+		configureVGPU:       func(context.Context, string, string) error { return nil },
+		refreshVGPUCapacity: func() {},
 	}
 }
 

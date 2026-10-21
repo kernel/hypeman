@@ -48,7 +48,9 @@ func (m *manager) StartVGPUReconciler(ctx context.Context) {
 // vendor VFIO placements /resources counts from.
 func (m *manager) ReconcileVGPUs(ctx context.Context) {
 	m.reconcileVGPUClaims(ctx)
-	m.resetUnclaimedVendorVFs(ctx)
+	if !m.resetUnclaimedVendorVFs(ctx) {
+		return
+	}
 	refresh := m.refreshVGPUCapacity
 	if refresh == nil {
 		refresh = devices.RefreshVGPUCapacity
@@ -80,23 +82,25 @@ func (m *manager) reconcileVGPUClaims(ctx context.Context) {
 // leaves such a VF holding a placement that /resources does not count. It
 // runs on every pass, so a reset refused once, as while a VFIO handle is
 // still open, is retried rather than waiting for the allocator to select
-// that VF, which it may never do if placement skips the host.
-func (m *manager) resetUnclaimedVendorVFs(ctx context.Context) {
+// that VF, which it may never do if placement skips the host. Reports
+// whether the host has vendor VFIO VFs.
+func (m *manager) resetUnclaimedVendorVFs(ctx context.Context) bool {
 	m.vgpuAllocationMu.Lock()
 	defer m.vgpuAllocationMu.Unlock()
 	framework, vfs, err := m.discoverVGPUDevices()
 	if err != nil || framework != devices.VGPUFrameworkVendorVFIO {
-		return
+		return false
 	}
 	allMetadata, err := m.listMetadataForReconcile()
 	if err != nil {
 		m.recordVGPUReconcileFailure(ctx, vgpuReconcileStageResetUnclaimedVFs)
 		logger.FromContext(ctx).WarnContext(ctx, "failed to list instances for unclaimed vGPU VF reset", "error", err)
-		return
+		return true
 	}
 	if _, failed := m.resetDirtyUnclaimedVFs(ctx, vfs, allMetadata); failed {
 		m.recordVGPUReconcileFailure(ctx, vgpuReconcileStageResetUnclaimedVFs)
 	}
+	return true
 }
 
 func (m *manager) reconcileVGPUAssignments(ctx context.Context) (map[string]struct{}, error) {

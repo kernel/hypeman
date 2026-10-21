@@ -129,6 +129,7 @@ func TestStartVGPUReconcilerRunsPeriodically(t *testing.T) {
 			passes.Add(1)
 			return nil
 		},
+		refreshVGPUCapacity:   func() {},
 		vgpuReconcileInterval: time.Millisecond,
 	}
 
