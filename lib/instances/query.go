@@ -298,7 +298,7 @@ func advancePhaseIfRunning(stored *StoredMetadata) {
 // Returns true when at least one missing marker was found and populated.
 func (m *manager) hydrateBootMarkersFromLogs(ctx context.Context, stored *StoredMetadata) bool {
 	needProgram := !programMarkerSettled(stored)
-	needAgent := !stored.SkipGuestAgent && stored.GuestAgentReadyAt == nil
+	needAgent := stored.GuestAgentEnabled() && stored.GuestAgentReadyAt == nil
 	if !needProgram && !needAgent {
 		m.clearBootMarkerRescan(stored.Id)
 		return false
@@ -425,7 +425,7 @@ func (m *manager) nowUTC() time.Time {
 }
 
 func (m *manager) hydrateGuestAgentReadyFromProbe(ctx context.Context, stored *StoredMetadata) bool {
-	if stored == nil || stored.SkipGuestAgent || stored.GuestAgentReadyAt != nil {
+	if stored == nil || !stored.GuestAgentEnabled() || stored.GuestAgentReadyAt != nil {
 		return false
 	}
 	probe := m.guestAgentReadyProbe
@@ -441,7 +441,7 @@ func (m *manager) hydrateGuestAgentReadyFromProbe(ctx context.Context, stored *S
 }
 
 func probeGuestAgentReady(ctx context.Context, stored *StoredMetadata) bool {
-	if stored == nil || stored.SkipGuestAgent {
+	if stored == nil || !stored.GuestAgentEnabled() {
 		return false
 	}
 	dialer, err := hypervisor.NewVsockDialer(stored.HypervisorType, stored.VsockSocket, stored.VsockCID)
@@ -651,7 +651,7 @@ func (m *manager) persistBootMarkers(ctx context.Context, id string) {
 	}
 
 	needProgram := !programMarkerSettled(&meta.StoredMetadata)
-	needAgent := !meta.SkipGuestAgent && meta.GuestAgentReadyAt == nil
+	needAgent := meta.GuestAgentEnabled() && meta.GuestAgentReadyAt == nil
 	if !needProgram && !needAgent {
 		return
 	}
