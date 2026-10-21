@@ -194,6 +194,7 @@ type manager struct {
 	pickVFIndex               func(n int) int
 	destroyVGPU               func(context.Context, devices.VGPUAssignment) error
 	reconcileVGPUDevices      func(context.Context, map[string]struct{}) error
+	refreshVGPUCapacity       func()
 	vgpuAllocationMu          sync.Mutex
 	deleteSnapshotFn          func(context.Context, string) error
 	ttlReaperDeleteTimeout    time.Duration
