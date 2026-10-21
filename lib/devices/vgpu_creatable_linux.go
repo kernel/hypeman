@@ -155,13 +155,27 @@ func (s vendorVFIOSysfs) creatableOrSysfs(vfs []VirtualFunction) (map[string][]c
 	return creatable, sysfsVFs
 }
 
+// nvmlSlot admits one NVML query at a time. A query takes it before it
+// starts and gives it back only when the driver returns, so callers queued
+// behind a hung query never enter the driver themselves. Concurrent queries
+// on one initialization take no less time than serialized ones.
+var nvmlSlot = make(chan struct{}, 1)
+
 // runBounded returns at nvmlTimeout even if query has not: a call stuck in
-// the driver cannot be interrupted. Until such a query returns, later calls
-// fail at once instead of each waiting out the timeout, which the claim
-// would pay while holding the vGPU allocation lock.
+// the driver cannot be interrupted. The timeout covers waiting for
+// nvmlSlot. Until a timed-out query returns, later calls fail at once
+// instead of each waiting out the timeout, which the claim would pay while
+// holding the vGPU allocation lock.
 func runBounded[T any](query func() (T, error)) (T, error) {
 	var zero T
 	if nvmlStuck.Load() > 0 {
+		return zero, errNVMLStuck
+	}
+	timer := time.NewTimer(nvmlTimeout)
+	defer timer.Stop()
+	select {
+	case nvmlSlot <- struct{}{}:
+	case <-timer.C:
 		return zero, errNVMLStuck
 	}
 	type result struct {
@@ -171,10 +185,9 @@ func runBounded[T any](query func() (T, error)) (T, error) {
 	done := make(chan result, 1)
 	go func() {
 		value, err := query()
+		<-nvmlSlot
 		done <- result{value, err}
 	}()
-	timer := time.NewTimer(nvmlTimeout)
-	defer timer.Stop()
 	select {
 	case r := <-done:
 		return r.value, r.err

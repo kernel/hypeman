@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -220,6 +221,65 @@ func TestVendorVFIOProfileTypesSkipNVMLWhileAQueryIsStuck(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, profilesByVF["0000:82:00.4"], VGPUProfileType{TypeName: "1153", Name: "NVIDIA L40S-12Q", FramebufferMB: 12288},
 		"queries NVML again once the stuck query returns")
+}
+
+func TestNVMLQueriesStartOneAtATime(t *testing.T) {
+	setNVMLTimeout(t, 100*time.Millisecond)
+	release := make(chan struct{})
+	var entered atomic.Int32
+	hung := func() (int, error) {
+		entered.Add(1)
+		<-release
+		return 0, nil
+	}
+	t.Cleanup(func() {
+		close(release)
+		waitForStuckNVML(t)
+	})
+
+	errs := make(chan error, 5)
+	for range 5 {
+		go func() {
+			_, err := runBounded(hung)
+			errs <- err
+		}()
+	}
+	var timeouts, stuck int
+	for range 5 {
+		err := <-errs
+		switch {
+		case errors.Is(err, errNVMLTimeout):
+			timeouts++
+		case errors.Is(err, errNVMLStuck):
+			stuck++
+		}
+	}
+	assert.Equal(t, 1, timeouts)
+	assert.Equal(t, 4, stuck)
+	assert.Equal(t, int32(1), entered.Load(), "callers behind a hung query never enter the driver")
+}
+
+func TestNVMLQueriesWaitForEachOther(t *testing.T) {
+	var active, overlaps atomic.Int32
+	query := func() (int, error) {
+		if active.Add(1) > 1 {
+			overlaps.Add(1)
+		}
+		time.Sleep(5 * time.Millisecond)
+		active.Add(-1)
+		return 1, nil
+	}
+
+	var wg sync.WaitGroup
+	for range 10 {
+		wg.Go(func() {
+			value, err := runBounded(query)
+			assert.NoError(t, err)
+			assert.Equal(t, 1, value)
+		})
+	}
+	wg.Wait()
+	assert.Zero(t, overlaps.Load())
 }
 
 func TestVendorVFIOListProfilesCountsFreePlacements(t *testing.T) {
