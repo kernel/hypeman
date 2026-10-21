@@ -216,7 +216,7 @@ func (m *manager) admitMacOSBoot(ctx context.Context, stored *StoredMetadata) (f
 func (m *manager) macOSVMConfig(inst *Instance) hypervisor.VMConfig {
 	c := hypervisor.VMConfig{BootMode: hypervisor.BootModeMacOS, VCPUs: inst.Vcpus, MemoryBytes: inst.Size, VsockCID: inst.VsockCID, VsockSocket: inst.VsockSocket,
 		MacOS: &hypervisor.MacOSPlatform{HardwareModelData: inst.MacOS.HardwareModel, MachineIdentifierData: inst.MacOS.MachineIdentifier, AuxStoragePath: filepath.Join(inst.DataDir, macOSAuxStorageFile)},
-		Disks: []hypervisor.DiskConfig{{Path: macOSBootDiskPath(m.paths, inst.Id)}}}
+		Disks: []hypervisor.DiskConfig{{Path: m.paths.InstanceMacOSBootDisk(inst.Id)}}}
 	if inst.NetworkEnabled {
 		c.Networks = []hypervisor.NetworkConfig{{MAC: inst.MAC}}
 	}
@@ -389,27 +389,7 @@ func (s *StoredMetadata) VMStoragePath() string {
 	if s.MacOS == nil || s.DataDir == "" {
 		return ""
 	}
-	boot := filepath.Join(s.DataDir, paths.MacOSBootDiskFile)
-	if legacy := filepath.Join(s.DataDir, "overlay.raw"); !fileExists(boot) && fileExists(legacy) {
-		return legacy
-	}
-	return boot
-}
-
-// macOSBootDiskPath is the boot disk a macOS instance runs from. Instances created
-// before the boot.raw name keep their disk at overlay.raw, so that file is used when
-// boot.raw is absent. New instances always use boot.raw.
-func macOSBootDiskPath(p *paths.Paths, id string) string {
-	boot := p.InstanceMacOSBootDisk(id)
-	if legacy := p.InstanceOverlay(id); !fileExists(boot) && fileExists(legacy) {
-		return legacy
-	}
-	return boot
-}
-
-func fileExists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
+	return filepath.Join(s.DataDir, paths.MacOSBootDiskFile)
 }
 
 // requireMacOSGuest refuses Linux guests on a macOS-only server.
