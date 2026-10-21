@@ -13,6 +13,7 @@ Build on a macOS development machine with the macOS SDK and cgo enabled:
 
 ```sh
 CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 go build \
+  -ldflags "-X main.agentVersion=$(git describe --always --dirty)" \
   -o guest-agent-darwin-arm64 ./lib/system/guest_agent
 ```
 
@@ -60,6 +61,29 @@ Undeclared/disabled images reject exec/copy before WebSocket upgrade and skip
 agent shutdown/probes. The declaration is an image capability claim, not a
 verified live guest handshake or a security credential. Runtime connectivity
 and privileged provisioning still require the validation below.
+
+## Versioning
+
+The macOS agent ships inside the image, so an instance can run an agent older or
+newer than the host. When the agent first answers, the host calls `GetAgentInfo`
+and records the reply on the instance:
+
+- **Protocol version** changes only for a change an older host cannot handle. The
+  host refuses an agent with a newer protocol than it supports; the guest stays
+  `Initializing` with that reason until the startup deadline stops it.
+- **Capabilities** list optional features. An operation that needs one returns
+  501 naming the missing capability, rather than failing at the transport.
+- **Version** is the build string set with `-X main.agentVersion`, for diagnostics.
+
+An agent that predates `GetAgentInfo` answers `Unimplemented` and is recorded as
+protocol 0 with no optional capabilities. It keeps exec, copy, stat and shutdown.
+
+To upgrade the agent, build a new image with the new agent and create instances
+from it; existing instances keep the agent their disk holds. To roll back, create
+instances from the previous image. The host checks the agent on every boot, so a
+guest whose agent was replaced in place is rechecked at its next start. Linux
+guests get the agent embedded in hypeman's initrd, so it always matches the host
+at boot; the host does not call `GetAgentInfo` for them.
 
 ## OS-specific operations
 

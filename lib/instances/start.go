@@ -71,6 +71,7 @@ func (m *manager) startInstance(
 	stored.ExitMessage = ""
 	stored.ProgramStartedAt = nil
 	stored.GuestAgentReadyAt = nil
+	stored.GuestAgent = nil
 	if len(req.Entrypoint) > 0 {
 		stored.Entrypoint = req.Entrypoint
 	}

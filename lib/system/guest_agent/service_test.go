@@ -293,3 +293,12 @@ func TestGuestServiceFileRoundTrip(t *testing.T) {
 	require.True(t, final)
 	require.Equal(t, payload, content.String())
 }
+
+func TestGuestServiceReportsAgentInfo(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	info, err := testGuestClient(t).GetAgentInfo(ctx, &pb.GetAgentInfoRequest{})
+	require.NoError(t, err)
+	require.EqualValues(t, agentProtocolVersion, info.ProtocolVersion)
+	require.Equal(t, agentVersion, info.Version)
+}

@@ -126,6 +126,9 @@ type StoredMetadata struct {
 	ProgramStartedAt  *time.Time // Set when guest program handoff/start boundary is reached
 	GuestAgentReadyAt *time.Time // Set when guest-agent is ready (unless skip_guest_agent=true)
 
+	// macOS: what the image's agent reported when it became ready
+	GuestAgent *GuestAgentInfo `json:",omitempty"`
+
 	// Versions
 	KernelVersion string // Kernel version (e.g., "ch-v6.12.9")
 

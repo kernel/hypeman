@@ -71,6 +71,51 @@ func (GPUInitState) EnumDescriptor() ([]byte, []int) {
 	return file_lib_guest_guest_proto_rawDescGZIP(), []int{0}
 }
 
+// AgentCapability names an optional agent feature. Operations every agent supports,
+// such as exec, copy, stat and shutdown, are not listed.
+type AgentCapability int32
+
+const (
+	AgentCapability_AGENT_CAPABILITY_UNSPECIFIED AgentCapability = 0
+)
+
+// Enum value maps for AgentCapability.
+var (
+	AgentCapability_name = map[int32]string{
+		0: "AGENT_CAPABILITY_UNSPECIFIED",
+	}
+	AgentCapability_value = map[string]int32{
+		"AGENT_CAPABILITY_UNSPECIFIED": 0,
+	}
+)
+
+func (x AgentCapability) Enum() *AgentCapability {
+	p := new(AgentCapability)
+	*p = x
+	return p
+}
+
+func (x AgentCapability) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (AgentCapability) Descriptor() protoreflect.EnumDescriptor {
+	return file_lib_guest_guest_proto_enumTypes[1].Descriptor()
+}
+
+func (AgentCapability) Type() protoreflect.EnumType {
+	return &file_lib_guest_guest_proto_enumTypes[1]
+}
+
+func (x AgentCapability) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use AgentCapability.Descriptor instead.
+func (AgentCapability) EnumDescriptor() ([]byte, []int) {
+	return file_lib_guest_guest_proto_rawDescGZIP(), []int{1}
+}
+
 // ExecRequest represents messages from client to server
 type ExecRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -1521,6 +1566,107 @@ func (x *GetGPUInitStatusResponse) GetFailureMessage() string {
 	return ""
 }
 
+// GetAgentInfoRequest requests the agent's version information
+type GetAgentInfoRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetAgentInfoRequest) Reset() {
+	*x = GetAgentInfoRequest{}
+	mi := &file_lib_guest_guest_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetAgentInfoRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetAgentInfoRequest) ProtoMessage() {}
+
+func (x *GetAgentInfoRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_lib_guest_guest_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetAgentInfoRequest.ProtoReflect.Descriptor instead.
+func (*GetAgentInfoRequest) Descriptor() ([]byte, []int) {
+	return file_lib_guest_guest_proto_rawDescGZIP(), []int{21}
+}
+
+// GetAgentInfoResponse describes the running agent
+type GetAgentInfoResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Incremented only for changes an older host cannot handle; additive changes
+	// are reported as capabilities instead
+	ProtocolVersion uint32 `protobuf:"varint,1,opt,name=protocol_version,json=protocolVersion,proto3" json:"protocol_version,omitempty"`
+	// Build version, for diagnostics only
+	Version       string            `protobuf:"bytes,2,opt,name=version,proto3" json:"version,omitempty"`
+	Capabilities  []AgentCapability `protobuf:"varint,3,rep,packed,name=capabilities,proto3,enum=guest.AgentCapability" json:"capabilities,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetAgentInfoResponse) Reset() {
+	*x = GetAgentInfoResponse{}
+	mi := &file_lib_guest_guest_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetAgentInfoResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetAgentInfoResponse) ProtoMessage() {}
+
+func (x *GetAgentInfoResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_lib_guest_guest_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetAgentInfoResponse.ProtoReflect.Descriptor instead.
+func (*GetAgentInfoResponse) Descriptor() ([]byte, []int) {
+	return file_lib_guest_guest_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *GetAgentInfoResponse) GetProtocolVersion() uint32 {
+	if x != nil {
+		return x.ProtocolVersion
+	}
+	return 0
+}
+
+func (x *GetAgentInfoResponse) GetVersion() string {
+	if x != nil {
+		return x.Version
+	}
+	return ""
+}
+
+func (x *GetAgentInfoResponse) GetCapabilities() []AgentCapability {
+	if x != nil {
+		return x.Capabilities
+	}
+	return nil
+}
+
 var File_lib_guest_guest_proto protoreflect.FileDescriptor
 
 const file_lib_guest_guest_proto_rawDesc = "" +
@@ -1624,11 +1770,18 @@ const file_lib_guest_guest_proto_rawDesc = "" +
 	"\x17GetGPUInitStatusRequest\"n\n" +
 	"\x18GetGPUInitStatusResponse\x12)\n" +
 	"\x05state\x18\x01 \x01(\x0e2\x13.guest.GPUInitStateR\x05state\x12'\n" +
-	"\x0ffailure_message\x18\x02 \x01(\tR\x0efailureMessage*\\\n" +
+	"\x0ffailure_message\x18\x02 \x01(\tR\x0efailureMessage\"\x15\n" +
+	"\x13GetAgentInfoRequest\"\x97\x01\n" +
+	"\x14GetAgentInfoResponse\x12)\n" +
+	"\x10protocol_version\x18\x01 \x01(\rR\x0fprotocolVersion\x12\x18\n" +
+	"\aversion\x18\x02 \x01(\tR\aversion\x12:\n" +
+	"\fcapabilities\x18\x03 \x03(\x0e2\x16.guest.AgentCapabilityR\fcapabilities*\\\n" +
 	"\fGPUInitState\x12\x1a\n" +
 	"\x16GPU_INIT_STATE_UNKNOWN\x10\x00\x12\x15\n" +
 	"\x11GPU_INIT_STATE_OK\x10\x01\x12\x19\n" +
-	"\x15GPU_INIT_STATE_FAILED\x10\x022\x83\x04\n" +
+	"\x15GPU_INIT_STATE_FAILED\x10\x02*3\n" +
+	"\x0fAgentCapability\x12 \n" +
+	"\x1cAGENT_CAPABILITY_UNSPECIFIED\x10\x002\xcc\x04\n" +
 	"\fGuestService\x123\n" +
 	"\x04Exec\x12\x12.guest.ExecRequest\x1a\x13.guest.ExecResponse(\x010\x01\x12F\n" +
 	"\vCopyToGuest\x12\x19.guest.CopyToGuestRequest\x1a\x1a.guest.CopyToGuestResponse(\x01\x12L\n" +
@@ -1636,7 +1789,8 @@ const file_lib_guest_guest_proto_rawDesc = "" +
 	"\bStatPath\x12\x16.guest.StatPathRequest\x1a\x17.guest.StatPathResponse\x12;\n" +
 	"\bShutdown\x12\x16.guest.ShutdownRequest\x1a\x17.guest.ShutdownResponse\x12Y\n" +
 	"\x12ReconfigureNetwork\x12 .guest.ReconfigureNetworkRequest\x1a!.guest.ReconfigureNetworkResponse\x12S\n" +
-	"\x10GetGPUInitStatus\x12\x1e.guest.GetGPUInitStatusRequest\x1a\x1f.guest.GetGPUInitStatusResponseB'Z%github.com/onkernel/hypeman/lib/guestb\x06proto3"
+	"\x10GetGPUInitStatus\x12\x1e.guest.GetGPUInitStatusRequest\x1a\x1f.guest.GetGPUInitStatusResponse\x12G\n" +
+	"\fGetAgentInfo\x12\x1a.guest.GetAgentInfoRequest\x1a\x1b.guest.GetAgentInfoResponseB'Z%github.com/onkernel/hypeman/lib/guestb\x06proto3"
 
 var (
 	file_lib_guest_guest_proto_rawDescOnce sync.Once
@@ -1650,62 +1804,68 @@ func file_lib_guest_guest_proto_rawDescGZIP() []byte {
 	return file_lib_guest_guest_proto_rawDescData
 }
 
-var file_lib_guest_guest_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_lib_guest_guest_proto_msgTypes = make([]protoimpl.MessageInfo, 22)
+var file_lib_guest_guest_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_lib_guest_guest_proto_msgTypes = make([]protoimpl.MessageInfo, 24)
 var file_lib_guest_guest_proto_goTypes = []any{
 	(GPUInitState)(0),                  // 0: guest.GPUInitState
-	(*ExecRequest)(nil),                // 1: guest.ExecRequest
-	(*ExecStart)(nil),                  // 2: guest.ExecStart
-	(*WindowSize)(nil),                 // 3: guest.WindowSize
-	(*ExecResponse)(nil),               // 4: guest.ExecResponse
-	(*CopyToGuestRequest)(nil),         // 5: guest.CopyToGuestRequest
-	(*CopyToGuestStart)(nil),           // 6: guest.CopyToGuestStart
-	(*CopyToGuestEnd)(nil),             // 7: guest.CopyToGuestEnd
-	(*CopyToGuestResponse)(nil),        // 8: guest.CopyToGuestResponse
-	(*CopyFromGuestRequest)(nil),       // 9: guest.CopyFromGuestRequest
-	(*CopyFromGuestResponse)(nil),      // 10: guest.CopyFromGuestResponse
-	(*CopyFromGuestHeader)(nil),        // 11: guest.CopyFromGuestHeader
-	(*CopyFromGuestEnd)(nil),           // 12: guest.CopyFromGuestEnd
-	(*CopyFromGuestError)(nil),         // 13: guest.CopyFromGuestError
-	(*StatPathRequest)(nil),            // 14: guest.StatPathRequest
-	(*StatPathResponse)(nil),           // 15: guest.StatPathResponse
-	(*ShutdownRequest)(nil),            // 16: guest.ShutdownRequest
-	(*ShutdownResponse)(nil),           // 17: guest.ShutdownResponse
-	(*ReconfigureNetworkRequest)(nil),  // 18: guest.ReconfigureNetworkRequest
-	(*ReconfigureNetworkResponse)(nil), // 19: guest.ReconfigureNetworkResponse
-	(*GetGPUInitStatusRequest)(nil),    // 20: guest.GetGPUInitStatusRequest
-	(*GetGPUInitStatusResponse)(nil),   // 21: guest.GetGPUInitStatusResponse
-	nil,                                // 22: guest.ExecStart.EnvEntry
+	(AgentCapability)(0),               // 1: guest.AgentCapability
+	(*ExecRequest)(nil),                // 2: guest.ExecRequest
+	(*ExecStart)(nil),                  // 3: guest.ExecStart
+	(*WindowSize)(nil),                 // 4: guest.WindowSize
+	(*ExecResponse)(nil),               // 5: guest.ExecResponse
+	(*CopyToGuestRequest)(nil),         // 6: guest.CopyToGuestRequest
+	(*CopyToGuestStart)(nil),           // 7: guest.CopyToGuestStart
+	(*CopyToGuestEnd)(nil),             // 8: guest.CopyToGuestEnd
+	(*CopyToGuestResponse)(nil),        // 9: guest.CopyToGuestResponse
+	(*CopyFromGuestRequest)(nil),       // 10: guest.CopyFromGuestRequest
+	(*CopyFromGuestResponse)(nil),      // 11: guest.CopyFromGuestResponse
+	(*CopyFromGuestHeader)(nil),        // 12: guest.CopyFromGuestHeader
+	(*CopyFromGuestEnd)(nil),           // 13: guest.CopyFromGuestEnd
+	(*CopyFromGuestError)(nil),         // 14: guest.CopyFromGuestError
+	(*StatPathRequest)(nil),            // 15: guest.StatPathRequest
+	(*StatPathResponse)(nil),           // 16: guest.StatPathResponse
+	(*ShutdownRequest)(nil),            // 17: guest.ShutdownRequest
+	(*ShutdownResponse)(nil),           // 18: guest.ShutdownResponse
+	(*ReconfigureNetworkRequest)(nil),  // 19: guest.ReconfigureNetworkRequest
+	(*ReconfigureNetworkResponse)(nil), // 20: guest.ReconfigureNetworkResponse
+	(*GetGPUInitStatusRequest)(nil),    // 21: guest.GetGPUInitStatusRequest
+	(*GetGPUInitStatusResponse)(nil),   // 22: guest.GetGPUInitStatusResponse
+	(*GetAgentInfoRequest)(nil),        // 23: guest.GetAgentInfoRequest
+	(*GetAgentInfoResponse)(nil),       // 24: guest.GetAgentInfoResponse
+	nil,                                // 25: guest.ExecStart.EnvEntry
 }
 var file_lib_guest_guest_proto_depIdxs = []int32{
-	2,  // 0: guest.ExecRequest.start:type_name -> guest.ExecStart
-	3,  // 1: guest.ExecRequest.resize:type_name -> guest.WindowSize
-	22, // 2: guest.ExecStart.env:type_name -> guest.ExecStart.EnvEntry
-	6,  // 3: guest.CopyToGuestRequest.start:type_name -> guest.CopyToGuestStart
-	7,  // 4: guest.CopyToGuestRequest.end:type_name -> guest.CopyToGuestEnd
-	11, // 5: guest.CopyFromGuestResponse.header:type_name -> guest.CopyFromGuestHeader
-	12, // 6: guest.CopyFromGuestResponse.end:type_name -> guest.CopyFromGuestEnd
-	13, // 7: guest.CopyFromGuestResponse.error:type_name -> guest.CopyFromGuestError
+	3,  // 0: guest.ExecRequest.start:type_name -> guest.ExecStart
+	4,  // 1: guest.ExecRequest.resize:type_name -> guest.WindowSize
+	25, // 2: guest.ExecStart.env:type_name -> guest.ExecStart.EnvEntry
+	7,  // 3: guest.CopyToGuestRequest.start:type_name -> guest.CopyToGuestStart
+	8,  // 4: guest.CopyToGuestRequest.end:type_name -> guest.CopyToGuestEnd
+	12, // 5: guest.CopyFromGuestResponse.header:type_name -> guest.CopyFromGuestHeader
+	13, // 6: guest.CopyFromGuestResponse.end:type_name -> guest.CopyFromGuestEnd
+	14, // 7: guest.CopyFromGuestResponse.error:type_name -> guest.CopyFromGuestError
 	0,  // 8: guest.GetGPUInitStatusResponse.state:type_name -> guest.GPUInitState
-	1,  // 9: guest.GuestService.Exec:input_type -> guest.ExecRequest
-	5,  // 10: guest.GuestService.CopyToGuest:input_type -> guest.CopyToGuestRequest
-	9,  // 11: guest.GuestService.CopyFromGuest:input_type -> guest.CopyFromGuestRequest
-	14, // 12: guest.GuestService.StatPath:input_type -> guest.StatPathRequest
-	16, // 13: guest.GuestService.Shutdown:input_type -> guest.ShutdownRequest
-	18, // 14: guest.GuestService.ReconfigureNetwork:input_type -> guest.ReconfigureNetworkRequest
-	20, // 15: guest.GuestService.GetGPUInitStatus:input_type -> guest.GetGPUInitStatusRequest
-	4,  // 16: guest.GuestService.Exec:output_type -> guest.ExecResponse
-	8,  // 17: guest.GuestService.CopyToGuest:output_type -> guest.CopyToGuestResponse
-	10, // 18: guest.GuestService.CopyFromGuest:output_type -> guest.CopyFromGuestResponse
-	15, // 19: guest.GuestService.StatPath:output_type -> guest.StatPathResponse
-	17, // 20: guest.GuestService.Shutdown:output_type -> guest.ShutdownResponse
-	19, // 21: guest.GuestService.ReconfigureNetwork:output_type -> guest.ReconfigureNetworkResponse
-	21, // 22: guest.GuestService.GetGPUInitStatus:output_type -> guest.GetGPUInitStatusResponse
-	16, // [16:23] is the sub-list for method output_type
-	9,  // [9:16] is the sub-list for method input_type
-	9,  // [9:9] is the sub-list for extension type_name
-	9,  // [9:9] is the sub-list for extension extendee
-	0,  // [0:9] is the sub-list for field type_name
+	1,  // 9: guest.GetAgentInfoResponse.capabilities:type_name -> guest.AgentCapability
+	2,  // 10: guest.GuestService.Exec:input_type -> guest.ExecRequest
+	6,  // 11: guest.GuestService.CopyToGuest:input_type -> guest.CopyToGuestRequest
+	10, // 12: guest.GuestService.CopyFromGuest:input_type -> guest.CopyFromGuestRequest
+	15, // 13: guest.GuestService.StatPath:input_type -> guest.StatPathRequest
+	17, // 14: guest.GuestService.Shutdown:input_type -> guest.ShutdownRequest
+	19, // 15: guest.GuestService.ReconfigureNetwork:input_type -> guest.ReconfigureNetworkRequest
+	21, // 16: guest.GuestService.GetGPUInitStatus:input_type -> guest.GetGPUInitStatusRequest
+	23, // 17: guest.GuestService.GetAgentInfo:input_type -> guest.GetAgentInfoRequest
+	5,  // 18: guest.GuestService.Exec:output_type -> guest.ExecResponse
+	9,  // 19: guest.GuestService.CopyToGuest:output_type -> guest.CopyToGuestResponse
+	11, // 20: guest.GuestService.CopyFromGuest:output_type -> guest.CopyFromGuestResponse
+	16, // 21: guest.GuestService.StatPath:output_type -> guest.StatPathResponse
+	18, // 22: guest.GuestService.Shutdown:output_type -> guest.ShutdownResponse
+	20, // 23: guest.GuestService.ReconfigureNetwork:output_type -> guest.ReconfigureNetworkResponse
+	22, // 24: guest.GuestService.GetGPUInitStatus:output_type -> guest.GetGPUInitStatusResponse
+	24, // 25: guest.GuestService.GetAgentInfo:output_type -> guest.GetAgentInfoResponse
+	18, // [18:26] is the sub-list for method output_type
+	10, // [10:18] is the sub-list for method input_type
+	10, // [10:10] is the sub-list for extension type_name
+	10, // [10:10] is the sub-list for extension extendee
+	0,  // [0:10] is the sub-list for field type_name
 }
 
 func init() { file_lib_guest_guest_proto_init() }
@@ -1739,8 +1899,8 @@ func file_lib_guest_guest_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_lib_guest_guest_proto_rawDesc), len(file_lib_guest_guest_proto_rawDesc)),
-			NumEnums:      1,
-			NumMessages:   22,
+			NumEnums:      2,
+			NumMessages:   24,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

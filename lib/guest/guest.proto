@@ -26,6 +26,10 @@ service GuestService {
 
   // GetGPUInitStatus reports the GPU driver init state observed by the guest agent
   rpc GetGPUInitStatus(GetGPUInitStatusRequest) returns (GetGPUInitStatusResponse);
+
+  // GetAgentInfo reports the agent's protocol version and optional capabilities.
+  // Agents that predate it answer Unimplemented, which the host treats as protocol 0.
+  rpc GetAgentInfo(GetAgentInfoRequest) returns (GetAgentInfoResponse);
 }
 
 // ExecRequest represents messages from client to server
@@ -188,4 +192,23 @@ message GetGPUInitStatusResponse {
   GPUInitState state = 1;
   // Most recent NVRM init-failure line observed in kmsg; set when state is FAILED
   string failure_message = 2;
+}
+
+// AgentCapability names an optional agent feature. Operations every agent supports,
+// such as exec, copy, stat and shutdown, are not listed.
+enum AgentCapability {
+  AGENT_CAPABILITY_UNSPECIFIED = 0;
+}
+
+// GetAgentInfoRequest requests the agent's version information
+message GetAgentInfoRequest {}
+
+// GetAgentInfoResponse describes the running agent
+message GetAgentInfoResponse {
+  // Incremented only for changes an older host cannot handle; additive changes
+  // are reported as capabilities instead
+  uint32 protocol_version = 1;
+  // Build version, for diagnostics only
+  string version = 2;
+  repeated AgentCapability capabilities = 3;
 }

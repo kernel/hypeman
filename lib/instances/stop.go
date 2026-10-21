@@ -289,6 +289,7 @@ func (m *manager) stopInstance(
 	// Boot markers are per-boot-run and must not carry across stop/restore/start.
 	stored.ProgramStartedAt = nil
 	stored.GuestAgentReadyAt = nil
+	stored.GuestAgent = nil
 	stored.FirecrackerSnapshotCacheKey = ""
 	clearFirecrackerUFFDRestoreState(stored)
 	stored.Phases.Record(phasetracking.PhaseStopped, now)

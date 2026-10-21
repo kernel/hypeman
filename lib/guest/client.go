@@ -1003,6 +1003,25 @@ func GetGPUInitStatus(ctx context.Context, dialer hypervisor.VsockDialer) (GPUIn
 	return resp.State, resp.FailureMessage, nil
 }
 
+// GetAgentInfo asks the agent for its protocol version and capabilities. It dials its
+// own connection, as readiness probes do. An agent that predates the RPC is reported
+// as protocol 0 with no optional capabilities.
+func GetAgentInfo(ctx context.Context, dialer hypervisor.VsockDialer) (*GetAgentInfoResponse, error) {
+	conn, err := dialGuestConn(ctx, dialer)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	info, err := NewGuestServiceClient(conn).GetAgentInfo(ctx, &GetAgentInfoRequest{})
+	if status.Code(err) == codes.Unimplemented {
+		return &GetAgentInfoResponse{}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("agent info RPC: %w", err)
+	}
+	return info, nil
+}
+
 // ShutdownInstance sends a shutdown signal to the guest VM's init process (PID 1).
 // The guest-agent forwards the signal to init, which forwards it to the entrypoint.
 // sig is the signal number to send (0 = SIGTERM default).

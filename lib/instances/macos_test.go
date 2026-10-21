@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kernel/hypeman/lib/guest"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/instances/phasetracking"
@@ -65,7 +66,7 @@ func TestMacOSAgentReadinessGatesRunning(t *testing.T) {
 			stored := StoredMetadata{Id: "mac", MacOS: image.MacOS, SkipGuestAgent: tc.skipped}
 			now := time.Now().UTC()
 			calls := 0
-			m := &manager{paths: paths.New(t.TempDir()), now: func() time.Time { return now }, guestAgentReadyProbe: func(context.Context, *StoredMetadata) bool {
+			m := &manager{paths: paths.New(t.TempDir()), now: func() time.Time { return now }, guestAgentInfoProbe: currentAgentInfo, guestAgentReadyProbe: func(context.Context, *StoredMetadata) bool {
 				calls++
 				return tc.ready
 			}}
@@ -100,7 +101,7 @@ func TestMacOSAgentReadinessGatesRunning(t *testing.T) {
 func TestMacOSAgentReadyMarkerPersisted(t *testing.T) {
 	p := paths.New(t.TempDir())
 	now := time.Now().UTC()
-	m := &manager{paths: p, now: func() time.Time { return now }, guestAgentReadyProbe: func(context.Context, *StoredMetadata) bool { return true }}
+	m := &manager{paths: p, now: func() time.Time { return now }, guestAgentReadyProbe: func(context.Context, *StoredMetadata) bool { return true }, guestAgentInfoProbe: currentAgentInfo}
 	require.NoError(t, m.ensureDirectories("mac"))
 	image := testMacImage()
 	image.MacOS.GuestAgent = true
@@ -116,7 +117,7 @@ func TestMacOSAgentReadyMarkerPersisted(t *testing.T) {
 func TestMacOSAgentReadyMarkerPersistedByPublicRead(t *testing.T) {
 	p := paths.New(t.TempDir())
 	now := time.Now().UTC()
-	m := &manager{paths: p, now: func() time.Time { return now }, guestAgentReadyProbe: func(context.Context, *StoredMetadata) bool { return true }}
+	m := &manager{paths: p, now: func() time.Time { return now }, guestAgentReadyProbe: func(context.Context, *StoredMetadata) bool { return true }, guestAgentInfoProbe: currentAgentInfo}
 	require.NoError(t, m.ensureDirectories("mac"))
 	socket := filepath.Join(p.InstanceDir("mac"), "vz.sock")
 	require.NoError(t, os.WriteFile(socket, nil, 0600))
@@ -233,4 +234,45 @@ func TestMacOSRunningPhaseFollowsReadiness(t *testing.T) {
 	stored = StoredMetadata{MacOS: image.MacOS, SkipGuestAgent: true}
 	phase, _ = runningPhaseFromMarkers(&stored)
 	require.Equal(t, phasetracking.PhaseRunning, phase, "a guest without the agent runs from boot")
+}
+
+// currentAgentInfo answers GetAgentInfo as an agent at this host's protocol does.
+func currentAgentInfo(context.Context, *StoredMetadata) (*guest.GetAgentInfoResponse, error) {
+	return &guest.GetAgentInfoResponse{ProtocolVersion: maxGuestAgentProtocol, Version: "test"}, nil
+}
+
+func TestMacOSAgentInfoRecordedAtReadiness(t *testing.T) {
+	image := testMacImage()
+	image.MacOS.GuestAgent = true
+	for _, tc := range []struct {
+		name   string
+		info   *guest.GetAgentInfoResponse
+		err    error
+		ready  bool
+		reason string
+	}{
+		{name: "current agent", info: &guest.GetAgentInfoResponse{ProtocolVersion: 1, Version: "v1"}, ready: true},
+		{name: "agent that predates the RPC", info: &guest.GetAgentInfoResponse{}, ready: true},
+		{name: "agent newer than the host", info: &guest.GetAgentInfoResponse{ProtocolVersion: maxGuestAgentProtocol + 1, Version: "v9"}, reason: "this host supports up to"},
+		{name: "info RPC fails", err: errors.New("connection reset"), reason: "connection reset"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := &manager{paths: paths.New(t.TempDir()), now: time.Now,
+				guestAgentReadyProbe: func(context.Context, *StoredMetadata) bool { return true },
+				guestAgentInfoProbe:  func(context.Context, *StoredMetadata) (*guest.GetAgentInfoResponse, error) { return tc.info, tc.err },
+			}
+			stored := StoredMetadata{Id: "mac", MacOS: image.MacOS}
+			require.Equal(t, tc.ready, m.hydrateGuestAgentReadyFromProbe(context.Background(), &stored))
+			reason, failed := m.macOSAgentNotReady.Load("mac")
+			if !tc.ready {
+				require.Nil(t, stored.GuestAgentReadyAt)
+				require.True(t, failed)
+				require.Contains(t, reason, tc.reason)
+				return
+			}
+			require.False(t, failed)
+			require.NotNil(t, stored.GuestAgentReadyAt)
+			require.Equal(t, &GuestAgentInfo{ProtocolVersion: tc.info.ProtocolVersion, Version: tc.info.Version}, stored.GuestAgent)
+		})
+	}
 }

@@ -435,6 +435,15 @@ func (m *manager) hydrateGuestAgentReadyFromProbe(ctx context.Context, stored *S
 	if !probe(ctx, stored) {
 		return false
 	}
+	if stored.MacOS != nil {
+		info, err := m.macOSGuestAgentInfo(ctx, stored)
+		if err != nil {
+			m.macOSAgentNotReady.Store(stored.Id, err.Error())
+			return false
+		}
+		m.macOSAgentNotReady.Delete(stored.Id)
+		stored.GuestAgent = info
+	}
 	readyAt := m.nowUTC()
 	stored.GuestAgentReadyAt = &readyAt
 	return true
