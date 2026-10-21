@@ -62,13 +62,21 @@ func pumpExecInput(stream pb.GuestService_ExecServer, onStdin func([]byte), onRe
 	}()
 }
 
-// execExitCode is the status a client sees. A deadline always reports 124, the GNU
-// timeout convention, even when the command exited during the drain. Otherwise the
-// process exit code is used, and a command that could not be waited for reports 124.
+// execExitCode is the status the macOS lifecycle reports. A deadline always reports
+// 124, the GNU timeout convention, even when the command exited during the drain.
+// Otherwise it is the process exit status.
 func execExitCode(cmd *exec.Cmd, waitErr error, timedOut bool) int32 {
 	if timedOut {
 		return 124
 	}
+	return processExitCode(cmd, waitErr)
+}
+
+// processExitCode is the status the direct (Linux) path reports: the process exit
+// code, which is -1 for a command a timeout killed, and 124 only for a command that
+// could not be waited for. The deadline is not consulted, so a command that finished
+// in time keeps its code even if sending its output outlasts the deadline.
+func processExitCode(cmd *exec.Cmd, waitErr error) int32 {
 	if cmd.ProcessState != nil {
 		return int32(cmd.ProcessState.ExitCode())
 	}

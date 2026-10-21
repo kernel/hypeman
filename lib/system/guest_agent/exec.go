@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -127,7 +126,7 @@ func (s *guestServer) executeNoTTY(ctx context.Context, stream pb.GuestService_E
 		sendMu.Unlock()
 	}
 
-	exitCode := execExitCode(cmd, waitErr, errors.Is(ctx.Err(), context.DeadlineExceeded))
+	exitCode := processExitCode(cmd, waitErr)
 
 	log.Printf("[guest-agent] command finished with exit code: %d", exitCode)
 
@@ -193,7 +192,7 @@ func (s *guestServer) executeTTY(ctx context.Context, stream pb.GuestService_Exe
 	// Wait for all output to be sent
 	wg.Wait()
 
-	exitCode := execExitCode(cmd, waitErr, errors.Is(ctx.Err(), context.DeadlineExceeded))
+	exitCode := processExitCode(cmd, waitErr)
 
 	log.Printf("[guest-agent] TTY command finished with exit code: %d", exitCode)
 
