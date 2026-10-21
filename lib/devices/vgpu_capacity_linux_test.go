@@ -4,6 +4,7 @@ package devices
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -39,6 +40,27 @@ func TestCapacityCacheReadsDoNotQueryTheDriver(t *testing.T) {
 	assert.Equal(t, 1, profileAvailability(profiles, "NVIDIA L40S-4Q"),
 		"a claimed or quarantined VF counts before the placements are reloaded")
 	assert.Equal(t, int32(1), loads.Load(), "only the first read loads")
+}
+
+func TestCapacityCacheReloadsAfterFailedLoad(t *testing.T) {
+	fail := true
+	var loads atomic.Int32
+	cache := newCapacityCache(func() (creatableSnapshot, error) {
+		loads.Add(1)
+		if fail {
+			return creatableSnapshot{}, errors.New("read PCI devices: transient")
+		}
+		return creatableSnapshot{byGPU: testCreatablePlacements()}, nil
+	})
+	cache.refresh()
+	_, err := cache.profiles(testCapacityVFs(), nil)
+	require.ErrorContains(t, err, "transient")
+
+	fail = false
+	profiles, err := cache.profiles(testCapacityVFs(), nil)
+	require.NoError(t, err, "a read after a failed load loads again rather than returning the stale error")
+	assert.Equal(t, 3, profileAvailability(profiles, "NVIDIA L40S-4Q"))
+	assert.Equal(t, int32(3), loads.Load())
 }
 
 func TestCapacityCacheBackgroundRefreshesCoalesce(t *testing.T) {

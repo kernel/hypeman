@@ -50,10 +50,12 @@ func (s vendorVFIOSysfs) loadCapacity() (creatableSnapshot, error) {
 }
 
 // profiles returns the profile counts for vfs from the cached placements,
-// loading them first if nothing has been loaded yet.
+// loading them first if nothing has been loaded yet or the last load
+// failed, so a transient failure costs one read, not every read until the
+// next refresh.
 func (c *capacityCache) profiles(vfs []VirtualFunction, quarantined map[string]struct{}) ([]GPUProfile, error) {
 	c.mu.RLock()
-	loaded := c.loaded
+	loaded := c.loaded && c.err == nil
 	c.mu.RUnlock()
 	if !loaded {
 		c.refresh()

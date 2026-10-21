@@ -28,8 +28,8 @@ type GPUResourceStatus struct {
 // prevents determining allocatable vGPU capacity. The status is still
 // returned alongside such an error, with PlacementDisabledReason set. It
 // returns nil if no GPU is available or the mode is "none". Profiles are
-// listed only if withProfiles is set: admission uses only the slot counts,
-// and on a vendor VFIO host the listing queries NVML.
+// listed only if withProfiles is set, since admission uses only the slot
+// counts.
 func GetGPUStatus(ctx context.Context, withProfiles bool) (*GPUResourceStatus, error) {
 	framework, vfs, err := devices.DiscoverVGPU()
 	if err != nil {
