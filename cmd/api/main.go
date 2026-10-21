@@ -684,6 +684,14 @@ func run() error {
 			return restartController.StartRestartPolicyController(gctx)
 		})
 	}
+	if startupController, ok := app.InstanceManager.(interface {
+		StartMacOSAgentStartupController(context.Context) error
+	}); ok && runtime.GOOS == "darwin" {
+		grp.Go(func() error {
+			logger.Info("starting macOS agent startup controller")
+			return startupController.StartMacOSAgentStartupController(gctx)
+		})
+	}
 	if ttlReaper, ok := app.InstanceManager.(interface {
 		StartTTLReaper(context.Context) error
 	}); ok {

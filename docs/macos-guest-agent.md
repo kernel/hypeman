@@ -57,6 +57,12 @@ start marker. An enabled instance is `Initializing` until that marker is recorde
 then `Running`; this does not certify desktop or browser readiness. This readiness timestamp is a boot observation,
 not continuous agent health. Start clears the prior boot's readiness marker.
 
+An enabled instance that is still `Initializing` 10 minutes after it booted (or
+resumed) is stopped, because its agent is missing, broken or incompatible. The
+reason, including the last probe failure, is in the instance's `exit_message`.
+Its disk and logs are kept, start clears the message, and the restart policy
+applies as for any other stop.
+
 Undeclared/disabled images reject exec/copy before WebSocket upgrade and skip
 agent shutdown/probes. The declaration is an image capability claim, not a
 verified live guest handshake or a security credential. Runtime connectivity
