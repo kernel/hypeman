@@ -84,8 +84,9 @@ func (s *guestServer) executeLifecycleNoTTY(ctx context.Context, cancel context.
 	}
 	// Cancel is not called once the direct child has exited, so a descendant that
 	// still holds the pipes would outlive the timeout. Kill the group from the context.
-	waited := make(chan struct{})
-	go killGroupOnDone(ctx, cmd, waited)
+	lifecycleDone := make(chan struct{})
+	defer close(lifecycleDone)
+	go killGroupOnDone(ctx, cmd, lifecycleDone)
 
 	// Handle stdin in background
 	go func() {
@@ -101,7 +102,7 @@ func (s *guestServer) executeLifecycleNoTTY(ctx context.Context, cancel context.
 		}
 	}()
 
-	return s.finishExec(ctx, sender, cmd, waited, nil)
+	return s.finishExec(ctx, sender, cmd, nil)
 }
 
 // execCommand owns setup and pre-start cancellation for both I/O modes.
@@ -121,13 +122,11 @@ func (s *guestServer) execCommand(ctx context.Context, start *pb.ExecStart) (*ex
 }
 
 // finishExec owns bounded wait, output drain and final status for both I/O modes.
-// It closes waited once cmd.Wait returns.
-func (s *guestServer) finishExec(ctx context.Context, sender *execSender, cmd *exec.Cmd, waited chan<- struct{}, outputDone <-chan struct{}) error {
+func (s *guestServer) finishExec(ctx context.Context, sender *execSender, cmd *exec.Cmd, outputDone <-chan struct{}) error {
 	// Non-TTY cmd.Wait also waits for copies, which can block in stream.Send.
 	var waitErr error
 	if err := s.runBounded(ctx, func() {
 		waitErr = cmd.Wait()
-		close(waited)
 	}); err != nil {
 		return err
 	}
@@ -198,34 +197,47 @@ func awaitBounded(ctx context.Context, done <-chan struct{}, grace time.Duration
 	}
 }
 
-// killGroupOnDone kills cmd's process group once ctx ends, unless cmd.Wait has
-// returned. Wait reaps the group leader, after which its ID may belong to another
-// process group, so a cancellation that arrives later kills nothing.
-func killGroupOnDone(ctx context.Context, cmd *exec.Cmd, waited <-chan struct{}) {
+// killGroupOnDone kills cmd's process group if ctx ends before the exec lifecycle
+// finishes (done closes). It watches the lifecycle, not cmd.Wait, so a timeout that
+// fires during the output drain can still kill background children that hold the
+// terminal open. Wait reaps the leader first, so the group id is used only while
+// members remain. A later kill can reach a group whose id a new leader has reused,
+// which is a residual risk.
+func killGroupOnDone(ctx context.Context, cmd *exec.Cmd, done <-chan struct{}) {
 	select {
-	case <-ctx.Done():
-	case <-waited:
+	case <-done:
 		return
+	case <-ctx.Done():
 	}
 	select {
-	case <-waited:
+	case <-done:
+		// The command finished before the cancellation. Background children are left
+		// running on a normal exit, as the exec contract says.
+		return
 	default:
-		_ = killProcessGroup(cmd)
 	}
+	_ = killProcessGroup(cmd)
 }
 
-// sendExitCode delivers the final status under the same bound as output, so a client
-// that stopped reading cannot hold the handler past cancellation.
+// sendExitCode delivers the final status within the drain bound, counted from the
+// send itself, so a client that stopped reading cannot hold the handler even when
+// nothing is cancelled.
 func (s *guestServer) sendExitCode(ctx context.Context, sender *execSender, exitCode int32) error {
-	var err error
-	if boundErr := s.runBounded(ctx, func() {
-		err = sender.send(&pb.ExecResponse{
-			Response: &pb.ExecResponse_ExitCode{ExitCode: exitCode},
-		})
-	}); boundErr != nil {
-		return boundErr
+	sent := make(chan error, 1)
+	go func() {
+		sent <- sender.send(&pb.ExecResponse{Response: &pb.ExecResponse_ExitCode{ExitCode: exitCode}})
+	}()
+	timer := time.NewTimer(s.drainBound())
+	defer timer.Stop()
+	select {
+	case err := <-sent:
+		return err
+	case <-timer.C:
+		if ctx.Err() != nil {
+			return fmt.Errorf("command did not finish after cancellation: %w", ctx.Err())
+		}
+		return fmt.Errorf("exit status not delivered within %s: client stopped reading", s.drainBound())
 	}
-	return err
 }
 
 // runBounded runs fn on its own goroutine and waits for it under the drain bound.
@@ -309,8 +321,9 @@ func (s *guestServer) executeLifecycleTTY(ctx context.Context, cancel context.Ca
 		return fmt.Errorf("start pty: %w", err)
 	}
 	defer ptmx.Close()
-	waited := make(chan struct{})
-	go killGroupOnDone(ctx, cmd, waited)
+	lifecycleDone := make(chan struct{})
+	defer close(lifecycleDone)
+	go killGroupOnDone(ctx, cmd, lifecycleDone)
 
 	outputDone := make(chan struct{})
 	output := &execStreamWriter{sender: sender, cancel: cancel}
@@ -343,5 +356,5 @@ func (s *guestServer) executeLifecycleTTY(ctx context.Context, cancel context.Ca
 		_, _ = io.Copy(output, ptmx)
 	}()
 
-	return s.finishExec(ctx, sender, cmd, waited, outputDone)
+	return s.finishExec(ctx, sender, cmd, outputDone)
 }
