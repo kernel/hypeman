@@ -452,13 +452,10 @@ func probeGuestAgentReady(ctx context.Context, stored *StoredMetadata) bool {
 	probeCtx, cancel := context.WithTimeout(ctx, guestAgentReadyProbeTimeout)
 	defer cancel()
 
-	exit, err := guest.ExecIntoInstance(probeCtx, dialer, guest.ExecOptions{
+	exit, err := guest.ProbeExec(probeCtx, dialer, guest.ExecOptions{
 		Command:      []string{guestAgentReadyExecutable(stored)},
 		Timeout:      int32(guestAgentReadyProbeTimeout / time.Second),
 		WaitForAgent: guestAgentReadyProbeWait,
-		// Listings probe every instance concurrently. A macOS probe that evicted the
-		// shared connection cancelled other callers' in-flight RPCs (restore readiness).
-		KeepPooledConn: stored.MacOS != nil,
 	})
 	return err == nil && exit != nil && exit.Code == 0
 }

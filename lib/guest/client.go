@@ -81,7 +81,18 @@ func GetOrCreateConn(ctx context.Context, dialer hypervisor.VsockDialer) (*grpc.
 		return conn, nil
 	}
 
-	// Create new connection using the VsockDialer
+	conn, err := dialGuestConn(ctx, dialer)
+	if err != nil {
+		return nil, err
+	}
+	connPool.conns[key] = conn
+	slog.Debug("created new gRPC connection", "key", key)
+	return conn, nil
+}
+
+// dialGuestConn creates a gRPC client connection to the guest agent. The connection is
+// not registered in the pool, so the caller owns it.
+func dialGuestConn(ctx context.Context, dialer hypervisor.VsockDialer) (*grpc.ClientConn, error) {
 	traceCtx := ctx
 	conn, err := grpc.Dial("passthrough:///vsock",
 		grpc.WithContextDialer(func(ctx context.Context, addr string) (net.Conn, error) {
@@ -99,9 +110,6 @@ func GetOrCreateConn(ctx context.Context, dialer hypervisor.VsockDialer) (*grpc.
 	if err != nil {
 		return nil, fmt.Errorf("create grpc connection: %w", err)
 	}
-
-	connPool.conns[key] = conn
-	slog.Debug("created new gRPC connection", "key", key)
 	return conn, nil
 }
 
@@ -148,9 +156,6 @@ type ExecOptions struct {
 	Rows         uint32             // Initial terminal rows (0 = default 24)
 	Cols         uint32             // Initial terminal cols (0 = default 80)
 	ResizeChan   <-chan *WindowSize // Optional: channel to receive resize events (pointer to avoid copying mutex)
-	// KeepPooledConn stops a retryable error from evicting the shared pooled connection.
-	// Use it for probes that run concurrently with other callers on the same guest.
-	KeepPooledConn bool
 }
 
 type ReconfigureNetworkOptions struct {
@@ -269,7 +274,7 @@ func ExecIntoInstance(ctx context.Context, dialer hypervisor.VsockDialer, opts E
 	// we are waiting for the guest-agent to become reachable.
 	if opts.WaitForAgent == 0 {
 		exit, err := execIntoInstanceOnce(ctx, dialer, opts)
-		if err != nil && isRetryableConnectionError(err) && !opts.KeepPooledConn {
+		if err != nil && isRetryableConnectionError(err) {
 			CloseConn(dialer.Key())
 		}
 		return exit, err
@@ -309,9 +314,7 @@ func ExecIntoInstance(ctx context.Context, dialer hypervisor.VsockDialer, opts E
 			firstRetryableErrorType = errType
 		}
 		lastRetryableErrorType = errType
-		if !opts.KeepPooledConn {
-			CloseConn(dialer.Key())
-		}
+		CloseConn(dialer.Key())
 
 		// Connection error - check if we should retry
 		if time.Now().After(deadline) {
@@ -331,6 +334,35 @@ func ExecIntoInstance(ctx context.Context, dialer hypervisor.VsockDialer, opts E
 			// Continue to retry
 		}
 	}
+}
+
+// ProbeExec runs a readiness probe. Probes run concurrently with other callers on the
+// same guest, so each attempt dials its own connection and closes it. A failed probe
+// therefore cannot evict or cancel the pooled connection other callers use. Retryable
+// failures are retried until WaitForAgent passes, as in ExecIntoInstance.
+func ProbeExec(ctx context.Context, dialer hypervisor.VsockDialer, opts ExecOptions) (*ExitStatus, error) {
+	start := time.Now()
+	deadline := start.Add(opts.WaitForAgent)
+	for {
+		exit, err := probeAttempt(ctx, dialer, opts)
+		if err == nil || !isRetryableConnectionError(err) || !time.Now().Before(deadline) {
+			return exit, err
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(guestExecRetryInterval(time.Since(start))):
+		}
+	}
+}
+
+func probeAttempt(ctx context.Context, dialer hypervisor.VsockDialer, opts ExecOptions) (*ExitStatus, error) {
+	conn, err := dialGuestConn(ctx, dialer)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	return execOnConn(ctx, conn, opts)
 }
 
 func guestExecRetryInterval(elapsed time.Duration) time.Duration {
@@ -447,9 +479,6 @@ func retryableConnectionErrorType(err error) string {
 
 // execIntoInstanceOnce executes command in instance via vsock using gRPC (single attempt).
 func execIntoInstanceOnce(ctx context.Context, dialer hypervisor.VsockDialer, opts ExecOptions) (*ExitStatus, error) {
-	start := time.Now()
-	var bytesSent int64
-
 	// Get or create a reusable gRPC connection for this vsock dialer
 	_, finishGetConn := startGuestExecStep(ctx, opts, "guest.exec.get_conn")
 	grpcConn, err := GetOrCreateConn(ctx, dialer)
@@ -458,6 +487,13 @@ func execIntoInstanceOnce(ctx context.Context, dialer hypervisor.VsockDialer, op
 		return nil, fmt.Errorf("get grpc connection: %w", err)
 	}
 	// Note: Don't close the connection - it's pooled and reused
+	return execOnConn(ctx, grpcConn, opts)
+}
+
+// execOnConn runs one command over grpcConn and returns its exit status.
+func execOnConn(ctx context.Context, grpcConn *grpc.ClientConn, opts ExecOptions) (*ExitStatus, error) {
+	start := time.Now()
+	var bytesSent int64
 
 	// Create guest client
 	client := NewGuestServiceClient(grpcConn)

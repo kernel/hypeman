@@ -25,24 +25,24 @@ func pooledKeyExists(key string) bool {
 	return ok
 }
 
-// A probe that keeps the pooled connection must not evict it for concurrent callers.
-func TestKeepPooledConnPreservesSharedConnectionOnRetry(t *testing.T) {
-	const key = "keep-pooled-conn-test"
+// A probe owns its connection, so a failed probe leaves the pooled connection that
+// other callers use in place. Ordinary exec still evicts after retryable failures.
+func TestProbeExecLeavesPooledConnectionInPlace(t *testing.T) {
+	const key = "probe-exec-test"
 	t.Cleanup(func() { CloseConn(key) })
 	shared := unreachableDialer{key: key}
 
-	// Seed the pool with a live client connection for this key.
 	_, err := GetOrCreateConn(context.Background(), shared)
 	require.NoError(t, err)
 	require.True(t, pooledKeyExists(key))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	_, err = ExecIntoInstance(ctx, shared, ExecOptions{Command: []string{"true"}, WaitForAgent: 50 * time.Millisecond, KeepPooledConn: true})
+	_, err = ProbeExec(ctx, shared, ExecOptions{Command: []string{"true"}, WaitForAgent: 50 * time.Millisecond})
 	require.Error(t, err)
-	require.True(t, pooledKeyExists(key), "a probe that keeps the pooled connection must leave it in place")
+	require.True(t, pooledKeyExists(key), "a failed probe must not evict the pooled connection")
 
 	_, err = ExecIntoInstance(ctx, shared, ExecOptions{Command: []string{"true"}, WaitForAgent: 50 * time.Millisecond})
 	require.Error(t, err)
-	require.False(t, pooledKeyExists(key), "default behavior still evicts after retryable failures")
+	require.False(t, pooledKeyExists(key), "ordinary exec still evicts after retryable failures")
 }
