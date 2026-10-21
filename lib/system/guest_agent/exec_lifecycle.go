@@ -72,25 +72,50 @@ func (s *execSender) send(response *pb.ExecResponse) error {
 func (s *execSender) close() { s.closed.Store(true) }
 
 // executeLifecycleNoTTY streams output as the command writes it.
+// executeLifecycleNoTTY streams output as the command writes it. The pipes are read
+// here, not by cmd.Wait, which would reap the leader before the output drain.
 func (s *guestServer) executeLifecycleNoTTY(ctx context.Context, cancel context.CancelFunc, sender *execSender, cmd *exec.Cmd) error {
-	cmd.Stdout = &execStreamWriter{sender: sender, cancel: cancel}
-	cmd.Stderr = &execStreamWriter{sender: sender, cancel: cancel, stderr: true}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return fmt.Errorf("open command stdin: %w", err)
 	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("open command stdout: %w", err)
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return fmt.Errorf("open command stderr: %w", err)
+	}
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start command: %w", err)
 	}
-	// Cancel is not called once the direct child has exited, so a descendant that
-	// still holds the pipes would outlive the timeout. Kill the group from the context.
+	grp := newProcessGroup(cmd)
+	// A descendant that holds the pipes outlives the leader. The group is killed from
+	// the context, which is the only killer.
 	lifecycleDone := make(chan struct{})
 	defer close(lifecycleDone)
-	go killGroupOnDone(ctx, cmd, lifecycleDone)
+	go killGroupOnDone(ctx, grp, lifecycleDone)
+
+	var copies sync.WaitGroup
+	copies.Add(2)
+	go func() {
+		defer copies.Done()
+		_, _ = io.Copy(&execStreamWriter{sender: sender, cancel: cancel}, stdout)
+	}()
+	go func() {
+		defer copies.Done()
+		_, _ = io.Copy(&execStreamWriter{sender: sender, cancel: cancel, stderr: true}, stderr)
+	}()
+	outputDone := make(chan struct{})
+	go func() {
+		copies.Wait()
+		close(outputDone)
+	}()
 
 	pumpExecInput(sender.stream, func(data []byte) { stdin.Write(data) }, nil, func() { stdin.Close() })
 
-	return s.finishExec(ctx, sender, cmd, nil)
+	return s.finishExec(ctx, sender, cmd, grp, outputDone)
 }
 
 // execCommand owns setup and pre-start cancellation for both I/O modes.
@@ -99,7 +124,8 @@ func (s *guestServer) execCommand(ctx context.Context, start *pb.ExecStart) (*ex
 		return nil, fmt.Errorf("start command: %w", err)
 	}
 	cmd := s.newExecCmd(ctx, start)
-	cmd.Cancel = func() error { return killProcessGroup(cmd) }
+	// The group watcher kills the group, so it can check whether the leader was reaped.
+	cmd.Cancel = func() error { return nil }
 	cmd.WaitDelay = 2 * time.Second
 	if !start.Tty {
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -108,26 +134,28 @@ func (s *guestServer) execCommand(ctx context.Context, start *pb.ExecStart) (*ex
 }
 
 // finishExec owns bounded wait, output drain and final status for both I/O modes.
-func (s *guestServer) finishExec(ctx context.Context, sender *execSender, cmd *exec.Cmd, outputDone <-chan struct{}) error {
-	// Non-TTY cmd.Wait also waits for copies, which can block in stream.Send.
-	var waitErr error
-	if err := s.runBounded(ctx, func() {
-		waitErr = cmd.Wait()
-	}); err != nil {
-		return err
+func (s *guestServer) finishExec(ctx context.Context, sender *execSender, cmd *exec.Cmd, grp *processGroup, outputDone <-chan struct{}) error {
+	// The leader exits, or the context kills the group, and the leader stays unreaped
+	// until reap below. Its group id stays reserved, so a deadline during the output
+	// drain can still kill background children that hold the output open.
+	if err := waitLeaderExit(grp.pid); err != nil {
+		log.Printf("[guest-agent] wait for command exit: %v", err)
 	}
-	// ErrWaitDelay means the command exited but a descendant still held its output.
-	// The status is already known, so it is reported as a normal exit.
-	if waitErr != nil {
-		_, exited := waitErr.(*exec.ExitError)
-		if !exited && !errors.Is(waitErr, exec.ErrWaitDelay) {
-			return fmt.Errorf("stream command output: %w", waitErr)
-		}
-	}
-
+	var drainErr error
 	if outputDone != nil {
-		if err := drainAfterExit(ctx, outputDone, s.drainBound()); err != nil {
-			return err
+		drainErr = drainAfterExit(ctx, outputDone, s.drainBound())
+	}
+	waitErr := grp.reap(cmd)
+	if drainErr != nil {
+		return drainErr
+	}
+	if waitErr != nil {
+		// exec.CommandContext reports the context error from Wait once the context ends.
+		// That is a cancellation, not a failed stream, and execExitCode maps it.
+		_, exited := waitErr.(*exec.ExitError)
+		cancelled := ctx.Err() != nil && errors.Is(waitErr, ctx.Err())
+		if !exited && !cancelled {
+			return fmt.Errorf("stream command output: %w", waitErr)
 		}
 	}
 	exitCode := execExitCode(cmd, waitErr, errors.Is(ctx.Err(), context.DeadlineExceeded))
@@ -183,28 +211,6 @@ func awaitBounded(ctx context.Context, done <-chan struct{}, grace time.Duration
 	}
 }
 
-// killGroupOnDone kills cmd's process group if ctx ends before the exec lifecycle
-// finishes (done closes). It watches the lifecycle, not cmd.Wait, so a timeout that
-// fires during the output drain can still kill background children that hold the
-// terminal open. Wait reaps the leader first, so the group id is used only while
-// members remain. A later kill can reach a group whose id a new leader has reused,
-// which is a residual risk.
-func killGroupOnDone(ctx context.Context, cmd *exec.Cmd, done <-chan struct{}) {
-	select {
-	case <-done:
-		return
-	case <-ctx.Done():
-	}
-	select {
-	case <-done:
-		// The command finished before the cancellation. Background children are left
-		// running on a normal exit, as the exec contract says.
-		return
-	default:
-	}
-	_ = killProcessGroup(cmd)
-}
-
 // sendExitCode delivers the final status within the drain bound, counted from the
 // send itself, so a client that stopped reading cannot hold the handler even when
 // nothing is cancelled.
@@ -235,15 +241,6 @@ func (s *guestServer) runBounded(ctx context.Context, fn func()) error {
 		close(done)
 	}()
 	return awaitBounded(ctx, done, s.drainBound())
-}
-
-// killProcessGroup kills the command and its descendants. Both exec paths start the command
-// as a group leader (Setpgid for no-TTY, Setsid for TTY), so the group id is its pid.
-func killProcessGroup(cmd *exec.Cmd) error {
-	if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
-		return err
-	}
-	return nil
 }
 
 type execStreamWriter struct {
@@ -279,9 +276,10 @@ func (s *guestServer) executeLifecycleTTY(ctx context.Context, cancel context.Ca
 		return fmt.Errorf("start pty: %w", err)
 	}
 	defer ptmx.Close()
+	grp := newProcessGroup(cmd)
 	lifecycleDone := make(chan struct{})
 	defer close(lifecycleDone)
-	go killGroupOnDone(ctx, cmd, lifecycleDone)
+	go killGroupOnDone(ctx, grp, lifecycleDone)
 
 	outputDone := make(chan struct{})
 	output := &execStreamWriter{sender: sender, cancel: cancel}
@@ -299,5 +297,5 @@ func (s *guestServer) executeLifecycleTTY(ctx context.Context, cancel context.Ca
 		_, _ = io.Copy(output, ptmx)
 	}()
 
-	return s.finishExec(ctx, sender, cmd, outputDone)
+	return s.finishExec(ctx, sender, cmd, grp, outputDone)
 }

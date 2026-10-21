@@ -72,8 +72,9 @@ func TestGuestServiceExecCancellationKillsDescendants(t *testing.T) {
 	}
 }
 
-// Once cmd.Wait has reaped the group leader, its group ID may belong to another
-// process group, so a cancellation that arrives afterwards must not signal it.
+// Once the group leader is reaped, its group ID may belong to another process group,
+// so a cancellation that arrives afterwards must not signal it. Before reap, the same
+// cancellation kills the group.
 func TestCancellationAfterWaitDoesNotKillGroup(t *testing.T) {
 	group := exec.Command("sleep", "30")
 	group.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -82,14 +83,14 @@ func TestCancellationAfterWaitDoesNotKillGroup(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	waited := make(chan struct{})
-	close(waited)
-	killGroupOnDone(ctx, group, waited)
-	require.NoError(t, syscall.Kill(group.Process.Pid, 0), "the group was signalled after Wait returned")
+	reaped := newProcessGroup(group)
+	reaped.reaped = true // stands in for reap, which would have waited for the process
+	killGroupOnDone(ctx, reaped, make(chan struct{}))
+	require.NoError(t, syscall.Kill(group.Process.Pid, 0), "the group was signalled after reap")
 
-	killGroupOnDone(ctx, group, make(chan struct{}))
+	killGroupOnDone(ctx, newProcessGroup(group), make(chan struct{}))
 	err := group.Wait()
 	var exitErr *exec.ExitError
 	require.ErrorAs(t, err, &exitErr)
-	require.Equal(t, syscall.SIGKILL, exitErr.Sys().(syscall.WaitStatus).Signal(), "cancellation before Wait kills the group")
+	require.Equal(t, syscall.SIGKILL, exitErr.Sys().(syscall.WaitStatus).Signal(), "cancellation before reap kills the group")
 }
