@@ -47,7 +47,15 @@ func newParallelTestNetworkConfig(t *testing.T) config.NetworkConfig {
 		DNSServer:  "1.1.1.1",
 	}
 
-	actual, _ := testNetworkByName.LoadOrStore(t.Name(), cfg)
+	actual, loaded := testNetworkByName.LoadOrStore(t.Name(), cfg)
+	if !loaded {
+		// Nothing else removes the bridge the network manager creates for this
+		// config, so delete it with the test.
+		t.Cleanup(func() {
+			testsupport.DeleteBridge(bridge)
+			testNetworkByName.Delete(t.Name())
+		})
+	}
 	return actual.(config.NetworkConfig)
 }
 
