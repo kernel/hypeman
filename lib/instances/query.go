@@ -29,23 +29,7 @@ const (
 	bootMarkerRescanInterval    = 1 * time.Second
 	guestAgentReadyProbeWait    = 250 * time.Millisecond
 	guestAgentReadyProbeTimeout = 1 * time.Second
-	// hypervisorStateCacheTTL bounds how long a cached hypervisor state may be
-	// reused before a fresh GetVMInfo call is required. Short enough to detect
-	// guest-driven shutdowns promptly, long enough that bursty list calls
-	// collapse onto one underlying socket query.
-	hypervisorStateCacheTTL = 5 * time.Second
-	// getVMInfoTimeout bounds a single hypervisor /vm.info query. The cloud
-	// hypervisor API socket serializes requests, so a snapshot in flight can
-	// otherwise park derive_state for tens of seconds.
-	getVMInfoTimeout = 500 * time.Millisecond
 )
-
-// hypervisorStateCacheEntry stores the last observed hypervisor VM state for
-// an instance, used to skip /vm.info queries on hot list paths.
-type hypervisorStateCacheEntry struct {
-	state       hypervisor.VMState
-	refreshedAt time.Time
-}
 
 // stateResult holds the result of state derivation
 type stateResult struct {
@@ -96,59 +80,68 @@ func (m *manager) deriveStateWithOptions(ctx context.Context, stored *StoredMeta
 
 	// 2. Socket exists - resolve hypervisor state, preferring the in-memory
 	// cache (populated by lifecycle events and prior queries) and falling
-	// back to a time-bounded /vm.info call.
-	var hvState hypervisor.VMState
-	if cached, ok := m.loadCachedHypervisorState(stored.Id); ok {
-		span.SetAttributes(attribute.Bool("hypervisor_state.cache_hit", true))
-		hvState = cached
-	} else {
-		span.SetAttributes(attribute.Bool("hypervisor_state.cache_hit", false))
-		hv, err := m.getHypervisor(stored.SocketPath, stored.HypervisorType)
-		if macOSShimGone(stored, err) {
-			return m.macOSStateWithoutShim(stored)
-		}
-		if err != nil {
-			// Failed to create client - this is unexpected if socket exists
-			errMsg := fmt.Sprintf("failed to create hypervisor client: %v", err)
-			log.WarnContext(ctx, "failed to determine instance state",
-				"instance_id", stored.Id,
-				"socket", stored.SocketPath,
-				"error", err,
-			)
-			return stateResult{State: StateUnknown, Error: &errMsg}
-		}
-
-		queryCtx, cancel := context.WithTimeout(ctx, getVMInfoTimeout)
-		info, err := hv.GetVMInfo(queryCtx)
-		cancel()
-		if macOSShimGone(stored, err) {
-			return m.macOSStateWithoutShim(stored)
-		}
-		if err != nil {
-			// Socket exists but hypervisor query failed or timed out. The API
-			// socket serializes requests, so a snapshot in flight will trip
-			// the timeout — return Unknown and let the next list call retry.
-			errMsg := fmt.Sprintf("failed to query hypervisor: %v", err)
-			log.WarnContext(ctx, "failed to query hypervisor state",
-				"instance_id", stored.Id,
-				"socket", stored.SocketPath,
-				"error", err,
-			)
-			return stateResult{State: StateUnknown, Error: &errMsg}
-		}
-		hvState = info.State
-		m.storeCachedHypervisorState(stored.Id, hvState)
+	// back to a coalesced /vm.info call with a bounded caller wait.
+	stateQueryLock := m.hypervisorStateQueryLock(stored.Id)
+	if !stateQueryLock.TryRLock() {
+		errMsg := "hypervisor state unavailable during snapshot operation"
+		return stateResult{State: StateUnknown, Error: &errMsg}
 	}
+	lockHeld := true
+	defer func() {
+		if lockHeld {
+			stateQueryLock.RUnlock()
+		}
+	}()
+
+	var hvState hypervisor.VMState
+	cacheHit := false
+	if hvState, cacheHit = m.loadCachedHypervisorState(stored.Id); !cacheHit {
+		queryResult, err := m.queryHypervisorState(ctx, stored)
+		if err != nil {
+			if macOSShimGone(stored, err) {
+				return m.macOSStateWithoutShim(stored)
+			}
+			errMsg := err.Error()
+			return stateResult{State: StateUnknown, Error: &errMsg}
+		}
+		if queryResult.operationInProgress {
+			errMsg := "hypervisor state unavailable during snapshot operation"
+			return stateResult{State: StateUnknown, Error: &errMsg}
+		}
+		hvState = queryResult.state
+		cacheHit = queryResult.cacheHit
+	}
+	span.SetAttributes(attribute.Bool("hypervisor_state.cache_hit", cacheHit))
 
 	// 3. Map hypervisor state to our state
 	switch hvState {
 	case hypervisor.StateCreated:
 		return stateResult{State: StateCreated}
 	case hypervisor.StateRunning:
+		lock.cacheMu.Lock()
+		generation := lock.generation
+		lock.cacheMu.Unlock()
+		stateQueryLock.RUnlock()
+		lockHeld = false
+
 		hydrated := false
 		if hydrateBootMarkers && stored.MacOS == nil {
 			hydrated = m.hydrateBootMarkersFromLogs(ctx, stored)
 		}
+
+		if !stateQueryLock.TryRLock() {
+			errMsg := "hypervisor state unavailable during snapshot operation"
+			return stateResult{State: StateUnknown, Error: &errMsg}
+		}
+		lockHeld = true
+		lock.cacheMu.Lock()
+		stateUnchanged := lock.generation == generation
+		lock.cacheMu.Unlock()
+		if !stateUnchanged {
+			errMsg := "hypervisor state changed during boot marker hydration"
+			return stateResult{State: StateUnknown, Error: &errMsg}
+		}
+
 		return stateResult{
 			State:               deriveRunningState(stored),
 			BootMarkersHydrated: hydrated,
@@ -165,65 +158,6 @@ func (m *manager) deriveStateWithOptions(ctx context.Context, stored *StoredMeta
 			"hypervisor_state", hvState,
 		)
 		return stateResult{State: StateUnknown, Error: &errMsg}
-	}
-}
-
-// loadCachedHypervisorState returns the cached hypervisor state for an instance
-// when present and within the TTL window. Stale entries are treated as a miss.
-func (m *manager) loadCachedHypervisorState(id string) (hypervisor.VMState, bool) {
-	v, ok := m.hypervisorStateCache.Load(id)
-	if !ok {
-		return "", false
-	}
-	entry, ok := v.(hypervisorStateCacheEntry)
-	if !ok {
-		return "", false
-	}
-	if m.nowUTC().Sub(entry.refreshedAt) > hypervisorStateCacheTTL {
-		return "", false
-	}
-	return entry.state, true
-}
-
-// storeCachedHypervisorState records the latest known hypervisor state for an
-// instance so subsequent derive_state calls within the TTL window avoid the
-// socket round-trip.
-func (m *manager) storeCachedHypervisorState(id string, state hypervisor.VMState) {
-	m.hypervisorStateCache.Store(id, hypervisorStateCacheEntry{
-		state:       state,
-		refreshedAt: m.nowUTC(),
-	})
-}
-
-// invalidateCachedHypervisorState drops the cached hypervisor state for an
-// instance. Called when the instance no longer has a live hypervisor socket
-// (Stopped, Standby, Deleted) or transitions through a state where the cached
-// value would be stale.
-func (m *manager) invalidateCachedHypervisorState(id string) {
-	m.hypervisorStateCache.Delete(id)
-}
-
-// updateCachedHypervisorStateFromInstance reconciles the hypervisor state
-// cache with the post-transition instance state observed by a lifecycle
-// event. Lifecycle events are the source of truth for state changes hypeman
-// itself drives; mirroring them into the cache avoids re-querying /vm.info
-// on the next list call.
-func (m *manager) updateCachedHypervisorStateFromInstance(inst *Instance) {
-	if inst == nil {
-		return
-	}
-	switch inst.State {
-	case StateRunning, StateInitializing:
-		m.storeCachedHypervisorState(inst.Id, hypervisor.StateRunning)
-	case StateCreated:
-		m.storeCachedHypervisorState(inst.Id, hypervisor.StateCreated)
-	case StatePaused:
-		m.storeCachedHypervisorState(inst.Id, hypervisor.StatePaused)
-	case StateShutdown:
-		m.storeCachedHypervisorState(inst.Id, hypervisor.StateShutdown)
-	default:
-		// Stopped, Standby, Unknown — no live socket worth caching.
-		m.invalidateCachedHypervisorState(inst.Id)
 	}
 }
 

@@ -2,12 +2,17 @@ package instances
 
 import (
 	"context"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
+	_ "github.com/kernel/hypeman/lib/hypervisor/firecracker"
 	"github.com/kernel/hypeman/lib/instances/phasetracking"
 	"github.com/kernel/hypeman/lib/paths"
 	"github.com/stretchr/testify/assert"
@@ -625,6 +630,124 @@ func TestHypervisorStateCache_TTL(t *testing.T) {
 	now = now.Add(2 * time.Millisecond)
 	_, ok = m.loadCachedHypervisorState("vm-1")
 	require.False(t, ok)
+}
+
+func TestDeriveStateCoalescesConcurrentHypervisorQueries(t *testing.T) {
+	m, stored, requests := firecrackerStateFixture(t, "vm-coalesced", 250*time.Millisecond)
+	started := time.Now()
+	stored.ProgramStartedAt = &started
+	stored.SkipGuestAgent = true
+
+	const callers = 12
+	var wg sync.WaitGroup
+	ready := make(chan struct{}, callers)
+	start := make(chan struct{})
+	results := make(chan stateResult, callers)
+	for range callers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ready <- struct{}{}
+			<-start
+			results <- m.deriveState(context.Background(), &stored)
+		}()
+	}
+	for range callers {
+		<-ready
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+
+	for result := range results {
+		require.Equal(t, StateRunning, result.State)
+	}
+	assert.EqualValues(t, 1, requests.Load())
+}
+
+func TestDeriveStateDoesNotStartProbeForCanceledContext(t *testing.T) {
+	m, stored, requests := firecrackerStateFixture(t, "vm-canceled-query", 0)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	result := m.deriveState(ctx, &stored)
+
+	require.Equal(t, StateUnknown, result.State)
+	require.NotNil(t, result.Error)
+	assert.Contains(t, *result.Error, context.Canceled.Error())
+	assert.Zero(t, requests.Load())
+}
+
+func TestInvalidationPreventsStaleHypervisorQueryCacheWrite(t *testing.T) {
+	m := &manager{}
+	id := "vm-deleted"
+	m.storeCachedHypervisorState(id, hypervisor.StateRunning)
+	lock := m.hypervisorStateQueryLock(id)
+	lock.cacheMu.Lock()
+	generation := lock.generation
+	lock.cacheMu.Unlock()
+
+	m.invalidateCachedHypervisorState(id)
+
+	require.False(t, m.storeQueriedHypervisorState(lock, id, hypervisor.StateRunning, generation))
+	_, ok := m.loadCachedHypervisorState(id)
+	assert.False(t, ok)
+}
+
+func TestDeriveStateBoundsWaitForHypervisorQuery(t *testing.T) {
+	m, stored, requests := firecrackerStateFixture(t, "vm-stalled-query", 2*getVMInfoTimeout)
+
+	result := m.deriveState(context.Background(), &stored)
+
+	require.Equal(t, StateUnknown, result.State)
+	require.NotNil(t, result.Error)
+	assert.Contains(t, *result.Error, context.DeadlineExceeded.Error())
+	assert.EqualValues(t, 1, requests.Load())
+}
+
+func TestDeriveStateSkipsProbeDuringSnapshotOperation(t *testing.T) {
+	m, stored, requests := firecrackerStateFixture(t, "vm-snapshotting", 0)
+	m.storeCachedHypervisorState(stored.Id, hypervisor.StateRunning)
+	lock := m.hypervisorStateQueryLock(stored.Id)
+	lock.Lock()
+	result := m.deriveState(context.Background(), &stored)
+	lock.Unlock()
+
+	require.Equal(t, StateUnknown, result.State)
+	require.NotNil(t, result.Error)
+	assert.Contains(t, *result.Error, "during snapshot operation")
+	assert.Zero(t, requests.Load())
+}
+
+func firecrackerStateFixture(t *testing.T, id string, delay time.Duration) (*manager, StoredMetadata, *atomic.Int32) {
+	t.Helper()
+	socketPath := filepath.Join(t.TempDir(), "firecracker.sock")
+	requests := &atomic.Int32{}
+	startFirecrackerInfoServer(t, socketPath, delay, requests)
+	return &manager{}, StoredMetadata{
+		Id:             id,
+		SocketPath:     socketPath,
+		DataDir:        filepath.Dir(socketPath),
+		HypervisorType: hypervisor.TypeFirecracker,
+	}, requests
+}
+
+func startFirecrackerInfoServer(t *testing.T, socketPath string, delay time.Duration, requests *atomic.Int32) {
+	t.Helper()
+	listener, err := net.Listen("unix", socketPath)
+	require.NoError(t, err)
+	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		if delay > 0 {
+			time.Sleep(delay)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"state":"Running"}`))
+	})}
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(func() {
+		_ = server.Close()
+	})
 }
 
 func TestHypervisorStateCache_InvalidationAndUpdate(t *testing.T) {
