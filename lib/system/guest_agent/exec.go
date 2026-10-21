@@ -2,11 +2,11 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"os"
-	"os/exec"
 	"strings"
 	"sync"
 	"time"
@@ -62,15 +62,7 @@ func (s *guestServer) executeNoTTY(ctx context.Context, stream pb.GuestService_E
 		return fmt.Errorf("empty command")
 	}
 
-	cmd := exec.CommandContext(ctx, start.Command[0], start.Command[1:]...)
-
-	// Set up environment (no TTY defaults for non-TTY mode)
-	cmd.Env = s.buildEnv(start.Env, false)
-
-	// Set up working directory
-	if start.Cwd != "" {
-		cmd.Dir = start.Cwd
-	}
+	cmd := s.newExecCmd(ctx, start)
 
 	stdin, _ := cmd.StdinPipe()
 	stdout, _ := cmd.StdoutPipe()
@@ -87,19 +79,7 @@ func (s *guestServer) executeNoTTY(ctx context.Context, stream pb.GuestService_E
 	var wg sync.WaitGroup
 	var stdoutData, stderrData []byte
 
-	// Handle stdin in background
-	go func() {
-		defer stdin.Close()
-		for {
-			req, err := stream.Recv()
-			if err != nil {
-				return
-			}
-			if data := req.GetStdin(); data != nil {
-				stdin.Write(data)
-			}
-		}
-	}()
+	pumpExecInput(stream, func(data []byte) { stdin.Write(data) }, nil, func() { stdin.Close() })
 
 	// Read all stdout/stderr BEFORE calling Wait() - Wait() closes the pipes!
 	wg.Add(1)
@@ -147,13 +127,7 @@ func (s *guestServer) executeNoTTY(ctx context.Context, stream pb.GuestService_E
 		sendMu.Unlock()
 	}
 
-	exitCode := int32(0)
-	if cmd.ProcessState != nil {
-		exitCode = int32(cmd.ProcessState.ExitCode())
-	} else if waitErr != nil {
-		// If killed by timeout, exit with 124 (GNU timeout convention)
-		exitCode = 124
-	}
+	exitCode := execExitCode(cmd, waitErr, errors.Is(ctx.Err(), context.DeadlineExceeded))
 
 	log.Printf("[guest-agent] command finished with exit code: %d", exitCode)
 
@@ -171,30 +145,10 @@ func (s *guestServer) executeTTY(ctx context.Context, stream pb.GuestService_Exe
 		return fmt.Errorf("empty command")
 	}
 
-	cmd := exec.CommandContext(ctx, start.Command[0], start.Command[1:]...)
-
-	// Set up environment (TTY mode adds TERM default)
-	cmd.Env = s.buildEnv(start.Env, true)
-
-	// Set up working directory
-	if start.Cwd != "" {
-		cmd.Dir = start.Cwd
-	}
-
-	// Set up initial window size (use defaults if not specified)
-	ws := &pty.Winsize{
-		Rows: uint16(start.Rows),
-		Cols: uint16(start.Cols),
-	}
-	if ws.Rows == 0 {
-		ws.Rows = 24
-	}
-	if ws.Cols == 0 {
-		ws.Cols = 80
-	}
+	cmd := s.newExecCmd(ctx, start)
 
 	// Start with PTY and initial window size
-	ptmx, err := pty.StartWithSize(cmd, ws)
+	ptmx, err := startExecPTY(cmd, start)
 	if err != nil {
 		return fmt.Errorf("start pty: %w", err)
 	}
@@ -206,27 +160,12 @@ func (s *guestServer) executeTTY(ctx context.Context, stream pb.GuestService_Exe
 	// Use WaitGroup to ensure all output is sent before exit code
 	var wg sync.WaitGroup
 
-	// Handle stdin and resize in background
-	go func() {
-		for {
-			req, err := stream.Recv()
-			if err != nil {
-				return
-			}
-
-			if data := req.GetStdin(); data != nil {
-				ptmx.Write(data)
-			}
-
-			// Handle window resize
-			if resize := req.GetResize(); resize != nil {
-				pty.Setsize(ptmx, &pty.Winsize{
-					Rows: uint16(resize.Rows),
-					Cols: uint16(resize.Cols),
-				})
-			}
-		}
-	}()
+	pumpExecInput(stream, func(data []byte) { ptmx.Write(data) }, func(resize *pb.WindowSize) {
+		pty.Setsize(ptmx, &pty.Winsize{
+			Rows: uint16(resize.Rows),
+			Cols: uint16(resize.Cols),
+		})
+	}, nil)
 
 	// Stream output
 	wg.Add(1)
@@ -254,13 +193,7 @@ func (s *guestServer) executeTTY(ctx context.Context, stream pb.GuestService_Exe
 	// Wait for all output to be sent
 	wg.Wait()
 
-	exitCode := int32(0)
-	if cmd.ProcessState != nil {
-		exitCode = int32(cmd.ProcessState.ExitCode())
-	} else if waitErr != nil {
-		// If killed by timeout, exit with 124 (GNU timeout convention)
-		exitCode = 124
-	}
+	exitCode := execExitCode(cmd, waitErr, errors.Is(ctx.Err(), context.DeadlineExceeded))
 
 	log.Printf("[guest-agent] TTY command finished with exit code: %d", exitCode)
 

@@ -88,19 +88,7 @@ func (s *guestServer) executeLifecycleNoTTY(ctx context.Context, cancel context.
 	defer close(lifecycleDone)
 	go killGroupOnDone(ctx, cmd, lifecycleDone)
 
-	// Handle stdin in background
-	go func() {
-		defer stdin.Close()
-		for {
-			req, err := sender.stream.Recv()
-			if err != nil {
-				return
-			}
-			if data := req.GetStdin(); data != nil {
-				stdin.Write(data)
-			}
-		}
-	}()
+	pumpExecInput(sender.stream, func(data []byte) { stdin.Write(data) }, nil, func() { stdin.Close() })
 
 	return s.finishExec(ctx, sender, cmd, nil)
 }
@@ -110,11 +98,9 @@ func (s *guestServer) execCommand(ctx context.Context, start *pb.ExecStart) (*ex
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("start command: %w", err)
 	}
-	cmd := exec.CommandContext(ctx, start.Command[0], start.Command[1:]...)
+	cmd := s.newExecCmd(ctx, start)
 	cmd.Cancel = func() error { return killProcessGroup(cmd) }
 	cmd.WaitDelay = 2 * time.Second
-	cmd.Env = s.buildEnv(start.Env, start.Tty)
-	cmd.Dir = start.Cwd
 	if !start.Tty {
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	}
@@ -144,7 +130,7 @@ func (s *guestServer) finishExec(ctx context.Context, sender *execSender, cmd *e
 			return err
 		}
 	}
-	exitCode := exitCodeOf(ctx, cmd, waitErr)
+	exitCode := execExitCode(cmd, waitErr, errors.Is(ctx.Err(), context.DeadlineExceeded))
 
 	log.Printf("[guest-agent] command finished with exit code: %d", exitCode)
 
@@ -251,21 +237,6 @@ func (s *guestServer) runBounded(ctx context.Context, fn func()) error {
 	return awaitBounded(ctx, done, s.drainBound())
 }
 
-// exitCodeOf reports how a command ended. A command that hit its deadline exits 124
-// (GNU timeout convention) even though the group kill leaves a process state behind.
-func exitCodeOf(ctx context.Context, cmd *exec.Cmd, waitErr error) int32 {
-	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		return 124
-	}
-	if cmd.ProcessState != nil {
-		return int32(cmd.ProcessState.ExitCode())
-	}
-	if waitErr != nil {
-		return 124
-	}
-	return 0
-}
-
 // killProcessGroup kills the command and its descendants. Both exec paths start the command
 // as a group leader (Setpgid for no-TTY, Setsid for TTY), so the group id is its pid.
 func killProcessGroup(cmd *exec.Cmd) error {
@@ -303,20 +274,7 @@ func (w *execStreamWriter) Write(data []byte) (int, error) {
 
 // executeLifecycleTTY runs the command on a PTY.
 func (s *guestServer) executeLifecycleTTY(ctx context.Context, cancel context.CancelFunc, sender *execSender, start *pb.ExecStart, cmd *exec.Cmd) error {
-	// Set up initial window size (use defaults if not specified)
-	ws := &pty.Winsize{
-		Rows: uint16(start.Rows),
-		Cols: uint16(start.Cols),
-	}
-	if ws.Rows == 0 {
-		ws.Rows = 24
-	}
-	if ws.Cols == 0 {
-		ws.Cols = 80
-	}
-
-	// Start with PTY and initial window size
-	ptmx, err := pty.StartWithSize(cmd, ws)
+	ptmx, err := startExecPTY(cmd, start)
 	if err != nil {
 		return fmt.Errorf("start pty: %w", err)
 	}
@@ -328,27 +286,12 @@ func (s *guestServer) executeLifecycleTTY(ctx context.Context, cancel context.Ca
 	outputDone := make(chan struct{})
 	output := &execStreamWriter{sender: sender, cancel: cancel}
 
-	// Handle stdin and resize in background
-	go func() {
-		for {
-			req, err := sender.stream.Recv()
-			if err != nil {
-				return
-			}
-
-			if data := req.GetStdin(); data != nil {
-				ptmx.Write(data)
-			}
-
-			// Handle window resize
-			if resize := req.GetResize(); resize != nil {
-				pty.Setsize(ptmx, &pty.Winsize{
-					Rows: uint16(resize.Rows),
-					Cols: uint16(resize.Cols),
-				})
-			}
-		}
-	}()
+	pumpExecInput(sender.stream, func(data []byte) { ptmx.Write(data) }, func(resize *pb.WindowSize) {
+		pty.Setsize(ptmx, &pty.Winsize{
+			Rows: uint16(resize.Rows),
+			Cols: uint16(resize.Cols),
+		})
+	}, nil)
 
 	// Stream output
 	go func() {
