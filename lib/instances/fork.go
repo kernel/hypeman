@@ -71,8 +71,8 @@ func (m *manager) forkInstance(ctx context.Context, id string, req ForkInstanceR
 
 		log.InfoContext(ctx, "fork from running requested; transitioning source to standby",
 			"source_instance_id", id, "hypervisor", source.HypervisorType)
-		if _, err := m.standbyInstance(ctx, id, StandbyInstanceRequest{}, true); err != nil {
-			return nil, "", false, fmt.Errorf("standby source instance: %w", err)
+		if inst, err := m.standbyInstance(ctx, id, StandbyInstanceRequest{}, true); err != nil {
+			return nil, "", false, m.recoverSourceAfterFailedStandby(ctx, inst, fmt.Errorf("standby source instance: %w", err))
 		}
 
 		forked, _, forkErr := m.forkInstanceFromStoppedOrStandby(ctx, id, req, true)

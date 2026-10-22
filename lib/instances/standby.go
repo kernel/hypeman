@@ -269,7 +269,9 @@ func (m *manager) standbyInstance(
 	meta = &metadata{StoredMetadata: *stored}
 	if err := m.saveMetadata(meta); err != nil {
 		log.ErrorContext(ctx, "failed to save metadata", "instance_id", id, "error", err)
-		return nil, fmt.Errorf("save metadata: %w", err)
+		// The VMM is down and the checkpoint is saved, but the disk copy predates standby.
+		// Return the record standby reached so the caller can persist it before restoring.
+		return &Instance{StoredMetadata: meta.StoredMetadata}, fmt.Errorf("save metadata: %w", err)
 	}
 
 	// Record metrics

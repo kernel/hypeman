@@ -11,6 +11,7 @@ import (
 
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/images"
+	"github.com/kernel/hypeman/lib/instances/phasetracking"
 	"github.com/kernel/hypeman/lib/paths"
 	restartpolicy "github.com/kernel/hypeman/lib/restart-policy"
 	"github.com/kernel/hypeman/lib/snapshot"
@@ -216,17 +217,56 @@ func TestStartRetryFinishesCloneRekey(t *testing.T) {
 }
 
 func TestRecoverSourceAfterFailedStandby(t *testing.T) {
+	ctx := context.Background()
 	standbyErr := errors.New("save metadata")
 
-	// A checkpoint with the VM down is the state a late standby failure leaves behind.
+	// The disk copy predates standby: still Running, with no Standby phase.
 	m, meta := macOSMemorySnapshotFixture(t)
 	writeMacOSMemorySnapshotPayload(t, m, meta.DataDir, &meta.StoredMetadata)
-	require.ErrorIs(t, m.recoverSourceAfterFailedStandby(context.Background(), &meta.StoredMetadata, standbyErr), standbyErr)
-	inst, err := m.GetInstance(context.Background(), meta.Id)
+	started := time.Now().Add(-time.Hour)
+	meta.StartedAt = &started
+	meta.Phases.Record(phasetracking.PhaseRunning, started)
+	require.NoError(t, m.saveMetadata(meta))
+
+	// The record standby reached after stopping the VMM.
+	stoppedAt := time.Now()
+	standby := cloneStoredMetadata(meta.StoredMetadata)
+	standby.StoppedAt = &stoppedAt
+	standby.HypervisorProcessIdentity.Clear()
+	standby.Phases.Record(phasetracking.PhaseStandby, stoppedAt)
+
+	require.ErrorIs(t, m.recoverSourceAfterFailedStandby(ctx, &Instance{StoredMetadata: standby}, standbyErr), standbyErr)
+	inst, err := m.GetInstance(ctx, meta.Id)
 	require.NoError(t, err)
 	require.Equal(t, StateRunning, inst.State, "the source must not stay in Standby after a failed snapshot")
+	disk, err := m.loadMetadata(meta.Id)
+	require.NoError(t, err)
+	require.Contains(t, disk.Phases.Cumulative, phasetracking.PhaseStandby, "the standby record must reach the disk before the restore reads it")
 
-	// Without a checkpoint the VM never stopped, so there is nothing to recover.
+	// Nil means standby failed before the VMM stopped, so there is nothing to recover.
 	m2, meta2 := macOSMemorySnapshotFixture(t)
-	require.Equal(t, standbyErr, m2.recoverSourceAfterFailedStandby(context.Background(), &meta2.StoredMetadata, standbyErr))
+	require.Equal(t, standbyErr, m2.recoverSourceAfterFailedStandby(ctx, nil, standbyErr))
+	_ = meta2
+}
+
+func TestRecoverSourceKeepsStandbyWhenRecordCannotBeSaved(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	ctx := context.Background()
+	m, meta := macOSMemorySnapshotFixture(t)
+	writeMacOSMemorySnapshotPayload(t, m, meta.DataDir, &meta.StoredMetadata)
+	require.NoError(t, os.Chmod(meta.DataDir, 0500))
+	t.Cleanup(func() { os.Chmod(meta.DataDir, 0700) })
+
+	standbyErr := errors.New("save metadata")
+	stoppedAt := time.Now()
+	standby := cloneStoredMetadata(meta.StoredMetadata)
+	standby.StoppedAt = &stoppedAt
+	err := m.recoverSourceAfterFailedStandby(ctx, &Instance{StoredMetadata: standby}, standbyErr)
+	require.ErrorIs(t, err, standbyErr)
+	require.ErrorContains(t, err, "source left in Standby")
+	inst, gerr := m.GetInstance(ctx, meta.Id)
+	require.NoError(t, gerr)
+	require.Equal(t, StateStandby, inst.State)
 }

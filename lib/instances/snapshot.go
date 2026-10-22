@@ -46,15 +46,18 @@ func (m *manager) getSnapshot(ctx context.Context, snapshotID string) (*Snapshot
 }
 
 // recoverSourceAfterFailedStandby returns standbyErr after putting the source back if
-// standby failed after its VMM was saved and stopped. Otherwise the failed snapshot
-// would leave a running guest in Standby. A failure before the VMM stops leaves the
-// source Running and needs no recovery.
-func (m *manager) recoverSourceAfterFailedStandby(ctx context.Context, stored *StoredMetadata, standbyErr error) error {
-	inst, err := m.currentInstanceWithoutHydration(ctx, stored.Id)
-	if err != nil || inst.State != StateStandby {
+// standby failed after its VMM was stopped. standby is the record standby reached at
+// that point, and it is nil for failures before the VMM stopped, which leave the
+// source Running. The disk copy can predate standby, so the record is saved before
+// the restore reads it. Otherwise the restore would use the pre-standby record.
+func (m *manager) recoverSourceAfterFailedStandby(ctx context.Context, standby *Instance, standbyErr error) error {
+	if standby == nil {
 		return standbyErr
 	}
-	if restoreErr := m.restoreSnapshotSource(ctx, stored); restoreErr != nil {
+	if err := m.saveMetadata(&metadata{StoredMetadata: standby.StoredMetadata}); err != nil {
+		return fmt.Errorf("%w; additionally failed to record standby, source left in Standby: %v", standbyErr, err)
+	}
+	if restoreErr := m.restoreSnapshotSource(ctx, &standby.StoredMetadata); restoreErr != nil {
 		return fmt.Errorf("%w; additionally failed to restore source: %v", standbyErr, restoreErr)
 	}
 	return standbyErr
@@ -120,8 +123,9 @@ func (m *manager) createSnapshot(ctx context.Context, id string, req CreateSnaps
 			if err := ensureGuestAgentReadyForForkPhase(ctx, &inst.StoredMetadata, "before running snapshot"); err != nil {
 				return nil, err
 			}
-			if _, err := m.standbyInstance(ctx, id, StandbyInstanceRequest{}, true); err != nil {
-				return nil, m.recoverSourceAfterFailedStandby(ctx, stored, fmt.Errorf("standby source instance: %w", err))
+			standby, err := m.standbyInstance(ctx, id, StandbyInstanceRequest{}, true)
+			if err != nil {
+				return nil, m.recoverSourceAfterFailedStandby(ctx, standby, fmt.Errorf("standby source instance: %w", err))
 			}
 			restoreSource = true
 		case StateStandby:

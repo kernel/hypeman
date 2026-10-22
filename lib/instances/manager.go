@@ -631,10 +631,11 @@ func (m *manager) StandbyInstance(ctx context.Context, id string, req StandbyIns
 		}
 	}
 	inst, err := m.standbyInstance(ctx, id, req, false)
-	if err == nil {
-		m.notifyLifecycleEvent(ctx, LifecycleEventStandby, inst)
+	if err != nil {
+		return nil, m.recoverSourceAfterFailedStandby(ctx, inst, err)
 	}
-	return inst, err
+	m.notifyLifecycleEvent(ctx, LifecycleEventStandby, inst)
+	return inst, nil
 }
 
 // RestoreInstance restores an instance from standby
