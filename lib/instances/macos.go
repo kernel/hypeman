@@ -396,6 +396,17 @@ func (m *manager) macOSStateWithoutShim(stored *StoredMetadata) stateResult {
 	return stateResult{State: StateStopped}
 }
 
+// macOSSocketAnswers reports whether a macOS guest's control socket answers a query.
+// A shim still loading the VM has not opened it yet.
+func (m *manager) macOSSocketAnswers(ctx context.Context, inst *Instance) bool {
+	hv, err := m.getHypervisor(inst.SocketPath, inst.HypervisorType)
+	if err != nil {
+		return false
+	}
+	_, err = hv.GetVMInfo(ctx)
+	return err == nil
+}
+
 // findVZShimPIDs lists vz-shim processes by control socket. Tests replace it.
 var findVZShimPIDs = hypervisor.VZShimPIDs
 

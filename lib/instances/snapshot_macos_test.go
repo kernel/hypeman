@@ -1,11 +1,15 @@
 package instances
 
 import (
+	"context"
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/paths"
 	restartpolicy "github.com/kernel/hypeman/lib/restart-policy"
@@ -170,4 +174,59 @@ func TestMacOSMemoryCompressionRejectsEnabledOnly(t *testing.T) {
 	require.NoError(t, validateMacOSMemoryCompression(nil))
 	require.NoError(t, validateMacOSMemoryCompression(&snapshot.SnapshotCompressionConfig{Enabled: false}))
 	require.ErrorIs(t, validateMacOSMemoryCompression(&snapshot.SnapshotCompressionConfig{Enabled: true}), ErrInvalidRequest)
+}
+
+func TestRestoreKeepsCheckpointWhileShimLoads(t *testing.T) {
+	m, meta := macOSMemorySnapshotFixture(t)
+	writeMacOSMemorySnapshotPayload(t, m, meta.DataDir, &meta.StoredMetadata)
+	// A live shim that has not opened its control socket yet.
+	shim := exec.Command("sleep", "60")
+	require.NoError(t, shim.Start())
+	t.Cleanup(func() { shim.Process.Kill(); shim.Wait() })
+	prev := findVZShimPIDs
+	findVZShimPIDs = func(string) ([]int, error) { return []int{shim.Process.Pid}, nil }
+	t.Cleanup(func() { findVZShimPIDs = prev })
+
+	_, err := m.RestoreInstance(context.Background(), meta.Id)
+	require.ErrorIs(t, err, ErrInvalidState)
+	require.DirExists(t, m.paths.InstanceSnapshotLatest(meta.Id), "the checkpoint is consumed only after the VM resumes")
+}
+
+func TestStartRetryFinishesCloneRekey(t *testing.T) {
+	m, meta := macOSMemorySnapshotFixture(t)
+	meta.HypervisorType = lifecycleNoopHypervisorType
+	meta.SkipGuestAgent = false
+	meta.MacOS.GuestAgent = true
+	meta.IdentityRekeyPending = true
+	require.NoError(t, os.WriteFile(meta.SocketPath, nil, 0600))
+	lifecycleNoopHypervisorStates.Store(meta.SocketPath, hypervisor.StateRunning)
+	t.Cleanup(func() { lifecycleNoopHypervisorStates.Delete(meta.SocketPath) })
+	require.NoError(t, m.saveMetadata(meta))
+
+	// The fixture has no guest agent, so the rekey retries until its context ends. The
+	// retry must report that failure rather than return a clone still carrying its
+	// source's SSH host keys.
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	_, err := m.StartInstance(ctx, meta.Id, StartInstanceRequest{})
+	require.Error(t, err)
+	reloaded, err := m.loadMetadata(meta.Id)
+	require.NoError(t, err)
+	require.True(t, reloaded.IdentityRekeyPending, "a failed rekey keeps the flag for the next start")
+}
+
+func TestRecoverSourceAfterFailedStandby(t *testing.T) {
+	standbyErr := errors.New("save metadata")
+
+	// A checkpoint with the VM down is the state a late standby failure leaves behind.
+	m, meta := macOSMemorySnapshotFixture(t)
+	writeMacOSMemorySnapshotPayload(t, m, meta.DataDir, &meta.StoredMetadata)
+	require.ErrorIs(t, m.recoverSourceAfterFailedStandby(context.Background(), &meta.StoredMetadata, standbyErr), standbyErr)
+	inst, err := m.GetInstance(context.Background(), meta.Id)
+	require.NoError(t, err)
+	require.Equal(t, StateRunning, inst.State, "the source must not stay in Standby after a failed snapshot")
+
+	// Without a checkpoint the VM never stopped, so there is nothing to recover.
+	m2, meta2 := macOSMemorySnapshotFixture(t)
+	require.Equal(t, standbyErr, m2.recoverSourceAfterFailedStandby(context.Background(), &meta2.StoredMetadata, standbyErr))
 }

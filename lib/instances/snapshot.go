@@ -45,6 +45,21 @@ func (m *manager) getSnapshot(ctx context.Context, snapshotID string) (*Snapshot
 	return snapshot, nil
 }
 
+// recoverSourceAfterFailedStandby returns standbyErr after putting the source back if
+// standby failed after its VMM was saved and stopped. Otherwise the failed snapshot
+// would leave a running guest in Standby. A failure before the VMM stops leaves the
+// source Running and needs no recovery.
+func (m *manager) recoverSourceAfterFailedStandby(ctx context.Context, stored *StoredMetadata, standbyErr error) error {
+	inst, err := m.currentInstanceWithoutHydration(ctx, stored.Id)
+	if err != nil || inst.State != StateStandby {
+		return standbyErr
+	}
+	if restoreErr := m.restoreSnapshotSource(ctx, stored); restoreErr != nil {
+		return fmt.Errorf("%w; additionally failed to restore source: %v", standbyErr, restoreErr)
+	}
+	return standbyErr
+}
+
 func (m *manager) createSnapshot(ctx context.Context, id string, req CreateSnapshotRequest) (_ *Snapshot, retErr error) {
 	log := logger.FromContext(ctx)
 	log.InfoContext(ctx, "creating snapshot", "instance_id", id, "kind", req.Kind, "name", req.Name)
@@ -106,7 +121,7 @@ func (m *manager) createSnapshot(ctx context.Context, id string, req CreateSnaps
 				return nil, err
 			}
 			if _, err := m.standbyInstance(ctx, id, StandbyInstanceRequest{}, true); err != nil {
-				return nil, fmt.Errorf("standby source instance: %w", err)
+				return nil, m.recoverSourceAfterFailedStandby(ctx, stored, fmt.Errorf("standby source instance: %w", err))
 			}
 			restoreSource = true
 		case StateStandby:

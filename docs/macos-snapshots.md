@@ -57,8 +57,9 @@ Restore with `POST /instances/{id}/snapshots/{snapshot_id}/restore`.
 - A restore never mutates the persistent snapshot. If the framework restore fails
   after installation, the restored checkpoint remains available in Standby.
 - If the API dies during a restore, the shim it started keeps loading the VM. Until
-  it opens its socket the instance reads Standby, and start or restore return 409
-  while that shim runs. Once loaded it reads Paused: `POST /restore` resumes it and
+  it opens its socket the instance reads Initializing. Restore returns 409 while
+  that shim has not resumed the VM, and keeps the checkpoint. Once loaded it reads
+  Paused: `POST /restore` resumes it and
   completes the restore (records the shim, removes the consumed checkpoint), and
   DELETE kills it. As on Linux, stop does not accept Paused.
 - Saved state is not portable. Use the originating Mac and OS account, a compatible

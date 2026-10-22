@@ -650,6 +650,11 @@ func (m *manager) RestoreInstance(ctx context.Context, id string) (*Instance, er
 		// A running macOS guest has consumed its checkpoint. One still on disk means an
 		// earlier resume failed before removing it, so finish that resume now.
 		if current.MacOS != nil && current.HasSnapshot {
+			// Initializing without a control socket is a shim still loading the VM. It has
+			// not resumed, so the checkpoint it will consume must stay.
+			if current.State == StateInitializing && !m.macOSSocketAnswers(ctx, current) {
+				return nil, fmt.Errorf("%w: macOS restore is still loading the VM; retry shortly", ErrInvalidState)
+			}
 			if err := m.finishMacOSResume(id); err != nil {
 				return nil, fmt.Errorf("finish resumed restore: %w", err)
 			}
@@ -740,6 +745,14 @@ func (m *manager) StartInstance(ctx context.Context, id string, req StartInstanc
 			return nil, err
 		}
 		if current.State == StateRunning || current.State == StateInitializing {
+			// The API can exit after a clone boots and before its rekey finishes. Finish it
+			// here, or the clone keeps its source's SSH host keys.
+			if current.IdentityRekeyPending {
+				if err := m.rekeyMacOSCloneOnStart(ctx, &current.StoredMetadata); err != nil {
+					return nil, err
+				}
+				return m.currentInstanceWithoutHydration(ctx, id)
+			}
 			return current, nil
 		}
 	}
