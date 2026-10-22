@@ -228,8 +228,9 @@ func TestRecoverSourceAfterFailedStandby(t *testing.T) {
 	meta.Phases.Record(phasetracking.PhaseRunning, started)
 	require.NoError(t, m.saveMetadata(meta))
 
-	// The record standby reached after stopping the VMM.
-	stoppedAt := time.Now()
+	// The record standby reached after stopping the VMM. It is backdated so the standby
+	// phase accrues measurable time; Tracker drops sub-millisecond elapsed time.
+	stoppedAt := time.Now().Add(-time.Minute)
 	standby := cloneStoredMetadata(meta.StoredMetadata)
 	standby.StoppedAt = &stoppedAt
 	standby.HypervisorProcessIdentity.Clear()
@@ -241,7 +242,7 @@ func TestRecoverSourceAfterFailedStandby(t *testing.T) {
 	require.Equal(t, StateRunning, inst.State, "the source must not stay in Standby after a failed snapshot")
 	disk, err := m.loadMetadata(meta.Id)
 	require.NoError(t, err)
-	require.Contains(t, disk.Phases.Cumulative, phasetracking.PhaseStandby, "the standby record must reach the disk before the restore reads it")
+	require.GreaterOrEqual(t, disk.Phases.Cumulative[phasetracking.PhaseStandby], int64(time.Minute/time.Millisecond), "the standby record must reach the disk before the restore reads it")
 
 	// Nil means standby failed before the VMM stopped, so there is nothing to recover.
 	m2, meta2 := macOSMemorySnapshotFixture(t)
