@@ -347,15 +347,16 @@ func (m *manager) restoreSnapshot(ctx context.Context, id string, snapshotID str
 			}
 		}
 		prepareMacOSSnapshotRestoreMetadata(&restored, &sourceMeta.StoredMetadata, rec.Snapshot.Kind, targetState)
-		// The staged metadata is the committed record. Writing it again after the
-		// swap could fail a restore that already happened.
 		if err := m.replaceMacOSInstanceWithSnapshotPayload(snapshotID, &metadata{StoredMetadata: restored}); err != nil {
 			return nil, err
 		}
-	} else {
-		if err := m.replaceInstanceWithSnapshotPayload(snapshotID, id); err != nil {
-			return nil, err
-		}
+	} else if err := m.replaceInstanceWithSnapshotPayload(snapshotID, id); err != nil {
+		return nil, err
+	}
+
+	// The macOS staged metadata is already the committed record. Writing it again
+	// after the swap could fail a restore that already happened.
+	if restored.MacOS == nil {
 		if err := m.saveMetadata(&metadata{StoredMetadata: restored}); err != nil {
 			return nil, fmt.Errorf("save restored metadata: %w", err)
 		}

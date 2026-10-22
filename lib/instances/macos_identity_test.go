@@ -42,19 +42,16 @@ func TestPrepareMacOSCloneRebindsIdentityWithoutAliasingSource(t *testing.T) {
 	require.False(t, source.IdentityRekeyPending)
 }
 
-func TestPrepareMacOSCloneRefusesGuestWithoutAgent(t *testing.T) {
-	clone := testMacOSSource()
-	clone.MacOS.GuestAgent = false
-	err := prepareMacOSClone(clone)
-	require.ErrorIs(t, err, ErrInvalidRequest)
-	require.False(t, clone.IdentityRekeyPending)
-}
-
-func TestPrepareMacOSCloneRefusesSkippedAgent(t *testing.T) {
-	clone := testMacOSSource()
-	clone.SkipGuestAgent = true
-	require.ErrorIs(t, prepareMacOSClone(clone), ErrInvalidRequest)
-	require.False(t, clone.IdentityRekeyPending)
+func TestPrepareMacOSCloneRefusesWithoutGuestAgent(t *testing.T) {
+	for _, disable := range []func(*StoredMetadata){
+		func(s *StoredMetadata) { s.MacOS.GuestAgent = false },
+		func(s *StoredMetadata) { s.SkipGuestAgent = true },
+	} {
+		clone := testMacOSSource()
+		disable(clone)
+		require.ErrorIs(t, prepareMacOSClone(clone), ErrInvalidRequest)
+		require.False(t, clone.IdentityRekeyPending)
+	}
 }
 
 func TestNewUniqueMACAvoidsUsedAddresses(t *testing.T) {
