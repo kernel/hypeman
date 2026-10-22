@@ -42,10 +42,13 @@ func (m *manager) standbyInstance(
 		log.ErrorContext(ctx, "failed to load instance metadata", "instance_id", id, "error", err)
 		return nil, err
 	}
-	if err := m.admitGuestOperation(&meta.StoredMetadata, "standby"); err != nil {
+	if err := m.admitGuestOperation(&meta.StoredMetadata); err != nil {
 		return nil, err
 	}
 	if meta.MacOS != nil {
+		if err := validateMacOSMemoryCompression(req.Compression); err != nil {
+			return nil, err
+		}
 		// macOS saved state is not compressed. The framework already omits zero pages,
 		// and compression would add time inside the paused window.
 		skipCompression = true

@@ -19,6 +19,7 @@ import (
 
 	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/hypervisor"
+	"github.com/kernel/hypeman/lib/images"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -737,4 +738,21 @@ func TestKillHypervisorHardKillsNonVGPUHypervisor(t *testing.T) {
 
 	assert.ErrorIs(t, syscall.Kill(pid, 0), syscall.ESRCH)
 	assert.NoFileExists(t, markerPath, "non-vGPU hypervisors keep the direct SIGKILL path")
+}
+
+func TestMacOSGracefulShutdownWithoutLiveVMMIsNotGraceful(t *testing.T) {
+	inst := &Instance{StoredMetadata: StoredMetadata{
+		Id:             "graceful-macos-no-vmm",
+		HypervisorType: hypervisor.TypeCloudHypervisor,
+		MacOS:          &images.MacOSImage{GuestAgent: true},
+		VsockSocket:    filepath.Join(t.TempDir(), "missing-vsock.sock"),
+	}}
+	sent := false
+	m := &manager{shutdownGuestFn: func(context.Context, hypervisor.VsockDialer, int32) error {
+		sent = true
+		return nil
+	}}
+	assert.False(t, m.tryGracefulGuestShutdown(context.Background(), inst, 1),
+		"a macOS stop with no VMM to signal must not produce a graceful receipt")
+	assert.False(t, sent)
 }

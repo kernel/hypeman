@@ -8,6 +8,8 @@ import (
 
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/paths"
+	restartpolicy "github.com/kernel/hypeman/lib/restart-policy"
+	"github.com/kernel/hypeman/lib/snapshot"
 	"github.com/stretchr/testify/require"
 )
 
@@ -152,4 +154,20 @@ func TestMacOSRestoreRecoveryKeepsBackupWhenInstanceStateIsUnknown(t *testing.T)
 	data, err := os.ReadFile(filepath.Join(root, "previous", "boot.raw"))
 	require.NoError(t, err, "the parked backup must survive an inconclusive check")
 	require.Equal(t, "previous", string(data))
+}
+
+func TestMacOSRestoreClearsSourceRestartBlock(t *testing.T) {
+	restored := StoredMetadata{RestartStatus: restartpolicy.Status{BlockedReason: restartpolicy.BlockedReasonManualStop}}
+	source := StoredMetadata{}
+	prepareMacOSSnapshotRestoreMetadata(&restored, &source, SnapshotKindStopped, StateRunning)
+	require.True(t, restored.RestartStatus.IsZero(), "a running restore must not inherit the source's manual-stop block")
+
+	prepareMacOSSnapshotRestoreMetadata(&restored, &source, SnapshotKindStopped, StateStopped)
+	require.Equal(t, restartpolicy.BlockedReasonManualStop, restored.RestartStatus.BlockedReason)
+}
+
+func TestMacOSMemoryCompressionRejectsEnabledOnly(t *testing.T) {
+	require.NoError(t, validateMacOSMemoryCompression(nil))
+	require.NoError(t, validateMacOSMemoryCompression(&snapshot.SnapshotCompressionConfig{Enabled: false}))
+	require.ErrorIs(t, validateMacOSMemoryCompression(&snapshot.SnapshotCompressionConfig{Enabled: true}), ErrInvalidRequest)
 }

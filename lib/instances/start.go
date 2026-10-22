@@ -155,9 +155,6 @@ func (m *manager) startInstance(
 		if err := m.checkMacOSMACAvailable(ctx, stored); err != nil {
 			return nil, err
 		}
-		if err := m.clearMacOSStopReceipt(stored); err != nil {
-			return nil, err
-		}
 	}
 
 	// 4b. Recreate the vGPU if this instance had a GPU profile

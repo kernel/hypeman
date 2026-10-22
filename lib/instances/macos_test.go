@@ -265,7 +265,7 @@ func TestMacOSPreservedIdentityAdmission(t *testing.T) {
 	require.NoError(t, os.Remove(socket))
 	require.NoError(t, m.checkMacOSIdentityAvailable(context.Background(), &other))
 	require.NoError(t, m.checkMacOSMACAvailable(context.Background(), &other))
-	require.NoError(t, (&manager{}).admitGuestOperation(&stored, "snapshot schedules"))
+	require.NoError(t, (&manager{}).admitGuestOperation(&stored))
 }
 
 func TestMacOSSocketPathLimit(t *testing.T) {

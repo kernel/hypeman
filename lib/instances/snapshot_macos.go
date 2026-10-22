@@ -18,6 +18,7 @@ import (
 	"github.com/kernel/hypeman/lib/instances/phasetracking"
 	"github.com/kernel/hypeman/lib/paths"
 	restartpolicy "github.com/kernel/hypeman/lib/restart-policy"
+	"github.com/kernel/hypeman/lib/snapshot"
 )
 
 func validateMacOSSnapshotCreate(meta *metadata, req CreateSnapshotRequest) error {
@@ -25,8 +26,8 @@ func validateMacOSSnapshotCreate(meta *metadata, req CreateSnapshotRequest) erro
 		return nil
 	}
 	if req.Kind == SnapshotKindStandby {
-		if req.Compression != nil && req.Compression.Enabled {
-			return fmt.Errorf("%w: macOS memory snapshots do not support compression", ErrInvalidRequest)
+		if err := validateMacOSMemoryCompression(req.Compression); err != nil {
+			return err
 		}
 		return validateMacOSMemorySnapshotSupport(&meta.StoredMetadata)
 	}
@@ -35,6 +36,15 @@ func validateMacOSSnapshotCreate(meta *metadata, req CreateSnapshotRequest) erro
 	}
 	if !meta.StopGraceful {
 		return fmt.Errorf("%w: macOS stopped snapshots require a graceful stop", ErrInvalidState)
+	}
+	return nil
+}
+
+// validateMacOSMemoryCompression rejects an explicit compression request. macOS saved
+// state is never compressed, so accepting one would silently drop it.
+func validateMacOSMemoryCompression(compression *snapshot.SnapshotCompressionConfig) error {
+	if compression != nil && compression.Enabled {
+		return fmt.Errorf("%w: macOS memory snapshots do not support compression", ErrInvalidRequest)
 	}
 	return nil
 }
@@ -115,6 +125,8 @@ func prepareMacOSSnapshotRestoreMetadata(restored *StoredMetadata, source *Store
 		}
 	}
 	restored.Phases.Record(phase, time.Now().UTC())
+	// A restored VM is a new run, so it must not inherit the source's restart block.
+	restored.RestartStatus = restartpolicy.Status{}
 	if target == StateStopped {
 		restored.RestartStatus = restartpolicy.Status{BlockedReason: restartpolicy.BlockedReasonManualStop}
 	}

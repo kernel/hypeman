@@ -65,7 +65,9 @@ func (m *manager) tryGracefulGuestShutdown(ctx context.Context, inst *Instance, 
 		return false
 	}
 	if pid == 0 {
-		return true
+		// Nothing was signalled. Linux treats an already-gone VMM as stopped, but
+		// macOS only counts a stop as graceful after a shutdown attempt.
+		return inst.MacOS == nil
 	}
 	inst.HypervisorProcessIdentity.Set(pid)
 
@@ -169,7 +171,6 @@ func (m *manager) stopInstance(
 		attribute.String("operation", "graceful_guest_shutdown"),
 		attribute.Int("stop_timeout_seconds", stopTimeout),
 	)
-	macOSVMMLive := inst.MacOS != nil && hypervisorProcessLive(&inst)
 	gracefulShutdown := m.tryGracefulGuestShutdown(gracefulCtx, &inst, stopTimeout)
 	if gracefulShutdown {
 		gracefulSpanEnd(nil)
@@ -287,8 +288,7 @@ func (m *manager) stopInstance(
 	now := time.Now().UTC()
 	stored.StoppedAt = &now
 	if stored.MacOS != nil {
-		// A VMM that was already gone exits "gracefully" without a guest shutdown.
-		stored.StopGraceful = gracefulShutdown && macOSVMMLive
+		stored.StopGraceful = gracefulShutdown
 	}
 	stored.HypervisorProcessIdentity.Clear()
 	// Boot markers are per-boot-run and must not carry across stop/restore/start.

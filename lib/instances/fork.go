@@ -42,7 +42,7 @@ func (m *manager) forkInstance(ctx context.Context, id string, req ForkInstanceR
 	if err != nil {
 		return nil, "", false, err
 	}
-	if err := m.admitGuestOperation(&meta.StoredMetadata, "fork"); err != nil {
+	if err := m.admitGuestOperation(&meta.StoredMetadata); err != nil {
 		return nil, "", false, err
 	}
 	source := m.toInstance(ctx, meta)

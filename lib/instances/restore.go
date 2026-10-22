@@ -42,7 +42,7 @@ func (m *manager) restoreInstance(
 		log.ErrorContext(ctx, "failed to load instance metadata", "instance_id", id, "error", err)
 		return nil, err
 	}
-	if err := m.admitGuestOperation(&meta.StoredMetadata, "restore"); err != nil {
+	if err := m.admitGuestOperation(&meta.StoredMetadata); err != nil {
 		return nil, err
 	}
 	release, err := m.admitMacOSBoot(ctx, &meta.StoredMetadata)

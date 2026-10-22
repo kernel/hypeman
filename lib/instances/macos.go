@@ -295,15 +295,9 @@ func guestAgentReadyExecutable(stored *StoredMetadata) string {
 // macOS guest, so a normal stop can record a graceful receipt and strict export waits.
 const macOSMinStopTimeout = 30
 
-// hypervisorProcessLive reports whether the instance's VMM process is still running.
-func hypervisorProcessLive(inst *Instance) bool {
-	pid, err := resolveLiveHypervisorPID(inst.HypervisorProcessIdentity, inst.SocketPath)
-	return err == nil && pid != 0
-}
-
 // admitGuestOperation applies the server's guest-type restriction. Operation-specific
 // admission follows at the caller, under the instance lock.
-func (m *manager) admitGuestOperation(stored *StoredMetadata, _ string) error {
+func (m *manager) admitGuestOperation(stored *StoredMetadata) error {
 	return m.requireMacOSGuest(stored)
 }
 

@@ -63,7 +63,7 @@ func (m *manager) createSnapshot(ctx context.Context, id string, req CreateSnaps
 	if err != nil {
 		return nil, err
 	}
-	if err := m.admitGuestOperation(&meta.StoredMetadata, "snapshot"); err != nil {
+	if err := m.admitGuestOperation(&meta.StoredMetadata); err != nil {
 		return nil, err
 	}
 	if err := validateMacOSSnapshotCreate(meta, req); err != nil {
@@ -271,7 +271,7 @@ func (m *manager) restoreSnapshot(ctx context.Context, id string, snapshotID str
 	if err := validateMacOSSnapshotRestore(sourceMeta, rec); err != nil {
 		return nil, err
 	}
-	if err := m.admitGuestOperation(&sourceMeta.StoredMetadata, "restore snapshot"); err != nil {
+	if err := m.admitGuestOperation(&sourceMeta.StoredMetadata); err != nil {
 		return nil, err
 	}
 	sourceInst := m.toInstance(ctx, sourceMeta)
@@ -347,15 +347,18 @@ func (m *manager) restoreSnapshot(ctx context.Context, id string, snapshotID str
 			}
 		}
 		prepareMacOSSnapshotRestoreMetadata(&restored, &sourceMeta.StoredMetadata, rec.Snapshot.Kind, targetState)
+		// The staged metadata is the committed record. Writing it again after the
+		// swap could fail a restore that already happened.
 		if err := m.replaceMacOSInstanceWithSnapshotPayload(snapshotID, &metadata{StoredMetadata: restored}); err != nil {
 			return nil, err
 		}
-	} else if err := m.replaceInstanceWithSnapshotPayload(snapshotID, id); err != nil {
-		return nil, err
-	}
-
-	if err := m.saveMetadata(&metadata{StoredMetadata: restored}); err != nil {
-		return nil, fmt.Errorf("save restored metadata: %w", err)
+	} else {
+		if err := m.replaceInstanceWithSnapshotPayload(snapshotID, id); err != nil {
+			return nil, err
+		}
+		if err := m.saveMetadata(&metadata{StoredMetadata: restored}); err != nil {
+			return nil, fmt.Errorf("save restored metadata: %w", err)
+		}
 	}
 
 	switch rec.Snapshot.Kind {
@@ -408,7 +411,7 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 	if err != nil {
 		return nil, err
 	}
-	if err := m.admitGuestOperation(&rec.StoredMetadata, "fork snapshot"); err != nil {
+	if err := m.admitGuestOperation(&rec.StoredMetadata); err != nil {
 		return nil, err
 	}
 	if err := validateMacOSSnapshotFork(rec); err != nil {

@@ -1,8 +1,12 @@
 package instances
 
 import (
+	"context"
+	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/paths"
 	"github.com/stretchr/testify/require"
@@ -39,4 +43,25 @@ func TestAssignMacOSCloneMACAvoidsStoredMACs(t *testing.T) {
 	offline := StoredMetadata{Id: "clone2", MacOS: &images.MacOSImage{}}
 	require.NoError(t, m.assignMacOSCloneMAC(&offline))
 	require.Empty(t, offline.MAC, "a clone without networking gets no MAC")
+}
+
+func TestRejectedMacOSStartKeepsStopReceipt(t *testing.T) {
+	p := paths.New(t.TempDir())
+	m := &manager{paths: p}
+	require.NoError(t, m.ensureDirectories("mac"))
+	stored := StoredMetadata{
+		Id:             "mac",
+		DataDir:        p.InstanceDir("mac"),
+		HypervisorType: hypervisor.TypeVZ,
+		SocketPath:     filepath.Join(t.TempDir(), strings.Repeat("s", maxMacOSSocketPath)),
+		MacOS:          &images.MacOSImage{},
+		StopGraceful:   true,
+	}
+	require.NoError(t, m.saveMetadata(&metadata{StoredMetadata: stored}))
+
+	err := m.startAndBootVM(context.Background(), &stored, nil, nil, false)
+	require.ErrorIs(t, err, ErrInvalidRequest)
+	meta, err := m.loadMetadata("mac")
+	require.NoError(t, err)
+	require.True(t, meta.StopGraceful, "a start rejected at boot admission must keep the stop receipt")
 }
