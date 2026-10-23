@@ -320,6 +320,13 @@ func (m *manager) restoreInstance(
 		releaseNetwork()
 		return nil, err
 	}
+	// A macOS guest allocates no host network here, so there is none to release.
+	if stored.MacOS != nil {
+		if err := m.invalidateMacOSCheckpoint(id); err != nil {
+			hv.Shutdown(ctx)
+			return nil, err
+		}
+	}
 
 	// 6. Transition: Paused → Running (resume)
 	resumeCtx, resumeSpanEnd := m.startLifecycleStep(ctx, "resume_vm",
@@ -377,14 +384,7 @@ func (m *manager) restoreInstance(
 		if err := restoreRetainedSnapshotBase(snapshotDir, retainedBaseDir); err != nil {
 			log.WarnContext(ctx, "failed to retain snapshot base after restore", "instance_id", id, "error", err)
 		}
-	} else if stored.MacOS != nil {
-		// A checkpoint left behind would read as Standby if the shim later died, and
-		// restoring it would replay old memory onto a newer disk. The guest is running;
-		// a retried restore removes it.
-		if err := os.RemoveAll(snapshotDir); err != nil {
-			return nil, fmt.Errorf("remove consumed snapshot: %w", err)
-		}
-	} else {
+	} else if stored.MacOS == nil {
 		log.InfoContext(ctx, "deleting snapshot after successful restore", "instance_id", id)
 		os.RemoveAll(snapshotDir) // Best effort, ignore errors
 	}

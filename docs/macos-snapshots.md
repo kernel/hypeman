@@ -7,9 +7,11 @@ snapshot and schedule paths is still required.
 
 ## Stopped snapshots and cold forks
 
-- `kind: Stopped` requires a stopped source and a graceful shutdown receipt:
-  acknowledged guest shutdown with confirmed owned VMM exit. A forced stop is
-  refused with 409.
+- `kind: Stopped` requires a stopped source and a graceful shutdown receipt: after
+  the shutdown request, the vz-shim recorded that the guest powered the VM off
+  itself, and the owned VMM exited. VMM exit alone does not count, and a forced
+  stop is refused with 409. A shim started before this receipt existed never
+  writes one, so its guest needs a fresh boot and stop.
 - Restore targets are Stopped or Running. The source instance, hardware model,
   machine identifier and MAC must match the snapshot.
 - A stopped-snapshot fork requires a graceful receipt and an enabled guest agent.
@@ -49,19 +51,24 @@ Restore with `POST /instances/{id}/snapshots/{snapshot_id}/restore`.
 - Preflight checks CPU/RAM, hardware model, machine identifier, NIC MAC, disk and
   auxiliary paths, and the full memory/disk/auxiliary bundle before storage is
   replaced. An invalid payload leaves current storage untouched.
-- Restored metadata is staged with the payload, including the current name and
-  expiration, so a directory-swap recovery commits or rolls back metadata and
-  storage together. Host phase accounting is preserved rather than replayed from the
+- Restore stages the payload and restored metadata (including the current name and
+  expiration) in `restore-staging/` inside the instance directory, then swaps the
+  instance's files in place. Deleting the instance always removes its staging. A
+  crash before the swap commits rolls back to the previous files; after it, server
+  start or the next restore finishes the install. Host phase accounting is preserved rather than replayed from the
   checkpoint; a memory restore keeps its boot time. An explicit Stopped target
   suppresses automatic restart.
 - A restore never mutates the persistent snapshot. If the framework restore fails
   after installation, the restored checkpoint remains available in Standby.
+- Once the shim has loaded the VM, the checkpoint is retired before the guest
+  resumes, so a later crash cannot restore old memory onto a newer disk. If retiring
+  it fails, the VM is shut down and the checkpoint is kept. A resume that fails after
+  it was retired leaves the instance Stopped with no graceful receipt.
 - If the API dies during a restore, the shim it started keeps loading the VM. Until
   it opens its socket the instance reads Initializing. Restore returns 409 while
   that shim has not resumed the VM, and keeps the checkpoint. Once loaded it reads
-  Paused: `POST /restore` resumes it and
-  completes the restore (records the shim, removes the consumed checkpoint), and
-  DELETE kills it. As on Linux, stop does not accept Paused.
+  Paused: `POST /restore` retires the checkpoint, resumes the VM and records the
+  shim, and DELETE kills it. As on Linux, stop does not accept Paused.
 - Saved state is not portable. Use the originating Mac and OS account, a compatible
   framework version and the same VM configuration. API availability on macOS 14+
   does not guarantee support for a particular guest configuration.

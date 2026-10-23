@@ -70,6 +70,9 @@ func (m *manager) tryGracefulGuestShutdown(ctx context.Context, inst *Instance, 
 		return inst.MacOS == nil
 	}
 	inst.HypervisorProcessIdentity.Set(pid)
+	if inst.MacOS != nil {
+		_ = os.Remove(macOSStopReceiptPath(&inst.StoredMetadata))
+	}
 
 	shutdownGuest := guest.ShutdownInstance
 	if m.shutdownGuestFn != nil {
@@ -103,6 +106,12 @@ func (m *manager) tryGracefulGuestShutdown(ctx context.Context, inst *Instance, 
 	}
 
 	if WaitForProcessExit(pid, waitTimeout) {
+		// The shim exits after a forced stop too, so macOS also needs its receipt that
+		// the guest powered off.
+		if inst.MacOS != nil && os.Remove(macOSStopReceiptPath(&inst.StoredMetadata)) != nil {
+			log.WarnContext(ctx, "VM exited without confirming a guest power-off", "instance_id", inst.Id)
+			return false
+		}
 		log.DebugContext(ctx, "VM shut down gracefully", "instance_id", inst.Id)
 		return true
 	}

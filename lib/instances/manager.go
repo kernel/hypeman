@@ -668,6 +668,11 @@ func (m *manager) RestoreInstance(ctx context.Context, id string) (*Instance, er
 		if err != nil {
 			return nil, fmt.Errorf("create hypervisor client: %w", err)
 		}
+		if current.MacOS != nil {
+			if err := m.invalidateMacOSCheckpoint(id); err != nil {
+				return nil, err
+			}
+		}
 		if err := hv.Resume(ctx); err != nil {
 			m.invalidateCachedHypervisorState(id)
 			return nil, fmt.Errorf("resume paused vm: %w", err)

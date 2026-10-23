@@ -124,8 +124,9 @@ type StoredMetadata struct {
 	ExpiresAt *time.Time // Absolute expiration time; nil disables expiration
 	StartedAt *time.Time // Boot epoch start time (set on create/start; preserved across standby restore)
 	StoppedAt *time.Time // Last time VM was stopped
-	// StopGraceful records whether the last stop was an acknowledged guest shutdown with
-	// owned VMM exit. macOS stopped snapshots require it; a forced stop is not consistent.
+	// StopGraceful records whether the last stop was a guest power-off, confirmed by the
+	// vz-shim's stop receipt, with owned VMM exit. macOS stopped snapshots require it; a
+	// forced stop is not consistent.
 	StopGraceful bool `json:"stop_graceful,omitempty"`
 
 	// Boot progress markers (derived from guest serial log sentinels and persisted)

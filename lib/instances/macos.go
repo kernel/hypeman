@@ -15,6 +15,7 @@ import (
 
 	"github.com/kernel/hypeman/lib/healthcheck"
 	"github.com/kernel/hypeman/lib/hypervisor"
+	"github.com/kernel/hypeman/lib/hypervisor/vz/shimconfig"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/instances/phasetracking"
 	"github.com/kernel/hypeman/lib/network"
@@ -354,6 +355,11 @@ func (s *StoredMetadata) VMStoragePath() string {
 		return ""
 	}
 	return filepath.Join(s.DataDir, paths.MacOSBootDiskFile)
+}
+
+// macOSStopReceiptPath is where the vz-shim records that the guest stopped the VM.
+func macOSStopReceiptPath(stored *StoredMetadata) string {
+	return filepath.Join(stored.DataDir, shimconfig.StopReceiptFile)
 }
 
 // requireMacOSGuest refuses Linux guests on a macOS-only server.

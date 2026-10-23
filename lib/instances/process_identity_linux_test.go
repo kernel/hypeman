@@ -756,3 +756,52 @@ func TestMacOSGracefulShutdownWithoutLiveVMMIsNotGraceful(t *testing.T) {
 		"a macOS stop with no VMM to signal must not produce a graceful receipt")
 	assert.False(t, sent)
 }
+
+// A macOS VMM exits after a forced stop as well, so a stop is graceful only when the
+// shim recorded that the guest powered off. A receipt from an earlier run never counts.
+func TestMacOSGracefulShutdownRequiresGuestStopReceipt(t *testing.T) {
+	for _, guestStopped := range []bool{true, false} {
+		t.Run(fmt.Sprintf("receipt=%v", guestStopped), func(t *testing.T) {
+			socketPath := filepath.Join(t.TempDir(), "test.sock")
+			owner := exec.Command(os.Args[0], "-test.run=^TestSocketListenerHelper$")
+			owner.Env = append(os.Environ(), "HYPERVISOR_SOCKET_HELPER=1", "HYPERVISOR_SOCKET_PATH="+socketPath)
+			stdin, err := owner.StdinPipe()
+			require.NoError(t, err)
+			stdout, err := owner.StdoutPipe()
+			require.NoError(t, err)
+			require.NoError(t, owner.Start())
+			exited := make(chan struct{})
+			go func() { _ = owner.Wait(); close(exited) }()
+			t.Cleanup(func() {
+				_ = stdin.Close()
+				_ = owner.Process.Kill()
+				<-exited
+			})
+			_, err = bufio.NewReader(stdout).ReadString('\n')
+			require.NoError(t, err)
+
+			inst := &Instance{StoredMetadata: StoredMetadata{
+				Id:                        "graceful-macos-receipt",
+				HypervisorType:            hypervisor.TypeCloudHypervisor,
+				HypervisorProcessIdentity: HypervisorProcessIdentity{HypervisorPID: &owner.Process.Pid},
+				MacOS:                     &images.MacOSImage{GuestAgent: true},
+				DataDir:                   t.TempDir(),
+				SocketPath:                socketPath,
+				VsockSocket:               filepath.Join(t.TempDir(), "missing-vsock.sock"),
+			}}
+			receipt := macOSStopReceiptPath(&inst.StoredMetadata)
+			require.NoError(t, os.WriteFile(receipt, []byte("earlier run"), 0600))
+			m := &manager{shutdownGuestFn: func(context.Context, hypervisor.VsockDialer, int32) error {
+				assert.NoFileExists(t, receipt, "a receipt from an earlier run is cleared before shutdown")
+				if guestStopped {
+					require.NoError(t, os.WriteFile(receipt, []byte("now"), 0600))
+				}
+				_, err := stdin.Write([]byte{1})
+				return err
+			}}
+
+			assert.Equal(t, guestStopped, m.tryGracefulGuestShutdown(context.Background(), inst, 5))
+			assert.NoFileExists(t, receipt, "the receipt is consumed")
+		})
+	}
+}

@@ -404,22 +404,72 @@ func TestMacOSRestoreRetryRemovesConsumedCheckpoint(t *testing.T) {
 	require.NoDirExists(t, m.paths.InstanceSnapshotLatest(meta.Id))
 }
 
-func TestMacOSRestoreFailsWhenCheckpointCannotBeRemoved(t *testing.T) {
+func TestMacOSRestoreKeepsCheckpointWhenItCannotBeRetired(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root ignores directory permissions")
 	}
 	m, meta := macOSMemorySnapshotFixture(t)
 	writeMacOSMemorySnapshotPayload(t, m, meta.DataDir, &meta.StoredMetadata)
+	resumed := false
+	m.vmStarters[macOSMemoryTestHypervisor] = macOSResumeProbeStarter{onResume: func() { resumed = true }}
 	snapshots := filepath.Dir(m.paths.InstanceSnapshotLatest(meta.Id))
 	require.NoError(t, os.Chmod(snapshots, 0500))
 	t.Cleanup(func() { os.Chmod(snapshots, 0700) })
 
 	_, err := m.restoreInstance(context.Background(), meta.Id)
-	require.ErrorContains(t, err, "remove consumed snapshot")
+	require.ErrorContains(t, err, "invalidate checkpoint before resume")
+	require.False(t, resumed, "the guest must not run while its checkpoint is still restorable")
+	require.FileExists(t, filepath.Join(m.paths.InstanceSnapshotLatest(meta.Id), shimconfig.SnapshotMachineStateFile))
 
 	require.NoError(t, os.Chmod(snapshots, 0700))
-	m.storeCachedHypervisorState(meta.Id, hypervisor.StateRunning)
-	inst, err := m.RestoreInstance(context.Background(), meta.Id)
+	// The shut-down shim removes its control socket on exit; the fake leaves it.
+	require.NoError(t, os.Remove(meta.SocketPath))
+	_, err = m.restoreInstance(context.Background(), meta.Id)
 	require.NoError(t, err)
-	require.False(t, inst.HasSnapshot, "the retry removes the consumed checkpoint")
+	require.True(t, resumed)
+	require.NoDirExists(t, m.paths.InstanceSnapshotLatest(meta.Id))
+}
+
+// The checkpoint is retired once the VM is loaded and before the guest runs, so a crash
+// after resume cannot leave it to be restored onto the newer disk.
+func TestMacOSRestoreRetiresCheckpointBeforeResume(t *testing.T) {
+	m, meta := macOSMemorySnapshotFixture(t)
+	writeMacOSMemorySnapshotPayload(t, m, meta.DataDir, &meta.StoredMetadata)
+	checkpoint := m.paths.InstanceSnapshotLatest(meta.Id)
+	resumed, presentAtResume := false, false
+	m.vmStarters[macOSMemoryTestHypervisor] = macOSResumeProbeStarter{onResume: func() {
+		resumed = true
+		_, err := os.Stat(checkpoint)
+		presentAtResume = err == nil
+	}}
+
+	_, err := m.restoreInstance(context.Background(), meta.Id)
+	require.NoError(t, err)
+	require.True(t, resumed)
+	require.False(t, presentAtResume)
+	require.NoDirExists(t, checkpoint)
+	require.NoDirExists(t, filepath.Join(filepath.Dir(checkpoint), "snapshot-consumed"))
+}
+
+type macOSResumeProbeStarter struct {
+	concurrentForkPrepareTestStarter
+	onResume func()
+}
+
+func (s macOSResumeProbeStarter) RestoreVM(ctx context.Context, p *paths.Paths, version, socket, snapshot string, options hypervisor.RestoreOptions) (int, hypervisor.Hypervisor, error) {
+	pid, hv, err := s.concurrentForkPrepareTestStarter.RestoreVM(ctx, p, version, socket, snapshot, options)
+	if err != nil {
+		return 0, nil, err
+	}
+	return pid, resumeProbeHypervisor{Hypervisor: hv, onResume: s.onResume}, nil
+}
+
+type resumeProbeHypervisor struct {
+	hypervisor.Hypervisor
+	onResume func()
+}
+
+func (h resumeProbeHypervisor) Resume(ctx context.Context) error {
+	h.onResume()
+	return h.Hypervisor.Resume(ctx)
 }

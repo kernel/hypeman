@@ -234,25 +234,24 @@ func (m *manager) saveMacOSSnapshotFork(ctx context.Context, meta *metadata) err
 	return m.saveForkMetadata(ctx, meta)
 }
 
-// replaceMacOSInstanceWithSnapshotPayload stages the snapshot and restored metadata
-// beside the instance, then swaps both in. A failure before the swap leaves the
-// previous directory intact; a failed swap is rolled back. The staging root lives outside the guests directory,
-// so instance and snapshot listings never see a half-restored copy.
+// replaceMacOSInstanceWithSnapshotPayload stages the snapshot and restored metadata in
+// the instance's restore staging directory, then swaps the instance's files for the
+// staged ones. The instance directory itself stays in place, so deleting it always
+// removes any staging. Renaming staged to installing commits the swap: a crash before
+// that rolls back to the previous files, and a crash after it finishes the install.
 func (m *manager) replaceMacOSInstanceWithSnapshotPayload(snapshotID string, restored *metadata) error {
 	instanceID := restored.Id
 	if err := m.recoverMacOSRestoreStaging(instanceID); err != nil {
 		return fmt.Errorf("recover before restore: %w", err)
 	}
 	instanceDir := m.paths.InstanceDir(instanceID)
-	root := filepath.Join(m.paths.DataDir(), "restore-staging", instanceID)
+	root := m.paths.InstanceRestoreStaging(instanceID)
 	staged := filepath.Join(root, "staged")
 	previous := filepath.Join(root, "previous")
+	installing := filepath.Join(root, "installing")
 	fail := func(err error) error {
 		_ = os.RemoveAll(root)
 		return err
-	}
-	if err := os.RemoveAll(root); err != nil {
-		return fmt.Errorf("clear restore staging: %w", err)
 	}
 	if err := os.MkdirAll(root, 0700); err != nil {
 		return fmt.Errorf("create restore staging: %w", err)
@@ -275,29 +274,58 @@ func (m *manager) replaceMacOSInstanceWithSnapshotPayload(snapshotID string, res
 	if err := os.WriteFile(filepath.Join(staged, filepath.Base(m.paths.InstanceMetadata(instanceID))), data, 0644); err != nil {
 		return fail(fmt.Errorf("stage restored metadata: %w", err))
 	}
-	if err := os.Rename(instanceDir, previous); err != nil {
-		return fail(fmt.Errorf("retire instance directory: %w", err))
+	if err := os.Mkdir(previous, 0700); err != nil {
+		return fail(fmt.Errorf("create restore backup: %w", err))
 	}
-	if err := os.Rename(staged, instanceDir); err != nil {
-		if rollbackErr := os.Rename(previous, instanceDir); rollbackErr != nil {
-			return fmt.Errorf("install snapshot payload: %w (rollback failed: %v; previous state kept at %s)", err, rollbackErr, previous)
+	retired := moveDirEntries(instanceDir, previous)
+	if retired == nil {
+		retired = os.Rename(staged, installing)
+	}
+	if retired != nil {
+		if rollbackErr := moveDirEntries(previous, instanceDir); rollbackErr != nil {
+			return fmt.Errorf("retire instance files: %w (rollback failed: %v; previous files kept at %s)", retired, rollbackErr, previous)
 		}
-		return fail(fmt.Errorf("install snapshot payload: %w", err))
+		return fail(fmt.Errorf("retire instance files: %w", retired))
+	}
+	if err := moveDirEntries(installing, instanceDir); err != nil {
+		return fmt.Errorf("install snapshot payload: %w (the next restore or server start finishes it)", err)
 	}
 	_ = os.RemoveAll(root)
 	return nil
 }
 
-// recoverMacOSRestoreStaging resolves a swap interrupted by a crash. With the instance
-// directory missing and the previous directory parked, the previous state is put back.
-// If the instance directory is present, a completed swap leaves stale staging, which is
-// removed. Staging with no previous directory is an unfinished copy and is removed.
-// An empty instanceID recovers every instance.
+// moveDirEntries renames every entry of src into dst, except restore staging.
+func moveDirEntries(src, dst string) error {
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if entry.Name() == paths.RestoreStagingDir {
+			continue
+		}
+		if err := os.Rename(filepath.Join(src, entry.Name()), filepath.Join(dst, entry.Name())); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func pathExists(path string) (bool, error) {
+	_, err := os.Stat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+// recoverMacOSRestoreStaging resolves a swap interrupted by a crash. A committed swap
+// (installing present) is finished; otherwise any retired files are moved back. The
+// staging directory is then removed. An empty instanceID recovers every instance.
 func (m *manager) recoverMacOSRestoreStaging(instanceID string) error {
-	root := filepath.Join(m.paths.DataDir(), "restore-staging")
 	ids := []string{instanceID}
 	if instanceID == "" {
-		entries, err := os.ReadDir(root)
+		entries, err := os.ReadDir(m.paths.GuestsDir())
 		if errors.Is(err, os.ErrNotExist) {
 			return nil
 		}
@@ -310,37 +338,56 @@ func (m *manager) recoverMacOSRestoreStaging(instanceID string) error {
 		}
 	}
 	for _, id := range ids {
-		stagingRoot := filepath.Join(root, id)
-		previous := filepath.Join(stagingRoot, "previous")
+		root := m.paths.InstanceRestoreStaging(id)
+		if ok, err := pathExists(root); err != nil {
+			return fmt.Errorf("inspect restore staging for %s: %w", id, err)
+		} else if !ok {
+			continue
+		}
 		instanceDir := m.paths.InstanceDir(id)
-		_, previousErr := os.Stat(previous)
-		if previousErr != nil && !errors.Is(previousErr, os.ErrNotExist) {
-			return fmt.Errorf("inspect restore staging for %s: %w", id, previousErr)
+		installing, err := pathExists(filepath.Join(root, "installing"))
+		if err != nil {
+			return fmt.Errorf("inspect restore staging for %s: %w", id, err)
 		}
-		if previousErr == nil {
-			_, instanceErr := os.Stat(instanceDir)
-			if instanceErr != nil && !errors.Is(instanceErr, os.ErrNotExist) {
-				return fmt.Errorf("inspect instance directory for %s: %w", id, instanceErr)
+		previous, err := pathExists(filepath.Join(root, "previous"))
+		if err != nil {
+			return fmt.Errorf("inspect restore staging for %s: %w", id, err)
+		}
+		if installing {
+			if err := moveDirEntries(filepath.Join(root, "installing"), instanceDir); err != nil {
+				return fmt.Errorf("finish restore for %s: %w", id, err)
 			}
-			if errors.Is(instanceErr, os.ErrNotExist) {
-				if err := os.MkdirAll(filepath.Dir(instanceDir), 0755); err != nil {
-					return fmt.Errorf("prepare rollback for %s: %w", id, err)
-				}
-				if err := os.Rename(previous, instanceDir); err != nil {
-					return fmt.Errorf("roll back restore for %s: %w", id, err)
-				}
+		} else if previous {
+			if err := moveDirEntries(filepath.Join(root, "previous"), instanceDir); err != nil {
+				return fmt.Errorf("roll back restore for %s: %w", id, err)
 			}
 		}
-		if err := os.RemoveAll(stagingRoot); err != nil {
+		if err := os.RemoveAll(root); err != nil {
 			return fmt.Errorf("clear restore staging for %s: %w", id, err)
 		}
 	}
 	return nil
 }
 
+// invalidateMacOSCheckpoint retires the checkpoint of a loaded, still paused macOS VM
+// before it resumes. Once the guest runs its disk moves past the checkpoint, so a later
+// crash must not find it and restore old memory onto the newer disk. The rename is
+// atomic: if it fails, the checkpoint is whole and the restore can be retried.
+func (m *manager) invalidateMacOSCheckpoint(id string) error {
+	consumed := filepath.Join(m.paths.InstanceSnapshots(id), "snapshot-consumed")
+	if err := os.RemoveAll(consumed); err != nil {
+		return fmt.Errorf("clear consumed checkpoint: %w", err)
+	}
+	if err := os.Rename(m.paths.InstanceSnapshotLatest(id), consumed); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("invalidate checkpoint before resume: %w", err)
+	}
+	_ = os.RemoveAll(consumed)
+	return nil
+}
+
 // finishMacOSResume completes a restore whose API process died after the shim had
-// loaded the VM, once resuming the Paused guest succeeds. It records the shim, and
-// removes the consumed memory snapshot so a later crash cannot restore stale memory
+// loaded the VM, once resuming the Paused guest succeeds. It records the shim and
+// removes any checkpoint still on disk, so a later crash cannot restore stale memory
 // onto the guest's newer disk.
 func (m *manager) finishMacOSResume(id string) error {
 	meta, err := m.loadMetadata(id)

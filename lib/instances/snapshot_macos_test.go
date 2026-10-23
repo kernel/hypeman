@@ -85,8 +85,7 @@ func TestMacOSRestoreSwapsPayloadWithMetadata(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(m.paths.InstanceDir(id), "boot.raw"))
 	require.NoError(t, err)
 	require.Equal(t, "before", string(data))
-	_, err = os.Stat(filepath.Join(m.paths.DataDir(), "restore-staging", id))
-	require.ErrorIs(t, err, os.ErrNotExist, "staging is removed after a successful swap")
+	require.NoDirExists(t, m.paths.InstanceRestoreStaging(id), "staging is removed after a successful swap")
 	// A restart before the caller's own saveMetadata must find the restored metadata.
 	require.NoError(t, m.recoverMacOSRestoreStaging(id))
 	got, err := m.loadMetadata(id)
@@ -104,58 +103,74 @@ func TestMacOSRestoreSwapsPayloadWithMetadata(t *testing.T) {
 	require.Equal(t, "current", string(data), "a failed staging leaves the previous disk untouched")
 }
 
-func TestMacOSRestoreRecoveryRollsBackAndCleans(t *testing.T) {
+func TestMacOSRestoreRecoveryRollsBackOrFinishes(t *testing.T) {
 	const id = "mac-crash"
 	newManager := func(t *testing.T) (*manager, string) {
 		m := &manager{paths: paths.New(t.TempDir())}
-		return m, filepath.Join(m.paths.DataDir(), "restore-staging", id)
+		return m, m.paths.InstanceRestoreStaging(id)
+	}
+	readBoot := func(t *testing.T, m *manager) string {
+		data, err := os.ReadFile(filepath.Join(m.paths.InstanceDir(id), "boot.raw"))
+		require.NoError(t, err)
+		return string(data)
 	}
 
-	// Crash after retiring the instance directory, before the swap: roll the previous state back.
+	// Crash while retiring files, before the swap commits: the retired files come back.
 	m, root := newManager(t)
+	writeGuestFiles(t, m.paths.InstanceDir(id), map[string]string{macOSAuxStorageFile: "aux-previous"})
 	writeGuestFiles(t, filepath.Join(root, "previous"), map[string]string{"boot.raw": "previous"})
+	writeGuestFiles(t, filepath.Join(root, "staged"), map[string]string{"boot.raw": "restored"})
 	require.NoError(t, m.recoverMacOSRestoreStaging(id))
-	data, err := os.ReadFile(filepath.Join(m.paths.InstanceDir(id), "boot.raw"))
-	require.NoError(t, err)
-	require.Equal(t, "previous", string(data))
-	_, err = os.Stat(root)
-	require.ErrorIs(t, err, os.ErrNotExist)
+	require.Equal(t, "previous", readBoot(t, m))
+	require.FileExists(t, filepath.Join(m.paths.InstanceDir(id), macOSAuxStorageFile))
+	require.NoDirExists(t, root)
 
-	// Crash after a completed swap: the instance directory is current, so stale staging goes.
+	// Crash while installing a committed swap: the rest of the payload is installed.
 	m, root = newManager(t)
-	writeGuestFiles(t, m.paths.InstanceDir(id), map[string]string{"boot.raw": "restored"})
-	writeGuestFiles(t, filepath.Join(root, "previous"), map[string]string{"boot.raw": "old"})
+	writeGuestFiles(t, m.paths.InstanceDir(id), map[string]string{macOSAuxStorageFile: "aux-restored"})
+	writeGuestFiles(t, filepath.Join(root, "installing"), map[string]string{"boot.raw": "restored"})
+	writeGuestFiles(t, filepath.Join(root, "previous"), map[string]string{"boot.raw": "old", macOSAuxStorageFile: "aux-old"})
 	require.NoError(t, m.recoverMacOSRestoreStaging(id))
-	data, err = os.ReadFile(filepath.Join(m.paths.InstanceDir(id), "boot.raw"))
-	require.NoError(t, err)
-	require.Equal(t, "restored", string(data))
-	_, err = os.Stat(root)
-	require.ErrorIs(t, err, os.ErrNotExist)
+	require.Equal(t, "restored", readBoot(t, m))
+	require.NoDirExists(t, root)
 
-	// Crash during staging copy: no previous directory, so the partial copy is removed.
+	// Crash during the staging copy: nothing was retired, so the partial copy is removed.
 	m, root = newManager(t)
+	writeGuestFiles(t, m.paths.InstanceDir(id), map[string]string{"boot.raw": "current"})
 	writeGuestFiles(t, filepath.Join(root, "staged"), map[string]string{"boot.raw": "partial"})
+	writeGuestFiles(t, m.paths.InstanceDir("other"), map[string]string{"boot.raw": "untouched"})
 	require.NoError(t, m.recoverMacOSRestoreStaging(""))
-	_, err = os.Stat(root)
-	require.ErrorIs(t, err, os.ErrNotExist)
+	require.Equal(t, "current", readBoot(t, m))
+	require.NoDirExists(t, root)
+	require.FileExists(t, filepath.Join(m.paths.InstanceDir("other"), "boot.raw"))
 }
 
-func TestMacOSRestoreRecoveryKeepsBackupWhenInstanceStateIsUnknown(t *testing.T) {
+func TestMacOSRestoreStagingIsDeletedWithInstance(t *testing.T) {
+	m := &manager{paths: paths.New(t.TempDir())}
+	const id = "mac-deleted"
+	root := m.paths.InstanceRestoreStaging(id)
+	writeGuestFiles(t, filepath.Join(root, "previous"), map[string]string{"boot.raw": "previous"})
+	require.Equal(t, m.paths.InstanceDir(id), filepath.Dir(root), "staging lives inside the instance directory")
+
+	require.NoError(t, os.RemoveAll(m.paths.InstanceDir(id)))
+	require.NoError(t, m.recoverMacOSRestoreStaging(""))
+	require.NoDirExists(t, m.paths.InstanceDir(id), "recovery must not resurrect a deleted instance")
+}
+
+func TestMacOSRestoreRecoveryKeepsBackupWhenStagingIsUnreadable(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root ignores directory permissions")
 	}
 	const id = "mac-unknown"
 	m := &manager{paths: paths.New(t.TempDir())}
-	root := filepath.Join(m.paths.DataDir(), "restore-staging", id)
+	root := m.paths.InstanceRestoreStaging(id)
 	writeGuestFiles(t, filepath.Join(root, "previous"), map[string]string{"boot.raw": "previous"})
-	guests := filepath.Dir(m.paths.InstanceDir(id))
-	require.NoError(t, os.MkdirAll(guests, 0755))
-	// An unreadable guests directory makes the instance directory's state unknown.
-	require.NoError(t, os.Chmod(guests, 0))
-	t.Cleanup(func() { _ = os.Chmod(guests, 0755) })
+	// An unreadable staging directory makes the swap's progress unknown.
+	require.NoError(t, os.Chmod(root, 0))
+	t.Cleanup(func() { _ = os.Chmod(root, 0755) })
 
 	require.Error(t, m.recoverMacOSRestoreStaging(id))
-	require.NoError(t, os.Chmod(guests, 0755))
+	require.NoError(t, os.Chmod(root, 0755))
 	data, err := os.ReadFile(filepath.Join(root, "previous", "boot.raw"))
 	require.NoError(t, err, "the parked backup must survive an inconclusive check")
 	require.Equal(t, "previous", string(data))

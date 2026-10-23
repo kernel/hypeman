@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 
 	"github.com/Code-Hex/vz/v3"
 	"github.com/kernel/hypeman/lib/hypervisor/vz/shimconfig"
@@ -24,6 +25,9 @@ type ShimServer struct {
 	vmConfig   *vz.VirtualMachineConfiguration
 	shimConfig shimconfig.ShimConfig
 	mu         sync.RWMutex
+	// forcedStop is set before the shim stops the VM itself, so that stop is not
+	// mistaken for the guest powering off.
+	forcedStop atomic.Bool
 }
 
 // NewShimServer creates a new shim server.
@@ -305,6 +309,7 @@ func (s *ShimServer) handleVMMShutdown(w http.ResponseWriter, r *http.Request) {
 		defer s.mu.Unlock()
 
 		if s.vm.CanStop() {
+			s.forcedStop.Store(true)
 			s.vm.Stop()
 		}
 		// Process will exit when VM stops (monitored in main)
