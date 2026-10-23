@@ -42,8 +42,16 @@ func (m *manager) standbyInstance(
 		log.ErrorContext(ctx, "failed to load instance metadata", "instance_id", id, "error", err)
 		return nil, err
 	}
-	if err := m.admitGuestOperation(&meta.StoredMetadata, "standby"); err != nil {
+	if err := m.admitGuestOperation(&meta.StoredMetadata); err != nil {
 		return nil, err
+	}
+	if meta.MacOS != nil {
+		if err := validateMacOSMemoryCompression(req.Compression); err != nil {
+			return nil, err
+		}
+		// macOS saved state is not compressed. The framework already omits zero pages,
+		// and compression would add time inside the paused window.
+		skipCompression = true
 	}
 
 	inst := m.toInstance(ctx, meta)
@@ -91,7 +99,7 @@ func (m *manager) standbyInstance(
 	// 3. Get network allocation BEFORE killing VMM (while we can still query it)
 	// This is needed to delete the TAP device after VMM shuts down
 	var networkAlloc *network.Allocation
-	if inst.NetworkEnabled {
+	if inst.usesLinuxNetwork() {
 		log.DebugContext(ctx, "getting network allocation", "instance_id", id)
 		networkAlloc, err = m.networkManager.GetAllocation(ctx, id)
 		if err != nil {
@@ -112,6 +120,10 @@ func (m *manager) standbyInstance(
 		return nil, fmt.Errorf("hypervisor %s does not support standby (snapshots)", stored.HypervisorType)
 	}
 
+	if err := validateMacOSSaveRestoreSupport(ctx, stored, hv); err != nil {
+		return nil, err
+	}
+
 	// 6. Transition: Running → Paused
 	log.DebugContext(ctx, "pausing VM", "instance_id", id)
 	pauseCtx, pauseSpanEnd := m.startLifecycleStep(ctx, "pause_vm",
@@ -122,6 +134,11 @@ func (m *manager) standbyInstance(
 	if err := hv.Pause(pauseCtx); err != nil {
 		pauseSpanEnd(err)
 		log.ErrorContext(ctx, "failed to pause VM", "instance_id", id, "error", err)
+		if stored.MacOS != nil {
+			if resumeErr := resumeSnapshotAfterError(ctx, stored, hv); resumeErr != nil {
+				log.ErrorContext(ctx, "failed to resume VM after pause error", "instance_id", id, "error", resumeErr)
+			}
+		}
 		return nil, fmt.Errorf("pause vm failed: %w", err)
 	}
 	pauseSpanEnd(nil)
@@ -135,7 +152,7 @@ func (m *manager) standbyInstance(
 		var err error
 		promotedExistingBase, err = prepareRetainedSnapshotTarget(snapshotDir, retainedBaseDir)
 		if err != nil {
-			if resumeErr := hv.Resume(ctx); resumeErr != nil {
+			if resumeErr := resumeSnapshotAfterError(ctx, stored, hv); resumeErr != nil {
 				log.ErrorContext(ctx, "failed to resume VM after retained snapshot target preparation error", "instance_id", id, "error", resumeErr)
 			}
 			return nil, fmt.Errorf("prepare retained snapshot target: %w", err)
@@ -144,7 +161,7 @@ func (m *manager) standbyInstance(
 		// place; if fanout forks still hardlink its inode, replace it with a
 		// private copy first so their memory is never mutated.
 		if err := ensureExclusiveSnapshotMemoryOwnership(ctx, snapshotDir); err != nil {
-			if resumeErr := hv.Resume(ctx); resumeErr != nil {
+			if resumeErr := resumeSnapshotAfterError(ctx, stored, hv); resumeErr != nil {
 				log.ErrorContext(ctx, "failed to resume VM after snapshot memory unshare error", "instance_id", id, "error", resumeErr)
 			}
 			if promotedExistingBase {
@@ -166,7 +183,7 @@ func (m *manager) standbyInstance(
 		snapshotSpanEnd(err)
 		// Snapshot failed - try to resume VM
 		log.ErrorContext(ctx, "snapshot failed, attempting to resume VM", "instance_id", id, "error", err)
-		if resumeErr := hv.Resume(ctx); resumeErr != nil {
+		if resumeErr := resumeSnapshotAfterError(ctx, stored, hv); resumeErr != nil {
 			log.ErrorContext(ctx, "failed to resume VM after snapshot error", "instance_id", id, "error", resumeErr)
 		}
 		if promotedExistingBase {
@@ -190,7 +207,7 @@ func (m *manager) standbyInstance(
 		// The hypervisor may still be running: releasing its TAP or clearing
 		// its identity now would orphan a live VMM. The snapshot on disk is
 		// harmless and a retried standby redoes it.
-		if resumeErr := hv.Resume(ctx); resumeErr != nil {
+		if resumeErr := resumeSnapshotAfterError(ctx, stored, hv); resumeErr != nil {
 			log.ErrorContext(ctx, "failed to resume VM after shutdown error", "instance_id", id, "error", resumeErr)
 		}
 		return nil, fmt.Errorf("shutdown hypervisor: %w", err)
@@ -215,7 +232,7 @@ func (m *manager) standbyInstance(
 	// 9. Release network allocation (delete TAP device)
 	// TAP devices with explicit Owner/Group fields do NOT auto-delete when VMM exits
 	// They must be explicitly deleted
-	if inst.NetworkEnabled {
+	if inst.usesLinuxNetwork() {
 		m.unregisterEgressProxyInstance(ctx, id)
 		log.DebugContext(ctx, "releasing network", "instance_id", id, "network", "default")
 		releaseNetworkCtx, releaseNetworkSpanEnd := m.startLifecycleStep(ctx, "release_network",
@@ -252,7 +269,9 @@ func (m *manager) standbyInstance(
 	meta = &metadata{StoredMetadata: *stored}
 	if err := m.saveMetadata(meta); err != nil {
 		log.ErrorContext(ctx, "failed to save metadata", "instance_id", id, "error", err)
-		return nil, fmt.Errorf("save metadata: %w", err)
+		// The VMM is down and the checkpoint is saved, but the disk copy predates standby.
+		// Return the record standby reached so the caller can persist it before restoring.
+		return &Instance{StoredMetadata: meta.StoredMetadata}, fmt.Errorf("save metadata: %w", err)
 	}
 
 	// Record metrics

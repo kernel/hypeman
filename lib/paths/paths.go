@@ -259,6 +259,15 @@ func (p *Paths) InstanceMacOSBootDisk(id string) string {
 	return filepath.Join(p.InstanceDir(id), MacOSBootDiskFile)
 }
 
+// RestoreStagingDir holds a macOS restore in progress inside its instance directory,
+// so deleting the instance also deletes any staging it left behind.
+const RestoreStagingDir = "restore-staging"
+
+// InstanceRestoreStaging returns the path to an instance's restore staging directory.
+func (p *Paths) InstanceRestoreStaging(id string) string {
+	return filepath.Join(p.InstanceDir(id), RestoreStagingDir)
+}
+
 // InstanceConfigDisk returns the path to instance config disk.
 func (p *Paths) InstanceConfigDisk(id string) string {
 	return filepath.Join(p.InstanceDir(id), "config.ext4")

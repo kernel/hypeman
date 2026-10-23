@@ -45,6 +45,24 @@ func (m *manager) getSnapshot(ctx context.Context, snapshotID string) (*Snapshot
 	return snapshot, nil
 }
 
+// recoverSourceAfterFailedStandby returns standbyErr after putting the source back if
+// standby failed after its VMM was stopped. standby is the record standby reached at
+// that point, and it is nil for failures before the VMM stopped, which leave the
+// source Running. The disk copy can predate standby, so the record is saved before
+// the restore reads it. Otherwise the restore would use the pre-standby record.
+func (m *manager) recoverSourceAfterFailedStandby(ctx context.Context, standby *Instance, standbyErr error) error {
+	if standby == nil {
+		return standbyErr
+	}
+	if err := m.saveMetadata(&metadata{StoredMetadata: standby.StoredMetadata}); err != nil {
+		return fmt.Errorf("%w; additionally failed to record standby, source left in Standby: %v", standbyErr, err)
+	}
+	if restoreErr := m.restoreSnapshotSource(ctx, &standby.StoredMetadata); restoreErr != nil {
+		return fmt.Errorf("%w; additionally failed to restore source: %v", standbyErr, restoreErr)
+	}
+	return standbyErr
+}
+
 func (m *manager) createSnapshot(ctx context.Context, id string, req CreateSnapshotRequest) (_ *Snapshot, retErr error) {
 	log := logger.FromContext(ctx)
 	log.InfoContext(ctx, "creating snapshot", "instance_id", id, "kind", req.Kind, "name", req.Name)
@@ -63,7 +81,10 @@ func (m *manager) createSnapshot(ctx context.Context, id string, req CreateSnaps
 	if err != nil {
 		return nil, err
 	}
-	if err := m.admitGuestOperation(&meta.StoredMetadata, "snapshot"); err != nil {
+	if err := m.admitGuestOperation(&meta.StoredMetadata); err != nil {
+		return nil, err
+	}
+	if err := validateMacOSSnapshotCreate(meta, req); err != nil {
 		return nil, err
 	}
 	inst := m.toInstance(ctx, meta)
@@ -102,8 +123,9 @@ func (m *manager) createSnapshot(ctx context.Context, id string, req CreateSnaps
 			if err := ensureGuestAgentReadyForForkPhase(ctx, &inst.StoredMetadata, "before running snapshot"); err != nil {
 				return nil, err
 			}
-			if _, err := m.standbyInstance(ctx, id, StandbyInstanceRequest{}, true); err != nil {
-				return nil, fmt.Errorf("standby source instance: %w", err)
+			standby, err := m.standbyInstance(ctx, id, StandbyInstanceRequest{}, true)
+			if err != nil {
+				return nil, m.recoverSourceAfterFailedStandby(ctx, standby, fmt.Errorf("standby source instance: %w", err))
 			}
 			restoreSource = true
 		case StateStandby:
@@ -124,13 +146,16 @@ func (m *manager) createSnapshot(ctx context.Context, id string, req CreateSnaps
 			return nil, fmt.Errorf("%w: standby snapshot requires source in %s or %s, got %s", ErrInvalidState, StateRunning, StateStandby, inst.State)
 		}
 
-		copyErr := m.copySnapshotPayload(id, snapshotGuestDir)
+		copyErr := m.validateMacOSMemorySnapshotPayload(m.paths.InstanceDir(id), stored)
+		if copyErr == nil {
+			copyErr = m.copySnapshotPayload(id, snapshotGuestDir)
+		}
 		if copyErr == nil {
 			meta, copyErr = m.loadMetadata(id)
 		}
 
 		if restoreSource {
-			_, restoreErr := m.restoreInstance(ctx, id)
+			restoreErr := m.restoreSnapshotSource(ctx, stored)
 			if restoreErr != nil {
 				if copyErr != nil {
 					return nil, fmt.Errorf("snapshot copy failed: %v; additionally failed to restore source: %w", copyErr, restoreErr)
@@ -262,10 +287,16 @@ func (m *manager) restoreSnapshot(ctx context.Context, id string, snapshotID str
 	if err != nil {
 		return nil, err
 	}
-	if err := m.admitGuestOperation(&sourceMeta.StoredMetadata, "restore snapshot"); err != nil {
+	if err := validateMacOSSnapshotRestore(sourceMeta, rec); err != nil {
+		return nil, err
+	}
+	if err := m.admitGuestOperation(&sourceMeta.StoredMetadata); err != nil {
 		return nil, err
 	}
 	sourceInst := m.toInstance(ctx, sourceMeta)
+	if err := validateMacOSSnapshotRestoreState(&sourceInst); err != nil {
+		return nil, err
+	}
 	if sourceInst.State == StateRunning {
 		return nil, fmt.Errorf("%w: cannot restore snapshot while source is %s", ErrInvalidState, sourceInst.State)
 	}
@@ -297,17 +328,15 @@ func (m *manager) restoreSnapshot(ctx context.Context, id string, snapshotID str
 		m.recordSnapshotCompressionPreemption(ctx, snapshotCompressionPreemptionRestoreSnapshot, target.Target)
 	}
 
-	if err := m.replaceInstanceWithSnapshotPayload(snapshotID, id); err != nil {
-		return nil, err
-	}
-
 	restored := cloneStoredMetadataWithoutPendingStandbyCompression(rec.StoredMetadata)
 	restored.Id = sourceMeta.Id
 	restored.Name = sourceMeta.Name
 	restored.ExpiresAt = sourceMeta.ExpiresAt
 	restored.DataDir = m.paths.InstanceDir(id)
 	restored.HypervisorProcessIdentity.Clear()
-	restored.StartedAt = nil
+	if restored.MacOS == nil || rec.Snapshot.Kind == SnapshotKindStopped {
+		restored.StartedAt = nil
+	}
 	restored.StoppedAt = nil
 	restored.ExitCode = nil
 	restored.ExitMessage = ""
@@ -330,8 +359,26 @@ func (m *manager) restoreSnapshot(ctx context.Context, id string, snapshotID str
 		restored.VsockCID = generateVsockCID(id)
 	}
 
-	if err := m.saveMetadata(&metadata{StoredMetadata: restored}); err != nil {
-		return nil, fmt.Errorf("save restored metadata: %w", err)
+	if restored.MacOS != nil {
+		if rec.Snapshot.Kind == SnapshotKindStandby {
+			if err := m.validateMacOSMemorySnapshotPayload(m.paths.SnapshotGuestDir(snapshotID), &rec.StoredMetadata); err != nil {
+				return nil, err
+			}
+		}
+		prepareMacOSSnapshotRestoreMetadata(&restored, &sourceMeta.StoredMetadata, rec.Snapshot.Kind, targetState)
+		if err := m.replaceMacOSInstanceWithSnapshotPayload(snapshotID, &metadata{StoredMetadata: restored}); err != nil {
+			return nil, err
+		}
+	} else if err := m.replaceInstanceWithSnapshotPayload(snapshotID, id); err != nil {
+		return nil, err
+	}
+
+	// The macOS staged metadata is already the committed record. Writing it again
+	// after the swap could fail a restore that already happened.
+	if restored.MacOS == nil {
+		if err := m.saveMetadata(&metadata{StoredMetadata: restored}); err != nil {
+			return nil, fmt.Errorf("save restored metadata: %w", err)
+		}
 	}
 
 	switch rec.Snapshot.Kind {
@@ -384,14 +431,17 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 	if err != nil {
 		return nil, err
 	}
-	if err := m.admitGuestOperation(&rec.StoredMetadata, "fork snapshot"); err != nil {
+	if err := m.admitGuestOperation(&rec.StoredMetadata); err != nil {
+		return nil, err
+	}
+	if err := validateMacOSSnapshotFork(rec); err != nil {
 		return nil, err
 	}
 	if err := validateForkVolumeSafety(rec.StoredMetadata.Volumes); err != nil {
 		return nil, fmt.Errorf("%w: snapshot requires readonly volume attachments: %v", ErrNotSupported, err)
 	}
 
-	if err := m.ensureInstanceNameAvailableForSnapshotFork(ctx, req.Name, rec.StoredMetadata.NetworkEnabled); err != nil {
+	if err := m.ensureInstanceNameAvailableForSnapshotFork(ctx, req.Name, rec.StoredMetadata.usesLinuxNetwork()); err != nil {
 		return nil, err
 	}
 
@@ -497,7 +547,12 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 		}
 	}
 
-	if err := m.saveMetadata(&metadata{StoredMetadata: forkMeta}); err != nil {
+	newMeta := &metadata{StoredMetadata: forkMeta}
+	if forkMeta.MacOS != nil {
+		if err := m.saveMacOSSnapshotFork(ctx, newMeta); err != nil {
+			return nil, err
+		}
+	} else if err := m.saveMetadata(newMeta); err != nil {
 		return nil, fmt.Errorf("save fork metadata: %w", err)
 	}
 

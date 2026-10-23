@@ -197,6 +197,9 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 	shimConfig.VsockSocket = filepath.Join(instanceDir, "vz.vsock")
 	shimConfig.LogPath = filepath.Join(instanceDir, "logs", "vz-shim.log")
 	shimConfig.RestoreMachineStatePath = restorePath
+	if shimConfig.MacAuxStoragePath != "" {
+		shimConfig.StopReceiptPath = filepath.Join(instanceDir, shimconfig.StopReceiptFile)
+	}
 
 	return s.startShim(ctx, p, version, shimConfig, 90*time.Second)
 }
@@ -221,6 +224,7 @@ func buildShimConfigFromVMConfig(config hypervisor.VMConfig, socketPath string) 
 		cfg.MacHardwareModelData = base64.StdEncoding.EncodeToString(config.MacOS.HardwareModelData)
 		cfg.MacMachineIdentifierData = base64.StdEncoding.EncodeToString(config.MacOS.MachineIdentifierData)
 		cfg.MacAuxStoragePath = config.MacOS.AuxStoragePath
+		cfg.StopReceiptPath = filepath.Join(instanceDir, shimconfig.StopReceiptFile)
 	}
 	for _, disk := range config.Disks {
 		cfg.Disks = append(cfg.Disks, shimconfig.DiskConfig{

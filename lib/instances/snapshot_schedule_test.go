@@ -658,7 +658,7 @@ func markSnapshotScheduleDue(t *testing.T, mgr *manager, instanceID string) {
 	require.NoError(t, mgr.saveSnapshotScheduleUnlocked(schedule))
 }
 
-func TestSnapshotScheduleRejectedForMacOSGuests(t *testing.T) {
+func TestSnapshotScheduleRejectsMacOSWithoutSaveRestoreSupport(t *testing.T) {
 	t.Parallel()
 	mgr, _ := setupTestManager(t)
 	ctx := context.Background()
@@ -674,6 +674,6 @@ func TestSnapshotScheduleRejectedForMacOSGuests(t *testing.T) {
 		NamePrefix: "nightly",
 		Retention:  SnapshotScheduleRetention{MaxCount: 1},
 	})
-	require.ErrorIs(t, err, ErrInvalidRequest)
-	require.Contains(t, err.Error(), "snapshot schedules")
+	require.ErrorIs(t, err, ErrNotSupported)
+	require.Contains(t, err.Error(), "save/restore support")
 }

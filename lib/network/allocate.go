@@ -690,3 +690,14 @@ func GenerateTAPName(instanceID string) string {
 	}
 	return TAPPrefix + strings.ToLower(shortID)
 }
+
+// NewUniqueMAC returns a locally administered MAC that is not in used. Callers that
+// assign MACs outside the network allocator (macOS vmnet) use it so both paths share
+// one uniqueness rule.
+func NewUniqueMAC(used []string) (string, error) {
+	usedMACs := make(map[string]bool, len(used))
+	for _, mac := range used {
+		usedMACs[strings.ToLower(strings.TrimSpace(mac))] = true
+	}
+	return allocateUniqueMACFromSet(usedMACs, generateMAC)
+}

@@ -10,9 +10,11 @@ import (
 	"runtime"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/images"
+	"github.com/kernel/hypeman/lib/instances/phasetracking"
 	"github.com/kernel/hypeman/lib/paths"
 	"github.com/kernel/hypeman/lib/resources"
 	"github.com/stretchr/testify/require"
@@ -133,4 +135,26 @@ func TestMacOSPreListenerShimIsNotStopped(t *testing.T) {
 	}
 	require.False(t, ProcessExists(shim.Process.Pid), "the shim is killed")
 	require.Equal(t, StateStopped, m.deriveStateWithoutHydration(context.Background(), stored).State)
+}
+
+func TestFinishMacOSResumeRemovesConsumedSnapshot(t *testing.T) {
+	p := paths.New(t.TempDir())
+	m := &manager{paths: p}
+	id := "resumed"
+	require.NoError(t, m.ensureDirectories(id))
+	image := &images.MacOSImage{GuestAgent: true}
+	ready := time.Now().UTC().Add(-time.Minute)
+	meta := &metadata{StoredMetadata: StoredMetadata{Id: id, DataDir: p.InstanceDir(id), MacOS: image, GuestAgentReadyAt: &ready}}
+	meta.Phases.Record(phasetracking.PhaseStandby, ready)
+	require.NoError(t, m.saveMetadata(meta))
+	snapshot := p.InstanceSnapshotLatest(id)
+	require.NoError(t, os.MkdirAll(snapshot, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(snapshot, "state"), []byte("x"), 0644))
+
+	require.NoError(t, m.finishMacOSResume(id))
+
+	require.NoDirExists(t, snapshot, "a consumed memory snapshot must not survive the resume")
+	saved, err := m.loadMetadata(id)
+	require.NoError(t, err)
+	require.Equal(t, phasetracking.PhaseRunning, saved.Phases.Current)
 }

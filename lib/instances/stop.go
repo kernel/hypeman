@@ -65,9 +65,14 @@ func (m *manager) tryGracefulGuestShutdown(ctx context.Context, inst *Instance, 
 		return false
 	}
 	if pid == 0 {
-		return true
+		// Nothing was signalled. Linux treats an already-gone VMM as stopped, but
+		// macOS only counts a stop as graceful after a shutdown attempt.
+		return inst.MacOS == nil
 	}
 	inst.HypervisorProcessIdentity.Set(pid)
+	if inst.MacOS != nil {
+		_ = os.Remove(macOSStopReceiptPath(&inst.StoredMetadata))
+	}
 
 	shutdownGuest := guest.ShutdownInstance
 	if m.shutdownGuestFn != nil {
@@ -101,6 +106,12 @@ func (m *manager) tryGracefulGuestShutdown(ctx context.Context, inst *Instance, 
 	}
 
 	if WaitForProcessExit(pid, waitTimeout) {
+		// The shim exits after a forced stop too, so macOS also needs its receipt that
+		// the guest powered off.
+		if inst.MacOS != nil && os.Remove(macOSStopReceiptPath(&inst.StoredMetadata)) != nil {
+			log.WarnContext(ctx, "VM exited without confirming a guest power-off", "instance_id", inst.Id)
+			return false
+		}
 		log.DebugContext(ctx, "VM shut down gracefully", "instance_id", inst.Id)
 		return true
 	}
@@ -285,6 +296,9 @@ func (m *manager) stopInstance(
 	// 10. Update metadata (clear PID, set StoppedAt)
 	now := time.Now().UTC()
 	stored.StoppedAt = &now
+	if stored.MacOS != nil {
+		stored.StopGraceful = gracefulShutdown
+	}
 	stored.HypervisorProcessIdentity.Clear()
 	// Boot markers are per-boot-run and must not carry across stop/restore/start.
 	stored.ProgramStartedAt = nil

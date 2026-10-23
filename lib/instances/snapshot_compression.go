@@ -210,6 +210,9 @@ func normalizeCompressionConfig(cfg *snapshotstore.SnapshotCompressionConfig) (s
 }
 
 func (m *manager) resolveSnapshotCompressionPolicy(stored *StoredMetadata, override *snapshotstore.SnapshotCompressionConfig) (snapshotstore.SnapshotCompressionConfig, error) {
+	if stored != nil && stored.MacOS != nil {
+		return snapshotstore.SnapshotCompressionConfig{Enabled: false}, nil
+	}
 	cfg, err := m.resolveConfiguredCompressionPolicy(stored, override)
 	if err != nil {
 		return snapshotstore.SnapshotCompressionConfig{}, err

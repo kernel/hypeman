@@ -1,5 +1,3 @@
-//go:build darwin
-
 // Package shimconfig defines the configuration types shared between
 // the hypeman API server and the vz-shim subprocess.
 package shimconfig
@@ -10,6 +8,9 @@ const (
 	SnapshotManifestFile = "config.json"
 	// SnapshotMachineStateFile is the serialized VM machine state filename.
 	SnapshotMachineStateFile = "machine-state.vzm"
+	// StopReceiptFile is written in the instance directory when a macOS guest stops
+	// its VM itself.
+	StopReceiptFile = "vz-guest-stopped"
 )
 
 // ShimConfig is the configuration passed from hypeman to the shim.
@@ -52,6 +53,10 @@ type ShimConfig struct {
 
 	// Logging
 	LogPath string `json:"log_path"`
+
+	// StopReceiptPath, when set, is written once the guest stops the VM itself, as
+	// after an orderly power-off. A stop the shim forces does not write it.
+	StopReceiptPath string `json:"stop_receipt_path,omitempty"`
 
 	// Generic machine identifier data representation (base64), used to keep
 	// platform identity stable across save/restore.

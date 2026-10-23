@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync/atomic"
+
+	"github.com/kernel/hypeman/lib/paths"
 )
 
 var (
@@ -172,7 +174,7 @@ func copyRegularFile(state *copyState, srcPath, dstPath string, perms fs.FileMod
 }
 
 func shouldSkipDirectory(relPath string) bool {
-	return relPath == "logs"
+	return relPath == "logs" || relPath == paths.RestoreStagingDir
 }
 
 func shouldSkipRegularFile(relPath string) bool {
