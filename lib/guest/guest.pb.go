@@ -77,15 +77,19 @@ type AgentCapability int32
 
 const (
 	AgentCapability_AGENT_CAPABILITY_UNSPECIFIED AgentCapability = 0
+	// HTTP and WebSocket forwarding to guest loopback ports over vsock 2223
+	AgentCapability_AGENT_CAPABILITY_PORT_FORWARD AgentCapability = 1
 )
 
 // Enum value maps for AgentCapability.
 var (
 	AgentCapability_name = map[int32]string{
 		0: "AGENT_CAPABILITY_UNSPECIFIED",
+		1: "AGENT_CAPABILITY_PORT_FORWARD",
 	}
 	AgentCapability_value = map[string]int32{
-		"AGENT_CAPABILITY_UNSPECIFIED": 0,
+		"AGENT_CAPABILITY_UNSPECIFIED":  0,
+		"AGENT_CAPABILITY_PORT_FORWARD": 1,
 	}
 )
 
@@ -1779,9 +1783,10 @@ const file_lib_guest_guest_proto_rawDesc = "" +
 	"\fGPUInitState\x12\x1a\n" +
 	"\x16GPU_INIT_STATE_UNKNOWN\x10\x00\x12\x15\n" +
 	"\x11GPU_INIT_STATE_OK\x10\x01\x12\x19\n" +
-	"\x15GPU_INIT_STATE_FAILED\x10\x02*3\n" +
+	"\x15GPU_INIT_STATE_FAILED\x10\x02*V\n" +
 	"\x0fAgentCapability\x12 \n" +
-	"\x1cAGENT_CAPABILITY_UNSPECIFIED\x10\x002\xcc\x04\n" +
+	"\x1cAGENT_CAPABILITY_UNSPECIFIED\x10\x00\x12!\n" +
+	"\x1dAGENT_CAPABILITY_PORT_FORWARD\x10\x012\xcc\x04\n" +
 	"\fGuestService\x123\n" +
 	"\x04Exec\x12\x12.guest.ExecRequest\x1a\x13.guest.ExecResponse(\x010\x01\x12F\n" +
 	"\vCopyToGuest\x12\x19.guest.CopyToGuestRequest\x1a\x1a.guest.CopyToGuestResponse(\x01\x12L\n" +

@@ -198,6 +198,8 @@ message GetGPUInitStatusResponse {
 // such as exec, copy, stat and shutdown, are not listed.
 enum AgentCapability {
   AGENT_CAPABILITY_UNSPECIFIED = 0;
+  // HTTP and WebSocket forwarding to guest loopback ports over vsock 2223
+  AGENT_CAPABILITY_PORT_FORWARD = 1;
 }
 
 // GetAgentInfoRequest requests the agent's version information
