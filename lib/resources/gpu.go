@@ -27,8 +27,10 @@ type GPUResourceStatus struct {
 // GetGPUStatus returns the current GPU resource status and any error that
 // prevents determining allocatable vGPU capacity. The status is still
 // returned alongside such an error, with PlacementDisabledReason set. It
-// returns nil if no GPU is available or the mode is "none".
-func GetGPUStatus(ctx context.Context) (*GPUResourceStatus, error) {
+// returns nil if no GPU is available or the mode is "none". Profiles are
+// listed only if withProfiles is set, since admission uses only the slot
+// counts.
+func GetGPUStatus(ctx context.Context, withProfiles bool) (*GPUResourceStatus, error) {
 	framework, vfs, err := devices.DiscoverVGPU()
 	if err != nil {
 		// Only report passthrough once vGPU discovery confirms no vGPU
@@ -39,13 +41,13 @@ func GetGPUStatus(ctx context.Context) (*GPUResourceStatus, error) {
 		return nil, nil
 	}
 	if framework != devices.VGPUFrameworkNone {
-		return getVGPUStatus(ctx, framework, vfs)
+		return getVGPUStatus(ctx, framework, vfs, withProfiles)
 	}
 	return getPassthroughStatus(), nil
 }
 
 // getVGPUStatus returns GPU status for vGPU mode (SR-IOV).
-func getVGPUStatus(ctx context.Context, framework devices.VGPUFramework, vfs []devices.VirtualFunction) (*GPUResourceStatus, error) {
+func getVGPUStatus(ctx context.Context, framework devices.VGPUFramework, vfs []devices.VirtualFunction, withProfiles bool) (*GPUResourceStatus, error) {
 	usedSlots := 0
 	// Count used VFs (those with a vGPU assigned)
 	for _, vf := range vfs {
@@ -68,6 +70,9 @@ func getVGPUStatus(ctx context.Context, framework devices.VGPUFramework, vfs []d
 	}
 	status.AllocatableSlots = availability.AllocatableSlots
 	status.QuarantinedSlots = availability.QuarantinedSlots
+	if !withProfiles {
+		return status, nil
+	}
 
 	// Get available profiles (reuse VFs to avoid redundant discovery)
 	profiles, err := devices.ListGPUProfilesWithVFs(framework, vfs, availability.Quarantined)

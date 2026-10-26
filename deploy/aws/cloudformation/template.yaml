@@ -481,7 +481,7 @@ Resources:
 
           if [ -n "${HypemanBranch}" ]; then
             apt-get install -y build-essential git make
-            curl -fsSL https://go.dev/dl/go1.25.4.linux-amd64.tar.gz | tar -C /usr/local -xzf -
+            curl -fsSL https://go.dev/dl/go1.26.10.linux-amd64.tar.gz | tar -C /usr/local -xzf -
             export PATH="/usr/local/go/bin:$PATH"
             export HOME=/root
             export GOPATH=/root/go

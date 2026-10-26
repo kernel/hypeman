@@ -5,6 +5,8 @@ package instances
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -33,6 +35,8 @@ func newVGPUAllocationManager(t *testing.T, vfs []devices.VirtualFunction) *mana
 			}
 			return profiles, nil
 		},
+		configureVGPU:       func(context.Context, string, string) error { return nil },
+		refreshVGPUCapacity: func() {},
 	}
 }
 
@@ -213,6 +217,7 @@ func TestVGPUClaimRepairsDirtyVFWhenProfileNotAdvertised(t *testing.T) {
 			dirty = false
 			return nil
 		},
+		configureVGPU: func(context.Context, string, string) error { return nil },
 	}
 	meta := saveTestVGPUInstance(t, m, "new")
 
@@ -314,4 +319,98 @@ func TestVGPUClaimFallsBackWhenDirtyVFRefusesReset(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "0000:82:00.5", device.VFAddress)
 	assert.Equal(t, []string{testVFDevicePath, "/sys/bus/pci/devices/0000:82:00.5"}, resets)
+}
+
+func TestVGPUClaimConfiguresBeforeReleasingAllocationLock(t *testing.T) {
+	// GPU 82 has one placement left. The first claim must take it before
+	// releasing the allocation lock, so the second claim sees GPU 82 as full
+	// and lands on GPU e3, instead of both claims choosing GPU 82 and one
+	// failing later.
+	vfs := []devices.VirtualFunction{
+		{PCIAddress: "0000:82:00.4", ParentGPU: "0000:82:00.0"},
+		{PCIAddress: "0000:82:00.5", ParentGPU: "0000:82:00.0"},
+		{PCIAddress: "0000:e3:00.4", ParentGPU: "0000:e3:00.0", Allocated: true, ProfileType: testVFProfileType},
+		{PCIAddress: "0000:e3:00.5", ParentGPU: "0000:e3:00.0"},
+	}
+	m := newVGPUAllocationManager(t, vfs)
+	m.pickVFIndex = pickFirst
+	running := saveTestVGPUInstance(t, m, "running")
+	running.GPUFramework = devices.VGPUFrameworkVendorVFIO
+	running.GPUDevicePath = "/sys/bus/pci/devices/0000:e3:00.4"
+	require.NoError(t, m.saveMetadata(running))
+	placementsLeft := map[string]int{"0000:82:00.0": 1, "0000:e3:00.0": 1}
+	// As with the driver's creatable placements, a GPU's VFs list the profile
+	// only while the GPU has a placement left for it.
+	m.vendorVFIOProfiles = func(vfs []devices.VirtualFunction) (map[string][]devices.VGPUProfileType, error) {
+		profiles := make(map[string][]devices.VGPUProfileType, len(vfs))
+		for _, vf := range vfs {
+			if placementsLeft[vf.ParentGPU] > 0 {
+				profiles[vf.PCIAddress] = []devices.VGPUProfileType{{TypeName: testVFProfileType, Name: testVGPUProfile, FramebufferMB: 2048}}
+			}
+		}
+		return profiles, nil
+	}
+	m.configureVGPU = func(_ context.Context, vfAddress, _ string) error {
+		vf, ok := vfByAddress(vfs, vfAddress)
+		require.True(t, ok)
+		require.Positive(t, placementsLeft[vf.ParentGPU], "configured a GPU with no placement left")
+		placementsLeft[vf.ParentGPU]--
+		return nil
+	}
+
+	first, err := m.claimVGPU(context.Background(), saveTestVGPUInstance(t, m, "first"), testVGPUProfile)
+	require.NoError(t, err)
+	second, err := m.claimVGPU(context.Background(), saveTestVGPUInstance(t, m, "second"), testVGPUProfile)
+	require.NoError(t, err)
+	assert.Equal(t, "0000:82:00.4", first.VFAddress)
+	assert.Equal(t, "0000:e3:00.5", second.VFAddress)
+	assert.Equal(t, map[string]int{"0000:82:00.0": 0, "0000:e3:00.0": 0}, placementsLeft)
+}
+
+func TestVGPUClaimResetsConfiguredVFWhenClaimSaveFails(t *testing.T) {
+	vfs := []devices.VirtualFunction{{PCIAddress: "0000:82:00.4", ParentGPU: "0000:82:00.0"}}
+	m := newVGPUAllocationManager(t, vfs)
+	var resets []string
+	m.destroyVGPU = func(_ context.Context, assignment devices.VGPUAssignment) error {
+		resets = append(resets, assignment.DevicePath)
+		return nil
+	}
+	meta := saveTestVGPUInstance(t, m, "new")
+	require.NoError(t, os.RemoveAll(m.paths.InstanceDir("new")))
+
+	_, err := m.claimVGPU(context.Background(), meta, testVGPUProfile)
+	require.ErrorContains(t, err, "save vGPU claim")
+	assert.Equal(t, []string{testVFDevicePath}, resets)
+	assert.Empty(t, meta.GPUDevicePath)
+}
+
+func TestVGPUClaimResetsVFWhenConfigureFails(t *testing.T) {
+	// The selection already used the driver's free placements, so a configure
+	// error fails the claim instead of trying another GPU. The write may have
+	// landed before the error and no claim is saved, so the claim must reset
+	// the VF itself.
+	vfs := []devices.VirtualFunction{
+		{PCIAddress: "0000:82:00.4", ParentGPU: "0000:82:00.0"},
+		{PCIAddress: "0000:e3:00.4", ParentGPU: "0000:e3:00.0"},
+	}
+	m := newVGPUAllocationManager(t, vfs)
+	var configured []string
+	m.configureVGPU = func(_ context.Context, vfAddress, profileType string) error {
+		configured = append(configured, vfAddress)
+		return fmt.Errorf("verify vGPU on VF %s: type is 0, want %s", vfAddress, profileType)
+	}
+	var resets []string
+	m.destroyVGPU = func(_ context.Context, assignment devices.VGPUAssignment) error {
+		resets = append(resets, assignment.DevicePath)
+		return nil
+	}
+	meta := saveTestVGPUInstance(t, m, "new")
+
+	_, err := m.claimVGPU(context.Background(), meta, testVGPUProfile)
+	require.Len(t, configured, 1)
+	require.ErrorContains(t, err, "verify vGPU on VF "+configured[0])
+	assert.Equal(t, []string{"/sys/bus/pci/devices/" + configured[0]}, resets)
+	stored, err := m.loadMetadata("new")
+	require.NoError(t, err)
+	assert.Empty(t, stored.GPUDevicePath)
 }

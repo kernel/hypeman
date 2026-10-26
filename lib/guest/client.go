@@ -81,7 +81,18 @@ func GetOrCreateConn(ctx context.Context, dialer hypervisor.VsockDialer) (*grpc.
 		return conn, nil
 	}
 
-	// Create new connection using the VsockDialer
+	conn, err := dialGuestConn(ctx, dialer)
+	if err != nil {
+		return nil, err
+	}
+	connPool.conns[key] = conn
+	slog.Debug("created new gRPC connection", "key", key)
+	return conn, nil
+}
+
+// dialGuestConn creates a gRPC client connection to the guest agent. The connection is
+// not registered in the pool, so the caller owns it.
+func dialGuestConn(ctx context.Context, dialer hypervisor.VsockDialer) (*grpc.ClientConn, error) {
 	traceCtx := ctx
 	conn, err := grpc.Dial("passthrough:///vsock",
 		grpc.WithContextDialer(func(ctx context.Context, addr string) (net.Conn, error) {
@@ -99,9 +110,6 @@ func GetOrCreateConn(ctx context.Context, dialer hypervisor.VsockDialer) (*grpc.
 	if err != nil {
 		return nil, fmt.Errorf("create grpc connection: %w", err)
 	}
-
-	connPool.conns[key] = conn
-	slog.Debug("created new gRPC connection", "key", key)
 	return conn, nil
 }
 
@@ -328,6 +336,35 @@ func ExecIntoInstance(ctx context.Context, dialer hypervisor.VsockDialer, opts E
 	}
 }
 
+// ProbeExec runs a readiness probe. Probes run concurrently with other callers on the
+// same guest, so each attempt dials its own connection and closes it. A failed probe
+// therefore cannot evict or cancel the pooled connection other callers use. Retryable
+// failures are retried until WaitForAgent passes, as in ExecIntoInstance.
+func ProbeExec(ctx context.Context, dialer hypervisor.VsockDialer, opts ExecOptions) (*ExitStatus, error) {
+	start := time.Now()
+	deadline := start.Add(opts.WaitForAgent)
+	for {
+		exit, err := probeAttempt(ctx, dialer, opts)
+		if err == nil || !isRetryableConnectionError(err) || !time.Now().Before(deadline) {
+			return exit, err
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(guestExecRetryInterval(time.Since(start))):
+		}
+	}
+}
+
+func probeAttempt(ctx context.Context, dialer hypervisor.VsockDialer, opts ExecOptions) (*ExitStatus, error) {
+	conn, err := dialGuestConn(ctx, dialer)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	return execOnConn(ctx, conn, opts)
+}
+
 func guestExecRetryInterval(elapsed time.Duration) time.Duration {
 	if elapsed < guestExecFastRetryWindow {
 		return guestExecFastRetryInterval
@@ -442,9 +479,6 @@ func retryableConnectionErrorType(err error) string {
 
 // execIntoInstanceOnce executes command in instance via vsock using gRPC (single attempt).
 func execIntoInstanceOnce(ctx context.Context, dialer hypervisor.VsockDialer, opts ExecOptions) (*ExitStatus, error) {
-	start := time.Now()
-	var bytesSent int64
-
 	// Get or create a reusable gRPC connection for this vsock dialer
 	_, finishGetConn := startGuestExecStep(ctx, opts, "guest.exec.get_conn")
 	grpcConn, err := GetOrCreateConn(ctx, dialer)
@@ -453,6 +487,13 @@ func execIntoInstanceOnce(ctx context.Context, dialer hypervisor.VsockDialer, op
 		return nil, fmt.Errorf("get grpc connection: %w", err)
 	}
 	// Note: Don't close the connection - it's pooled and reused
+	return execOnConn(ctx, grpcConn, opts)
+}
+
+// execOnConn runs one command over grpcConn and returns its exit status.
+func execOnConn(ctx context.Context, grpcConn *grpc.ClientConn, opts ExecOptions) (*ExitStatus, error) {
+	start := time.Now()
+	var bytesSent int64
 
 	// Create guest client
 	client := NewGuestServiceClient(grpcConn)
@@ -960,6 +1001,25 @@ func GetGPUInitStatus(ctx context.Context, dialer hypervisor.VsockDialer) (GPUIn
 		return GPUInitState_GPU_INIT_STATE_UNKNOWN, "", fmt.Errorf("gpu init status RPC: %w", err)
 	}
 	return resp.State, resp.FailureMessage, nil
+}
+
+// GetAgentInfo asks the agent for its protocol version and capabilities. It dials its
+// own connection, as readiness probes do. An agent that predates the RPC is reported
+// as protocol 0 with no optional capabilities.
+func GetAgentInfo(ctx context.Context, dialer hypervisor.VsockDialer) (*GetAgentInfoResponse, error) {
+	conn, err := dialGuestConn(ctx, dialer)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	info, err := NewGuestServiceClient(conn).GetAgentInfo(ctx, &GetAgentInfoRequest{})
+	if status.Code(err) == codes.Unimplemented {
+		return &GetAgentInfoResponse{}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("agent info RPC: %w", err)
+	}
+	return info, nil
 }
 
 // ShutdownInstance sends a shutdown signal to the guest VM's init process (PID 1).

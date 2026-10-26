@@ -26,8 +26,10 @@ import (
 
 // newTestService creates an ApiService for testing with automatic cleanup
 func newTestService(t *testing.T) *ApiService {
+	dataDir := t.TempDir()
+	prepareAPITestDataDir(t, dataDir)
 	cfg := &config.Config{
-		DataDir: t.TempDir(),
+		DataDir: dataDir,
 		Network: newParallelTestNetworkConfig(t),
 	}
 

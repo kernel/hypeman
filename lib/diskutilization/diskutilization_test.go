@@ -22,6 +22,10 @@ func TestCollect_UsesAllocatedBytesAndClassifiesSnapshots(t *testing.T) {
 	require.NoError(t, createSparseTestFile(imagePath, 32*1024*1024, []sparseWrite{
 		{offset: 0, data: bytes.Repeat([]byte("i"), 4096)},
 	}))
+	machineImagePath := filepath.Join(p.ImagesDir(), "content", "def", "rootfs.raw")
+	require.NoError(t, createSparseTestFile(machineImagePath, 32*1024*1024, []sparseWrite{
+		{offset: 0, data: bytes.Repeat([]byte("m"), 4096)},
+	}))
 
 	ociBlobPath := filepath.Join(p.SystemOCICache(), "blobs", "sha256", "blob")
 	require.NoError(t, createSparseTestFile(ociBlobPath, 16*1024, []sparseWrite{
@@ -36,6 +40,10 @@ func TestCollect_UsesAllocatedBytesAndClassifiesSnapshots(t *testing.T) {
 	rootfsOverlayPath := p.InstanceOverlay("inst-1")
 	require.NoError(t, createSparseTestFile(rootfsOverlayPath, 64*1024*1024, []sparseWrite{
 		{offset: 4 * 1024 * 1024, data: bytes.Repeat([]byte("r"), 4096)},
+	}))
+	macOSBootDiskPath := p.InstanceMacOSBootDisk("inst-mac")
+	require.NoError(t, createSparseTestFile(macOSBootDiskPath, 64*1024*1024, []sparseWrite{
+		{offset: 0, data: bytes.Repeat([]byte("b"), 4096)},
 	}))
 
 	volumeOverlayPath := p.InstanceVolumeOverlay("inst-1", "vol-1")
@@ -74,9 +82,9 @@ func TestCollect_UsesAllocatedBytesAndClassifiesSnapshots(t *testing.T) {
 	utilization, err := Collect(p)
 	require.NoError(t, err)
 
-	require.Equal(t, allocatedBytesForPath(imagePath), utilization.Images)
+	require.Equal(t, allocatedBytesForPath(imagePath)+allocatedBytesForPath(machineImagePath), utilization.Images)
 	require.Equal(t, allocatedBytesForPath(volumePath), utilization.Volumes)
-	require.Equal(t, allocatedBytesForPath(rootfsOverlayPath), utilization.RootfsOverlays)
+	require.Equal(t, allocatedBytesForPath(rootfsOverlayPath)+allocatedBytesForPath(macOSBootDiskPath), utilization.RootfsOverlays)
 	require.Equal(t, allocatedBytesForPath(volumeOverlayPath), utilization.VolumeOverlays)
 
 	require.Less(t, utilization.Volumes, fileSize(t, volumePath))

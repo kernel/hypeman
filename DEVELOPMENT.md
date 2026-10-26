@@ -6,7 +6,7 @@ This document covers development setup, configuration, and contributing to Hypem
 
 ### Linux (Default)
 
-**Go 1.25.4+**, **KVM**, **erofs-utils**, **dnsmasq**
+**Go 1.26.10+**, **KVM**, **erofs-utils**, **dnsmasq**
 
 ### macOS (Experimental)
 
@@ -16,7 +16,7 @@ See [macOS Development](#macos-development) below for native macOS development u
 
 **Linux Prerequisites:**
 
-**Go 1.25.4+**, **KVM**, **erofs-utils**, **dnsmasq**. QEMU development and testing also require the architecture-appropriate `qemu-system` package (for example, `qemu-system-x86` on amd64).
+**Go 1.26.10+**, **KVM**, **erofs-utils**, **dnsmasq**. QEMU development and testing also require the architecture-appropriate `qemu-system` package (for example, `qemu-system-x86` on amd64).
 
 ```bash
 # Verify prerequisites
@@ -368,7 +368,7 @@ Hypeman supports native macOS development using Apple's Virtualization.framework
 - **Apple Silicon** (M1/M2/M3) recommended
 - **macOS 14.0+** (Sonoma) required for snapshot/restore (ARM64 only)
 - **Rosetta** required for running `linux/amd64` images on Apple Silicon: `softwareupdate --install-rosetta --agree-to-license`
-- **Go 1.25.4+**
+- **Go 1.26.10+**
 - **Caddy** (for ingress): `brew install caddy`
 - **e2fsprogs** (for ext4 disk images): `brew install e2fsprogs`
 

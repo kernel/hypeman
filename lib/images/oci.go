@@ -278,14 +278,25 @@ func (c *ociClient) pullAndExportWithPlatformAuth(ctx context.Context, imageRef,
 	if err != nil {
 		return result, fmt.Errorf("extract metadata: %w", err)
 	}
+	// Reject malformed darwin artifacts before any layer is unpacked.
+	machine := isMacOSMachine(bundle.Meta)
+	if machine {
+		if err := validateMacOSMachine(bundle.Meta); err != nil {
+			return result, err
+		}
+	}
 	result.Metadata = bundle.Meta
 	result.Manifest = bundle.Model
 	result.LayerCount = bundle.LayerCount
 	result.CompressedBytes = bundle.CompressedBytes
 
 	// Unpack layers to the export directory
+	unpack := c.unpackLayers
+	if machine {
+		unpack = c.unpackMachineLayers
+	}
 	if err := result.measure("layer_unpack", func() error {
-		return c.unpackLayers(ctx, layoutTag, exportDir)
+		return unpack(ctx, layoutTag, exportDir)
 	}); err != nil {
 		return result, fmt.Errorf("unpack layers: %w", err)
 	}
@@ -316,6 +327,9 @@ func (c *ociClient) pullToOCILayoutWithPlatformAuth(ctx context.Context, imageRe
 	if err != nil {
 		// Rate limits fail here immediately (429 is not retried by default)
 		return fmt.Errorf("fetch image manifest: %w", ClassifyRegistryError(err))
+	}
+	if err := refuseMachineOnOtherHost(img); err != nil {
+		return err
 	}
 
 	err = ocicache.AppendImage(c.cacheDir, img, layoutTag)

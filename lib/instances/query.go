@@ -75,6 +75,9 @@ func (m *manager) deriveStateWithOptions(ctx context.Context, stored *StoredMeta
 
 	// 1. Check if socket exists
 	if _, err := os.Stat(stored.SocketPath); err != nil {
+		if stored.MacOS != nil {
+			return m.macOSStateWithoutShim(stored)
+		}
 		// No socket - check for snapshot to distinguish Stopped vs Standby
 		m.invalidateCachedHypervisorState(stored.Id)
 		if m.hasSnapshot(stored.DataDir) {
@@ -101,6 +104,9 @@ func (m *manager) deriveStateWithOptions(ctx context.Context, stored *StoredMeta
 	} else {
 		span.SetAttributes(attribute.Bool("hypervisor_state.cache_hit", false))
 		hv, err := m.getHypervisor(stored.SocketPath, stored.HypervisorType)
+		if macOSShimGone(stored, err) {
+			return m.macOSStateWithoutShim(stored)
+		}
 		if err != nil {
 			// Failed to create client - this is unexpected if socket exists
 			errMsg := fmt.Sprintf("failed to create hypervisor client: %v", err)
@@ -115,6 +121,9 @@ func (m *manager) deriveStateWithOptions(ctx context.Context, stored *StoredMeta
 		queryCtx, cancel := context.WithTimeout(ctx, getVMInfoTimeout)
 		info, err := hv.GetVMInfo(queryCtx)
 		cancel()
+		if macOSShimGone(stored, err) {
+			return m.macOSStateWithoutShim(stored)
+		}
 		if err != nil {
 			// Socket exists but hypervisor query failed or timed out. The API
 			// socket serializes requests, so a snapshot in flight will trip
@@ -218,17 +227,13 @@ func (m *manager) updateCachedHypervisorStateFromInstance(inst *Instance) {
 	}
 }
 
+// deriveRunningState maps the boot markers to Running or Initializing, by the same
+// rule as the phase tracker.
 func deriveRunningState(stored *StoredMetadata) State {
-	if stored.ProgramStartedAt == nil {
-		return StateInitializing
-	}
-	if stored.SkipGuestAgent {
+	if phase, _ := runningPhaseFromMarkers(stored); phase == phasetracking.PhaseRunning {
 		return StateRunning
 	}
-	if stored.GuestAgentReadyAt == nil {
-		return StateInitializing
-	}
-	return StateRunning
+	return StateInitializing
 }
 
 // runningPhaseFromMarkers returns PhaseRunning with the wall-clock timestamp at
@@ -237,8 +242,11 @@ func deriveRunningState(stored *StoredMetadata) State {
 // PhaseInitializing and the zero time. The returned transition time is the
 // later of ProgramStartedAt / GuestAgentReadyAt (or ProgramStartedAt alone
 // when the guest agent is skipped), which is the moment the guest actually
-// became Running per deriveRunningState's rule.
+// became Running. deriveRunningState follows the same rule.
 func runningPhaseFromMarkers(stored *StoredMetadata) (phasetracking.Phase, time.Time) {
+	if stored.MacOS != nil {
+		return macOSRunningPhase(stored)
+	}
 	if stored.ProgramStartedAt == nil {
 		return phasetracking.PhaseInitializing, time.Time{}
 	}
@@ -289,8 +297,8 @@ func advancePhaseIfRunning(stored *StoredMetadata) {
 // services do not need to forward stdout/stderr to the serial console.
 // Returns true when at least one missing marker was found and populated.
 func (m *manager) hydrateBootMarkersFromLogs(ctx context.Context, stored *StoredMetadata) bool {
-	needProgram := stored.ProgramStartedAt == nil
-	needAgent := !stored.SkipGuestAgent && stored.GuestAgentReadyAt == nil
+	needProgram := !programMarkerSettled(stored)
+	needAgent := stored.GuestAgentEnabled() && stored.GuestAgentReadyAt == nil
 	if !needProgram && !needAgent {
 		m.clearBootMarkerRescan(stored.Id)
 		return false
@@ -314,7 +322,7 @@ func (m *manager) hydrateBootMarkersFromLogs(ctx context.Context, stored *Stored
 		stored.GuestAgentReadyAt = guestAgentReadyAt
 		hydrated = true
 	}
-	if needAgent && stored.GuestAgentReadyAt == nil && stored.ProgramStartedAt != nil && m.hydrateGuestAgentReadyFromProbe(ctx, stored) {
+	if needAgent && stored.GuestAgentReadyAt == nil && programMarkerSettled(stored) && m.hydrateGuestAgentReadyFromProbe(ctx, stored) {
 		hydrated = true
 	}
 	if hydrated {
@@ -417,7 +425,7 @@ func (m *manager) nowUTC() time.Time {
 }
 
 func (m *manager) hydrateGuestAgentReadyFromProbe(ctx context.Context, stored *StoredMetadata) bool {
-	if stored == nil || stored.SkipGuestAgent || stored.GuestAgentReadyAt != nil {
+	if stored == nil || !stored.GuestAgentEnabled() || stored.GuestAgentReadyAt != nil {
 		return false
 	}
 	probe := m.guestAgentReadyProbe
@@ -427,13 +435,22 @@ func (m *manager) hydrateGuestAgentReadyFromProbe(ctx context.Context, stored *S
 	if !probe(ctx, stored) {
 		return false
 	}
+	if stored.MacOS != nil {
+		info, err := m.macOSGuestAgentInfo(ctx, stored)
+		if err != nil {
+			m.macOSAgentNotReady.Store(stored.Id, err.Error())
+			return false
+		}
+		m.macOSAgentNotReady.Delete(stored.Id)
+		stored.GuestAgent = info
+	}
 	readyAt := m.nowUTC()
 	stored.GuestAgentReadyAt = &readyAt
 	return true
 }
 
 func probeGuestAgentReady(ctx context.Context, stored *StoredMetadata) bool {
-	if stored == nil || stored.SkipGuestAgent {
+	if stored == nil || !stored.GuestAgentEnabled() {
 		return false
 	}
 	dialer, err := hypervisor.NewVsockDialer(stored.HypervisorType, stored.VsockSocket, stored.VsockCID)
@@ -444,8 +461,8 @@ func probeGuestAgentReady(ctx context.Context, stored *StoredMetadata) bool {
 	probeCtx, cancel := context.WithTimeout(ctx, guestAgentReadyProbeTimeout)
 	defer cancel()
 
-	exit, err := guest.ExecIntoInstance(probeCtx, dialer, guest.ExecOptions{
-		Command:      []string{"/bin/true"},
+	exit, err := guest.ProbeExec(probeCtx, dialer, guest.ExecOptions{
+		Command:      []string{guestAgentReadyExecutable(stored)},
 		Timeout:      int32(guestAgentReadyProbeTimeout / time.Second),
 		WaitForAgent: guestAgentReadyProbeWait,
 	})
@@ -555,6 +572,9 @@ func (m *manager) toInstanceWithStateDerivation(ctx context.Context, meta *metad
 		HealthCheckRuntime:  healthcheck.CloneRuntime(meta.HealthCheckRuntime),
 	}
 	refreshHypervisorPID(&inst.StoredMetadata, result.State)
+	if inst.MacOS != nil && inst.NetworkEnabled && inst.State.RequiresVMM() {
+		inst.IP = macOSGuestIP(inst.MAC)
+	}
 
 	// If VM is stopped and exit info isn't persisted yet, populate in-memory
 	// from the serial console log. This is read-only -- no metadata writes.
@@ -636,8 +656,8 @@ func (m *manager) persistBootMarkers(ctx context.Context, id string) {
 		return
 	}
 
-	needProgram := meta.ProgramStartedAt == nil
-	needAgent := !meta.SkipGuestAgent && meta.GuestAgentReadyAt == nil
+	needProgram := !programMarkerSettled(&meta.StoredMetadata)
+	needAgent := meta.GuestAgentEnabled() && meta.GuestAgentReadyAt == nil
 	if !needProgram && !needAgent {
 		return
 	}
@@ -652,7 +672,7 @@ func (m *manager) persistBootMarkers(ctx context.Context, id string) {
 		meta.GuestAgentReadyAt = guestAgentReadyAt
 		updated = true
 	}
-	if needAgent && meta.GuestAgentReadyAt == nil && meta.ProgramStartedAt != nil && m.hydrateGuestAgentReadyFromProbe(ctx, &meta.StoredMetadata) {
+	if needAgent && meta.GuestAgentReadyAt == nil && programMarkerSettled(&meta.StoredMetadata) && m.hydrateGuestAgentReadyFromProbe(ctx, &meta.StoredMetadata) {
 		updated = true
 	}
 	if !updated {

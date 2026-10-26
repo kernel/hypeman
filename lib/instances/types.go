@@ -7,6 +7,7 @@ import (
 	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/healthcheck"
 	"github.com/kernel/hypeman/lib/hypervisor"
+	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/instances/phasetracking"
 	restartpolicy "github.com/kernel/hypeman/lib/restart-policy"
 	"github.com/kernel/hypeman/lib/snapshot"
@@ -92,6 +93,7 @@ type StoredMetadata struct {
 	// "linux/amd64"), captured from the pulled image's metadata at create time.
 	// Read-only; echoed on the instance API.
 	Platform string
+	MacOS    *images.MacOSImage `json:"MacOS,omitempty"` // Non-nil for experimental local macOS disk guests.
 
 	// Resources (matching Cloud Hypervisor terminology)
 	Size                     int64 // Base memory in bytes
@@ -123,6 +125,9 @@ type StoredMetadata struct {
 	// Boot progress markers (derived from guest serial log sentinels and persisted)
 	ProgramStartedAt  *time.Time // Set when guest program handoff/start boundary is reached
 	GuestAgentReadyAt *time.Time // Set when guest-agent is ready (unless skip_guest_agent=true)
+
+	// macOS: what the image's agent reported when it became ready
+	GuestAgent *GuestAgentInfo `json:",omitempty"`
 
 	// Versions
 	KernelVersion string // Kernel version (e.g., "ch-v6.12.9")

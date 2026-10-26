@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/diskutilization"
 	"github.com/kernel/hypeman/lib/logger"
 	"go.opentelemetry.io/otel/attribute"
@@ -199,7 +200,15 @@ func newMonitoringMetrics(meter metric.Meter, mgr *Manager) error {
 
 	gpuProfileSlots, err := meter.Int64ObservableGauge(
 		"hypeman_resources_gpu_profile_slots",
-		metric.WithDescription("Virtual functions able to create each vGPU profile (best-effort snapshot)"),
+		metric.WithDescription("How many more vGPUs of each profile fit if only that profile is added"),
+	)
+	if err != nil {
+		return err
+	}
+
+	gpuNVMLFallbacks, err := meter.Int64ObservableCounter(
+		"hypeman_resources_gpu_nvml_fallbacks_total",
+		metric.WithDescription("vGPU capacity queries answered from the sysfs creatable lists for at least one GPU because NVML failed (error), every GPU it failed for was in equal-size mode (equal_size), it timed out (timeout), or an earlier timed-out query had not returned (stuck)"),
 	)
 	if err != nil {
 		return err
@@ -265,10 +274,13 @@ func newMonitoringMetrics(meter metric.Meter, mgr *Manager) error {
 					),
 				)
 			}
+			for reason, count := range devices.NVMLFallbacks() {
+				o.ObserveInt64(gpuNVMLFallbacks, count, metric.WithAttributes(attribute.String("reason", reason)))
+			}
 		}
 
 		return nil
-	}, capacity, effectiveLimit, allocated, oversubRatio, diskBreakdown, diskUtilization, imageStorage, gpuSlots, gpuProfileSlots, gpuPlacementDisabled); err != nil {
+	}, capacity, effectiveLimit, allocated, oversubRatio, diskBreakdown, diskUtilization, imageStorage, gpuSlots, gpuProfileSlots, gpuPlacementDisabled, gpuNVMLFallbacks); err != nil {
 		return err
 	}
 

@@ -56,7 +56,7 @@ func Collect(p *paths.Paths) (Breakdown, error) {
 			return false
 		}
 		name := entry.Name()
-		return name == "rootfs.erofs" || name == "rootfs.ext4"
+		return name == "rootfs.erofs" || name == "rootfs.ext4" || name == "rootfs.raw"
 	})
 	if err != nil {
 		return Breakdown{}, err
@@ -88,7 +88,7 @@ func Collect(p *paths.Paths) (Breakdown, error) {
 
 		instanceID := guest.Name()
 
-		breakdown.RootfsOverlays += allocatedBytesForPath(p.InstanceOverlay(instanceID))
+		breakdown.RootfsOverlays += allocatedBytesForPath(p.InstanceOverlay(instanceID)) + allocatedBytesForPath(p.InstanceMacOSBootDisk(instanceID))
 
 		volumeOverlays, err := sumMatchingFilesAllocatedBytes(p.InstanceVolumeOverlaysDir(instanceID), func(path string, entry fs.DirEntry) bool {
 			return !entry.IsDir() && filepath.Ext(entry.Name()) == ".raw"

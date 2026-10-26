@@ -47,6 +47,15 @@ func main() {
 
 	slog.Info("vz-shim starting", "control_socket", config.ControlSocket, "vsock_socket", config.VsockSocket)
 
+	identityLock, err := lockMacOSIdentity(&config)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "macOS identity admission: %v\n", err)
+		os.Exit(1)
+	}
+	if identityLock != nil {
+		defer identityLock.Close()
+	}
+
 	// Create the VM
 	vm, vmConfig, err := createVM(&config)
 	if err != nil {

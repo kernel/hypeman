@@ -18,6 +18,19 @@ type createImageResolver interface {
 }
 
 func resolveImageForCreate(ctx context.Context, imageManager createImageResolver, imageName, platform string, log *slog.Logger) (*images.Image, error) {
+	if p, err := images.ParsePlatform(platform); err == nil && p.OS == "darwin" {
+		img, err := imageManager.GetImage(ctx, imageName)
+		if err != nil {
+			return nil, fmt.Errorf("get imported macOS image: %w", err)
+		}
+		if img.MacOS == nil {
+			return nil, fmt.Errorf("%w: image is not a macOS disk bundle", images.ErrInvalidPlatform)
+		}
+		if err := validateResolvedImagePlatform(img, platform); err != nil {
+			return nil, err
+		}
+		return img, nil
+	}
 	// An empty platform means the host platform: a no-platform run must boot a
 	// host-native guest and never silently emulate, so we resolve the host variant
 	// explicitly rather than follow the (last-pull-wins) tag, which may point at a

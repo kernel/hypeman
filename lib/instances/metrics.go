@@ -77,8 +77,9 @@ const lifecycleEventDropReasonBufferFull lifecycleEventDropReason = "buffer_full
 type vgpuReconcileStage string
 
 const (
-	vgpuReconcileStageListInstances    vgpuReconcileStage = "list_instances"
-	vgpuReconcileStageReconcileDevices vgpuReconcileStage = "reconcile_devices"
+	vgpuReconcileStageListInstances     vgpuReconcileStage = "list_instances"
+	vgpuReconcileStageReconcileDevices  vgpuReconcileStage = "reconcile_devices"
+	vgpuReconcileStageResetUnclaimedVFs vgpuReconcileStage = "reset_unclaimed_vfs"
 )
 
 // Metrics holds the metrics instruments for instance operations.
@@ -283,7 +284,7 @@ func newInstanceMetrics(meter metric.Meter, tracer trace.Tracer, m *manager) (*M
 
 	vgpuReconcileFailuresTotal, err := meter.Int64Counter(
 		"hypeman_instances_vgpu_reconcile_failures_total",
-		metric.WithDescription("Total number of vGPU reconcile pass stages that failed, leaving stale assignments or device leftovers allocated while /resources still advertises the capacity"),
+		metric.WithDescription("Total number of vGPU reconcile pass stages that failed, leaving stale assignments or device leftovers allocated"),
 	)
 	if err != nil {
 		return nil, err

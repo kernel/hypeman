@@ -40,6 +40,14 @@ func ListVendorVFIOProfileTypes(vfs []VirtualFunction) (map[string][]VGPUProfile
 	return nil, ErrVGPUNotSupportedOnMacOS
 }
 
+// RefreshVGPUCapacity does nothing on macOS.
+func RefreshVGPUCapacity() {}
+
+// NVMLFallbacks returns nil on macOS.
+func NVMLFallbacks() map[string]int64 {
+	return nil
+}
+
 func ConfigureVGPU(ctx context.Context, vfAddress, profileType string) error {
 	return ErrVGPUNotSupportedOnMacOS
 }

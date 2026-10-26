@@ -12,6 +12,7 @@ import (
 
 	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/egressproxy"
+	"github.com/kernel/hypeman/lib/guest"
 	"github.com/kernel/hypeman/lib/guestmemory"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/images"
@@ -86,6 +87,7 @@ type ResourceLimits struct {
 
 // ManagerConfig holds non-resource manager behavior settings.
 type ManagerConfig struct {
+	MacOSOnly                         bool
 	LifecycleEventBufferSize          int
 	FirecrackerSnapshotMemoryBackend  string
 	FirecrackerUFFDCacheMaxBytes      int64
@@ -174,6 +176,8 @@ type manager struct {
 	resourceValidator         ResourceValidator // Optional validator for aggregate resource limits
 	instanceLocks             sync.Map          // map[string]*sync.RWMutex - per-instance locks
 	forkMetadataMu            sync.Mutex
+	macOSBootMu               sync.Mutex // Serialize admission for preserved Mac identities.
+	macOSOnly                 bool
 	bootMarkerScans           sync.Map      // map[string]time.Time next allowed boot-marker rescan
 	hypervisorStateCache      sync.Map      // map[string]hypervisorStateCacheEntry - last observed hypervisor state per instance
 	hostTopology              *HostTopology // Cached host CPU topology
@@ -191,6 +195,7 @@ type manager struct {
 	pickVFIndex               func(n int) int
 	destroyVGPU               func(context.Context, devices.VGPUAssignment) error
 	reconcileVGPUDevices      func(context.Context, map[string]struct{}) error
+	refreshVGPUCapacity       func()
 	vgpuAllocationMu          sync.Mutex
 	deleteSnapshotFn          func(context.Context, string) error
 	ttlReaperDeleteTimeout    time.Duration
@@ -206,7 +211,11 @@ type manager struct {
 	nativeCodecPaths          map[string]string
 	imageUsageRecorder        ImageUsageRecorder
 	guestAgentReadyProbe      func(context.Context, *StoredMetadata) bool
+	guestAgentInfoProbe       func(context.Context, *StoredMetadata) (*guest.GetAgentInfoResponse, error)
 	shutdownGuestFn           func(context.Context, hypervisor.VsockDialer, int32) error
+
+	// macOSAgentNotReady holds, per instance id, why a macOS agent probe last failed.
+	macOSAgentNotReady sync.Map
 
 	// Shared lifecycle event subscriptions for internal consumers.
 	lifecycleEvents *lifecycleSubscribers
@@ -285,6 +294,7 @@ func NewManagerWithConfigE(p *paths.Paths, imageManager images.Manager, systemMa
 
 	m := &manager{
 		paths:                            p,
+		macOSOnly:                        managerConfig.MacOSOnly,
 		imageManager:                     imageManager,
 		systemManager:                    systemManager,
 		networkManager:                   networkManager,
@@ -922,9 +932,10 @@ func (m *manager) ListRunningInstancesInfo(ctx context.Context) ([]resources.Ins
 		}
 
 		// Derive TAP device name if networking is enabled
-		if inst.NetworkEnabled {
+		if inst.usesLinuxNetwork() {
 			info.TAPDevice = network.GenerateTAPName(inst.Id)
 		}
+		info.StoragePath = inst.VMStoragePath()
 
 		infos = append(infos, info)
 	}

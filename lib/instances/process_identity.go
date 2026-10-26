@@ -145,6 +145,9 @@ func resolveLiveHypervisorPID(id HypervisorProcessIdentity, socketPath string) (
 		}
 	}
 	if runtime.GOOS != "linux" {
+		if stored == 0 {
+			return vzShimOwner(socketPath)
+		}
 		return stored, nil
 	}
 	bootID := hostBootID()

@@ -46,13 +46,14 @@ func ListGPUProfiles() ([]GPUProfile, error) {
 }
 
 // ListGPUProfilesWithVFs returns available profiles for discovered VFs.
-// Quarantined VFs are excluded from vendor VFIO counts.
+// Quarantined VFs are excluded from vendor VFIO counts, which come from the
+// cached placements rather than a driver query.
 func ListGPUProfilesWithVFs(framework VGPUFramework, vfs []VirtualFunction, quarantined map[string]struct{}) ([]GPUProfile, error) {
 	switch framework {
 	case VGPUFrameworkMdev:
 		return listMdevGPUProfilesWithVFs(vfs)
 	case VGPUFrameworkVendorVFIO:
-		return hostVendorVFIO.listProfiles(vfs, quarantined)
+		return vendorVFIOCapacity.profiles(vfs, quarantined)
 	default:
 		return nil, nil
 	}
@@ -88,8 +89,11 @@ func ListVendorVFIOProfileTypes(vfs []VirtualFunction) (map[string][]VGPUProfile
 	return hostVendorVFIO.profileTypes(vfs)
 }
 
-// ConfigureVGPU idempotently configures a claimed vendor VFIO VF.
+// ConfigureVGPU idempotently configures a claimed vendor VFIO VF. A failed
+// configure may still have written the type, so the cached placements are
+// refreshed either way.
 func ConfigureVGPU(ctx context.Context, vfAddress, profileType string) error {
+	defer vendorVFIOCapacity.refreshAsync()
 	return hostVendorVFIO.configure(ctx, vfAddress, profileType)
 }
 
@@ -110,6 +114,7 @@ func DestroyVGPU(ctx context.Context, assignment VGPUAssignment) error {
 		}
 		return DestroyMdev(ctx, mdevUUID)
 	case VGPUFrameworkVendorVFIO:
+		defer vendorVFIOCapacity.refreshAsync()
 		return hostVendorVFIO.destroy(ctx, filepath.Base(assignment.DevicePath), assignment.InstanceID)
 	case VGPUFrameworkNone:
 		return nil

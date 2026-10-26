@@ -26,6 +26,7 @@ const (
 	GuestService_Shutdown_FullMethodName           = "/guest.GuestService/Shutdown"
 	GuestService_ReconfigureNetwork_FullMethodName = "/guest.GuestService/ReconfigureNetwork"
 	GuestService_GetGPUInitStatus_FullMethodName   = "/guest.GuestService/GetGPUInitStatus"
+	GuestService_GetAgentInfo_FullMethodName       = "/guest.GuestService/GetAgentInfo"
 )
 
 // GuestServiceClient is the client API for GuestService service.
@@ -48,6 +49,9 @@ type GuestServiceClient interface {
 	ReconfigureNetwork(ctx context.Context, in *ReconfigureNetworkRequest, opts ...grpc.CallOption) (*ReconfigureNetworkResponse, error)
 	// GetGPUInitStatus reports the GPU driver init state observed by the guest agent
 	GetGPUInitStatus(ctx context.Context, in *GetGPUInitStatusRequest, opts ...grpc.CallOption) (*GetGPUInitStatusResponse, error)
+	// GetAgentInfo reports the agent's protocol version and optional capabilities.
+	// Agents that predate it answer Unimplemented, which the host treats as protocol 0.
+	GetAgentInfo(ctx context.Context, in *GetAgentInfoRequest, opts ...grpc.CallOption) (*GetAgentInfoResponse, error)
 }
 
 type guestServiceClient struct {
@@ -143,6 +147,16 @@ func (c *guestServiceClient) GetGPUInitStatus(ctx context.Context, in *GetGPUIni
 	return out, nil
 }
 
+func (c *guestServiceClient) GetAgentInfo(ctx context.Context, in *GetAgentInfoRequest, opts ...grpc.CallOption) (*GetAgentInfoResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetAgentInfoResponse)
+	err := c.cc.Invoke(ctx, GuestService_GetAgentInfo_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // GuestServiceServer is the server API for GuestService service.
 // All implementations must embed UnimplementedGuestServiceServer
 // for forward compatibility.
@@ -163,6 +177,9 @@ type GuestServiceServer interface {
 	ReconfigureNetwork(context.Context, *ReconfigureNetworkRequest) (*ReconfigureNetworkResponse, error)
 	// GetGPUInitStatus reports the GPU driver init state observed by the guest agent
 	GetGPUInitStatus(context.Context, *GetGPUInitStatusRequest) (*GetGPUInitStatusResponse, error)
+	// GetAgentInfo reports the agent's protocol version and optional capabilities.
+	// Agents that predate it answer Unimplemented, which the host treats as protocol 0.
+	GetAgentInfo(context.Context, *GetAgentInfoRequest) (*GetAgentInfoResponse, error)
 	mustEmbedUnimplementedGuestServiceServer()
 }
 
@@ -193,6 +210,9 @@ func (UnimplementedGuestServiceServer) ReconfigureNetwork(context.Context, *Reco
 }
 func (UnimplementedGuestServiceServer) GetGPUInitStatus(context.Context, *GetGPUInitStatusRequest) (*GetGPUInitStatusResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetGPUInitStatus not implemented")
+}
+func (UnimplementedGuestServiceServer) GetAgentInfo(context.Context, *GetAgentInfoRequest) (*GetAgentInfoResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetAgentInfo not implemented")
 }
 func (UnimplementedGuestServiceServer) mustEmbedUnimplementedGuestServiceServer() {}
 func (UnimplementedGuestServiceServer) testEmbeddedByValue()                      {}
@@ -312,6 +332,24 @@ func _GuestService_GetGPUInitStatus_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _GuestService_GetAgentInfo_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetAgentInfoRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GuestServiceServer).GetAgentInfo(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GuestService_GetAgentInfo_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GuestServiceServer).GetAgentInfo(ctx, req.(*GetAgentInfoRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // GuestService_ServiceDesc is the grpc.ServiceDesc for GuestService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -334,6 +372,10 @@ var GuestService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetGPUInitStatus",
 			Handler:    _GuestService_GetGPUInitStatus_Handler,
+		},
+		{
+			MethodName: "GetAgentInfo",
+			Handler:    _GuestService_GetAgentInfo_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

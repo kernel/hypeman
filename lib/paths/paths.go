@@ -251,6 +251,14 @@ func (p *Paths) InstanceOverlay(id string) string {
 	return filepath.Join(p.InstanceDir(id), "overlay.raw")
 }
 
+// MacOSBootDiskFile is a macOS guest's complete raw boot disk, cloned from its image.
+const MacOSBootDiskFile = "boot.raw"
+
+// InstanceMacOSBootDisk returns the path to a macOS guest's boot disk.
+func (p *Paths) InstanceMacOSBootDisk(id string) string {
+	return filepath.Join(p.InstanceDir(id), MacOSBootDiskFile)
+}
+
 // InstanceConfigDisk returns the path to instance config disk.
 func (p *Paths) InstanceConfigDisk(id string) string {
 	return filepath.Join(p.InstanceDir(id), "config.ext4")
@@ -286,6 +294,12 @@ func (p *Paths) InstanceLogs(id string) string {
 // InstanceAppLog returns the path to instance application log (guest serial console).
 func (p *Paths) InstanceAppLog(id string) string {
 	return filepath.Join(p.InstanceLogs(id), "app.log")
+}
+
+// InstanceVZShimLog returns the path to the Virtualization.framework shim log, which
+// is the VMM log for VZ guests.
+func (p *Paths) InstanceVZShimLog(id string) string {
+	return filepath.Join(p.InstanceLogs(id), "vz-shim.log")
 }
 
 // InstanceVMMLog returns the path to instance VMM log (Cloud Hypervisor stdout+stderr).

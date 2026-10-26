@@ -28,6 +28,9 @@ func (m *manager) TagImage(ctx context.Context, source, target string) (*Image, 
 	if err != nil {
 		return nil, err
 	}
+	if meta.MacOS != nil && sourceRef.Repository() != targetRef.Repository() {
+		return nil, fmt.Errorf("%w: cross-repository promotion of macOS bundles is not implemented", ErrInvalidPlatform)
+	}
 	if err := m.cancelPendingTag(targetRef.Repository(), targetRef.Tag()); err != nil {
 		return nil, fmt.Errorf("cancel pending image tag: %w", err)
 	}

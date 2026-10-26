@@ -18,6 +18,9 @@ import (
 // createConfigDisk generates an ext4 disk with instance configuration.
 // The disk contains /config.json read by the guest init binary.
 func (m *manager) createConfigDisk(ctx context.Context, inst *Instance, imageInfo *images.Image, netConfig *network.NetworkConfig, proxyCfg *egressproxy.GuestConfig) error {
+	if inst.MacOS != nil {
+		return nil // macOS boots its imported disk and has no init to read a config disk.
+	}
 	// Create temporary directory for config files
 	tmpDir, err := os.MkdirTemp("", "hypeman-config-*")
 	if err != nil {

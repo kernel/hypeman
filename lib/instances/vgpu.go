@@ -70,7 +70,7 @@ func (m *manager) claimVGPU(ctx context.Context, meta *metadata, profileName str
 		// A dirty unclaimed VF consumes framebuffer, which can make the
 		// requested profile vanish from every creatable list before the
 		// selector's repair path can resolve it. Reset such VFs and retry.
-		if !m.resetDirtyUnclaimedVFs(ctx, vfs, allMetadata) {
+		if reset, _ := m.resetDirtyUnclaimedVFs(ctx, vfs, allMetadata); !reset {
 			return nil, err
 		}
 		if _, vfs, err = m.discoverVGPUDevices(); err != nil {
@@ -118,6 +118,18 @@ func (m *manager) claimVGPU(ctx context.Context, meta *metadata, profileName str
 		ProfileName: profileName,
 		SysfsPath:   filepath.Clean(devices.GetDeviceSysfsPath(vfAddress)),
 	}
+	assignment := devices.VGPUAssignment{Framework: device.Framework, DevicePath: device.SysfsPath}
+	// The type is written under the allocation lock, so the placement the
+	// driver reported as free is taken before the next claim asks again.
+	// The write may have landed before a later check failed, and without a
+	// saved claim the VF would hold its placement until the allocator next
+	// repairs it, so a failed configure resets it.
+	if err := m.configureClaimedVGPU(ctx, device); err != nil {
+		if resetErr := m.destroyVGPUAssignment(ctx, assignment); resetErr != nil {
+			log.WarnContext(ctx, "failed to reset vGPU VF after configure failed", "vf", vfAddress, "error", resetErr)
+		}
+		return nil, err
+	}
 	setStoredVGPUDevice(&meta.StoredMetadata, device)
 	// Only vendor VFIO claims carry an assignment identity, so the claim time
 	// is set here rather than in setStoredVGPUDevice. clearStoredVGPUDevice
@@ -126,6 +138,9 @@ func (m *manager) claimVGPU(ctx context.Context, meta *metadata, profileName str
 	meta.GPUClaimedAt = &claimedAt
 	if err := m.saveMetadata(meta); err != nil {
 		clearStoredVGPUDevice(&meta.StoredMetadata)
+		if resetErr := m.destroyVGPUAssignment(ctx, assignment); resetErr != nil {
+			log.WarnContext(ctx, "failed to reset vGPU VF after claim save failed", "vf", vfAddress, "error", resetErr)
+		}
 		return nil, fmt.Errorf("save vGPU claim: %w", err)
 	}
 	return device, nil
@@ -134,8 +149,9 @@ func (m *manager) claimVGPU(ctx context.Context, meta *metadata, profileName str
 // resetDirtyUnclaimedVFs resets allocated VFs that no instance claims,
 // restoring the framebuffer their leftover type consumes. The reset is
 // gated on the open-VFIO-handle in-use check inside destroy. Reports
-// whether any VF was reset. Callers must hold vgpuAllocationMu.
-func (m *manager) resetDirtyUnclaimedVFs(ctx context.Context, vfs []devices.VirtualFunction, allMetadata []StoredMetadata) bool {
+// whether any VF was reset and whether any refused. Callers must hold
+// vgpuAllocationMu.
+func (m *manager) resetDirtyUnclaimedVFs(ctx context.Context, vfs []devices.VirtualFunction, allMetadata []StoredMetadata) (reset, failed bool) {
 	claimed := make(map[string]struct{}, len(allMetadata))
 	for i := range allMetadata {
 		if path := allMetadata[i].GPUDevicePath; path != "" {
@@ -143,7 +159,6 @@ func (m *manager) resetDirtyUnclaimedVFs(ctx context.Context, vfs []devices.Virt
 		}
 	}
 	log := logger.FromContext(ctx)
-	reset := false
 	for _, vf := range vfs {
 		if !vf.Allocated {
 			continue
@@ -157,12 +172,13 @@ func (m *manager) resetDirtyUnclaimedVFs(ctx context.Context, vfs []devices.Virt
 		}
 		if err := m.destroyVGPUAssignment(ctx, assignment); err != nil {
 			log.WarnContext(ctx, "failed to reset dirty vGPU VF", "vf", vf.PCIAddress, "error", err)
+			failed = true
 			continue
 		}
-		log.InfoContext(ctx, "reset dirty vGPU VF during allocation", "vf", vf.PCIAddress)
+		log.InfoContext(ctx, "reset dirty unclaimed vGPU VF", "vf", vf.PCIAddress)
 		reset = true
 	}
-	return reset
+	return reset, failed
 }
 
 func (m *manager) quarantinedVFAddresses() (map[string]struct{}, error) {
