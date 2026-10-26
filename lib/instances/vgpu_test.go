@@ -126,6 +126,20 @@ func TestSelectVendorVFIOVFFailsClosedOnClaimedVF(t *testing.T) {
 		claims:       []StoredMetadata{{GPUDevicePath: testVFDevicePath}},
 	}, testVGPUProfile, nil)
 	require.ErrorContains(t, err, "no available VF")
+	require.ErrorIs(t, err, ErrInsufficientResources, "a host with every VF claimed is out of capacity")
+}
+
+// A host whose VFs advertise no creatable profile at all is out of capacity
+// too, so the API reports it as insufficient_resources rather than a generic
+// create failure that clients retry.
+func TestSelectVendorVFIOVFNoCreatableProfilesIsInsufficientResources(t *testing.T) {
+	vfs := []devices.VirtualFunction{{PCIAddress: "0000:82:00.4", ParentGPU: "0000:82:00.0"}}
+	_, _, err := selectVendorVFIOVF(vendorVFIOCandidates{
+		vfs:          vfs,
+		profilesByVF: map[string][]devices.VGPUProfileType{"0000:82:00.4": {}},
+	}, testVGPUProfile, nil)
+	require.ErrorContains(t, err, "no creatable vGPU profiles on any VF")
+	require.ErrorIs(t, err, ErrInsufficientResources)
 }
 
 func testVFProfiles(addresses ...string) map[string][]devices.VGPUProfileType {
