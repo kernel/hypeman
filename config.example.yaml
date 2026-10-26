@@ -107,6 +107,8 @@ data_dir: /var/lib/hypeman
 # api:
 #   hostname: api.example.com
 #   tls: true                     # requires the hostname in acme.allowed_domains
+#   https_ports: [443]             # public TLS ports; empty defaults to [443]
+#                                 # e.g. [443, 4973] with the backend on a different port
 #   redirect_http: true           # redirect HTTP requests to HTTPS
 
 # =============================================================================
