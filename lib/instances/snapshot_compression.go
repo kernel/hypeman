@@ -1146,7 +1146,7 @@ func nativeDecompressionArgs(srcPath, dstPath string, algorithm snapshotstore.Sn
 	case snapshotstore.SnapshotCompressionAlgorithmLz4:
 		return []string{"-q", "-d", "-f", srcPath, dstPath}
 	default:
-		return []string{"-q", "-d", "-f", "-o", dstPath, srcPath}
+		return []string{"-q", "-d", "-f", "--sparse", "-o", dstPath, srcPath}
 	}
 }
 
