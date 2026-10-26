@@ -594,15 +594,8 @@ func (c *Config) Validate() error {
 	if c.MacOSOnly && (runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" || c.Hypervisor.Default != "vz") {
 		return fmt.Errorf("macos_only requires vz on Apple silicon")
 	}
-	seenPorts := make(map[int]bool)
-	for _, port := range c.API.HTTPSPorts {
-		if port < 1 || port > 65535 {
-			return fmt.Errorf("api.https_ports must be between 1 and 65535, got %d", port)
-		}
-		if seenPorts[port] {
-			return fmt.Errorf("api.https_ports contains duplicate port %d", port)
-		}
-		seenPorts[port] = true
+	if err := c.validateAPIHTTPSPorts(); err != nil {
+		return err
 	}
 	if strings.TrimSpace(c.Metrics.ListenAddress) == "" {
 		return fmt.Errorf("metrics.listen_address must not be empty")

@@ -33,6 +33,8 @@ func TestValidateAPIHTTPSPorts(t *testing.T) {
 		{"empty", []int{}, true},
 		{"dual", []int{443, 4973}, true},
 		{"custom only", []int{4973}, true},
+		{"http port", []int{80}, false},
+		{"http port with https", []int{443, 80}, false},
 		{"zero", []int{0}, false},
 		{"negative", []int{-1}, false},
 		{"too large", []int{65536}, false},
@@ -40,6 +42,8 @@ func TestValidateAPIHTTPSPorts(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := defaultConfig()
+			cfg.Port = "8080"
+			cfg.API.Hostname = "api.example.com"
 			cfg.API.HTTPSPorts = tt.ports
 			err := cfg.Validate()
 			if tt.valid {

@@ -24,7 +24,7 @@ func TestGenerateConfig_APIHTTPSPorts(t *testing.T) {
 		{"prefer 443", []int{4973, 443}, true, true, []int{80, 443, 4973}, "https://{http.request.host}{http.request.uri}"},
 		{"custom only", []int{4973}, true, true, []int{80, 4973}, "https://{http.request.host}:4973{http.request.uri}"},
 		{"no redirect", []int{443, 4973}, true, false, []int{443, 4973}, ""},
-		{"http", []int{4973}, false, true, []int{80}, ""},
+		{"http", nil, false, true, []int{80}, ""},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			generator, _, cleanup := setupTestGenerator(t)
