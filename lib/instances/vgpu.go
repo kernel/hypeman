@@ -215,7 +215,7 @@ func selectVendorVFIOVF(c vendorVFIOCandidates, profileName string, pick func(n 
 	requested, found := profilesByName[profileName]
 	if !found {
 		if len(profilesByName) == 0 && len(c.vfs) > 0 {
-			return "", "", fmt.Errorf("no creatable vGPU profiles on any VF (GPUs at capacity or dirty VFs consuming framebuffer): profile %q", profileName)
+			return "", "", fmt.Errorf("%w: no creatable vGPU profiles on any VF (GPUs at capacity or dirty VFs consuming framebuffer): profile %q", ErrInsufficientResources, profileName)
 		}
 		return "", "", fmt.Errorf("profile %q is not creatable on any VF (unknown profile or insufficient capacity)", profileName)
 	}
@@ -296,7 +296,7 @@ func selectVendorVFIOVF(c vendorVFIOCandidates, profileName string, pick func(n 
 		return usageByGPU[gpus[i]] < usageByGPU[gpus[j]]
 	})
 	if len(gpus) == 0 {
-		return "", "", fmt.Errorf("no available VF for profile %q", profileName)
+		return "", "", fmt.Errorf("%w: no available VF for profile %q", ErrInsufficientResources, profileName)
 	}
 	// Candidates are sorted clean-first, so the leading run with the same
 	// Allocated state is the set of equally ranked VFs.
