@@ -58,11 +58,7 @@ func (p *StreamingMachinePublisher) Publish(ctx context.Context, id, bundle stri
 	if registry.Scheme == "http" && registry.Hostname() != "localhost" && !net.ParseIP(registry.Hostname()).IsLoopback() {
 		return MachinePublication{}, fmt.Errorf("plaintext registry must be loopback")
 	}
-	platform, err := images.ValidateMacOSBundle(bundle)
-	if err != nil {
-		return MachinePublication{}, err
-	}
-	if err = validateMachineExport(bundle, platform); err != nil {
+	if err := validateMachineExport(bundle, nil); err != nil {
 		return MachinePublication{}, err
 	}
 	layer, diffID, err := hashMachineLayer(ctx, bundle)

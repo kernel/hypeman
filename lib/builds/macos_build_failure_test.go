@@ -25,7 +25,7 @@ func TestMachineBuildSourceReadFailure(t *testing.T) {
 	if err == nil || result != nil || strings.Contains(err.Error(), "secret-source-error") {
 		t.Fatal("source failure was not masked")
 	}
-	if !reflect.DeepEqual(f.calls, []string{"resolve"}) {
+	if len(f.calls) != 0 {
 		t.Fatalf("source failure started guest: %v", f.calls)
 	}
 	entries, err := os.ReadDir(r.WorkDir)
@@ -46,7 +46,7 @@ func TestMachineBuildTimeoutCleanup(t *testing.T) {
 	if !errors.Is(err, context.DeadlineExceeded) || result != nil || f.publisherCalled || !f.cleanupContextLive {
 		t.Fatal("timeout cleanup failed")
 	}
-	if !reflect.DeepEqual(f.calls, []string{"resolve", "start", "abort", "destroy"}) {
+	if !reflect.DeepEqual(f.calls, []string{"start", "abort", "destroy"}) {
 		t.Fatalf("timeout cleanup order: %v", f.calls)
 	}
 }

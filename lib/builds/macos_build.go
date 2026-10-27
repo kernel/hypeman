@@ -270,7 +270,7 @@ func validateMachineExport(root string, base *images.MacOSImage) error {
 	if err != nil {
 		return err
 	}
-	if !bytes.Equal(platform.HardwareModel, base.HardwareModel) || !bytes.Equal(platform.MachineIdentifier, base.MachineIdentifier) || !strings.EqualFold(platform.MAC, base.MAC) || platform.CPUs != base.CPUs || platform.Memory != base.Memory {
+	if base != nil && (!bytes.Equal(platform.HardwareModel, base.HardwareModel) || !bytes.Equal(platform.MachineIdentifier, base.MachineIdentifier) || !strings.EqualFold(platform.MAC, base.MAC) || platform.CPUs != base.CPUs || platform.Memory != base.Memory) {
 		return fmt.Errorf("machine export changed preserved identity/resources")
 	}
 	for _, entry := range entries {

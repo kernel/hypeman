@@ -1519,12 +1519,7 @@ func (m *manager) RecoverPendingBuilds() {
 		}
 	}
 
-	pending, err := listPendingBuilds(m.paths)
-	if err != nil {
-		m.logger.Error("list pending builds for recovery", "error", err)
-		return
-	}
-
+	pending := pendingBuilds(all)
 	for _, meta := range pending {
 		meta := meta // Shadow loop variable for closure capture
 		m.logger.Info("recovering build", "id", meta.ID, "status", meta.Status)

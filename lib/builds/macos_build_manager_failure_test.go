@@ -2,6 +2,7 @@ package builds
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -12,27 +13,44 @@ import (
 )
 
 func TestMachineFailureUsesSharedFailedStatusWithoutPublication(t *testing.T) {
-	f := newMachineFixture()
-	f.fail = "provision"
-	config := DefaultConfig()
-	config.RegistrySecret = "synthetic-test-secret"
-	config.MachineBuild = &MachineBuildBackend{Driver: f, Publisher: f}
-	api, err := NewManager(paths.New(t.TempDir()), config, noPriorBuilder{}, nil, nil, machineJobImages{fixture: f}, nil, nil, nil)
-	require.NoError(t, err)
-	m := api.(*manager)
-	build, err := m.CreateBuild(context.Background(), CreateBuildRequest{MachineBaseImage: "registry/base@" + machineTestDigest}, []byte("source"))
-	require.NoError(t, err)
-	require.Eventually(t, func() bool {
-		b, e := m.GetBuild(context.Background(), build.ID)
-		return e == nil && b.Status == StatusFailed
-	}, 5*time.Second, 10*time.Millisecond)
-	done, err := m.GetBuild(context.Background(), build.ID)
-	require.NoError(t, err)
-	require.Equal(t, StatusFailed, done.Status)
-	require.Nil(t, done.ImageDigest)
-	require.NotContains(t, f.calls, "publish")
-	require.Contains(t, f.calls, "destroy")
-	require.Equal(t, "machine build provision failed", *done.Error, "guest error text must remain masked")
+	for _, tc := range []struct {
+		name       string
+		phase      string
+		resolveErr error
+		wantError  string
+	}{
+		{name: "base resolution", resolveErr: errors.New("sensitive-resolution-error"), wantError: "machine build resolve_base failed"},
+		{name: "provision", phase: "provision", wantError: "machine build provision failed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newMachineFixture()
+			f.fail = tc.phase
+			config := DefaultConfig()
+			config.RegistrySecret = "synthetic-test-secret"
+			config.MachineBuild = &MachineBuildBackend{Driver: f, Publisher: f}
+			api, err := NewManager(paths.New(t.TempDir()), config, noPriorBuilder{}, nil, nil, machineJobImages{fixture: f, resolveErr: tc.resolveErr}, nil, nil, nil)
+			require.NoError(t, err)
+			m := api.(*manager)
+			build, err := m.CreateBuild(context.Background(), CreateBuildRequest{MachineBaseImage: "registry/base@" + machineTestDigest}, []byte("source"))
+			require.NoError(t, err)
+			require.Eventually(t, func() bool {
+				b, e := m.GetBuild(context.Background(), build.ID)
+				return e == nil && b.Status == StatusFailed
+			}, 5*time.Second, 10*time.Millisecond)
+			done, err := m.GetBuild(context.Background(), build.ID)
+			require.NoError(t, err)
+			require.Equal(t, StatusFailed, done.Status)
+			require.Nil(t, done.ImageDigest)
+			require.NotContains(t, f.calls, "publish")
+			require.NotContains(t, *done.Error, "sensitive-resolution-error")
+			require.Equal(t, tc.wantError, *done.Error)
+			if tc.phase == "provision" {
+				require.Contains(t, f.calls, "destroy")
+			} else {
+				require.Empty(t, f.calls)
+			}
+		})
+	}
 }
 
 func TestMachineFailureShowsOnlyRecipeStepAndExitCode(t *testing.T) {

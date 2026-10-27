@@ -144,7 +144,10 @@ func listPendingBuilds(p *paths.Paths) ([]*buildMetadata, error) {
 	if err != nil {
 		return nil, err
 	}
+	return pendingBuilds(all), nil
+}
 
+func pendingBuilds(all []*buildMetadata) []*buildMetadata {
 	var pending []*buildMetadata
 	for _, meta := range all {
 		switch meta.Status {
@@ -152,13 +155,10 @@ func listPendingBuilds(p *paths.Paths) ([]*buildMetadata, error) {
 			pending = append(pending, meta)
 		}
 	}
-
-	// Sort by created_at ascending (oldest first for FIFO recovery)
 	sort.Slice(pending, func(i, j int) bool {
 		return pending[i].CreatedAt.Before(pending[j].CreatedAt)
 	})
-
-	return pending, nil
+	return pending
 }
 
 // deleteBuild removes a build's data from disk

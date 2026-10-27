@@ -55,7 +55,7 @@ func parseMachineBuildMultipart(body *multipart.Reader) (builds.CreateBuildReque
 	if body == nil {
 		return req, nil, fmt.Errorf("multipart source is required")
 	}
-	for count := 0; ; count++ {
+	for {
 		part, err := body.NextPart()
 		if err == io.EOF {
 			break
@@ -64,8 +64,8 @@ func parseMachineBuildMultipart(body *multipart.Reader) (builds.CreateBuildReque
 			return req, nil, fmt.Errorf("invalid multipart form")
 		}
 		name := part.FormName()
-		if count >= 16 || seen[name] {
-			return req, nil, fmt.Errorf("duplicate or excessive multipart fields")
+		if seen[name] {
+			return req, nil, fmt.Errorf("duplicate multipart field")
 		}
 		seen[name] = true
 		limit := int64(64 << 10)

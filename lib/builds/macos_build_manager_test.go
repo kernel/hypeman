@@ -18,10 +18,14 @@ import (
 
 type machineJobImages struct {
 	images.Manager
-	fixture *machineFixture
+	fixture    *machineFixture
+	resolveErr error
 }
 
 func (m machineJobImages) GetImage(ctx context.Context, ref string) (*images.Image, error) {
+	if m.resolveErr != nil {
+		return nil, m.resolveErr
+	}
 	if ref == "registry/base@"+machineTestDigest {
 		return m.fixture.ResolveBase(ctx, ref)
 	}
@@ -108,6 +112,8 @@ func TestMachineBuildAdmissionAndSourceHash(t *testing.T) {
 	require.ErrorContains(t, err, "secret options")
 	_, err = m.CreateBuild(context.Background(), CreateBuildRequest{MachineBaseImage: "registry/base@" + machineTestDigest, SourceHash: "wrong"}, []byte("source"))
 	require.True(t, errors.Is(err, ErrSourceHashMismatch))
+	_, err = m.admitMachineBuild(&CreateBuildRequest{MachineBaseImage: "registry/base@" + machineTestDigest}, make([]byte, maxBuildSourceBytes+1))
+	require.ErrorContains(t, err, "source too large")
 	list, err := m.ListBuilds(context.Background())
 	require.NoError(t, err)
 	require.Empty(t, list)

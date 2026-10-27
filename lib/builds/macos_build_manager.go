@@ -144,7 +144,7 @@ func machineBuildSerialKey(req CreateBuildRequest) string {
 	if err != nil || !ref.IsDigest() {
 		return "machine:" + req.MachineBaseImage
 	}
-	return "machine:" + ref.Digest().String()
+	return "machine:" + ref.Digest()
 }
 
 func (m *manager) enqueueMachineBuild(meta *buildMetadata, req CreateBuildRequest, policy *BuildPolicy) *Build {

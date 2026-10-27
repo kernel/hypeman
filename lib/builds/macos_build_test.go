@@ -135,7 +135,7 @@ func TestMachineBuildPublicationOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	expected := []string{"resolve", "start", "provision", "sanitize", "stop", "export", "destroy", "publish"}
+	expected := []string{"start", "provision", "sanitize", "stop", "export", "destroy", "publish"}
 	if !reflect.DeepEqual(f.calls, expected) {
 		t.Fatalf("wrong phase order: %v", f.calls)
 	}
@@ -150,7 +150,7 @@ func TestMachineBuildPublicationOrder(t *testing.T) {
 }
 
 func TestMachineBuildFailuresDoNotPublish(t *testing.T) {
-	for _, phase := range []string{"resolve", "start", "provision", "sanitize", "stop", "export", "destroy"} {
+	for _, phase := range []string{"start", "provision", "sanitize", "stop", "export", "destroy"} {
 		t.Run(phase, func(t *testing.T) {
 			f := newMachineFixture()
 			f.fail = phase
@@ -196,13 +196,13 @@ func TestMachineBuildCancellationUsesIndependentCleanup(t *testing.T) {
 	if !errors.Is(err, context.Canceled) || !f.cleanupContextLive || f.publisherCalled {
 		t.Fatal("cancellation did not retain safe cleanup")
 	}
-	if !reflect.DeepEqual(f.calls, []string{"resolve", "start", "abort", "destroy"}) {
+	if !reflect.DeepEqual(f.calls, []string{"start", "abort", "destroy"}) {
 		t.Fatalf("cancel cleanup: %v", f.calls)
 	}
 }
 
 func TestMachineBuildInputAdmission(t *testing.T) {
-	for _, kind := range []string{"floating base", "wrong digest", "linux", "pending", "shaping", "domains", "source hash", "oversized source", "CPU overflow", "memory precision"} {
+	for _, kind := range []string{"floating base", "wrong digest", "linux", "pending", "shaping", "domains", "source hash", "CPU overflow", "memory precision"} {
 		t.Run(kind, func(t *testing.T) {
 			f := newMachineFixture()
 			r := machineTestRunner(t, f)
@@ -222,8 +222,6 @@ func TestMachineBuildInputAdmission(t *testing.T) {
 				req.Policy.AllowedDomains = []string{"example.com"}
 			case "source hash":
 				req.SourceHash = strings.Repeat("0", 64)
-			case "oversized source":
-				r.MaxSourceBytes = 3
 			case "CPU overflow":
 				f.image.MacOS.CPUs = ^uint(0)
 			case "memory precision":
@@ -253,7 +251,7 @@ func TestMachineBuildCanceledSourceDoesNotStart(t *testing.T) {
 	defer cancel()
 	f := newMachineFixture()
 	_, err := machineTestRunner(t, f).Run(ctx, machineTestRequest(), cancelMachineSource{cancel})
-	if !errors.Is(err, context.Canceled) || !reflect.DeepEqual(f.calls, []string{"resolve"}) {
+	if !errors.Is(err, context.Canceled) || len(f.calls) != 0 {
 		t.Fatalf("canceled source started builder: %v", f.calls)
 	}
 }
