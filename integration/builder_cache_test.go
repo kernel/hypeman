@@ -168,7 +168,7 @@ RUN --mount=type=cache,target=/cache sh -c 'if [ -f /cache/sentinel ]; then echo
 func builderIntegrationDockerContext(t *testing.T, repoRoot string) string {
 	t.Helper()
 	contextDir := t.TempDir()
-	for _, path := range []string{"go.mod", "go.sum", "lib/guest/guest.pb.go", "lib/guest/guest_grpc.pb.go"} {
+	for _, path := range []string{"go.mod", "go.sum", "lib/guest/guest.pb.go", "lib/guest/guest_grpc.pb.go", "lib/guest/portforward/protocol.go"} {
 		copyBuilderIntegrationFile(t, repoRoot, contextDir, path)
 	}
 	for _, dir := range []string{"lib/builds/builder_agent", "lib/system/guest_agent"} {
