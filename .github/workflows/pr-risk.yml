@@ -5,7 +5,7 @@ name: PR Risk
 
 on:
   pull_request:
-    types: [ready_for_review, synchronize]
+    types: [opened, ready_for_review, synchronize]
 
 permissions:
   contents: read
