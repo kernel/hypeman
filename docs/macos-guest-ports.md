@@ -25,23 +25,29 @@ vmnet NAT leases.
 
 | Status | Cause |
 | --- | --- |
-| 501 | Linux guest, a macOS image that does not declare the guest agent, or an agent that does not report the port-forward capability |
+| 501 | Linux guest, a macOS image that does not declare the guest agent, or an agent that did not report the port-forward capability (including one that became ready before agents reported capabilities) |
 | 400 | Port outside 1-65535 |
 | 409 | Instance is not running (it is `Initializing` until the guest agent is ready) |
 | 502 | Nothing is listening on the guest port, or the forward failed |
-| 503 | Guest agent unavailable or forwarding limit reached |
+| 503 | Guest agent unavailable, forwarding limit reached, or an unrecognized handshake reply |
 
 ## Guest side
 
-The guest agent listens on vsock 2223 only on Darwin. Each host connection
-starts with the target port as two big-endian bytes. The agent connects to that
-port on `127.0.0.1` and answers with one status byte (0 connected, 1 failed)
-before copying bytes both ways. Either side closing ends the forward.
+The guest agent listens on vsock 2223 only on Darwin. It binds the port before
+reporting ready and advertises the port-forward capability only if the bind
+succeeded, so an agent that reports the capability is already accepting. Each
+host connection starts with the target port as two big-endian bytes. The agent
+connects to that port on `127.0.0.1` and answers with one status byte (0
+connected, 1 failed) before copying bytes both ways. The host treats any other
+byte as a forwarder error. Either side closing ends the forward. The handshake
+is defined once, in `lib/guest/portforward`, for both the host and the agent.
 
 Each guest agent admits at most 64 concurrent forwards, including handshakes.
 Excess connections are closed immediately, without dialing the guest service
-or creating handler goroutines. Handshakes, including status writes, have a
-five-second deadline. Closing a forward releases its slot.
+or creating handler goroutines. Each handshake step on the agent (reading the
+port, dialing it, writing the status) has its own five-second deadline, and the
+host allows ten seconds for the whole handshake. Closing a forward releases its
+slot.
 
 Hypeman does not start or supervise services inside the guest. A browser, its
 flags and its profile belong to the guest image, for example as a LaunchAgent in

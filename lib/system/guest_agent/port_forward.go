@@ -2,55 +2,60 @@ package main
 
 import (
 	"context"
-	"encoding/binary"
 	"errors"
 	"io"
 	"log"
 	"net"
 	"runtime"
 	"strconv"
+	"sync/atomic"
 	"time"
+
+	"github.com/kernel/hypeman/lib/guest/portforward"
 )
 
 const maxConcurrentPortForwards = 64
-
-// Port forward protocol, matching lib/guest/port_forward.go. The builder image
-// compiles this agent with only the generated files from lib/guest.
-const (
-	portForwardVsockPort        = 2223
-	portForwardStatusOK         = byte(0)
-	portForwardStatusDialFailed = byte(1)
-)
 
 // portForwardSupported is true where the agent forwards guest ports. Linux guests
 // reach their ports through ingress instead.
 const portForwardSupported = runtime.GOOS == "darwin"
 
-// startPortForwards listens on the port forward vsock port and connects each
-// host connection to the TCP port it names on the guest's loopback interface.
-// The host API requires instance-write access, which also grants exec, so the
-// forwarder does not restrict which loopback ports it reaches.
+// portForwarding is set once the forwarder is listening. Only then does the agent
+// advertise port forwarding.
+var portForwarding atomic.Bool
+
+// startPortForwards binds the port forward vsock port before the agent reports
+// ready, so an agent that advertises forwarding is already accepting, then connects
+// each host connection to the TCP port it names on the guest's loopback interface.
+// If the port cannot be bound, the agent still serves its other operations but does
+// not advertise forwarding. The host API requires instance-write access, which also
+// grants exec, so the forwarder does not restrict which loopback ports it reaches.
 func startPortForwards() {
-	go func() {
-		l := listenWithRetry(func() (net.Listener, error) { return listenVsock(portForwardVsockPort) }, time.Second, 30*time.Second)
-		log.Printf("[guest-agent] port forwarding on vsock port %d", portForwardVsockPort)
-		servePortForwards(l, dialLoopback)
-	}()
+	l, err := listenWithRetries(func() (net.Listener, error) { return listenVsock(portforward.VsockPort) }, 10, time.Second)
+	if err != nil {
+		log.Printf("[guest-agent] port forwarding disabled: %v", err)
+		return
+	}
+	portForwarding.Store(true)
+	log.Printf("[guest-agent] port forwarding on vsock port %d", portforward.VsockPort)
+	go servePortForwards(l, dialLoopback)
 }
 
-// listenWithRetry retries listen until it succeeds. The agent reports ready
-// without waiting for the forwarder, so giving up would leave forwarding off for
-// the rest of the agent's life.
-func listenWithRetry(listen func() (net.Listener, error), backoff, maxBackoff time.Duration) net.Listener {
-	for attempt := 1; ; attempt++ {
-		l, err := listen()
-		if err == nil {
-			return l
+// listenWithRetries retries listen with a fixed backoff, as the agent does for its
+// main vsock port.
+func listenWithRetries(listen func() (net.Listener, error), attempts int, backoff time.Duration) (net.Listener, error) {
+	var err error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		var l net.Listener
+		if l, err = listen(); err == nil {
+			return l, nil
 		}
-		log.Printf("[guest-agent] port forward listen attempt %d failed: %v", attempt, err)
-		time.Sleep(backoff)
-		backoff = min(2*backoff, maxBackoff)
+		log.Printf("[guest-agent] port forward listen attempt %d/%d failed: %v", attempt, attempts, err)
+		if attempt < attempts {
+			time.Sleep(backoff)
+		}
 	}
+	return nil, err
 }
 
 // servePortForwards accepts until the listener closes. Other accept errors, such as
@@ -98,13 +103,13 @@ func dialLoopback(ctx context.Context, port uint16) (net.Conn, error) {
 func forwardGuestPort(host net.Conn, dial func(context.Context, uint16) (net.Conn, error)) {
 	defer host.Close()
 	_ = host.SetDeadline(time.Now().Add(portForwardStepTimeout))
-	var port uint16
-	if err := binary.Read(host, binary.BigEndian, &port); err != nil {
+	port, err := portforward.ReadRequest(host)
+	if err != nil {
 		return
 	}
 
 	if port == 0 {
-		_, _ = host.Write([]byte{portForwardStatusDialFailed})
+		_ = portforward.WriteStatus(host, portforward.StatusDialFailed)
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), portForwardStepTimeout)
@@ -114,11 +119,11 @@ func forwardGuestPort(host net.Conn, dial func(context.Context, uint16) (net.Con
 	// sees a dropped handshake (503) instead of a failed dial (502).
 	_ = host.SetWriteDeadline(time.Now().Add(portForwardStepTimeout))
 	if err != nil {
-		_, _ = host.Write([]byte{portForwardStatusDialFailed})
+		_ = portforward.WriteStatus(host, portforward.StatusDialFailed)
 		return
 	}
 	defer target.Close()
-	if _, err := host.Write([]byte{portForwardStatusOK}); err != nil {
+	if err := portforward.WriteStatus(host, portforward.StatusOK); err != nil {
 		return
 	}
 	_ = host.SetDeadline(time.Time{})

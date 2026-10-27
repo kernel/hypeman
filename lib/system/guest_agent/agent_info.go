@@ -16,7 +16,7 @@ var agentVersion = "dev"
 
 // agentCapabilities lists optional features this agent supports.
 func agentCapabilities() []pb.AgentCapability {
-	if portForwardSupported {
+	if portForwarding.Load() {
 		return []pb.AgentCapability{pb.AgentCapability_AGENT_CAPABILITY_PORT_FORWARD}
 	}
 	return nil

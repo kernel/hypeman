@@ -301,9 +301,11 @@ func TestGuestServiceReportsAgentInfo(t *testing.T) {
 	require.NoError(t, err)
 	require.EqualValues(t, agentProtocolVersion, info.ProtocolVersion)
 	require.Equal(t, agentVersion, info.Version)
-	if portForwardSupported {
-		require.Contains(t, info.Capabilities, pb.AgentCapability_AGENT_CAPABILITY_PORT_FORWARD)
-	} else {
-		require.Empty(t, info.Capabilities, "Linux agents forward no ports")
-	}
+	require.Empty(t, info.Capabilities, "forwarding is advertised only once its listener is bound")
+
+	portForwarding.Store(true)
+	t.Cleanup(func() { portForwarding.Store(false) })
+	info, err = testGuestClient(t).GetAgentInfo(ctx, &pb.GetAgentInfoRequest{})
+	require.NoError(t, err)
+	require.Contains(t, info.Capabilities, pb.AgentCapability_AGENT_CAPABILITY_PORT_FORWARD)
 }

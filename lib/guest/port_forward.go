@@ -2,25 +2,13 @@ package guest
 
 import (
 	"context"
-	"encoding/binary"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"time"
 
+	"github.com/kernel/hypeman/lib/guest/portforward"
 	"github.com/kernel/hypeman/lib/hypervisor"
-)
-
-// PortForwardVsockPort is the guest vsock port where the guest agent accepts
-// host connections to forward to a TCP port on the guest's loopback interface.
-const PortForwardVsockPort = 2223
-
-// Port forward handshake: the host sends the target port as two big-endian bytes,
-// and the agent answers with one status byte before copying bytes both ways.
-const (
-	PortForwardStatusOK         byte = 0
-	PortForwardStatusDialFailed byte = 1
 )
 
 // ErrGuestPortUnavailable means nothing accepted the connection on the guest port.
@@ -38,7 +26,7 @@ func DialPort(ctx context.Context, dialer hypervisor.VsockDialer, port uint16) (
 	if port == 0 {
 		return nil, fmt.Errorf("invalid guest port 0")
 	}
-	conn, err := dialer.DialVsock(ctx, PortForwardVsockPort)
+	conn, err := dialer.DialVsock(ctx, portforward.VsockPort)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrPortForwarderUnavailable, err)
 	}
@@ -60,15 +48,14 @@ func portForwardHandshake(conn net.Conn, port uint16) error {
 	if err := conn.SetDeadline(time.Now().Add(portForwardHandshakeTimeout)); err != nil {
 		return fmt.Errorf("%w: set handshake deadline: %v", ErrPortForwarderUnavailable, err)
 	}
-	var status [1]byte
-	err := binary.Write(conn, binary.BigEndian, port)
-	if err == nil {
-		_, err = io.ReadFull(conn, status[:])
-	}
-	if err != nil {
+	if err := portforward.WriteRequest(conn, port); err != nil {
 		return fmt.Errorf("%w: handshake: %v", ErrPortForwarderUnavailable, err)
 	}
-	if status[0] != PortForwardStatusOK {
+	status, err := portforward.ReadStatus(conn)
+	if err != nil {
+		return fmt.Errorf("%w: handshake: %w", ErrPortForwarderUnavailable, err)
+	}
+	if status != portforward.StatusOK {
 		return fmt.Errorf("%w: %d", ErrGuestPortUnavailable, port)
 	}
 	if err := conn.SetDeadline(time.Time{}); err != nil {

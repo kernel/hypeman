@@ -19,6 +19,7 @@ COPY lib/builds/builder_agent/ ./lib/builds/builder_agent/
 COPY lib/system/guest_agent/ ./lib/system/guest_agent/
 # Only copy proto files for guest-agent (not client.go which has host-side deps)
 COPY lib/guest/guest.pb.go lib/guest/guest_grpc.pb.go ./lib/guest/
+COPY lib/guest/portforward/protocol.go ./lib/guest/portforward/
 
 # Build the builder-agent
 RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /builder-agent ./lib/builds/builder_agent

@@ -28,8 +28,9 @@ func TestPortForwardRequiresAgentCapability(t *testing.T) {
 		return &StoredMetadata{MacOS: &images.MacOSImage{GuestAgent: true}, GuestAgent: info}
 	}
 	require.Empty(t, agent(&GuestAgentInfo{ProtocolVersion: 1, Capabilities: []string{guest.AgentCapability_AGENT_CAPABILITY_PORT_FORWARD.String()}}).GuestOperationUnsupportedReason(GuestOpPortForward))
-	require.Contains(t, agent(&GuestAgentInfo{}).GuestOperationUnsupportedReason(GuestOpPortForward), "does not support port forwarding", "an agent that predates the capability is refused")
+	require.Contains(t, agent(&GuestAgentInfo{}).GuestOperationUnsupportedReason(GuestOpPortForward), "does not offer port forwarding", "an agent without the capability is refused")
 	require.Empty(t, agent(&GuestAgentInfo{}).GuestOperationUnsupportedReason(GuestOpExec), "other operations do not need it")
-	require.Empty(t, agent(nil).GuestOperationUnsupportedReason(GuestOpPortForward), "an agent recorded before GetAgentInfo is not checked")
+	require.Contains(t, agent(nil).GuestOperationUnsupportedReason(GuestOpPortForward), "restart the instance", "an agent recorded before GetAgentInfo predates forwarding")
+	require.Empty(t, agent(nil).GuestOperationUnsupportedReason(GuestOpExec), "other operations still work without agent info")
 	require.Contains(t, (&StoredMetadata{}).GuestOperationUnsupportedReason(GuestOpPortForward), "use ingress")
 }

@@ -14,6 +14,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/gorilla/websocket"
 	"github.com/kernel/hypeman/lib/guest"
+	"github.com/kernel/hypeman/lib/guest/portforward"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/instances"
@@ -32,7 +33,7 @@ type forwardingDialer struct {
 }
 
 func (d *forwardingDialer) DialVsock(_ context.Context, port int) (net.Conn, error) {
-	if port != guest.PortForwardVsockPort {
+	if port != portforward.VsockPort {
 		return nil, io.ErrUnexpectedEOF
 	}
 	if d.dialErr != nil {
@@ -47,16 +48,16 @@ func (d *forwardingDialer) DialVsock(_ context.Context, port int) (net.Conn, err
 		}
 		d.ports <- target
 		if d.unopened {
-			_, _ = agent.Write([]byte{guest.PortForwardStatusDialFailed})
+			_, _ = agent.Write([]byte{portforward.StatusDialFailed})
 			return
 		}
 		conn, err := net.Dial("tcp", d.backend)
 		if err != nil {
-			_, _ = agent.Write([]byte{guest.PortForwardStatusDialFailed})
+			_, _ = agent.Write([]byte{portforward.StatusDialFailed})
 			return
 		}
 		defer conn.Close()
-		_, _ = agent.Write([]byte{guest.PortForwardStatusOK})
+		_, _ = agent.Write([]byte{portforward.StatusOK})
 		go func() { _, _ = io.Copy(conn, agent) }()
 		_, _ = io.Copy(agent, conn)
 	}()
@@ -101,8 +102,11 @@ func newPortForwardServer(t *testing.T, inst *instances.Instance, backend http.H
 
 func runningMacOSInstance() *instances.Instance {
 	return &instances.Instance{
-		StoredMetadata: instances.StoredMetadata{Id: "mac", MacOS: &images.MacOSImage{GuestAgent: true}},
-		State:          instances.StateRunning,
+		StoredMetadata: instances.StoredMetadata{Id: "mac", MacOS: &images.MacOSImage{GuestAgent: true}, GuestAgent: &instances.GuestAgentInfo{
+			ProtocolVersion: 1,
+			Capabilities:    []string{guest.AgentCapability_AGENT_CAPABILITY_PORT_FORWARD.String()},
+		}},
+		State: instances.StateRunning,
 	}
 }
 
@@ -158,6 +162,8 @@ func TestPortForwardForwardsWebSocket(t *testing.T) {
 func TestPortForwardRejections(t *testing.T) {
 	noAgent := runningMacOSInstance()
 	noAgent.MacOS.GuestAgent = false
+	noCapability := runningMacOSInstance()
+	noCapability.GuestAgent.Capabilities = nil
 	stopped := runningMacOSInstance()
 	stopped.State = instances.StateStopped
 	linux := &instances.Instance{StoredMetadata: instances.StoredMetadata{Id: "linux"}, State: instances.StateRunning}
@@ -170,6 +176,7 @@ func TestPortForwardRejections(t *testing.T) {
 	}{
 		{"linux guest", linux, "9222", http.StatusNotImplemented},
 		{"macOS without agent", noAgent, "9222", http.StatusNotImplemented},
+		{"agent without the capability", noCapability, "9222", http.StatusNotImplemented},
 		{"port zero", runningMacOSInstance(), "0", http.StatusBadRequest},
 		{"port out of range", runningMacOSInstance(), "70000", http.StatusBadRequest},
 		{"stopped", stopped, "9222", http.StatusConflict},

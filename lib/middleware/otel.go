@@ -167,7 +167,13 @@ func (rw *responseWriter) BytesWritten() int {
 }
 
 // WriteHeader captures the status code before calling the underlying WriteHeader.
+// Informational responses, such as 103 Early Hints from a proxied server, precede
+// the final status, so they are passed through without counting as it.
 func (rw *responseWriter) WriteHeader(code int) {
+	if code >= 100 && code < 200 && code != http.StatusSwitchingProtocols {
+		rw.ResponseWriter.WriteHeader(code)
+		return
+	}
 	if !rw.wroteHeader {
 		rw.statusCode = code
 		rw.wroteHeader = true

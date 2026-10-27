@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	pb "github.com/kernel/hypeman/lib/guest"
+	"github.com/kernel/hypeman/lib/guest/portforward"
 	"github.com/stretchr/testify/require"
 )
 
@@ -45,7 +45,7 @@ func TestForwardGuestPortCopiesBothWays(t *testing.T) {
 	status := make([]byte, 1)
 	_, err := io.ReadFull(host, status)
 	require.NoError(t, err)
-	require.Equal(t, portForwardStatusOK, status[0])
+	require.Equal(t, portforward.StatusOK, status[0])
 
 	_, err = host.Write([]byte("hello"))
 	require.NoError(t, err)
@@ -73,7 +73,7 @@ func TestForwardGuestPortReportsDialFailure(t *testing.T) {
 			status := make([]byte, 1)
 			_, err := io.ReadFull(host, status)
 			require.NoError(t, err)
-			require.Equal(t, portForwardStatusDialFailed, status[0])
+			require.Equal(t, portforward.StatusDialFailed, status[0])
 		})
 	}
 }
@@ -103,7 +103,7 @@ func TestServePortForwardsBoundsConcurrencyAndReusesSlots(t *testing.T) {
 		if err == nil {
 			_, err = io.ReadFull(conn, status[:])
 		}
-		if err != nil || status[0] != portForwardStatusOK {
+		if err != nil || status[0] != portforward.StatusOK {
 			conn.Close()
 			return nil, fmt.Errorf("handshake failed: %v", err)
 		}
@@ -141,6 +141,54 @@ func TestServePortForwardsBoundsConcurrencyAndReusesSlots(t *testing.T) {
 	require.Equal(t, int32(maxConcurrentPortForwards+1), dialed.Load())
 }
 
+// Handshakes that never send a port hold slots too, until the step timeout frees them.
+func TestServePortForwardsCountsStalledHandshakes(t *testing.T) {
+	prev := portForwardStepTimeout
+	portForwardStepTimeout = 500 * time.Millisecond
+	t.Cleanup(func() { portForwardStepTimeout = prev })
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	done := make(chan struct{})
+	go func() { servePortForwards(listener, dialLoopback); close(done) }()
+	var stalled []net.Conn
+	t.Cleanup(func() {
+		for _, conn := range stalled {
+			conn.Close()
+		}
+		listener.Close()
+		<-done
+	})
+	for range maxConcurrentPortForwards {
+		conn, err := net.Dial("tcp", listener.Addr().String())
+		require.NoError(t, err)
+		stalled = append(stalled, conn)
+	}
+	// Wait until the agent has admitted every stalled handshake.
+	time.Sleep(100 * time.Millisecond)
+
+	conn, err := net.Dial("tcp", listener.Addr().String())
+	require.NoError(t, err)
+	defer conn.Close()
+	_ = conn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+	_, err = conn.Read(make([]byte, 1))
+	require.ErrorIs(t, err, io.EOF, "a connection beyond the limit is closed while stalled handshakes hold every slot")
+
+	echo := startLoopbackEcho(t)
+	require.Eventually(t, func() bool {
+		conn, err := net.Dial("tcp", listener.Addr().String())
+		if err != nil {
+			return false
+		}
+		defer conn.Close()
+		_ = conn.SetDeadline(time.Now().Add(time.Second))
+		if portforward.WriteRequest(conn, echo) != nil {
+			return false
+		}
+		status, err := portforward.ReadStatus(conn)
+		return err == nil && status == portforward.StatusOK
+	}, 5*time.Second, 50*time.Millisecond, "stalled handshakes release their slots after the step timeout")
+}
+
 func TestForwardGuestPortBoundsStatusWrite(t *testing.T) {
 	host, agent := net.Pipe()
 	defer host.Close()
@@ -172,13 +220,7 @@ func TestForwardGuestPortReportsSlowDialFailure(t *testing.T) {
 	status := make([]byte, 1)
 	_, err := io.ReadFull(host, status)
 	require.NoError(t, err, "a dial that uses its whole timeout still reports its status")
-	require.Equal(t, portForwardStatusDialFailed, status[0])
-}
-
-func TestPortForwardProtocolMatchesHost(t *testing.T) {
-	require.Equal(t, pb.PortForwardVsockPort, portForwardVsockPort)
-	require.Equal(t, pb.PortForwardStatusOK, portForwardStatusOK)
-	require.Equal(t, pb.PortForwardStatusDialFailed, portForwardStatusDialFailed)
+	require.Equal(t, portforward.StatusDialFailed, status[0])
 }
 
 type flakyListener struct {
@@ -211,7 +253,7 @@ func TestServePortForwardsSurvivesTransientAcceptErrors(t *testing.T) {
 	status := make([]byte, 1)
 	_, err = io.ReadFull(host, status)
 	require.NoError(t, err)
-	require.Equal(t, portForwardStatusOK, status[0], "forwarding works after transient accept errors")
+	require.Equal(t, portforward.StatusOK, status[0], "forwarding works after transient accept errors")
 
 	require.NoError(t, inner.Close())
 	select {
@@ -221,18 +263,27 @@ func TestServePortForwardsSurvivesTransientAcceptErrors(t *testing.T) {
 	}
 }
 
-func TestPortForwardListenRetriesUntilBound(t *testing.T) {
+func TestPortForwardListenRetriesThenGivesUp(t *testing.T) {
 	var attempts int
 	want, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	t.Cleanup(func() { want.Close() })
-	got := listenWithRetry(func() (net.Listener, error) {
+	got, err := listenWithRetries(func() (net.Listener, error) {
 		attempts++
-		if attempts <= 12 {
+		if attempts < 3 {
 			return nil, errors.New("vsock not ready")
 		}
 		return want, nil
-	}, time.Microsecond, time.Millisecond)
+	}, 10, time.Microsecond)
+	require.NoError(t, err)
 	require.Same(t, want, got)
-	require.Equal(t, 13, attempts, "listening continues past the old ten-attempt limit")
+	require.Equal(t, 3, attempts)
+
+	attempts = 0
+	_, err = listenWithRetries(func() (net.Listener, error) {
+		attempts++
+		return nil, errors.New("port in use")
+	}, 4, time.Microsecond)
+	require.ErrorContains(t, err, "port in use")
+	require.Equal(t, 4, attempts, "a port that never binds leaves forwarding off instead of delaying readiness")
 }

@@ -33,9 +33,13 @@ func (s *StoredMetadata) GuestOperationUnsupportedReason(op GuestOperation) stri
 	if !s.GuestAgentEnabled() {
 		return fmt.Sprintf("%s requires the shared guest agent on macOS instances", op)
 	}
-	// An agent recorded before GetAgentInfo existed is not checked; the next boot records it.
-	if op == GuestOpPortForward && s.GuestAgent != nil && !s.GuestAgent.HasCapability(guest.AgentCapability_AGENT_CAPABILITY_PORT_FORWARD) {
-		return fmt.Sprintf("the guest agent in this image (%q, protocol %d) does not support port forwarding; use an image with a newer agent", s.GuestAgent.Version, s.GuestAgent.ProtocolVersion)
+	if op == GuestOpPortForward && !s.GuestAgent.HasCapability(guest.AgentCapability_AGENT_CAPABILITY_PORT_FORWARD) {
+		// No agent info means readiness was recorded before agents reported it, by
+		// an agent that predates forwarding. Restarting the guest records it.
+		if s.GuestAgent == nil {
+			return "the guest agent has not reported port forwarding support; restart the instance to record it"
+		}
+		return fmt.Sprintf("the guest agent (%q, protocol %d) does not offer port forwarding: its image predates it, or its forwarder could not start", s.GuestAgent.Version, s.GuestAgent.ProtocolVersion)
 	}
 	return ""
 }
