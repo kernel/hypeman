@@ -93,6 +93,7 @@ type ACMEConfig struct {
 type APIConfig struct {
 	Hostname     string `koanf:"hostname"`
 	TLS          bool   `koanf:"tls"`
+	ListenPorts  []int  `koanf:"listen_ports"`
 	RedirectHTTP bool   `koanf:"redirect_http"`
 }
 
@@ -592,6 +593,9 @@ func expandHomePath(path string) string {
 func (c *Config) Validate() error {
 	if c.MacOSOnly && (runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" || c.Hypervisor.Default != "vz") {
 		return fmt.Errorf("macos_only requires vz on Apple silicon")
+	}
+	if err := c.validateAPIListenPorts(); err != nil {
+		return err
 	}
 	if strings.TrimSpace(c.Metrics.ListenAddress) == "" {
 		return fmt.Errorf("metrics.listen_address must not be empty")

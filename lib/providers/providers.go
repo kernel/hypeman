@@ -378,6 +378,7 @@ func ProvideIngressManager(p *paths.Paths, cfg *config.Config, instanceManager i
 			Hostname:     cfg.API.Hostname,
 			Port:         apiPort,
 			TLS:          cfg.API.TLS,
+			ListenPorts:  cfg.API.ListenPorts,
 			RedirectHTTP: cfg.API.RedirectHTTP,
 		},
 	}

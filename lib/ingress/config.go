@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -153,6 +154,9 @@ type APIIngressConfig struct {
 
 	// TLS enables TLS for the API hostname.
 	TLS bool
+
+	// ListenPorts defaults to 443 with TLS, or 80 without TLS.
+	ListenPorts []int
 
 	// RedirectHTTP enables HTTP to HTTPS redirect for the API hostname.
 	RedirectHTTP bool
@@ -374,15 +378,26 @@ func (g *CaddyConfigGenerator) buildConfig(ctx context.Context, ingresses []Ingr
 		}
 
 		// Determine which port the API route goes to
-		apiListenPort := 80
+		apiListenPorts := g.apiIngress.ListenPorts
+		if len(apiListenPorts) == 0 {
+			apiListenPorts = []int{80}
+			if g.apiIngress.TLS {
+				apiListenPorts = []int{443}
+			}
+		}
 		if g.apiIngress.TLS {
-			apiListenPort = 443
 			tlsHostnames = append(tlsHostnames, g.apiIngress.Hostname)
-			tlsPortsByHostname[g.apiIngress.Hostname] = append(tlsPortsByHostname[g.apiIngress.Hostname], 443)
-			tlsEnabledPorts[443] = true
+			tlsPortsByHostname[g.apiIngress.Hostname] = append(tlsPortsByHostname[g.apiIngress.Hostname], apiListenPorts...)
+			for _, port := range apiListenPorts {
+				tlsEnabledPorts[port] = true
+			}
 
 			// Add HTTP to HTTPS redirect for API hostname
 			if g.apiIngress.RedirectHTTP {
+				redirectURL := "https://{http.request.host}{http.request.uri}"
+				if !slices.Contains(apiListenPorts, 443) {
+					redirectURL = fmt.Sprintf("https://{http.request.host}:%d{http.request.uri}", apiListenPorts[0])
+				}
 				apiRedirectRoute := map[string]interface{}{
 					"match": []interface{}{
 						map[string]interface{}{
@@ -394,7 +409,7 @@ func (g *CaddyConfigGenerator) buildConfig(ctx context.Context, ingresses []Ingr
 						map[string]interface{}{
 							"handler": "static_response",
 							"headers": map[string]interface{}{
-								"Location": []string{"https://{http.request.host}{http.request.uri}"},
+								"Location": []string{redirectURL},
 							},
 							"status_code": 301,
 						},
@@ -406,7 +421,9 @@ func (g *CaddyConfigGenerator) buildConfig(ctx context.Context, ingresses []Ingr
 			}
 		}
 		// Prepend API route so it takes precedence over wildcards
-		routesForPort(routesByPort, apiListenPort).prependExact(apiRoute)
+		for _, port := range apiListenPorts {
+			routesForPort(routesByPort, port).prependExact(apiRoute)
+		}
 	}
 
 	// Build base config (admin API only)
