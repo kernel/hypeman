@@ -39,8 +39,17 @@ permissions:
   contents: read
 
 jobs:
-  test:
+  # The "other" shard runs every package except lib/instances, and
+  # scripts/test-shard.sh spreads the lib/instances tests over all shards by
+  # expected time. Add or remove instances-N entries to resize; the script
+  # derives the split from the matrix size. The required "test" check
+  # aggregates these jobs.
+  test-linux:
     runs-on: [self-hosted, linux, x64, kvm]
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [instances-1, instances-2, other]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -78,9 +87,9 @@ jobs:
               echo "$ifc"
             fi
           done > "$RUNNER_TEMP/net-sweep-dead"
-          while read -r ifc; do
-            sudo ip link del "$ifc" 2>/dev/null || true
-          done < "$RUNNER_TEMP/net-sweep-dead"
+          # One ip process deletes the whole list; -force keeps going past
+          # interfaces another job already removed.
+          sed 's/^/link del /' "$RUNNER_TEMP/net-sweep-dead" | sudo ip -force -batch - 2>/dev/null || true
           echo "swept $(wc -l < "$RUNNER_TEMP/net-sweep-dead") interfaces (DOWN, portless, older than 1h)"
 
       - name: Set up Go
@@ -92,6 +101,7 @@ jobs:
           go-version-file: go.mod
 
       - name: Check UFFD pager version
+        if: matrix.shard == 'other'
         run: |
           git fetch "https://github.com/${{ github.repository }}.git" main --depth=1
           bash scripts/check-uffd-version.sh FETCH_HEAD
@@ -115,6 +125,10 @@ jobs:
               n=$((n + 1))
             done
           }
+          # mkfs.ext4 and iptables live in sbin, which is not on the runner's
+          # PATH on every host. Without it this step runs apt on every job, and
+          # shards on the same host then contend for the apt lock.
+          PATH="/usr/local/sbin:/usr/sbin:/sbin:$PATH"
           if ! command -v mkfs.erofs &> /dev/null || \
              ! command -v mkfs.ext4 &> /dev/null || \
              ! command -v iptables &> /dev/null || \
@@ -155,6 +169,7 @@ jobs:
           test -f "$HYPEMAN_WINDOWS_OVMF_VARS"
 
       - name: Test Windows hypervisor primitives
+        if: matrix.shard == 'other'
         run: |
           TEST_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
           for attempt in 1 2 3; do
@@ -226,7 +241,10 @@ jobs:
       - name: Install UFFD pager systemd template
         run: |
           sudo mkdir -p /run/hypeman/uffd
-          sudo tee /etc/systemd/system/hypeman-uffd@.service > /dev/null <<'EOF'
+          # Shards on one host run this concurrently. Rename into place so a
+          # concurrent daemon-reload never reads a partially written unit.
+          unit_tmp="$(sudo mktemp /etc/systemd/system/.hypeman-uffd.XXXXXX)"
+          sudo tee "$unit_tmp" > /dev/null <<'EOF'
           [Unit]
           Description=Hypeman UFFD Pager (%i)
           Documentation=https://github.com/kernel/hypeman
@@ -244,6 +262,8 @@ jobs:
           RestartSec=5
           KillMode=process
           EOF
+          sudo chmod 0644 "$unit_tmp"
+          sudo mv -f "$unit_tmp" /etc/systemd/system/hypeman-uffd@.service
           sudo systemctl daemon-reload
 
       - name: Prewarm test cache
@@ -271,6 +291,7 @@ jobs:
           exit 1
 
       - name: Check gofmt
+        if: matrix.shard == 'other'
         run: |
           set -euo pipefail
           go_files="$(git ls-files '*.go')"
@@ -300,8 +321,8 @@ jobs:
           HYPEMAN_TEST_PREWARM_STRICT: "1"
           HYPEMAN_TEST_REFLINK_STRICT: "1"
           HYPEMAN_TEST_REGISTRY: 127.0.0.1:5001
-          HYPEMAN_UFFD_PAGER_BINARY: ${{ runner.temp }}/hypeman-uffd-pager-${{ github.run_id }}-${{ github.run_attempt }}
-          HYPEMAN_UFFD_SYSTEMD_INSTANCE_PREFIX: ci-${{ github.run_id }}-${{ github.run_attempt }}
+          HYPEMAN_UFFD_PAGER_BINARY: ${{ runner.temp }}/hypeman-uffd-pager-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.shard }}
+          HYPEMAN_UFFD_SYSTEMD_INSTANCE_PREFIX: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.shard }}
           # Fast scratch filesystem provisioned on the runner. Must be reflink-capable
           # (the VM disk fork fast path uses FICLONE) and kept short to stay under the
           # 108-char AF_UNIX sun_path limit for VMM control sockets.
@@ -310,14 +331,14 @@ jobs:
           cp "$PWD/bin/hypeman-uffd-pager" "$HYPEMAN_UFFD_PAGER_BINARY"
           chmod +x "$HYPEMAN_UFFD_PAGER_BINARY"
           export HYPEMAN_TEST_PREWARM_DIR="/ci/prewarm/linux-amd64"
-          make test TEST_TIMEOUT=20m
+          make test-linux-shard SHARD=${{ matrix.shard }} SHARD_COUNT=${{ strategy.job-total }} TEST_TIMEOUT=20m
 
       - name: Cleanup
         if: always()
         run: |
           set -euo pipefail
 
-          run_prefix="ci-${{ github.run_id }}-${{ github.run_attempt }}"
+          run_prefix="ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.shard }}"
           guest_pids=()
           mapfile -t vmm_pids < <(pgrep -x 'cloud-hyperviso|firecracker|qemu-system-.*' || true)
           for pid in "${vmm_pids[@]}"; do
@@ -339,13 +360,28 @@ jobs:
             done
           fi
 
-          units="$(systemctl list-units --all --full --plain 'hypeman-uffd@ci-${{ github.run_id }}-${{ github.run_attempt }}-*.service' --no-legend | awk '{print $1}' || true)"
+          units="$(systemctl list-units --all --full --plain 'hypeman-uffd@ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.shard }}-*.service' --no-legend | awk '{print $1}' || true)"
           if [ -n "$units" ]; then
             echo "$units" | xargs -r sudo systemctl stop || true
             echo "$units" | xargs -r sudo systemctl reset-failed || true
           fi
-          sudo rm -f /run/hypeman/uffd/ci-${{ github.run_id }}-${{ github.run_attempt }}-*.env
-          rm -f "${{ runner.temp }}/hypeman-uffd-pager-${{ github.run_id }}-${{ github.run_attempt }}"
+          sudo rm -f /run/hypeman/uffd/ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.shard }}-*.env
+          rm -f "${{ runner.temp }}/hypeman-uffd-pager-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.shard }}"
+
+  # The required "test" status. always() makes it report failure instead of
+  # skipping (which branch protection treats as passing) when a shard fails or
+  # the run is cancelled.
+  test:
+    if: always()
+    needs: test-linux
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check Linux test shards
+        env:
+          RESULT: ${{ needs.test-linux.result }}
+        run: |
+          echo "Linux test shards: $RESULT"
+          test "$RESULT" = success
 
   report-pr-test:
     if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.pr_number != '' }}
