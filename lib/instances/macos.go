@@ -15,6 +15,7 @@ import (
 
 	"github.com/kernel/hypeman/lib/healthcheck"
 	"github.com/kernel/hypeman/lib/hypervisor"
+	"github.com/kernel/hypeman/lib/hypervisor/vz/shimconfig"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/instances/phasetracking"
 	"github.com/kernel/hypeman/lib/network"
@@ -196,7 +197,7 @@ func applyMacOSNetwork(stored *StoredMetadata) *network.NetworkConfig {
 }
 
 // admitMacOSBoot holds the macOS boot lock and checks socket paths and identity
-// admission before a macOS guest boots. The returned release ends the hold; for
+// and MAC admission before a macOS guest boots. The returned release ends the hold; for
 // other guests it does nothing.
 func (m *manager) admitMacOSBoot(ctx context.Context, stored *StoredMetadata) (func(), error) {
 	if stored.MacOS == nil {
@@ -206,7 +207,7 @@ func (m *manager) admitMacOSBoot(ctx context.Context, stored *StoredMetadata) (f
 		return nil, err
 	}
 	m.macOSBootMu.Lock()
-	if err := m.checkMacOSIdentityAvailable(ctx, stored); err != nil {
+	if err := m.checkMacOSBootAvailable(ctx, stored); err != nil {
 		m.macOSBootMu.Unlock()
 		return nil, err
 	}
@@ -239,41 +240,16 @@ func (m *manager) checkMacOSIdentityAvailable(ctx context.Context, stored *Store
 	if len(pids) > 0 {
 		return fmt.Errorf("%w: a vz-shim (pid %d) is already running for this instance; if an interrupted operation left it, wait for it or delete the instance", ErrInvalidState, pids[0])
 	}
-	entries, err := os.ReadDir(m.paths.GuestsDir())
-	if err != nil {
-		return err
-	}
-	for _, entry := range entries {
-		if !entry.IsDir() || entry.Name() == stored.Id {
-			continue
-		}
-		meta, err := m.loadMetadata(entry.Name())
-		if errors.Is(err, ErrNotFound) {
-			// A create in progress or a leftover directory has no instance to admit against.
-			continue
-		}
-		if err != nil {
-			return fmt.Errorf("check Mac identity admission: %w", err)
-		}
-		if meta.MacOS == nil {
-			continue
-		}
-		sameIdentity := bytes.Equal(meta.MacOS.MachineIdentifier, stored.MacOS.MachineIdentifier)
-		// Two live guests on one MAC share one vmnet DHCP lease.
-		sameMAC := stored.NetworkEnabled && meta.NetworkEnabled && sameMACAddress(macOSBootMAC(stored), macOSBootMAC(&meta.StoredMetadata))
-		if !sameIdentity && !sameMAC {
-			continue
+	return m.forEachOtherInstance(stored.Id, "check Mac identity admission", func(meta *metadata) error {
+		if meta.MacOS == nil || !bytes.Equal(meta.MacOS.MachineIdentifier, stored.MacOS.MachineIdentifier) {
+			return nil
 		}
 		state := m.deriveStateWithoutHydration(ctx, &meta.StoredMetadata).State
-		if !state.RequiresVMM() && state != StateUnknown {
-			continue
-		}
-		if sameIdentity {
+		if state.RequiresVMM() || state == StateUnknown {
 			return fmt.Errorf("%w: macOS template identity is already in use by instance %s; stop it first", ErrInsufficientResources, meta.Id)
 		}
-		return fmt.Errorf("%w: MAC %s is already in use by instance %s; stop it first", ErrInsufficientResources, macOSBootMAC(stored), meta.Id)
-	}
-	return nil
+		return nil
+	})
 }
 
 // maxMacOSSocketPath is the longest Unix socket path macOS accepts: sun_path holds
@@ -320,21 +296,10 @@ func guestAgentReadyExecutable(stored *StoredMetadata) string {
 // macOS guest, so a normal stop can record a graceful receipt and strict export waits.
 const macOSMinStopTimeout = 30
 
-// admitGuestOperation refuses an operation this server cannot run for the guest:
-// any Linux operation on a macOS-only server, and operations macOS guests do not
-// implement. Callers check it right after loading the record under the lock.
-func (m *manager) admitGuestOperation(stored *StoredMetadata, operation string) error {
-	if err := m.requireMacOSGuest(stored); err != nil {
-		return err
-	}
-	if stored.MacOS == nil {
-		return nil
-	}
-	switch operation {
-	case "fork", "fork snapshot", "restore", "snapshot", "restore snapshot", "snapshot schedules", "standby":
-		return fmt.Errorf("%w: %s is not implemented for experimental macOS instances", ErrInvalidRequest, operation)
-	}
-	return nil
+// admitGuestOperation applies the server's guest-type restriction. Operation-specific
+// admission follows at the caller, under the instance lock.
+func (m *manager) admitGuestOperation(stored *StoredMetadata) error {
+	return m.requireMacOSGuest(stored)
 }
 
 // vmnet stores octets without leading zeroes. A lease is observed addressing,
@@ -392,6 +357,11 @@ func (s *StoredMetadata) VMStoragePath() string {
 	return filepath.Join(s.DataDir, paths.MacOSBootDiskFile)
 }
 
+// macOSStopReceiptPath is where the vz-shim records that the guest stopped the VM.
+func macOSStopReceiptPath(stored *StoredMetadata) string {
+	return filepath.Join(stored.DataDir, shimconfig.StopReceiptFile)
+}
+
 // requireMacOSGuest refuses Linux guests on a macOS-only server.
 func (m *manager) requireMacOSGuest(stored *StoredMetadata) error {
 	if m.macOSOnly && stored.MacOS == nil {
@@ -430,6 +400,17 @@ func (m *manager) macOSStateWithoutShim(stored *StoredMetadata) stateResult {
 		return stateResult{State: StateStandby}
 	}
 	return stateResult{State: StateStopped}
+}
+
+// macOSSocketAnswers reports whether a macOS guest's control socket answers a query.
+// A shim still loading the VM has not opened it yet.
+func (m *manager) macOSSocketAnswers(ctx context.Context, inst *Instance) bool {
+	hv, err := m.getHypervisor(inst.SocketPath, inst.HypervisorType)
+	if err != nil {
+		return false
+	}
+	_, err = hv.GetVMInfo(ctx)
+	return err == nil
 }
 
 // findVZShimPIDs lists vz-shim processes by control socket. Tests replace it.

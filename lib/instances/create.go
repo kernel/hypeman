@@ -839,6 +839,14 @@ func (m *manager) startAndBootVM(
 		return fmt.Errorf("build vm config: %w", err)
 	}
 
+	if stored.MacOS != nil {
+		// Clear the stop receipt right before the guest can write to its disk. A start
+		// that fails earlier leaves the disk untouched and keeps the receipt.
+		if err := m.clearMacOSStopReceipt(stored); err != nil {
+			return err
+		}
+	}
+
 	// Start VM (handles process start, configuration, and boot)
 	log.DebugContext(ctx, "starting VM", "instance_id", stored.Id, "hypervisor", stored.HypervisorType, "version", stored.HypervisorVersion)
 	pid, hv, err := starter.StartVM(ctx, m.paths, stored.HypervisorVersion, stored.SocketPath, vmConfig)

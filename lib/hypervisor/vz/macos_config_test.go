@@ -15,6 +15,8 @@ func TestMacOSStarterConfig(t *testing.T) {
 	shim := buildShimConfigFromVMConfig(cfg, "/vm/vz.sock")
 	require.Equal(t, base64.StdEncoding.EncodeToString([]byte{1}), shim.MacHardwareModelData)
 	require.Equal(t, "/vm/aux.img", shim.MacAuxStoragePath)
+	require.Equal(t, "/vm/vz-guest-stopped", shim.StopReceiptPath)
+	require.Empty(t, buildShimConfigFromVMConfig(hypervisor.VMConfig{}, "/vm/vz.sock").StopReceiptPath, "Linux guests write no receipt")
 	for _, resources := range []struct {
 		cpus   int
 		memory int64

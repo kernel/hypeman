@@ -335,6 +335,11 @@ func NewManagerWithConfigE(p *paths.Paths, imageManager images.Manager, systemMa
 	if err := m.recoverPendingStandbyCompressionJobs(context.Background()); err != nil {
 		logger.FromContext(context.Background()).WarnContext(context.Background(), "failed to recover pending standby compression jobs", "error", err)
 	}
+	// An interrupted macOS restore can leave the previous disk parked in staging. Failure
+	// is logged here; each restore retries recovery for its own instance before swapping.
+	if err := m.recoverMacOSRestoreStaging(""); err != nil {
+		logger.FromContext(context.Background()).ErrorContext(context.Background(), "macOS restore staging recovery failed", "error", err)
+	}
 
 	return m, nil
 }
@@ -626,10 +631,11 @@ func (m *manager) StandbyInstance(ctx context.Context, id string, req StandbyIns
 		}
 	}
 	inst, err := m.standbyInstance(ctx, id, req, false)
-	if err == nil {
-		m.notifyLifecycleEvent(ctx, LifecycleEventStandby, inst)
+	if err != nil {
+		return nil, m.recoverSourceAfterFailedStandby(ctx, inst, err)
 	}
-	return inst, err
+	m.notifyLifecycleEvent(ctx, LifecycleEventStandby, inst)
+	return inst, nil
 }
 
 // RestoreInstance restores an instance from standby
@@ -642,6 +648,19 @@ func (m *manager) RestoreInstance(ctx context.Context, id string) (*Instance, er
 		return nil, err
 	}
 	if current.State == StateRunning || current.State == StateInitializing {
+		// A running macOS guest has consumed its checkpoint. One still on disk means an
+		// earlier resume failed before removing it, so finish that resume now.
+		if current.MacOS != nil && current.HasSnapshot {
+			// Initializing without a control socket is a shim still loading the VM. It has
+			// not resumed, so the checkpoint it will consume must stay.
+			if current.State == StateInitializing && !m.macOSSocketAnswers(ctx, current) {
+				return nil, fmt.Errorf("%w: macOS restore is still loading the VM; retry shortly", ErrInvalidState)
+			}
+			if err := m.finishMacOSResume(id); err != nil {
+				return nil, fmt.Errorf("finish resumed restore: %w", err)
+			}
+			return m.currentInstanceWithoutHydration(ctx, id)
+		}
 		return current, nil
 	}
 	if current.State == StatePaused {
@@ -649,11 +668,21 @@ func (m *manager) RestoreInstance(ctx context.Context, id string) (*Instance, er
 		if err != nil {
 			return nil, fmt.Errorf("create hypervisor client: %w", err)
 		}
+		if current.MacOS != nil {
+			if err := m.invalidateMacOSCheckpoint(id); err != nil {
+				return nil, err
+			}
+		}
 		if err := hv.Resume(ctx); err != nil {
 			m.invalidateCachedHypervisorState(id)
 			return nil, fmt.Errorf("resume paused vm: %w", err)
 		}
 		m.storeCachedHypervisorState(id, hypervisor.StateRunning)
+		if current.MacOS != nil {
+			if err := m.finishMacOSResume(id); err != nil {
+				return nil, fmt.Errorf("finish resumed restore: %w", err)
+			}
+		}
 		current, err = m.currentInstanceWithoutHydration(ctx, id)
 		if err != nil {
 			return nil, err
@@ -722,6 +751,14 @@ func (m *manager) StartInstance(ctx context.Context, id string, req StartInstanc
 			return nil, err
 		}
 		if current.State == StateRunning || current.State == StateInitializing {
+			// The API can exit after a clone boots and before its rekey finishes. Finish it
+			// here, or the clone keeps its source's SSH host keys.
+			if current.IdentityRekeyPending {
+				if err := m.rekeyMacOSCloneOnStart(ctx, &current.StoredMetadata); err != nil {
+					return nil, err
+				}
+				return m.currentInstanceWithoutHydration(ctx, id)
+			}
 			return current, nil
 		}
 	}

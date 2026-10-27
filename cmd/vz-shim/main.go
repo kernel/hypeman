@@ -141,6 +141,9 @@ func main() {
 			case newState := <-stateChanged:
 				slog.Info("VM state changed", "state", newState)
 				if newState == vz.VirtualMachineStateStopped || newState == vz.VirtualMachineStateError {
+					if newState == vz.VirtualMachineStateStopped && !server.forcedStop.Load() {
+						writeStopReceipt(config.StopReceiptPath)
+					}
 					slog.Info("VM stopped, shutting down shim")
 					cancel()
 					return
@@ -165,11 +168,23 @@ func main() {
 	if vm.State() == vz.VirtualMachineStateRunning {
 		slog.Info("stopping VM")
 		if vm.CanStop() {
+			server.forcedStop.Store(true)
 			vm.Stop()
 		}
 	}
 
 	slog.Info("vz-shim shutdown complete")
+}
+
+// writeStopReceipt records that the guest stopped the VM itself. The host counts a
+// macOS stop as graceful only with this receipt.
+func writeStopReceipt(path string) {
+	if path == "" {
+		return
+	}
+	if err := os.WriteFile(path, []byte(time.Now().UTC().Format(time.RFC3339Nano)+"\n"), 0600); err != nil {
+		slog.Error("failed to write stop receipt", "error", err, "path", path)
+	}
 }
 
 func setupLogging(logPath string) error {

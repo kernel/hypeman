@@ -151,6 +151,11 @@ func (m *manager) startInstance(
 			})
 		}
 	}
+	if stored.MacOS != nil {
+		if err := m.checkMacOSMACAvailable(ctx, stored); err != nil {
+			return nil, err
+		}
+	}
 
 	// 4b. Recreate the vGPU if this instance had a GPU profile
 	// Note: GPU availability was already validated in step 2b
@@ -225,6 +230,10 @@ func (m *manager) startInstance(
 
 	// Success - release cleanup stack (prevent cleanup)
 	cu.Release()
+
+	if err := m.rekeyMacOSCloneOnStart(ctx, stored); err != nil {
+		return nil, err
+	}
 
 	// 7. Update metadata (set PID, StartedAt). Boot markers were cleared at
 	// the top of this function, so we are in Initializing until they hydrate.

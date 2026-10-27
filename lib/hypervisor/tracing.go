@@ -219,6 +219,18 @@ func (h *tracingHypervisor) Resume(ctx context.Context) (err error) {
 	return h.next.Resume(ctx)
 }
 
+func (h *tracingHypervisor) ValidateSnapshotSupport(ctx context.Context) (err error) {
+	validator, ok := h.next.(SnapshotSupportValidator)
+	if !ok {
+		return ErrNotSupported
+	}
+	ctx, span := startTraceSpan(ctx, h.tracer, "hypervisor.validate_snapshot_support",
+		h.spanAttrs(attribute.String("operation", "validate_snapshot_support"))...,
+	)
+	defer func() { finishTraceSpan(span, err) }()
+	return validator.ValidateSnapshotSupport(ctx)
+}
+
 func (h *tracingHypervisor) Snapshot(ctx context.Context, destPath string) (err error) {
 	ctx, span := startTraceSpan(ctx, h.tracer, "hypervisor.snapshot",
 		h.spanAttrs(
