@@ -1,0 +1,28 @@
+name: PR Risk
+
+# Comments whether a small PR would have been auto-approved and why. It never approves, so a
+# human review is still required. The mechanism is pr-risk.yml in kernel/security-workflows.
+
+on:
+  pull_request:
+    types: [opened, ready_for_review, synchronize]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  classify:
+    uses: kernel/security-workflows/.github/workflows/pr-risk.yml@main
+    with:
+      # Never eligible in this repo, on top of the shared defaults.
+      deny-paths: |
+        deploy/**
+        lib/network/**
+        lib/egressproxy/**
+    # Named rather than `secrets: inherit`: this calls a workflow in another repository, and
+    # inherit would hand it every secret this repo holds.
+    secrets:
+      ADMIN_APP_ID: ${{ secrets.ADMIN_APP_ID }}
+      ADMIN_APP_PRIVATE_KEY: ${{ secrets.ADMIN_APP_PRIVATE_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
