@@ -42,18 +42,3 @@ func TestMachinePolicyNormalization(t *testing.T) {
 		})
 	}
 }
-
-func TestMachineBuildAdmissionRejectsInvalidPolicy(t *testing.T) {
-	f := newMachineFixture()
-	m := &manager{config: Config{MachineBuild: &MachineBuildBackend{Driver: f, Publisher: f}}}
-	for _, policy := range []BuildPolicy{
-		{TimeoutSeconds: -1},
-		{TimeoutSeconds: 86401},
-		{NetworkMode: "host"},
-		{AllowedDomains: []string{"example.test"}},
-	} {
-		req := CreateBuildRequest{MachineBaseImage: "registry/base@" + machineTestDigest, BuildPolicy: &policy}
-		_, err := m.admitMachineBuild(&req, []byte("source"))
-		require.Error(t, err)
-	}
-}

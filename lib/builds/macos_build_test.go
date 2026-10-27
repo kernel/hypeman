@@ -150,39 +150,42 @@ func TestMachineBuildPublicationOrder(t *testing.T) {
 }
 
 func TestMachineBuildFailuresDoNotPublish(t *testing.T) {
-	for _, phase := range []string{"start", "provision", "sanitize", "stop", "export", "destroy"} {
-		t.Run(phase, func(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		phase   string
+		receipt *MachineStopReceipt
+	}{
+		{name: "start", phase: "start"},
+		{name: "provision", phase: "provision"},
+		{name: "sanitize", phase: "sanitize"},
+		{name: "stop", phase: "stop"},
+		{name: "export", phase: "export"},
+		{name: "destroy", phase: "destroy"},
+		{name: "unconfirmed stop", receipt: &MachineStopReceipt{}},
+		{name: "forced stop", receipt: &MachineStopReceipt{VMMExited: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			f := newMachineFixture()
-			f.fail = phase
-			r := machineTestRunner(t, f)
-			result, err := r.Run(context.Background(), machineTestRequest(), strings.NewReader("source"))
-			if err == nil || result != nil || f.publisherCalled {
+			f.fail = tc.phase
+			if tc.receipt != nil {
+				f.stop = *tc.receipt
+			}
+			_, err := runMachineBuildFailure(t, f, context.Background(), machineTestRequest(), strings.NewReader("source"))
+			if f.publisherCalled {
 				t.Fatal("failed build reached publication")
 			}
-			if strings.Contains(err.Error(), "sensitive-command-argument") {
+			if tc.phase != "" && strings.Contains(err.Error(), "sensitive-command-argument") {
 				t.Fatal("raw guest error leaked")
 			}
+			for _, phase := range f.calls {
+				if phase == "export" && tc.receipt != nil {
+					t.Fatal("unconfirmed stop exported")
+				}
+				if phase == "destroy" && tc.receipt != nil && !tc.receipt.VMMExited {
+					t.Fatal("destroyed unconfirmed live storage")
+				}
+			}
 		})
-	}
-}
-
-func TestMachineBuildStopReceipts(t *testing.T) {
-	for _, receipt := range []MachineStopReceipt{{}, {VMMExited: true}} {
-		f := newMachineFixture()
-		f.stop = receipt
-		r := machineTestRunner(t, f)
-		_, err := r.Run(context.Background(), machineTestRequest(), strings.NewReader("source"))
-		if err == nil || f.publisherCalled {
-			t.Fatal("unconfirmed/forced stop published")
-		}
-		for _, phase := range f.calls {
-			if phase == "export" {
-				t.Fatal("unconfirmed/forced stop exported")
-			}
-			if phase == "destroy" && !receipt.VMMExited {
-				t.Fatal("destroyed unconfirmed live storage")
-			}
-		}
 	}
 }
 
@@ -191,8 +194,7 @@ func TestMachineBuildCancellationUsesIndependentCleanup(t *testing.T) {
 	defer cancel()
 	f := newMachineFixture()
 	f.cancel = cancel
-	r := machineTestRunner(t, f)
-	_, err := r.Run(ctx, machineTestRequest(), strings.NewReader("source"))
+	_, err := runMachineBuildFailure(t, f, ctx, machineTestRequest(), strings.NewReader("source"))
 	if !errors.Is(err, context.Canceled) || !f.cleanupContextLive || f.publisherCalled {
 		t.Fatal("cancellation did not retain safe cleanup")
 	}
@@ -205,7 +207,6 @@ func TestMachineBuildInputAdmission(t *testing.T) {
 	for _, kind := range []string{"floating base", "wrong digest", "linux", "pending", "shaping", "domains", "source hash", "CPU overflow", "memory precision"} {
 		t.Run(kind, func(t *testing.T) {
 			f := newMachineFixture()
-			r := machineTestRunner(t, f)
 			req := machineTestRequest()
 			switch kind {
 			case "floating base":
@@ -227,10 +228,7 @@ func TestMachineBuildInputAdmission(t *testing.T) {
 			case "memory precision":
 				f.image.MacOS.Memory++
 			}
-			_, err := r.Run(context.Background(), req, strings.NewReader("source"))
-			if err == nil {
-				t.Fatal("bad input accepted")
-			}
+			runMachineBuildFailure(t, f, context.Background(), req, strings.NewReader("source"))
 			for _, phase := range f.calls {
 				if phase == "start" {
 					t.Fatal("bad input started a VM")
@@ -250,7 +248,7 @@ func TestMachineBuildCanceledSourceDoesNotStart(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	f := newMachineFixture()
-	_, err := machineTestRunner(t, f).Run(ctx, machineTestRequest(), cancelMachineSource{cancel})
+	_, err := runMachineBuildFailure(t, f, ctx, machineTestRequest(), cancelMachineSource{cancel})
 	if !errors.Is(err, context.Canceled) || len(f.calls) != 0 {
 		t.Fatalf("canceled source started builder: %v", f.calls)
 	}

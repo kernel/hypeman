@@ -121,6 +121,11 @@ func TestMachineBuildAdmissionAndSourceHash(t *testing.T) {
 	require.True(t, errors.Is(err, ErrSourceHashMismatch))
 	_, err = m.admitMachineBuild(&CreateBuildRequest{MachineBaseImage: "registry/base@" + machineTestDigest}, make([]byte, maxBuildSourceBytes+1))
 	require.ErrorContains(t, err, "source too large")
+	for _, policy := range []BuildPolicy{{TimeoutSeconds: -1}, {TimeoutSeconds: 86401}, {NetworkMode: "host"}, {AllowedDomains: []string{"example.test"}}} {
+		req := CreateBuildRequest{MachineBaseImage: "registry/base@" + machineTestDigest, BuildPolicy: &policy}
+		_, err := m.admitMachineBuild(&req, []byte("source"))
+		require.Error(t, err)
+	}
 	list, err := m.ListBuilds(context.Background())
 	require.NoError(t, err)
 	require.Empty(t, list)
