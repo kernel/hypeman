@@ -24,17 +24,24 @@ func TestMachineLayerRegeneratesHashedBytesWithoutSpooling(t *testing.T) {
 		require.NoError(t, os.WriteFile(filepath.Join(bundle, name), data, 0600))
 	}
 
-	blob, diffID, err := hashMachineLayer(context.Background(), bundle)
+	layer, err := machineTarballLayer(context.Background(), bundle)
+	require.NoError(t, err)
+	diffID, err := layer.DiffID()
 	require.NoError(t, err)
 	require.NotEmpty(t, diffID.Hex)
+	digest, err := layer.Digest()
+	require.NoError(t, err)
+	size, err := layer.Size()
+	require.NoError(t, err)
 	for range 2 {
-		body := blob.open()
+		body, err := layer.Compressed()
+		require.NoError(t, err)
 		sum := sha256.New()
 		n, err := io.Copy(sum, body)
 		require.NoError(t, err)
 		require.NoError(t, body.Close())
-		require.Equal(t, blob.descriptor.Size, n)
-		require.Equal(t, blob.descriptor.Digest.Hex, hex.EncodeToString(sum.Sum(nil)))
+		require.Equal(t, size, n)
+		require.Equal(t, digest.Hex, hex.EncodeToString(sum.Sum(nil)))
 	}
 	entries, err := os.ReadDir(parent)
 	require.NoError(t, err)
@@ -46,10 +53,11 @@ func TestMachineLayerAbandonedUploadStopsGenerator(t *testing.T) {
 	for name, data := range map[string][]byte{"disk.img": make([]byte, 8<<20), "aux.img": []byte("aux"), "config.json": []byte("{}")} {
 		require.NoError(t, os.WriteFile(filepath.Join(bundle, name), data, 0600))
 	}
-	blob, _, err := hashMachineLayer(context.Background(), bundle)
+	layer, err := machineTarballLayer(context.Background(), bundle)
 	require.NoError(t, err)
 	before := runtime.NumGoroutine()
-	body := blob.open()
+	body, err := layer.Compressed()
+	require.NoError(t, err)
 	_, err = io.CopyN(io.Discard, body, 16)
 	require.NoError(t, err)
 	require.NoError(t, body.Close())

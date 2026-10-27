@@ -3,7 +3,6 @@ package builds
 import (
 	"archive/tar"
 	"bytes"
-	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -19,15 +18,16 @@ import (
 	"time"
 
 	v1 "github.com/google/go-containerregistry/pkg/v1"
+	"github.com/google/go-containerregistry/pkg/v1/tarball"
 	"github.com/google/go-containerregistry/pkg/v1/types"
 	"github.com/kernel/hypeman/lib/images"
 )
 
 // StreamingMachinePublisher targets only the configured internal registry and a
-// build-scoped repository. The layer is generated twice from the exported bundle,
-// once to hash it and once to stream it, so it is never written to disk. Blobs are
-// uploaded with bounded memory, independently re-read/hash verified, then the
-// manifest is committed last.
+// build-scoped repository. go-containerregistry hashes and compresses the layer
+// from a reopenable tar stream, so it is never written to disk. Blobs use the
+// registry's disk-streaming monolithic upload and are independently verified before
+// the manifest is committed last.
 // No credentials, redirect destinations or arbitrary output repositories come from recipes.
 type StreamingMachinePublisher struct {
 	RegistryURL string
@@ -35,7 +35,7 @@ type StreamingMachinePublisher struct {
 }
 
 type machineBlob struct {
-	open       func() io.ReadCloser
+	open       func() (io.ReadCloser, error)
 	descriptor v1.Descriptor
 }
 
@@ -61,10 +61,23 @@ func (p *StreamingMachinePublisher) Publish(ctx context.Context, id, bundle stri
 	if err := validateMachineExport(bundle, nil); err != nil {
 		return MachinePublication{}, err
 	}
-	layer, diffID, err := hashMachineLayer(ctx, bundle)
+	layer, err := machineTarballLayer(ctx, bundle)
 	if err != nil {
 		return MachinePublication{}, err
 	}
+	diffID, err := layer.DiffID()
+	if err != nil {
+		return MachinePublication{}, err
+	}
+	layerDigest, err := layer.Digest()
+	if err != nil {
+		return MachinePublication{}, err
+	}
+	layerSize, err := layer.Size()
+	if err != nil {
+		return MachinePublication{}, err
+	}
+	layerBlob := machineBlob{open: layer.Compressed, descriptor: v1.Descriptor{MediaType: types.OCILayer, Digest: layerDigest, Size: layerSize}}
 	config := v1.ConfigFile{OS: "darwin", Architecture: "arm64", RootFS: v1.RootFS{Type: "layers", DiffIDs: []v1.Hash{diffID}}, Config: v1.Config{Labels: map[string]string{
 		images.MacOSMachineVersionLabel: "1", images.MacOSMachineKindLabel: "macos-image", images.MacOSMachineFormatLabel: "raw", images.MacOSMachineDiskLabel: "disk.img", images.MacOSMachineAuxLabel: "aux.img", images.MacOSMachinePlatformLabel: "config.json",
 	}}}
@@ -72,8 +85,8 @@ func (p *StreamingMachinePublisher) Publish(ctx context.Context, id, bundle stri
 	if err != nil {
 		return MachinePublication{}, err
 	}
-	configBlob := machineBlob{open: func() io.ReadCloser { return io.NopCloser(bytes.NewReader(configBytes)) }, descriptor: v1.Descriptor{MediaType: types.OCIConfigJSON, Digest: machineHash(configBytes), Size: int64(len(configBytes))}}
-	manifest := v1.Manifest{SchemaVersion: 2, MediaType: types.OCIManifestSchema1, Config: configBlob.descriptor, Layers: []v1.Descriptor{layer.descriptor}}
+	configBlob := machineBlob{open: func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(configBytes)), nil }, descriptor: v1.Descriptor{MediaType: types.OCIConfigJSON, Digest: machineHash(configBytes), Size: int64(len(configBytes))}}
+	manifest := v1.Manifest{SchemaVersion: 2, MediaType: types.OCIManifestSchema1, Config: configBlob.descriptor, Layers: []v1.Descriptor{layerBlob.descriptor}}
 	manifestBytes, err := json.Marshal(manifest)
 	if err != nil {
 		return MachinePublication{}, err
@@ -89,8 +102,11 @@ func (p *StreamingMachinePublisher) Publish(ctx context.Context, id, bundle stri
 	defer transport.CloseIdleConnections()
 	client := &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	base := strings.TrimRight(address, "/") + "/v2/" + repo
-	for _, blob := range []machineBlob{configBlob, layer} {
-		body := blob.open()
+	for _, blob := range []machineBlob{configBlob, layerBlob} {
+		body, e := blob.open()
+		if e != nil {
+			return MachinePublication{}, e
+		}
 		response, e := machineRegistryRequest(ctx, client, token, http.MethodPost, base+"/blobs/uploads/?digest="+blob.descriptor.Digest.String(), "application/octet-stream", io.LimitReader(body, blob.descriptor.Size), blob.descriptor.Size)
 		closeErr := body.Close()
 		if e != nil {
@@ -161,53 +177,26 @@ func machineHash(data []byte) v1.Hash {
 	return v1.Hash{Algorithm: "sha256", Hex: hex.EncodeToString(sum[:])}
 }
 
-// hashMachineLayer hashes the bundle's gzipped tar layer without storing it. The
-// returned blob regenerates the same bytes when opened; the registry rejects them
-// if the bundle changed in between.
-func hashMachineLayer(ctx context.Context, bundle string) (blob machineBlob, diffID v1.Hash, err error) {
-	compressed := sha256.New()
-	counter := &machineByteCounter{}
-	plain, err := writeMachineLayer(ctx, bundle, io.MultiWriter(compressed, counter))
-	if err != nil {
-		return blob, diffID, err
-	}
-	open := func() io.ReadCloser {
+func machineTarballLayer(ctx context.Context, bundle string) (v1.Layer, error) {
+	return tarball.LayerFromOpener(func() (io.ReadCloser, error) {
 		reader, writer := io.Pipe()
-		go func() {
-			_, err := writeMachineLayer(ctx, bundle, writer)
-			writer.CloseWithError(err)
-		}()
-		return reader
-	}
-	digest := v1.Hash{Algorithm: "sha256", Hex: hex.EncodeToString(compressed.Sum(nil))}
-	return machineBlob{open: open, descriptor: v1.Descriptor{MediaType: types.OCILayer, Digest: digest, Size: counter.n}}, plain, nil
+		go func() { writer.CloseWithError(writeMachineTar(ctx, bundle, writer)) }()
+		return reader, nil
+	}, tarball.WithMediaType(types.OCILayer))
 }
 
-type machineByteCounter struct{ n int64 }
-
-func (c *machineByteCounter) Write(data []byte) (int, error) {
-	c.n += int64(len(data))
-	return len(data), nil
-}
-
-// writeMachineLayer writes the bundle as a gzipped tar and returns the digest of
-// the uncompressed tar. Headers carry no timestamps, so the output is deterministic.
-func writeMachineLayer(ctx context.Context, bundle string, w io.Writer) (diffID v1.Hash, err error) {
-	gz, err := gzip.NewWriterLevel(w, gzip.BestSpeed)
-	if err != nil {
-		return diffID, err
-	}
-	plainHash := sha256.New()
-	archive := tar.NewWriter(io.MultiWriter(gz, plainHash))
+// writeMachineTar writes a deterministic tar of the exported bundle.
+func writeMachineTar(ctx context.Context, bundle string, w io.Writer) error {
+	archive := tar.NewWriter(w)
 	for _, name := range []string{"disk.img", "aux.img", "config.json"} {
 		source, e := os.Open(filepath.Join(bundle, name))
 		if e != nil {
-			return diffID, e
+			return e
 		}
 		info, e := source.Stat()
 		if e != nil {
 			source.Close()
-			return diffID, e
+			return e
 		}
 		e = archive.WriteHeader(&tar.Header{Name: name, Mode: 0600, Size: info.Size(), Typeflag: tar.TypeReg})
 		if e == nil {
@@ -215,17 +204,11 @@ func writeMachineLayer(ctx context.Context, bundle string, w io.Writer) (diffID 
 		}
 		closeErr := source.Close()
 		if e != nil {
-			return diffID, e
+			return e
 		}
 		if closeErr != nil {
-			return diffID, closeErr
+			return closeErr
 		}
 	}
-	if err = archive.Close(); err != nil {
-		return diffID, err
-	}
-	if err = gz.Close(); err != nil {
-		return diffID, err
-	}
-	return v1.Hash{Algorithm: "sha256", Hex: hex.EncodeToString(plainHash.Sum(nil))}, nil
+	return archive.Close()
 }
