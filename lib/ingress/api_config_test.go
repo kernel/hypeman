@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestGenerateConfig_APIHTTPSPorts(t *testing.T) {
+func TestGenerateConfig_APIListenPorts(t *testing.T) {
 	for _, tt := range []struct {
 		name     string
 		ports    []int
@@ -25,13 +25,17 @@ func TestGenerateConfig_APIHTTPSPorts(t *testing.T) {
 		{"custom only", []int{4973}, true, true, []int{80, 4973}, "https://{http.request.host}:4973{http.request.uri}"},
 		{"no redirect", []int{443, 4973}, true, false, []int{443, 4973}, ""},
 		{"http", nil, false, true, []int{80}, ""},
+		{"empty http", []int{}, false, true, []int{80}, ""},
+		{"custom http", []int{8081}, false, true, []int{8081}, ""},
+		{"multiple http", []int{8081, 8082}, false, true, []int{8081, 8082}, ""},
+		{"http on 443", []int{443}, false, true, []int{443}, ""},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			generator, _, cleanup := setupTestGenerator(t)
 			defer cleanup()
 			generator.apiIngress = APIIngressConfig{
 				Hostname: "api.example.com", Port: 8080, TLS: tt.tls,
-				HTTPSPorts: tt.ports, RedirectHTTP: tt.redirect,
+				ListenPorts: tt.ports, RedirectHTTP: tt.redirect,
 			}
 			generator.acme = ACMEConfig{
 				Email: "admin@example.com", DNSProvider: DNSProviderCloudflare,

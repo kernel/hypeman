@@ -93,7 +93,7 @@ type ACMEConfig struct {
 type APIConfig struct {
 	Hostname     string `koanf:"hostname"`
 	TLS          bool   `koanf:"tls"`
-	HTTPSPorts   []int  `koanf:"https_ports"`
+	ListenPorts  []int  `koanf:"listen_ports"`
 	RedirectHTTP bool   `koanf:"redirect_http"`
 }
 
@@ -594,7 +594,7 @@ func (c *Config) Validate() error {
 	if c.MacOSOnly && (runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" || c.Hypervisor.Default != "vz") {
 		return fmt.Errorf("macos_only requires vz on Apple silicon")
 	}
-	if err := c.validateAPIHTTPSPorts(); err != nil {
+	if err := c.validateAPIListenPorts(); err != nil {
 		return err
 	}
 	if strings.TrimSpace(c.Metrics.ListenAddress) == "" {

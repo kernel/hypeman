@@ -155,8 +155,8 @@ type APIIngressConfig struct {
 	// TLS enables TLS for the API hostname.
 	TLS bool
 
-	// HTTPSPorts are the public TLS listener ports. Empty defaults to port 443.
-	HTTPSPorts []int
+	// ListenPorts defaults to 443 with TLS, or 80 without TLS.
+	ListenPorts []int
 
 	// RedirectHTTP enables HTTP to HTTPS redirect for the API hostname.
 	RedirectHTTP bool
@@ -378,12 +378,14 @@ func (g *CaddyConfigGenerator) buildConfig(ctx context.Context, ingresses []Ingr
 		}
 
 		// Determine which port the API route goes to
-		apiListenPorts := []int{80}
-		if g.apiIngress.TLS {
-			apiListenPorts = g.apiIngress.HTTPSPorts
-			if len(apiListenPorts) == 0 {
+		apiListenPorts := g.apiIngress.ListenPorts
+		if len(apiListenPorts) == 0 {
+			apiListenPorts = []int{80}
+			if g.apiIngress.TLS {
 				apiListenPorts = []int{443}
 			}
+		}
+		if g.apiIngress.TLS {
 			tlsHostnames = append(tlsHostnames, g.apiIngress.Hostname)
 			tlsPortsByHostname[g.apiIngress.Hostname] = append(tlsPortsByHostname[g.apiIngress.Hostname], apiListenPorts...)
 			for _, port := range apiListenPorts {

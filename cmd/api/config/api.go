@@ -7,22 +7,20 @@ import (
 	"strconv"
 )
 
-func (c *Config) validateAPIHTTPSPorts() error {
-	if len(c.API.HTTPSPorts) == 0 {
+func (c *Config) validateAPIListenPorts() error {
+	if len(c.API.ListenPorts) == 0 {
 		return nil
 	}
-	if !c.API.TLS {
-		return fmt.Errorf("api.https_ports requires api.tls to be enabled")
-	}
-	seen := make(map[int]bool)
-	for _, port := range c.API.HTTPSPorts {
-		if port < 1 || port > 65535 || port == 80 {
-			return fmt.Errorf("api.https_ports must be between 1 and 65535, excluding HTTP port 80, got %d", port)
+	for i, port := range c.API.ListenPorts {
+		if port < 1 || port > 65535 {
+			return fmt.Errorf("api.listen_ports must be between 1 and 65535, got %d", port)
 		}
-		if seen[port] {
-			return fmt.Errorf("api.https_ports contains duplicate port %d", port)
+		if c.API.TLS && port == 80 {
+			return fmt.Errorf("api.listen_ports cannot include HTTP port 80 when api.tls is enabled")
 		}
-		seen[port] = true
+		if slices.Contains(c.API.ListenPorts[:i], port) {
+			return fmt.Errorf("api.listen_ports contains duplicate port %d", port)
+		}
 	}
 	if c.API.Hostname == "" {
 		return nil
@@ -30,7 +28,7 @@ func (c *Config) validateAPIHTTPSPorts() error {
 
 	backendPort, err := strconv.Atoi(c.Port)
 	if err != nil {
-		return fmt.Errorf("api.https_ports: invalid backend port %q: %w", c.Port, err)
+		return fmt.Errorf("api.listen_ports: invalid backend port %q: %w", c.Port, err)
 	}
 	for _, listener := range []struct {
 		name    string
@@ -41,9 +39,9 @@ func (c *Config) validateAPIHTTPSPorts() error {
 		{"metrics.port", c.Metrics.ListenAddress, c.Metrics.Port},
 		{"caddy.admin_port", c.Caddy.AdminAddress, c.Caddy.AdminPort},
 	} {
-		if slices.Contains(c.API.HTTPSPorts, listener.port) &&
+		if slices.Contains(c.API.ListenPorts, listener.port) &&
 			bindAddressesOverlap(c.Caddy.ListenAddress, listener.address) {
-			return fmt.Errorf("api.https_ports port %d conflicts with %s", listener.port, listener.name)
+			return fmt.Errorf("api.listen_ports port %d conflicts with %s", listener.port, listener.name)
 		}
 	}
 	return nil
