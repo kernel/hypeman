@@ -11,9 +11,11 @@ completion, provenance and image-readiness gate remain owned by the normal build
 manager. The concrete implementations are `GuestMachineBuildDriver` and
 `StreamingMachinePublisher`. HTTP activation is disabled by default. Set both
 `macos_only: true` and `macos_builds: true` on an Apple-silicon VZ server, with
-an explicit `registry.url` reachable from the host (not a guest gateway). HTTPS
-uses system trust; custom CA/insecure HTTPS machine configurations are rejected.
-Loopback HTTP remains supported. Linux servers reject the machine selector.
+an explicit `registry.url` reachable from the host (not a guest gateway), including
+its scheme. For example, use `http://localhost:4973` for loopback HTTP or a
+system-trusted `https://` endpoint. Credentials, URL paths, queries and fragments
+are rejected; custom CA/insecure HTTPS machine configurations are rejected.
+Linux servers reject the machine selector.
 
 Use the existing authenticated `POST /builds` multipart endpoint:
 
@@ -46,7 +48,8 @@ longer explicitly selected deadline.
 Networking defaults isolated. Optional egress means unrestricted VZ NAT, not
 Linux TAP/domain-policy parity. Domain allowlists, Linux Dockerfile/builder/cache/
 build-argument/secret/admin options are rejected, not ignored. Template identity
-is preserved: concurrent same-identity guests remain forbidden.
+is preserved: jobs pinned to the same base digest are serialized, and concurrent
+same-identity guests remain forbidden.
 
 ## Experimental versioned provisioning recipe
 
@@ -111,10 +114,11 @@ acceptance does not undo shutdown. The host still independently awaits VMM exit;
 an acknowledgement alone is insufficient.
 
 The backend validates complete output and preserved identity/resources and destroys
-the stopped builder **before** publication. Staged source is removed only once the
-image is ready, so a job interrupted while pushing or converting is rebuilt on
-recovery. Each attempt first removes export and guest workspaces left by an
-interrupted attempt of the same job; every export holds a full disk image. Cancellation
+the stopped builder **before** publication. Staged source is retained until a terminal
+status is persisted, so a job interrupted while pushing or converting is rebuilt on
+recovery; startup also reaps cancelled builders and removes terminal-job source. Each
+attempt first removes export and guest workspaces left by an interrupted attempt of
+the same job; every export holds a full disk image. Cancellation
 interrupts the active normal machine job, not forced instance deletion. It records
 the owned builder before provisioning and keeps Cancelled terminal. Potentially secret-bearing guest errors remain masked in
 ordinary error/log strings while errors.Is/As work internally.

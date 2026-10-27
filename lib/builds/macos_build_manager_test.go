@@ -86,6 +86,12 @@ func TestMachineBuildUsesSharedQueueStatusAndSourceLifecycle(t *testing.T) {
 	require.Error(t, err, "machine builds must not persist a builder config or registry token")
 	require.NoFileExists(t, filepath.Join(m.paths.BuildSourceDir(build.ID), "source.tar.gz"))
 }
+func TestMachineBuildSerializesByBaseDigest(t *testing.T) {
+	first := CreateBuildRequest{MachineBaseImage: "registry-a/base@" + machineTestDigest}
+	second := CreateBuildRequest{MachineBaseImage: "registry-b/another-name@" + machineTestDigest}
+	require.Equal(t, machineBuildSerialKey(first), machineBuildSerialKey(second))
+}
+
 func TestMachineBuildAdmissionAndSourceHash(t *testing.T) {
 	config := DefaultConfig()
 	config.RegistrySecret = "synthetic-test-secret"

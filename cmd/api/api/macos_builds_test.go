@@ -174,6 +174,25 @@ func authorizedMachineBuildRequest(t *testing.T, path string, body io.Reader) *h
 	return r
 }
 
+func TestMachineBuildUploadsRequireWriteScopeBeforeTakingASlot(t *testing.T) {
+	claims := jwt.MapClaims{
+		"sub":         "user",
+		"iat":         time.Now().Unix(),
+		"exp":         time.Now().Add(time.Hour).Unix(),
+		"permissions": []string{"build:read"},
+	}
+	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(machineBuildTestSecret))
+	require.NoError(t, err)
+	called := false
+	handler := LimitMachineBuildBody(machineBuildTestSecret)(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called = true }))
+	r := httptest.NewRequest(http.MethodPost, "/builds", nil)
+	r.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, r)
+	require.Equal(t, http.StatusForbidden, w.Code)
+	require.False(t, called, "read-only token must be rejected before upload processing")
+}
+
 func TestMachineBuildUploadsRequireAuthBeforeTakingASlot(t *testing.T) {
 	reached := false
 	handler := LimitMachineBuildBody(machineBuildTestSecret)(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {

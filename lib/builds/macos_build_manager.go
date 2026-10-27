@@ -139,8 +139,16 @@ func (m *manager) admitMachineBuild(req *CreateBuildRequest, sourceData []byte) 
 }
 
 // enqueueMachineBuild queues a machine build whose source is already staged.
+func machineBuildSerialKey(req CreateBuildRequest) string {
+	ref, err := images.ParseNormalizedRef(req.MachineBaseImage)
+	if err != nil || !ref.IsDigest() {
+		return "machine:" + req.MachineBaseImage
+	}
+	return "machine:" + ref.Digest().String()
+}
+
 func (m *manager) enqueueMachineBuild(meta *buildMetadata, req CreateBuildRequest, policy *BuildPolicy) *Build {
-	queuePos := m.queue.EnqueueSerial(meta.ID, req, req.BuilderID, func() {
+	queuePos := m.queue.EnqueueSerial(meta.ID, req, machineBuildSerialKey(req), func() {
 		m.runBuild(context.Background(), meta.ID, req, policy)
 	})
 	build := meta.toBuild()
@@ -160,8 +168,7 @@ func removeMachineWorkspaces(buildDir string) {
 	}
 }
 
-// removeMachineSource deletes a machine build's staged source once its image is
-// ready. It stays until then so recovery can rebuild an interrupted job.
+// removeMachineSource deletes a machine build's staged source after the job is terminal.
 func (m *manager) removeMachineSource(id string) {
 	if err := os.Remove(filepath.Join(m.paths.BuildSourceDir(id), "source.tar.gz")); err != nil && !errors.Is(err, os.ErrNotExist) {
 		m.logger.Warn("failed to remove machine build source", "id", id, "error", err)

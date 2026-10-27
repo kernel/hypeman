@@ -63,6 +63,29 @@ func TestMachineOnlyStartRecoversInterruptedBuilds(t *testing.T) {
 	}
 }
 
+func TestRecoveryCleansCancelledMachineBuildSource(t *testing.T) {
+	f := newMachineFixture()
+	config := DefaultConfig()
+	config.MachineBuild = &MachineBuildBackend{Driver: f, Publisher: &machineJobPublisher{fixture: f}}
+	api, err := NewManager(paths.New(t.TempDir()), config, noPriorBuilder{}, nil, nil, machineJobImages{fixture: f}, nil, nil, nil)
+	require.NoError(t, err)
+	m := api.(*manager)
+	meta := &buildMetadata{
+		ID:     "cancelled-build",
+		Status: StatusCancelled,
+		Request: &CreateBuildRequest{
+			MachineBaseImage: "registry/base@" + machineTestDigest,
+		},
+	}
+	require.NoError(t, m.storeMachineSource(context.Background(), meta, []byte("source")))
+	meta.Status = StatusCancelled
+	require.NoError(t, writeMetadata(m.paths, meta))
+
+	m.RecoverPendingBuilds()
+
+	require.NoFileExists(t, filepath.Join(m.paths.BuildSourceDir(meta.ID), "source.tar.gz"))
+}
+
 func TestMachineOnlyStartPreservesBuildsWhenBackendDisabled(t *testing.T) {
 	config := DefaultConfig()
 	config.MachineBuildOnly = true

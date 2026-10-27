@@ -10,6 +10,7 @@ import (
 	"github.com/kernel/hypeman/lib/builds"
 	"github.com/kernel/hypeman/lib/images"
 	mw "github.com/kernel/hypeman/lib/middleware"
+	"github.com/kernel/hypeman/lib/scopes"
 )
 
 // maxConcurrentMachineBuildUploads bounds how many machine build bodies, each up
@@ -22,7 +23,7 @@ const maxConcurrentMachineBuildUploads = 4
 func LimitMachineBuildBody(jwtSecret string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		uploads := make(chan struct{}, maxConcurrentMachineBuildUploads)
-		upload := mw.JwtAuth(jwtSecret)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upload := mw.JwtAuth(jwtSecret)(scopes.RequireScope(scopes.BuildWrite)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			select {
 			case uploads <- struct{}{}:
 				defer func() { <-uploads }()
@@ -34,7 +35,7 @@ func LimitMachineBuildBody(jwtSecret string) func(http.Handler) http.Handler {
 			}
 			r.Body = http.MaxBytesReader(w, r.Body, 65<<20)
 			next.ServeHTTP(w, r)
-		}))
+		})))
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method == http.MethodPost && r.URL.Path == "/builds" {
 				upload.ServeHTTP(w, r)

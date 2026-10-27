@@ -497,18 +497,18 @@ func (m *manager) CreateBuild(ctx context.Context, req CreateBuildRequest, sourc
 		CreatedAt: time.Now(),
 	}
 
-	// Write initial metadata
-	if err := writeMetadata(m.paths, meta); err != nil {
-		return nil, fmt.Errorf("write metadata: %w", err)
-	}
-
 	if req.MachineBaseImage != "" {
-		// Machine builds publish with their own scoped token, not a builder config.
+		// Stage verified input before making the job visible to recovery.
 		if err := m.storeMachineSource(ctx, meta, sourceData); err != nil {
 			deleteBuild(m.paths, id)
 			return nil, err
 		}
 		return m.enqueueMachineBuild(meta, req, policy), nil
+	}
+
+	// Write initial metadata
+	if err := writeMetadata(m.paths, meta); err != nil {
+		return nil, fmt.Errorf("write metadata: %w", err)
 	}
 
 	// Store source data
@@ -710,6 +710,12 @@ func (m *manager) runBuild(ctx context.Context, id string, req CreateBuildReques
 	if req.MachineBaseImage != "" {
 		m.machineBuilds.Store(id, &machineBuildControl{cancel: cancel})
 		defer m.machineBuilds.Delete(id)
+		defer func() {
+			meta, err := readMetadata(m.paths, id)
+			if err == nil && (meta.Status == StatusReady || meta.Status == StatusFailed || meta.Status == StatusCancelled) {
+				m.removeMachineSource(id)
+			}
+		}()
 	}
 	m.updateStatus(id, StatusBuilding, nil)
 
@@ -813,9 +819,6 @@ func (m *manager) runBuild(ctx context.Context, id string, req CreateBuildReques
 	duration = time.Since(start)
 	durationMS = duration.Milliseconds()
 
-	if req.MachineBaseImage != "" {
-		m.removeMachineSource(id)
-	}
 	m.updateBuildComplete(id, StatusReady, &result.ImageDigest, nil, &result.Provenance, &durationMS)
 
 	// Update with image ref
@@ -1493,6 +1496,29 @@ func (m *manager) StreamBuildEvents(ctx context.Context, id string, follow bool)
 
 // RecoverPendingBuilds recovers builds that were interrupted on restart
 func (m *manager) RecoverPendingBuilds() {
+	all, err := listAllBuilds(m.paths)
+	if err != nil {
+		m.logger.Error("list builds for machine cleanup", "error", err)
+		return
+	}
+	for _, meta := range all {
+		if meta.Request == nil || meta.Request.MachineBaseImage == "" {
+			continue
+		}
+		switch meta.Status {
+		case StatusReady, StatusFailed:
+			m.removeMachineSource(meta.ID)
+		case StatusCancelled:
+			if m.config.MachineBuild != nil {
+				if err := m.reapPriorMachineBuilder(context.Background(), meta.ID); err != nil {
+					m.logger.Error("failed to reap cancelled machine build", "id", meta.ID, "error", err)
+					continue
+				}
+			}
+			m.removeMachineSource(meta.ID)
+		}
+	}
+
 	pending, err := listPendingBuilds(m.paths)
 	if err != nil {
 		m.logger.Error("list pending builds for recovery", "error", err)
@@ -1519,7 +1545,11 @@ func (m *manager) RecoverPendingBuilds() {
 				continue
 			}
 
-			m.queue.EnqueueSerial(meta.ID, *meta.Request, meta.Request.BuilderID, func() {
+			serialKey := meta.Request.BuilderID
+			if meta.Request.MachineBaseImage != "" {
+				serialKey = machineBuildSerialKey(*meta.Request)
+			}
+			m.queue.EnqueueSerial(meta.ID, *meta.Request, serialKey, func() {
 				policy := DefaultBuildPolicy()
 				if meta.Request.BuildPolicy != nil {
 					policy = *meta.Request.BuildPolicy

@@ -861,20 +861,27 @@ func intPtr(v int) *int {
 
 // validateMacOSBuilds enforces the experimental machine-build registry boundary.
 func (c *Config) validateMacOSBuilds() error {
-	if c.MacOSBuilds && !c.MacOSOnly {
+	if !c.MacOSBuilds {
+		return nil
+	}
+	if !c.MacOSOnly {
 		return fmt.Errorf("macos_builds requires macos_only")
 	}
-	if c.MacOSBuilds && c.Registry.CACertFile != "" {
+	if c.Registry.CACertFile != "" {
 		return fmt.Errorf("macos_builds requires system-trusted registry TLS or loopback HTTP")
 	}
-	if c.MacOSBuilds && c.Registry.Insecure && strings.HasPrefix(c.Registry.URL, "https://") {
+
+	u, err := url.Parse(c.Registry.URL)
+	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
+		return fmt.Errorf("macos_builds requires an explicit registry URL without credentials, path, query, or fragment")
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("macos_builds registry URL must use http or https")
+	}
+	if u.Scheme == "https" && c.Registry.Insecure {
 		return fmt.Errorf("macos_builds requires system-trusted registry TLS or loopback HTTP")
 	}
-	if c.MacOSBuilds && strings.HasPrefix(c.Registry.URL, "http://") {
-		u, err := url.Parse(c.Registry.URL)
-		if err != nil {
-			return fmt.Errorf("macos_builds registry URL: %w", err)
-		}
+	if u.Scheme == "http" {
 		host := u.Hostname()
 		if host != "localhost" && !net.ParseIP(host).IsLoopback() {
 			return fmt.Errorf("macos_builds plaintext registry must be loopback")
