@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kernel/hypeman/lib/paths"
 	"github.com/stretchr/testify/require"
 )
 
@@ -15,13 +14,8 @@ func TestMachineOnlyStartRecoversInterruptedBuilds(t *testing.T) {
 	for _, status := range []string{StatusQueued, StatusBuilding, StatusPushing} {
 		t.Run(status, func(t *testing.T) {
 			f := newMachineFixture()
-			config := DefaultConfig()
-			config.MachineBuildOnly = true
-			config.BuilderImage = "linux-builder-must-not-start"
-			config.MachineBuild = &MachineBuildBackend{Driver: f, Publisher: &machineJobPublisher{fixture: f}}
-			api, err := NewManager(paths.New(t.TempDir()), config, noPriorBuilder{}, nil, nil, machineJobImages{fixture: f}, nil, nil, nil)
-			require.NoError(t, err)
-			m := api.(*manager)
+			m := newMachineTestManager(t, f, &machineJobPublisher{fixture: f}, nil, true)
+			m.config.BuilderImage = "linux-builder-must-not-start"
 			policy := &BuildPolicy{}
 			require.NoError(t, normalizeMachinePolicy(policy))
 			meta := &buildMetadata{ID: "build-test", Status: status, Request: &CreateBuildRequest{MachineBaseImage: "registry/base@" + machineTestDigest, BuildPolicy: policy}}
@@ -65,11 +59,7 @@ func TestMachineOnlyStartRecoversInterruptedBuilds(t *testing.T) {
 
 func TestRecoveryCleansCancelledMachineBuildSource(t *testing.T) {
 	f := newMachineFixture()
-	config := DefaultConfig()
-	config.MachineBuild = &MachineBuildBackend{Driver: f, Publisher: &machineJobPublisher{fixture: f}}
-	api, err := NewManager(paths.New(t.TempDir()), config, noPriorBuilder{}, nil, nil, machineJobImages{fixture: f}, nil, nil, nil)
-	require.NoError(t, err)
-	m := api.(*manager)
+	m := newMachineTestManager(t, f, &machineJobPublisher{fixture: f}, nil, false)
 	meta := &buildMetadata{
 		ID:     "cancelled-build",
 		Status: StatusCancelled,
@@ -87,11 +77,7 @@ func TestRecoveryCleansCancelledMachineBuildSource(t *testing.T) {
 }
 
 func TestMachineOnlyStartPreservesBuildsWhenBackendDisabled(t *testing.T) {
-	config := DefaultConfig()
-	config.MachineBuildOnly = true
-	api, err := NewManager(paths.New(t.TempDir()), config, nil, nil, nil, nil, nil, nil, nil)
-	require.NoError(t, err)
-	m := api.(*manager)
+	m := newMachineTestManager(t, nil, nil, nil, true)
 	require.NoError(t, writeMetadata(m.paths, &buildMetadata{ID: "disabled", Status: StatusBuilding, Request: &CreateBuildRequest{MachineBaseImage: "registry/base@" + machineTestDigest}}))
 	require.NoError(t, m.Start(context.Background()))
 	require.Equal(t, 0, m.queue.ActiveCount())

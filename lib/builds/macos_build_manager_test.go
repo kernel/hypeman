@@ -34,6 +34,22 @@ func (m machineJobImages) GetImage(ctx context.Context, ref string) (*images.Ima
 
 func (m machineJobImages) WaitForReady(context.Context, string) error { return nil }
 
+func newMachineTestManager(t *testing.T, f *machineFixture, publisher MachineBuildPublisher, imageManager images.Manager, machineOnly bool) *manager {
+	t.Helper()
+	config := DefaultConfig()
+	config.RegistrySecret = "synthetic-test-secret"
+	config.MachineBuildOnly = machineOnly
+	if f != nil && publisher != nil {
+		config.MachineBuild = &MachineBuildBackend{Driver: f, Publisher: publisher}
+	}
+	if imageManager == nil && f != nil {
+		imageManager = machineJobImages{fixture: f}
+	}
+	api, err := NewManager(paths.New(t.TempDir()), config, noPriorBuilder{}, nil, nil, imageManager, nil, nil, nil)
+	require.NoError(t, err)
+	return api.(*manager)
+}
+
 type machineJobPublisher struct {
 	fixture     *machineFixture
 	publishedID string
@@ -58,12 +74,7 @@ func (p *machineJobPublisher) Publish(ctx context.Context, id, bundle string) (M
 func TestMachineBuildUsesSharedQueueStatusAndSourceLifecycle(t *testing.T) {
 	f := newMachineFixture()
 	publisher := &machineJobPublisher{fixture: f}
-	config := DefaultConfig()
-	config.RegistrySecret = "synthetic-test-secret"
-	config.MachineBuild = &MachineBuildBackend{Driver: f, Publisher: publisher}
-	api, err := NewManager(paths.New(t.TempDir()), config, noPriorBuilder{}, nil, nil, machineJobImages{fixture: f}, nil, nil, nil)
-	require.NoError(t, err)
-	m := api.(*manager)
+	m := newMachineTestManager(t, f, publisher, nil, false)
 	publisher.sourcePath = func(id string) string { return filepath.Join(m.paths.BuildSourceDir(id), "source.tar.gz") }
 	source := []byte("synthetic compressed-source bytes")
 	sum := sha256.Sum256(source)
@@ -97,12 +108,8 @@ func TestMachineBuildSerializesByBaseDigest(t *testing.T) {
 }
 
 func TestMachineBuildAdmissionAndSourceHash(t *testing.T) {
-	config := DefaultConfig()
-	config.RegistrySecret = "synthetic-test-secret"
-	api, err := NewManager(paths.New(t.TempDir()), config, nil, nil, nil, nil, nil, nil, nil)
-	require.NoError(t, err)
-	m := api.(*manager)
-	_, err = m.CreateBuild(context.Background(), CreateBuildRequest{MachineBaseImage: "registry/base@" + machineTestDigest}, []byte("source"))
+	m := newMachineTestManager(t, nil, nil, nil, false)
+	_, err := m.CreateBuild(context.Background(), CreateBuildRequest{MachineBaseImage: "registry/base@" + machineTestDigest}, []byte("source"))
 	require.ErrorContains(t, err, "not configured")
 	f := newMachineFixture()
 	m.config.MachineBuild = &MachineBuildBackend{Driver: f, Publisher: f}

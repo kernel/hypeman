@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/instances"
-	"github.com/kernel/hypeman/lib/paths"
 	"github.com/stretchr/testify/require"
 )
 
@@ -25,12 +24,7 @@ func TestMachineFailureUsesSharedFailedStatusWithoutPublication(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newMachineFixture()
 			f.fail = tc.phase
-			config := DefaultConfig()
-			config.RegistrySecret = "synthetic-test-secret"
-			config.MachineBuild = &MachineBuildBackend{Driver: f, Publisher: f}
-			api, err := NewManager(paths.New(t.TempDir()), config, noPriorBuilder{}, nil, nil, machineJobImages{fixture: f, resolveErr: tc.resolveErr}, nil, nil, nil)
-			require.NoError(t, err)
-			m := api.(*manager)
+			m := newMachineTestManager(t, f, f, machineJobImages{fixture: f, resolveErr: tc.resolveErr}, false)
 			build, err := m.CreateBuild(context.Background(), CreateBuildRequest{MachineBaseImage: "registry/base@" + machineTestDigest}, []byte("source"))
 			require.NoError(t, err)
 			require.Eventually(t, func() bool {
