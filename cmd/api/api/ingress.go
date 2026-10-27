@@ -36,12 +36,6 @@ func (s *ApiService) ListIngresses(ctx context.Context, request oapi.ListIngress
 
 // CreateIngress creates a new ingress resource
 func (s *ApiService) CreateIngress(ctx context.Context, request oapi.CreateIngressRequestObject) (oapi.CreateIngressResponseObject, error) {
-	if s.Config != nil && s.Config.MacOSOnly {
-		return oapi.CreateIngress501JSONResponse{Code: "unsupported", Message: "ingress is not implemented in macOS-only mode"}, nil
-	}
-	if reason := s.macOSIngressTargetReason(ctx, request.Body.Rules); reason != "" {
-		return oapi.CreateIngress501JSONResponse{Code: "unsupported", Message: reason}, nil
-	}
 	log := logger.FromContext(ctx)
 
 	// Convert OAPI request to domain request

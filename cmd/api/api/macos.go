@@ -10,8 +10,6 @@ import (
 	"runtime"
 
 	"github.com/kernel/hypeman/lib/images"
-	"github.com/kernel/hypeman/lib/ingress"
-	"github.com/kernel/hypeman/lib/instances"
 	"github.com/kernel/hypeman/lib/oapi"
 )
 
@@ -33,34 +31,6 @@ func (s *ApiService) isMacOSImage(ctx context.Context, name string) (bool, error
 		return false, err
 	}
 	return img.MacOS != nil, nil
-}
-
-// macOSIngressTargetReason refuses routes to macOS guests. Their addresses are NAT
-// leases, and no ingress path has been proven for them, so mixed-mode servers must
-// not route public traffic to them. A target that cannot be looked up is refused.
-// Pattern hostnames resolve their target per request, where the ingress resolver
-// refuses macOS guests, and a missing target is left to the ingress manager's 400.
-func (s *ApiService) macOSIngressTargetReason(ctx context.Context, rules []oapi.IngressRule) string {
-	if !macOSHost || s.InstanceManager == nil {
-		return ""
-	}
-	for _, rule := range rules {
-		match := ingress.IngressMatch{Hostname: rule.Match.Hostname}
-		if match.IsPattern() {
-			continue
-		}
-		inst, err := s.InstanceManager.GetInstance(ctx, rule.Target.Instance)
-		if errors.Is(err, instances.ErrNotFound) {
-			continue
-		}
-		if err != nil {
-			return "cannot verify ingress target is not a macOS guest"
-		}
-		if inst.MacOS != nil {
-			return "ingress cannot target macOS guests"
-		}
-	}
-	return ""
 }
 
 // Linux defaults for CreateInstanceRequest in openapi.yaml.

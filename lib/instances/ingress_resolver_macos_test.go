@@ -17,10 +17,15 @@ func (f fakeMinPrefixManager) getInstanceWithMinIDPrefix(context.Context, string
 	return f.inst, nil
 }
 
-func TestIngressResolverRefusesMacOSGuest(t *testing.T) {
+// A running macOS guest resolves to its vmnet lease, which the instance reports as its IP.
+func TestIngressResolverResolvesMacOSGuestLease(t *testing.T) {
 	inst := &Instance{StoredMetadata: StoredMetadata{Id: "mac", NetworkEnabled: true, IP: "192.168.64.2", MacOS: &images.MacOSImage{}}}
 	r := &IngressResolver{manager: fakeMinPrefixManager{inst: inst}}
-	_, err := r.ResolveInstanceIP(context.Background(), "mac")
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "macOS guest")
+	ip, err := r.ResolveInstanceIP(context.Background(), "mac")
+	require.NoError(t, err)
+	require.Equal(t, "192.168.64.2", ip)
+
+	inst.IP = ""
+	_, err = r.ResolveInstanceIP(context.Background(), "mac")
+	require.ErrorContains(t, err, "no IP assigned", "a guest without a current lease has no target")
 }

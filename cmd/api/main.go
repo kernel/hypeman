@@ -407,15 +407,11 @@ func run() error {
 
 	// Initialize ingress manager (starts Caddy daemon and DNS server for dynamic upstreams)
 	logger.Info("Initializing ingress manager...")
-	if !cfg.MacOSOnly {
-		if err := app.IngressManager.Initialize(app.Ctx); err != nil {
-			logger.Error("failed to initialize ingress manager", "error", err)
-			return fmt.Errorf("initialize ingress manager: %w", err)
-		}
-		logger.Info("Ingress manager initialized", "listen_addr", cfg.Caddy.ListenAddress, "admin", app.IngressManager.AdminURL())
-	} else {
-		logger.Info("macOS-only mode: ingress is unsupported; skipping Caddy and DNS startup")
+	if err := app.IngressManager.Initialize(app.Ctx); err != nil {
+		logger.Error("failed to initialize ingress manager", "error", err)
+		return fmt.Errorf("initialize ingress manager: %w", err)
 	}
+	logger.Info("Ingress manager initialized", "listen_addr", cfg.Caddy.ListenAddress, "admin", app.IngressManager.AdminURL())
 
 	// Create router
 	r := chi.NewRouter()
