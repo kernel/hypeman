@@ -38,8 +38,30 @@ func (m *manager) executeMachineBuild(ctx context.Context, id string, req Create
 	if backend == nil {
 		return nil, fmt.Errorf("machine build backend is not configured")
 	}
+	if err := m.reconcileMachineStorage(ctx); err != nil {
+		return nil, machineFailure("recover_storage", err)
+	}
 	if err := m.reapPriorMachineBuilder(ctx, id); err != nil {
 		return nil, machineFailure("reap_prior_builder", err)
+	}
+	if backend.Storage != nil {
+		if backend.Storage.quarantined(id) {
+			// A prior manifest submission may have outlived cancellation. Do not
+			// release its disk budget while the local image pipeline is running.
+			imageRef := "builds/" + id
+			prior, err := m.imageManager.GetImage(ctx, imageRef)
+			if err != nil && !errors.Is(err, images.ErrNotFound) {
+				return nil, machineFailure("recover_image_storage", err)
+			}
+			if err == nil && prior.Status != images.StatusReady && prior.Status != images.StatusFailed {
+				if err := m.imageManager.WaitForReady(ctx, imageRef); err != nil {
+					return nil, machineFailure("recover_image_storage", err)
+				}
+			}
+		}
+		if err := backend.Storage.reaped(id); err != nil {
+			return nil, machineFailure("recover_storage", err)
+		}
 	}
 	base, err := m.imageManager.GetImage(ctx, req.MachineBaseImage)
 	if err != nil {
@@ -52,7 +74,12 @@ func (m *manager) executeMachineBuild(ctx context.Context, id string, req Create
 	// An interrupted attempt skips its own cleanup; drop its workspace first.
 	removeMachineWorkspaces(m.paths.BuildDir(id))
 	defer removeMachineWorkspaces(m.paths.BuildDir(id))
-	result, err := backend.runPrepared(ctx, MachineBuildRequest{ID: id, BaseImage: req.MachineBaseImage, SourceHash: req.SourceHash, Policy: *policy, onStarted: func(instanceID string) error { return m.recordMachineBuilder(id, instanceID) }}, base, sourcePath, filepath.Dir(filepath.Dir(sourcePath)))
+	job := MachineBuildRequest{
+		ID: id, BaseImage: req.MachineBaseImage, SourceHash: req.SourceHash, Policy: *policy,
+		onStarted:   func(instanceID string) error { return m.recordMachineBuilder(id, instanceID) },
+		onPublished: func(ctx context.Context) error { return m.imageManager.WaitForReady(ctx, "builds/"+id) },
+	}
+	result, err := backend.runPrepared(ctx, job, base, sourcePath, filepath.Dir(filepath.Dir(sourcePath)))
 	if err != nil {
 		return nil, err
 	}
@@ -61,6 +88,53 @@ func (m *manager) executeMachineBuild(ctx context.Context, id string, req Create
 		return nil, fmt.Errorf("machine publication is outside the authorized job repository")
 	}
 	return &BuildResult{Success: true, ImageDigest: result.Publication.Digest, ImageRef: result.Publication.Reference, Provenance: result.Provenance}, nil
+}
+
+// reconcileMachineStorage releases terminal jobs' reservations only after both
+// their VM and asynchronous image work are gone. It never deletes storage or
+// stops another job to make capacity available.
+func (m *manager) reconcileMachineStorage(ctx context.Context) error {
+	storage := m.config.MachineBuild.Storage
+	if storage == nil {
+		return nil
+	}
+	for _, id := range storage.quarantinedIDs() {
+		meta, err := readMetadata(m.paths, id)
+		if err != nil {
+			return err
+		}
+		if meta.Status != StatusReady && meta.Status != StatusFailed && meta.Status != StatusCancelled {
+			continue
+		}
+		prior := machineBuilderName(id)
+		if meta.BuilderInstance != nil {
+			prior = *meta.BuilderInstance
+		}
+		if _, err := m.instanceManager.GetInstance(ctx, prior); !errors.Is(err, instances.ErrNotFound) {
+			if err != nil {
+				return err
+			}
+			continue
+		}
+		workspaces, err := filepath.Glob(filepath.Join(m.paths.BuildDir(id), "machine-build-*"))
+		if err != nil {
+			return err
+		}
+		if len(workspaces) != 0 {
+			continue
+		}
+		image, err := m.imageManager.GetImage(ctx, "builds/"+id)
+		if err != nil && !errors.Is(err, images.ErrNotFound) {
+			return err
+		}
+		if err == nil && image.Status != images.StatusReady && image.Status != images.StatusFailed {
+			continue
+		}
+		if err := storage.reaped(id); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // reapPriorMachineBuilder removes the builder recorded by an interrupted attempt of
@@ -103,7 +177,16 @@ func (m *manager) storeMachineSource(ctx context.Context, meta *buildMetadata, d
 	if err := os.MkdirAll(sourceDir, 0700); err != nil {
 		return fmt.Errorf("store source: %w", err)
 	}
-	hash, err := stageBuildSource(ctx, bytes.NewReader(data), filepath.Join(sourceDir, "source.tar.gz"), int64(len(data)))
+	if m.config.MachineBuild == nil || m.config.MachineBuild.Storage == nil {
+		return fmt.Errorf("machine build storage limits are not configured")
+	}
+	var hash string
+	path := filepath.Join(sourceDir, "source.tar.gz")
+	err := m.config.MachineBuild.Storage.stageSource(path, int64(len(data)), func() error {
+		var err error
+		hash, err = stageBuildSource(ctx, bytes.NewReader(data), path, int64(len(data)))
+		return err
+	})
 	if err != nil {
 		return fmt.Errorf("store source: %w", err)
 	}
@@ -122,6 +205,9 @@ func (m *manager) storeMachineSource(ctx context.Context, meta *buildMetadata, d
 func (m *manager) admitMachineBuild(req *CreateBuildRequest, sourceData []byte) (*BuildPolicy, error) {
 	if m.config.MachineBuild == nil || m.config.MachineBuild.Driver == nil || m.config.MachineBuild.Publisher == nil {
 		return nil, fmt.Errorf("machine build backend is not configured")
+	}
+	if m.config.MachineBuild.Storage == nil {
+		return nil, fmt.Errorf("machine build storage limits are not configured")
 	}
 	if req.Dockerfile != "" || req.BuilderID != "" || len(req.BuildArgs) != 0 || len(req.Secrets) != 0 || req.CacheScope != "" || req.GlobalCacheKey != "" || req.IsAdminBuild {
 		return nil, fmt.Errorf("machine builds do not support Linux builder/cache/secret options")

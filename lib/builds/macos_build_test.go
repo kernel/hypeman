@@ -122,7 +122,7 @@ func (f *machineFixture) Publish(ctx context.Context, id, root string) (MachineP
 }
 func machineTestRunner(t *testing.T, f *machineFixture) *machineRunnerFixture {
 	t.Helper()
-	return &machineRunnerFixture{MachineBuildBackend: MachineBuildBackend{Driver: f, Publisher: f}, WorkDir: t.TempDir()}
+	return &machineRunnerFixture{MachineBuildBackend: MachineBuildBackend{Driver: f, Publisher: f, Storage: testMachineStorage(t)}, WorkDir: t.TempDir()}
 }
 func machineTestRequest() MachineBuildRequest {
 	return MachineBuildRequest{ID: "build-test", BaseImage: "localhost/macos@" + machineTestDigest}

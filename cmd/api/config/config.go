@@ -153,6 +153,9 @@ type ImagesConfig struct {
 // BuildConfig holds source-to-image build system settings.
 type BuildConfig struct {
 	MaxConcurrentSourceBuilds int    `koanf:"max_concurrent_source_builds"`
+	MachineMaxConcurrent      int    `koanf:"machine_max_concurrent"`
+	MachineMaxExportBytes     int64  `koanf:"machine_max_export_bytes"`
+	MachineMinFreeBytes       int64  `koanf:"machine_min_free_bytes"`
 	BuilderImage              string `koanf:"builder_image"`
 	Timeout                   int    `koanf:"timeout"`
 	SecretsDir                string `koanf:"secrets_dir"`
@@ -411,6 +414,9 @@ func defaultConfig() *Config {
 
 		Build: BuildConfig{
 			MaxConcurrentSourceBuilds: 2,
+			MachineMaxConcurrent:      1,
+			MachineMaxExportBytes:     128 << 30,
+			MachineMinFreeBytes:       10 << 30,
 			BuilderImage:              "", // empty = build from embedded Dockerfile on first run
 			Timeout:                   600,
 			SecretsDir:                "",
@@ -866,6 +872,9 @@ func (c *Config) validateMacOSBuilds() error {
 	}
 	if !c.MacOSOnly {
 		return fmt.Errorf("macos_builds requires macos_only")
+	}
+	if c.Build.MachineMaxConcurrent < 1 || c.Build.MachineMaxExportBytes <= 1<<20 || c.Build.MachineMinFreeBytes < 1 || c.Build.MachineMaxExportBytes > (int64(1<<63-1)-c.Build.MachineMinFreeBytes-(256<<20))/4 {
+		return fmt.Errorf("macos_builds requires positive, bounded machine build storage limits")
 	}
 	if c.Registry.CACertFile != "" {
 		return fmt.Errorf("macos_builds requires system-trusted registry TLS or loopback HTTP")

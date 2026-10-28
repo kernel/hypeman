@@ -454,12 +454,24 @@ func ProvideBuildManager(p *paths.Paths, cfg *config.Config, instanceManager ins
 		if !cfg.MacOSOnly || registryURL == "" {
 			return nil, fmt.Errorf("machine builds require macOS-only mode and an explicit host registry URL")
 		}
+		if cfg.Build.MachineMaxConcurrent < buildConfig.MaxConcurrentBuilds {
+			buildConfig.MaxConcurrentBuilds = cfg.Build.MachineMaxConcurrent
+		}
 		workDir := filepath.Join(p.BuildsDir(), "machine-work")
 		if err := os.MkdirAll(workDir, 0700); err != nil {
 			return nil, err
 		}
+		storage, err := builds.NewMachineBuildStorage(cfg.DataDir, builds.MachineBuildLimits{
+			MaxConcurrent:  cfg.Build.MachineMaxConcurrent,
+			MaxExportBytes: cfg.Build.MachineMaxExportBytes,
+			MinFreeBytes:   cfg.Build.MachineMinFreeBytes,
+		})
+		if err != nil {
+			return nil, err
+		}
 		buildConfig.MachineBuild = &builds.MachineBuildBackend{
-			Driver:    &builds.GuestMachineBuildDriver{Instances: instanceManager, WorkDir: workDir},
+			Storage:   storage,
+			Driver:    &builds.GuestMachineBuildDriver{Instances: instanceManager, WorkDir: workDir, Paths: p, Storage: storage},
 			Publisher: &builds.StreamingMachinePublisher{RegistryURL: registryURL, Tokens: builds.NewRegistryTokenGenerator(cfg.JwtSecret)},
 		}
 	}
