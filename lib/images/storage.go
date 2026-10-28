@@ -275,6 +275,11 @@ func readMetadataAt(layout imageLayout) (*imageMetadata, error) {
 			}
 			return nil, fmt.Errorf("stat disk image: %w", err)
 		}
+		if meta.MacOS != nil {
+			if err := validateStoredMacOSImage(layout, &meta); err != nil {
+				return nil, err
+			}
+		}
 	}
 
 	return &meta, nil
@@ -296,6 +301,13 @@ func promoteImageToContent(p *paths.Paths, sourceRepository, digestHex string, s
 
 	sourceLayout := resolveImageLayout(p, sourceRepository, digestHex)
 	sourceDiskPath := sourceLayout.disk
+	targetDiskPath := p.ImageContentPath(digestHex)
+	if sourceMeta.MacOS != nil {
+		if err := validateStoredMacOSImage(sourceLayout, sourceMeta); err != nil {
+			return err
+		}
+		targetDiskPath = filepath.Join(p.ImageContentDir(digestHex), machineDiskFile)
+	}
 	if _, err := os.Stat(sourceDiskPath); err != nil {
 		return fmt.Errorf("stat source disk: %w", err)
 	}
@@ -307,10 +319,17 @@ func promoteImageToContent(p *paths.Paths, sourceRepository, digestHex string, s
 	if err := writeMetadataFile(p.ImageContentMetadata(digestHex), &pendingMeta); err != nil {
 		return fmt.Errorf("write content metadata: %w", err)
 	}
-	if err := installAtomically(p.ImageContentPath(digestHex), func(path string) error {
+	if err := installAtomically(targetDiskPath, func(path string) error {
 		return os.Link(sourceDiskPath, path)
 	}); err != nil {
 		return fmt.Errorf("link source disk: %w", err)
+	}
+	if sourceMeta.MacOS != nil {
+		if err := installAtomically(filepath.Join(p.ImageContentDir(digestHex), "aux.img"), func(path string) error {
+			return os.Link(filepath.Join(sourceLayout.dir, "aux.img"), path)
+		}); err != nil {
+			return fmt.Errorf("link auxiliary storage: %w", err)
+		}
 	}
 	sourceManifestPath := filepath.Join(sourceLayout.dir, "manifest.json")
 	if _, err := os.Stat(sourceManifestPath); err == nil {
