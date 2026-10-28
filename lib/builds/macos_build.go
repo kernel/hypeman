@@ -18,11 +18,12 @@ import (
 // or an HTTP API. The normal build manager owns ID, source staging and publish
 // authorization. A concrete driver must require a provisioned system agent.
 type MachineBuildRequest struct {
-	ID         string
-	BaseImage  string             // Installed darwin/arm64 image, pinned by sha256 digest.
-	SourceHash string             // Optional expected lowercase SHA256 of the source archive.
-	Policy     BuildPolicy        // Zero CPU/memory inherit the base machine's exact resources.
-	onStarted  func(string) error // Normal manager records the owned builder before provisioning.
+	ID          string
+	BaseImage   string                      // Installed darwin/arm64 image, pinned by sha256 digest.
+	SourceHash  string                      // Optional expected lowercase SHA256 of the source archive.
+	Policy      BuildPolicy                 // Zero CPU/memory inherit the base machine's exact resources.
+	onStarted   func(string) error          // Normal manager records the owned builder before provisioning.
+	onPublished func(context.Context) error // Hold storage until the shared image pipeline is terminal.
 }
 
 type MachineStopReceipt = instances.MacOSBuildExportReceipt
@@ -61,6 +62,7 @@ type MachineBuildPublisher interface {
 type MachineBuildBackend struct {
 	Driver    MachineBuildDriver
 	Publisher MachineBuildPublisher
+	Storage   *MachineBuildStorage
 }
 
 // machinePhaseError keeps potentially secret-bearing guest/command errors out of
@@ -146,11 +148,30 @@ func (r *MachineBuildBackend) runPrepared(ctx context.Context, req MachineBuildR
 	if e = policy.Validate(); e != nil {
 		return nil, e
 	}
+	if r.Storage == nil {
+		return nil, fmt.Errorf("machine build storage limits are not configured")
+	}
+	if e = r.Storage.reserve(ctx, req.ID, workDir); e != nil {
+		return nil, machineFailure("storage_admission", e)
+	}
+	storageClean := true
+	defer func() {
+		if releaseErr := r.Storage.finish(req.ID, storageClean); releaseErr != nil {
+			err = errors.Join(err, machineFailure("release_storage", releaseErr))
+			result = nil
+		}
+	}()
 	workspace, e := os.MkdirTemp(workDir, "machine-build-")
 	if e != nil {
 		return nil, machineFailure("workspace", e)
 	}
-	defer os.RemoveAll(workspace)
+	defer func() {
+		if cleanupErr := os.RemoveAll(workspace); cleanupErr != nil {
+			storageClean = false
+			err = errors.Join(err, machineFailure("cleanup_workspace", cleanupErr))
+			result = nil
+		}
+	}()
 	if e = verifyBuildSource(ctx, sourcePath, req.SourceHash); e != nil {
 		return nil, machineFailure("verify_source", e)
 	}
@@ -172,6 +193,7 @@ func (r *MachineBuildBackend) runPrepared(ctx context.Context, req MachineBuildR
 			receipt, stopErr := session.Abort(cleanup)
 			stopped = receipt.VMMExited
 			if !stopped {
+				storageClean = false
 				err = errors.Join(err, machineFailure("quarantine_unconfirmed_vmm_exit", stopErr))
 				result = nil
 				return
@@ -179,6 +201,7 @@ func (r *MachineBuildBackend) runPrepared(ctx context.Context, req MachineBuildR
 		}
 		if !destroyed {
 			if destroyErr := session.Destroy(cleanup); destroyErr != nil {
+				storageClean = false
 				err = errors.Join(err, machineFailure("cleanup", destroyErr))
 				result = nil
 			}
@@ -208,8 +231,14 @@ func (r *MachineBuildBackend) runPrepared(ctx context.Context, req MachineBuildR
 	if e = os.Mkdir(bundle, 0700); e != nil {
 		return nil, machineFailure("export", e)
 	}
+	if e = r.Storage.checkHeadroom(); e != nil {
+		return nil, machineFailure("export_headroom", e)
+	}
 	if e = session.Export(ctx, bundle); e != nil {
 		return nil, machineFailure("export", e)
+	}
+	if e = r.Storage.checkBundle(bundle); e != nil {
+		return nil, machineFailure("export_size", e)
 	}
 	if e = validateMachineExport(bundle, base.MacOS); e != nil {
 		return nil, machineFailure("validate_export", e)
@@ -221,6 +250,10 @@ func (r *MachineBuildBackend) runPrepared(ctx context.Context, req MachineBuildR
 	if e = ctx.Err(); e != nil {
 		return nil, e
 	}
+	if e = r.Storage.checkHeadroom(); e != nil {
+		return nil, machineFailure("publish_headroom", e)
+	}
+	storageClean = false // A failed or cancelled publication may still be importing locally.
 	publication, e := r.Publisher.Publish(ctx, req.ID, bundle)
 	if e != nil {
 		return nil, machineFailure("publish", e)
@@ -229,6 +262,12 @@ func (r *MachineBuildBackend) runPrepared(ctx context.Context, req MachineBuildR
 	if e != nil || !output.IsDigest() || !ValidMachineDigest(publication.Digest) || output.Digest() != publication.Digest {
 		return nil, fmt.Errorf("machine publication receipt is unverified")
 	}
+	if req.onPublished != nil {
+		if e = req.onPublished(ctx); e != nil {
+			return nil, machineFailure("image_ready", e)
+		}
+	}
+	storageClean = true
 	return &MachineBuildResult{Publication: publication, Provenance: BuildProvenance{BaseImageDigest: base.Digest, SourceHash: req.SourceHash, Timestamp: time.Now().UTC()}}, nil
 }
 

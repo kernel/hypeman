@@ -6,9 +6,31 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestMachineBuildStorageConfig(t *testing.T) {
+	for _, mutate := range []func(*BuildConfig){
+		func(b *BuildConfig) { b.MachineMaxConcurrent = 0 },
+		func(b *BuildConfig) { b.MachineMaxExportBytes = 0 },
+		func(b *BuildConfig) { b.MachineMinFreeBytes = -1 },
+		func(b *BuildConfig) { b.MachineMaxExportBytes = 1<<63 - 1 },
+		func(b *BuildConfig) { b.MachineMinFreeBytes = 1<<63 - 1 },
+	} {
+		c := defaultConfig()
+		mutate(&c.Build)
+		require.NoError(t, c.validateMacOSBuilds(), "disabled machine limits must not affect Linux")
+		c.MacOSBuilds, c.MacOSOnly = true, true
+		c.Registry.URL = "http://localhost:4973"
+		require.ErrorContains(t, c.validateMacOSBuilds(), "storage limits")
+	}
+	c := defaultConfig()
+	require.Equal(t, 1, c.Build.MachineMaxConcurrent)
+	require.EqualValues(t, 128<<30, c.Build.MachineMaxExportBytes)
+	require.EqualValues(t, 10<<30, c.Build.MachineMinFreeBytes)
+}
+
 func TestMacOSBuildsFailClosedConfiguration(t *testing.T) {
 	require.False(t, (&Config{}).MacOSBuilds)
-	c := Config{MacOSBuilds: true}
+	c := *defaultConfig()
+	c.MacOSBuilds = true
 	require.ErrorContains(t, c.validateMacOSBuilds(), "requires macos_only")
 	c.MacOSOnly = true
 	c.Hypervisor.Default = "vz"

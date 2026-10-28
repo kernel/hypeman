@@ -12,6 +12,7 @@ import (
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/instances"
+	"github.com/kernel/hypeman/lib/paths"
 )
 
 type machineExportManager interface {
@@ -24,6 +25,8 @@ type machineExportManager interface {
 type GuestMachineBuildDriver struct {
 	Instances instances.Manager
 	WorkDir   string
+	Paths     *paths.Paths
+	Storage   *MachineBuildStorage
 }
 
 func (d *GuestMachineBuildDriver) Start(ctx context.Context, name string, base *images.Image, policy BuildPolicy) (MachineBuildSession, error) {
@@ -50,6 +53,28 @@ func (d *GuestMachineBuildDriver) Start(ctx context.Context, name string, base *
 	if err != nil {
 		return nil, err
 	}
+	if d.Storage == nil || d.Paths == nil {
+		return nil, fmt.Errorf("machine storage admission required")
+	}
+	disk, err := images.GetDiskPath(d.Paths, base.Name, base.Digest)
+	if err != nil {
+		return nil, err
+	}
+	if err := d.Storage.sameFilesystem(filepath.Dir(disk)); err != nil {
+		return nil, err
+	}
+	if err := machineStorageSize([]string{disk, filepath.Join(filepath.Dir(disk), "aux.img")}, d.Storage.limits.MaxExportBytes-(1<<20)); err != nil {
+		return nil, err
+	}
+	guestRoot := filepath.Dir(d.Paths.InstanceDir(name))
+	if err := os.MkdirAll(guestRoot, 0700); err != nil {
+		return nil, err
+	}
+	for _, path := range []string{guestRoot, d.WorkDir} {
+		if err := d.Storage.sameFilesystem(path); err != nil {
+			return nil, err
+		}
+	}
 	// Workspaces are named per builder, so one left by an interrupted attempt
 	// of this job is removed here.
 	prefix := "guest-machine-" + name + "-"
@@ -69,7 +94,7 @@ func (d *GuestMachineBuildDriver) Start(ctx context.Context, name string, base *
 		}
 		return nil, err
 	}
-	session := &guestMachineSession{manager: d.Instances, exporter: exporter, instance: inst, workspace: dir, guestDir: "/var/root/hypeman-build-" + inst.Id}
+	session := &guestMachineSession{manager: d.Instances, exporter: exporter, instance: inst, workspace: dir, guestDir: "/var/root/hypeman-build-" + inst.Id, storage: d.Storage, paths: d.Paths}
 	return session, err
 }
 
@@ -80,6 +105,8 @@ type guestMachineSession struct {
 	workspace, guestDir string
 	receipt             MachineStopReceipt
 	sanitized           bool
+	storage             *MachineBuildStorage
+	paths               *paths.Paths
 }
 
 func (s *guestMachineSession) ID() string { return s.instance.Id }
@@ -196,6 +223,17 @@ func (s *guestMachineSession) Abort(ctx context.Context) (MachineStopReceipt, er
 func (s *guestMachineSession) Export(ctx context.Context, destination string) error {
 	if !s.receipt.Graceful || !s.receipt.VMMExited || !s.sanitized {
 		return fmt.Errorf("sanitized strict stop receipt required")
+	}
+	if s.storage == nil || s.paths == nil {
+		return fmt.Errorf("machine storage admission required")
+	}
+	if err := s.storage.sameFilesystem(destination); err != nil {
+		return err
+	}
+	// Guest block writes cannot grow the fixed raw disk. Check logical sizes
+	// before copying; leave room for the bounded platform metadata.
+	if err := machineStorageSize([]string{s.paths.InstanceMacOSBootDisk(s.ID()), filepath.Join(s.instance.DataDir, "mac-aux.img")}, s.storage.limits.MaxExportBytes-(1<<20)); err != nil {
+		return err
 	}
 	return s.exporter.ExportStoppedMacOSBuildInstance(ctx, s.ID(), destination)
 }

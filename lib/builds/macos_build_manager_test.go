@@ -40,7 +40,7 @@ func newMachineTestManager(t *testing.T, f *machineFixture, publisher MachineBui
 	config.RegistrySecret = "synthetic-test-secret"
 	config.MachineBuildOnly = machineOnly
 	if f != nil && publisher != nil {
-		config.MachineBuild = &MachineBuildBackend{Driver: f, Publisher: publisher}
+		config.MachineBuild = &MachineBuildBackend{Driver: f, Publisher: publisher, Storage: testMachineStorage(t)}
 	}
 	if imageManager == nil && f != nil {
 		imageManager = machineJobImages{fixture: f}
@@ -114,7 +114,7 @@ func TestMachineBuildAdmissionAndSourceHash(t *testing.T) {
 	_, err := m.CreateBuild(context.Background(), CreateBuildRequest{MachineBaseImage: "registry/base@" + machineTestDigest}, []byte("source"))
 	require.ErrorContains(t, err, "not configured")
 	f := newMachineFixture()
-	m.config.MachineBuild = &MachineBuildBackend{Driver: f, Publisher: f}
+	m.config.MachineBuild = &MachineBuildBackend{Driver: f, Publisher: f, Storage: testMachineStorage(t)}
 	_, err = m.CreateBuild(context.Background(), CreateBuildRequest{MachineBaseImage: "registry/base:mutable"}, []byte("source"))
 	require.ErrorContains(t, err, "pinned")
 	_, err = m.CreateBuild(context.Background(), CreateBuildRequest{MachineBaseImage: "registry/base@" + machineTestDigest, Secrets: []SecretRef{{ID: "unsupported"}}}, []byte("source"))
