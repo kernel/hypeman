@@ -790,6 +790,9 @@ func (m *manager) runBuild(ctx context.Context, id string, req CreateBuildReques
 	// If image_name is set, re-tag the image so it's accessible by that name.
 	// The builder pushed to builds/{id} but the user wants it as image_name.
 	imageRef := buildRepo
+	if req.MachineBaseImage != "" && result.ImageRef != "" {
+		imageRef = result.ImageRef
+	}
 	if req.ImageName != "" {
 		ref, err := images.ParseNormalizedRef(req.ImageName)
 		if err != nil {

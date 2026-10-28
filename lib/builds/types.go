@@ -223,6 +223,9 @@ type BuildResult struct {
 	// ImageDigest is the digest of the pushed image (only on success)
 	ImageDigest string `json:"image_digest,omitempty"`
 
+	// ImageRef is the pullable output reference for machine builds.
+	ImageRef string `json:"image_ref,omitempty"`
+
 	// Error is the error message (only on failure)
 	Error string `json:"error,omitempty"`
 

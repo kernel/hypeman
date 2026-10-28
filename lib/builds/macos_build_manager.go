@@ -53,7 +53,7 @@ func (m *manager) executeMachineBuild(ctx context.Context, id string, req Create
 	if err != nil || ref.Repository() != strings.TrimSuffix(stripRegistryScheme(m.config.RegistryURL), "/")+"/builds/"+id {
 		return nil, fmt.Errorf("machine publication is outside the authorized job repository")
 	}
-	return &BuildResult{Success: true, ImageDigest: result.Publication.Digest, Provenance: result.Provenance}, nil
+	return &BuildResult{Success: true, ImageDigest: result.Publication.Digest, ImageRef: result.Publication.Reference, Provenance: result.Provenance}, nil
 }
 
 // reapPriorMachineBuilder removes the builder recorded by an interrupted attempt of

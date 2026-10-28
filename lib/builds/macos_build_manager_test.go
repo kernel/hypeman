@@ -88,6 +88,8 @@ func TestMachineBuildUsesSharedQueueStatusAndSourceLifecycle(t *testing.T) {
 	done, err := m.GetBuild(context.Background(), build.ID)
 	require.NoError(t, err)
 	require.Equal(t, StatusReady, done.Status, "failure: %v", done.Error)
+	require.NotNil(t, done.ImageRef)
+	require.Equal(t, "localhost:4973/builds/"+build.ID+"@"+machineTestDigest, *done.ImageRef)
 	require.Equal(t, build.ID, publisher.publishedID)
 	require.Equal(t, req.SourceHash, done.Provenance.SourceHash)
 	require.Equal(t, machineTestDigest, done.Provenance.BaseImageDigest)

@@ -37,17 +37,20 @@ validation. These limits do not change Linux source parsing.
 
 ## Use the built image on another Mac host
 
-A completed build returns an image reference that can be passed to the normal
-instance-create API. On a macOS-only server, an omitted platform defaults to
-`darwin/arm64`; on a mixed host, request that platform explicitly. If the image
-isn't cached locally, Hypeman starts a platform-specific pull. Large machine
-images may take longer than the create request's readiness wait, so retry the
-create after the image becomes ready or pull it explicitly first.
+After a build is ready, `GET /builds/{id}` returns a digest-pinned `image_ref`
+that can be passed directly to the normal instance-create API. For use across
+hosts, configure `registry.url` to a registry address reachable from each Mac
+host; loopback is only suitable for same-host builds. On a macOS-only server, an
+omitted platform defaults to `darwin/arm64`; on a mixed host, request that
+platform explicitly. If the image isn't cached locally, Hypeman starts a
+platform-specific pull. Large machine images may take longer than the create
+request's readiness wait, so retry after the image becomes ready or pull it
+explicitly first.
 
 ```json
 {
   "name": "macos-app",
-  "image": "registry.example/builds/<build-id>:latest",
+  "image": "registry.example/builds/<build-id>@sha256:<manifest-digest>",
   "platform": "darwin/arm64"
 }
 ```
