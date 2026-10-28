@@ -30,7 +30,7 @@ The installed base must already be Ready. A 202 response queues an ordinary job;
 GET /builds/{id}, cancellation and status/provenance use the shared APIs. OpenAPI
 and generated server request types include machine_base_image; external language
 SDK releases are separate, not claimed here. Only source, machine_base_image,
-timeout_seconds, memory_mb, cpus and tags are accepted for machine HTTP builds.
+machine_network_mode, timeout_seconds, memory_mb, cpus and tags are accepted for machine HTTP builds.
 Duplicates/unknown fields, malformed numbers and mutable bases return 400. Metadata
 is limited to 64 KiB per field, source 64 MiB and the entire HTTP body 65 MiB before OpenAPI
 validation. These limits do not change Linux source parsing.
@@ -55,9 +55,12 @@ explicitly first.
 }
 ```
 
-Each instance is pinned to the resolved image digest. Image pulls are
-repository-scoped; use the build's returned image reference rather than assuming
-it has been promoted to another repository or tag.
+Each instance is pinned to the resolved image digest. Use the build's returned
+image reference until explicitly promoted. Local cross-repository image tags now
+retain the raw disk, auxiliary storage and platform metadata together. Normal
+`POST /pushes` publishes a candidate registry tag without changing the OCI manifest
+digest; local tagging alone does not publish. The [base-image pipeline](macos-base-images.md)
+provides build → candidate push → local tag → destination pre-pull orchestration.
 
 ## Base and policy
 
@@ -69,8 +72,9 @@ Build limits, exact MiB precision and bounded deadlines still apply. Timeout
 normally defaults to 600 s, capped at 24 hours; full machine-image compression/pull can need a
 longer explicitly selected deadline.
 
-Networking defaults isolated. Optional egress means unrestricted VZ NAT, not
-Linux TAP/domain-policy parity. Domain allowlists, Linux Dockerfile/builder/cache/
+Networking defaults isolated. Explicit `machine_network_mode=egress` enables
+unrestricted VZ NAT for pinned, checksum-verified artifact downloads, not Linux
+TAP/domain-policy parity. Omit the selector or set it to `isolated` for offline recipes. Domain allowlists, Linux Dockerfile/builder/cache/
 build-argument/secret/admin options are rejected, not ignored. Template identity
 is preserved: jobs pinned to the same base digest are serialized, and concurrent
 same-identity guests remain forbidden.
@@ -84,7 +88,9 @@ uncompressed data 128 MiB, entries 1024 and individual regular files 64 MiB. Onl
 files/directories are accepted; duplicate names, links/devices and path escapes
 fail before transfer. Files are 0600 or owner-executable 0700. Guest tar is not used.
 
-The archive must contain `hypeman-macos-build.json`, limited to 64 KiB:
+The archive must contain `hypeman-macos-build.json`, limited to 64 KiB. The
+[version 1 JSON schema](schemas/macos-build-v1.schema.json) describes its fields;
+the server additionally rejects duplicate/case-variant keys and enforces byte limits:
 
 ```json
 {"version":1,"steps":[{"command":["/bin/sh","build.sh"],"env":{"MODE":"release"}}]}
@@ -93,19 +99,26 @@ The archive must contain `hypeman-macos-build.json`, limited to 64 KiB:
 At at most 32 steps execute as root in one exclusive `/var/root/hypeman-build-{id}`
 directory. Command executable paths must be absolute; arguments/environment are
 bounded and reject NUL. Commands run only in the guest, never a host shell.
-Unknown JSON fields and extra JSON objects fail. Version 1 remains experimental;
-public source/schema/toolchain contracts require review before merge.
+Unknown JSON fields, duplicate keys, null strings, case-variant field names and
+extra JSON objects fail. The exact validated recipe bytes are SHA256-hashed in
+`provenance.recipe_hash`, alongside the source archive hash and pinned base digest.
+Version 1 remains experimental pending native production validation; no OS/compiler
+version is inferred from the host or a base image name.
 
 Sanitation removes and verifies absence of the build-owned guest source directory
 and removes extracted host source before stopping. There is no injected registry
-token, host credential or secret in the guest. Guest stdout/stderr are not forwarded
-or retained yet; recipe-level log streaming is still a gate. A failed step reports
+token, host credential or secret in the guest. Guest stdout/stderr are discarded.
+Bounded host-authored lifecycle and step-number progress uses the existing build
+logs/SSE endpoint; commands, environment values and raw guest errors never enter
+that stream. This is progress logging, not arbitrary recipe-output streaming. A failed step reports
 only its number and exit code, for example `machine build provision failed: recipe
 step 1 exited with code 1`. Host admission errors, such as the base's
 machine identity already being used by a running instance, are also shown; the
-builder boots that identity, so instances made from the base must be stopped. This does not sanitize
-inherited template accounts, SSH keys, browser state or credentials: use a separately
-reviewed clean base, not a private development guest, for distributable images.
+builder boots that identity, so instances made from the base must be stopped.
+Source cleanup does not sanitize inherited accounts, SSH keys, browser state or
+credentials. The [base audit/publication tools](macos-base-images.md) require a
+reviewed fresh installation and explicit operator evidence; they do not certify a
+used development guest as clean.
 
 ## Stop, export and cleanup safety
 
@@ -163,7 +176,7 @@ not go-containerregistry's large-buffer PATCH path. Each persisted
 blob is independently GET/hash/size verified. The `latest` manifest is committed
 last (the normal manager's image-readiness convention), then immutable digest
 content is verified. Ambiguous errors do not return successful receipts. Disk
-quota/floor policy belongs to deployment; a compressed-size bound is not a storage quota.
+admission settings are described below; a compressed-size bound is not a storage quota.
 
 ## Validation and remaining gates
 
@@ -181,6 +194,70 @@ during provisioning, publication and conversion (each rebuilt on recovery), and
 host admission errors. These runs used a development base, not a sanitized
 production template.
 
-Remaining: external SDK releases, common safe recipe logs,
-clean-template sanitation policy/audit, toolchain/version provenance, production
-storage quotas/floors and Linux runtime regressions. Keep PR6 draft and experimental HTTP activation disabled by default.
+Remaining gates are native execution of the new pipeline and admission code,
+a reviewed fresh base with approved artifact pins, cross-host publication/pull and
+sequential cold-boot validation, operational monitoring and SDK/CLI release. The
+broader Linux runtime suite must also pass in an environment with its required
+hypervisor/network permissions. Keep experimental HTTP activation disabled by default.
+
+## Storage admission
+
+The native backend requires `build.machine_max_concurrent` (default 1),
+`build.machine_max_export_bytes` (default 128 GiB), and
+`build.machine_min_free_bytes` (default 10 GiB). Effective worker concurrency is the
+smaller of `machine_max_concurrent` and `max_concurrent_source_builds`. Linux builds
+ignore these machine-only settings.
+
+Admission budgets `4 × machine_max_export_bytes + 256 MiB` per active/quarantined
+job, plus the configured free-space floor. Defaults therefore require about
+522.25 GiB free for one job. Choose an explicitly reviewed export cap for the
+actual logical disk/auxiliary size and available capacity; sparse allocation and
+APFS cloning are not permission to lower that logical-size budget. Headroom is
+rechecked before export and publication, and files are size-checked before native
+export copying. Queued source uploads share the same admission lock.
+
+Reservations persist across restart, cancellation and ambiguous publication until
+the builder and asynchronous image import are safely reconciled. They are admission
+budgets, not filesystem quotas: other processes/writers are not coordinated. A
+quarantined reservation is not permission to delete a VM, disk or marker manually;
+first prove VMM exit, workspace cleanup and terminal image import. Offline initial
+base publication has its own operator capacity preflight and is not covered by the
+build backend reservation.
+
+## Rollout gates and rollback
+
+1. **Contract gate:** pass build, image, registry/push, config and API contract
+   tests with real embedded binaries; run pipeline Python tests. The Linux suite
+   must pass on a host with its normal hypervisor/network prerequisites. Fixtures
+   prove admission/transport, not a bootable macOS installation.
+2. **Base/recipe gate:** review a fresh installation and final GuestService audit,
+   retain the strict stop evidence, publish the base receipt, and approve all
+   downstream browser/runtime artifact hashes. Never promote a development guest
+   or the placeholder example pins. The initial Apple install remains an explicit
+   operator prerequisite.
+3. **Native failure gate:** on an isolated authorized builder, exercise success,
+   recipe failure, cancellation and process interruption during provisioning,
+   export, publication and import. Restart and verify shared job recovery; verify
+   failed/cancelled jobs never report Ready and quarantined storage is not released
+   before confirmed VMM exit and terminal import. Check safe logs contain only
+   lifecycle/step progress, not test secrets.
+4. **Distribution/canary gate:** publish only a candidate tag, pre-pull the exact
+   digest on a second approved Mac, then cold-boot sequentially with no other copy
+   of the identity running. Require agent readiness, root exec, expected OS/tool
+   versions and workload health. Preserve the previous validated image digest and
+   successful private evidence before changing any production selection.
+5. **Operations gate:** enable one explicit builder and canary first. Record build
+   success/failure counts, queue/active jobs, build duration, filesystem free space
+   and active/quarantined reservations using the [build metrics](../lib/otel/README.md#source-builds).
+   Treat missing filesystem telemetry as a failed gate, not zero usage. Configure operator-owned alerts and stop
+   expansion on any unresolved quarantine, free-space-floor violation, missed
+   deadline, wrong digest/platform, or unexpected workload failure. No production
+   alert routing or inventory is fabricated by this change.
+
+For rollback, first revoke new build submissions at the authenticated admission
+boundary and drain/cancel existing jobs through normal APIs while keeping the
+backend available for cleanup/recovery. Repoint workload selection to the prior
+validated immutable digest and pre-pull it through the same image API. Only after
+jobs/imports and quarantine recovery are resolved, set `macos_builds: false` on
+the dedicated builder. Disabling the backend does not delete persisted jobs or
+images. Do not delete the old digest or stop an unrelated instance to free space.

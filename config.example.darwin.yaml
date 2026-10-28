@@ -27,6 +27,14 @@ data_dir: ~/Library/Application Support/hypeman
 # Server configuration
 port: "4973"
 
+# Native macOS guests/builds are opt-in; these defaults retain Linux guests on VZ.
+macos_only: false
+macos_builds: false
+# For a dedicated native Mac builder, set both true after the release gates in
+# docs/macos-builds.md pass, and replace registry.url below with an explicit
+# system-trusted HTTPS address reachable by the build and destination hosts.
+# Machine publication runs on the host, not at the Linux guest NAT gateway.
+
 # =============================================================================
 # Hypervisor Configuration (IMPORTANT FOR MACOS)
 # =============================================================================
@@ -130,6 +138,12 @@ build:
   # builder_image: ""  # empty (default) = built from Dockerfile on first run
   docker_socket: /var/run/docker.sock
   max_concurrent_source_builds: 2
+  # Native-only admission budgets, ignored for Linux builds. Defaults require
+  # 522.25 GiB free for one job: 4 * export cap + 256 MiB + free-space floor.
+  # Review the logical base disk/aux size before selecting a lower export cap.
+  machine_max_concurrent: 1
+  machine_max_export_bytes: 137438953472 # 128 GiB
+  machine_min_free_bytes: 10737418240    # 10 GiB
   timeout: 600
 
 # =============================================================================

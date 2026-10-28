@@ -61,6 +61,22 @@ This keeps pull and push views aligned because both are sourced from the same OT
 | `hypeman_image_retention_sweep_duration_seconds` | histogram | status | Retention sweep latency |
 | `hypeman_image_retention_deletes_total` | counter | status | Retention delete attempts |
 
+### Source builds
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `hypeman_builds_total` | counter | status | Completed build jobs, shared by Linux and macOS |
+| `hypeman_build_duration_seconds` | histogram | status | Build job duration |
+| `hypeman_build_queue_length` | gauge | | Queued build jobs |
+| `hypeman_builds_active` | gauge | | Active build jobs |
+| `hypeman_machine_build_reservations_active` | gauge | | Native machine storage reservations, excluding quarantine |
+| `hypeman_machine_build_reservations_quarantined` | gauge | | Reservations retained after interruption or unconfirmed cleanup |
+| `hypeman_machine_build_filesystem_available_bytes` | gauge | | Available data-filesystem bytes; omitted if the filesystem probe fails |
+| `hypeman_machine_build_min_free_bytes` | gauge | | Configured native machine free-space floor |
+
+Machine storage gauges exist only when the machine backend is configured. They
+have no per-build labels. Reservations are admission budgets, not filesystem
+quotas; see [macOS builds](../../docs/macos-builds.md) for rollout gates.
+
 ### Instances
 | Metric | Type | Labels | Description |
 |--------|------|--------|-------------|
