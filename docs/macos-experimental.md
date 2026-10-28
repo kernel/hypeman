@@ -76,8 +76,21 @@ CPU and memory default to the imported template (minimum 2 CPUs and 4GB).
 Each instance gets its own writable complete boot disk (`boot.raw`) and auxiliary
 storage; instances created before that naming must be deleted and recreated. No
 Linux kernel, initrd, configuration disk, overlay filesystem or balloon is
-attached. NAT uses the preserved MAC. The IP is observed from the host's VZ
-DHCP leases, which may retain an old lease before the guest is ready.
+attached. A networked guest gets its own vmnet network (macOS 26 and later):
+hypeman assigns it a /29 from `network.macos_subnet_cidr` (default
+`192.168.128.0/20`) and vmnet's DHCP serves the guest a reservation for its
+preserved MAC. The guest's address is stored with the instance, kept through stop
+and standby, and reported whether or not the guest is running. Delete releases it,
+and a released address is not given to another guest for five minutes, longer than
+ingress caches upstream addresses. Clones and forks get a new address. Instances
+started before this change get an address at their next start; until then they
+stay on vmnet's shared NAT and report none.
+
+The guest's vz-shim owns its vmnet network. If the shim is killed while the guest
+runs (SIGKILL, a crash), macOS keeps the network and refuses to create that subnet
+again until the host restarts, so that guest cannot start and its address cannot be
+reused. Stop and delete therefore ask the shim to stop the VM and exit, and kill it
+only if it does not.
 
 **Without the guest agent, `Running` means the VMM is running, not that SSH,
 the desktop or Chrome is ready.** Unmanaged templates still need an external
@@ -110,13 +123,59 @@ Unsupported operations are rejected explicitly. The status of each operation is 
 [macos-support.md](macos-support.md), not repeated here.
 
 An opt-in `macos_only: true` config requires Darwin/arm64 and VZ, refuses Linux
-instance creates/starts and skips Linux kernel/initrd downloads, builders and
-Caddy/DNS initialization. Ingress creation and builds are rejected in that mode.
+instance creates/starts and skips Linux kernel/initrd downloads and builders.
+Builds are rejected in that mode. Caddy and DNS start as on Linux.
 The default is false. `listen_address: 127.0.0.1` can bind the HTTP API locally.
 No host sudo, bridge creation or launchd installation is required for the spike.
 
 For controlled Chrome testing after autologin, use `open -na "Google Chrome"`
 with a dedicated `--user-data-dir` and guest-local `--remote-debugging-port=9222`.
 macOS can reopen Chrome after a power-off without the original debugging flags;
-`open -a` may just activate that existing process and ignore the flags. Tunnel
-CDP via SSH rather than exposing it on the guest network.
+`open -a` may just activate that existing process and ignore the flags. To reach
+CDP from off the host, route it through ingress (below) or tunnel it via SSH.
+
+## Ingress
+
+Ingress routes to macOS guests as it does to Linux guests: Caddy on the host
+resolves the target instance through hypeman's DNS server on each request and
+proxies to the guest's IP, the address hypeman assigned it. A guest that is not
+running has no network at that address, so Caddy returns 502; the address is never
+another guest's. As on Linux, the guest service must listen on the guest's network
+interface, not only on loopback.
+
+Caddy is not embedded in macOS builds. `make build-caddy-darwin` builds the same
+Caddy version and DNS modules as Linux into `bin/caddy`. Hypeman looks for `caddy`
+next to its own binary, then on `PATH`, and fails to start without it.
+
+Caddy needs local network access to reach guests. On macOS 15.5 and later, allow
+the guest pool for every process once per host, then restart (Apple TN3179):
+
+```sh
+sudo defaults write com.apple.network.local-network AllowedEthernetLocalNetworkAddresses -array "192.168.128.0/20"
+```
+
+Without it, only root has access. On the QA host (macOS 27.0), a launchd daemon
+running as a regular user was refused, and so was a hypeman left running after the
+SSH session that started it ended: dials to guests failed with "no route to host"
+and Caddy returned 502. With the subnet allowed, the same daemon reached guests.
+
+Starting a macOS guest also needs the hypeman user logged in on the host. After a
+host restart with nobody logged in, start failed with `VZErrorDomain Code=-9`
+("Unable to access security information") and succeeded once the user logged in.
+
+Saving a macOS guest's memory (standby and memory snapshots) also needs that
+user's screen unlocked. VZ encrypts saved state with a Secure Enclave key that
+macOS creates only while the user's data is unlocked, and a locked screen locks
+it. On the QA host, standby failed with `VZErrorDomain Code=11` ("permission
+denied"; the log shows `errSecInteractionNotAllowed` from the key creation) until
+the screen was unlocked. Turn off the automatic screen lock for that user:
+
+```sh
+sysadminctl -screenLock off -password -
+```
+
+Each guest's network is separate, so guests cannot reach each other's addresses.
+A guest can still reach anything the host listens on, including Caddy's listeners,
+sshd and Screen Sharing, so hosts that run guests for different tenants should not
+expose other host services on guest networks. Ingress hostnames reach a guest
+through Caddy, as they do from outside.

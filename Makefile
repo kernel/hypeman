@@ -1,5 +1,5 @@
 SHELL := /bin/bash
-.PHONY: oapi-generate generate-vmm-client generate-wire generate-all dev build build-linux test test-linux test-darwin test-guestmemory-linux test-guestmemory-vz install-tools gen-jwt download-ch-binaries download-firecracker-binaries download-ch-spec ensure-ch-binaries ensure-firecracker-binaries build-caddy-binaries build-caddy ensure-caddy-binaries release-prep clean build-embedded
+.PHONY: oapi-generate generate-vmm-client generate-wire generate-all dev build build-linux test test-linux test-darwin test-guestmemory-linux test-guestmemory-vz install-tools gen-jwt download-ch-binaries download-firecracker-binaries download-ch-spec ensure-ch-binaries ensure-firecracker-binaries build-caddy-binaries build-caddy build-caddy-darwin ensure-caddy-binaries release-prep clean build-embedded
 
 # Directory where local binaries will be installed
 BIN_DIR ?= $(CURDIR)/bin
@@ -92,6 +92,13 @@ build-caddy-binaries: $(XCADDY)
 		--output lib/ingress/binaries/caddy/$(CADDY_VERSION)/aarch64/caddy
 	@chmod +x lib/ingress/binaries/caddy/$(CADDY_VERSION)/*/caddy
 	@echo "Caddy binaries built successfully with DNS modules"
+
+# Build Caddy with the same DNS modules for macOS hosts, which find it next to
+# hypeman (bin/caddy) or on PATH instead of embedding it.
+build-caddy-darwin: $(XCADDY) | $(BIN_DIR)
+	GOOS=darwin GOARCH=arm64 $(XCADDY) build $(CADDY_VERSION) \
+		$(CADDY_DNS_MODULES) \
+		--output $(BIN_DIR)/caddy
 
 # Build Caddy for current architecture only (faster for development)
 build-caddy: $(XCADDY)

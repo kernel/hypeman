@@ -572,9 +572,6 @@ func (m *manager) toInstanceWithStateDerivation(ctx context.Context, meta *metad
 		HealthCheckRuntime:  healthcheck.CloneRuntime(meta.HealthCheckRuntime),
 	}
 	refreshHypervisorPID(&inst.StoredMetadata, result.State)
-	if inst.MacOS != nil && inst.NetworkEnabled && inst.State.RequiresVMM() {
-		inst.IP = macOSGuestIP(inst.MAC)
-	}
 
 	// If VM is stopped and exit info isn't persisted yet, populate in-memory
 	// from the serial console log. This is read-only -- no metadata writes.

@@ -605,3 +605,16 @@ func TestValidateBuildersConfig(t *testing.T) {
 		t.Fatalf("expected parsed idle ttl 24h, got %s", cfg.Builders.IdleTTLDuration)
 	}
 }
+
+func TestValidateMacOSSubnetCIDR(t *testing.T) {
+	if err := defaultConfig().Validate(); err != nil {
+		t.Fatalf("expected the default macOS guest pool to validate, got %v", err)
+	}
+	for _, pool := range []string{"", "nonsense", "fd00::/64", "192.168.128.0/30", "10.100.4.0/24"} {
+		cfg := defaultConfig()
+		cfg.Network.MacOSSubnetCIDR = pool
+		if err := cfg.Validate(); err == nil {
+			t.Fatalf("expected macOS guest pool %q to be rejected", pool)
+		}
+	}
+}

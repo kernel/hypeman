@@ -2,8 +2,6 @@ package api
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -18,14 +16,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestMacOSOnlyRejectsBuildersAndIngress(t *testing.T) {
+func TestMacOSOnlyRejectsBuilders(t *testing.T) {
 	s := &ApiService{Config: &config.Config{MacOSOnly: true}}
 	build, err := s.CreateBuild(context.Background(), oapi.CreateBuildRequestObject{})
 	require.NoError(t, err)
 	require.IsType(t, oapi.CreateBuild501JSONResponse{}, build)
-	ingress, err := s.CreateIngress(context.Background(), oapi.CreateIngressRequestObject{})
-	require.NoError(t, err)
-	require.IsType(t, oapi.CreateIngress501JSONResponse{}, ingress)
 }
 
 func TestMacOSExecRejectedBeforeWebsocketUpgrade(t *testing.T) {
@@ -176,38 +171,4 @@ type macOSImageManager struct{ images.Manager }
 
 func (macOSImageManager) GetImage(context.Context, string) (*images.Image, error) {
 	return &images.Image{Platform: "darwin/arm64", MacOS: &images.MacOSImage{}}, nil
-}
-
-type macOSIngressTargetManager struct {
-	instances.Manager
-	inst *instances.Instance
-	err  error
-}
-
-func (m macOSIngressTargetManager) GetInstance(context.Context, string) (*instances.Instance, error) {
-	return m.inst, m.err
-}
-
-func TestIngressRejectsMacOSTargets(t *testing.T) {
-	useMacOSHost(t)
-	rule := oapi.IngressRule{Match: oapi.IngressMatch{Hostname: "app.example.test"}, Target: oapi.IngressTarget{Instance: "mac", Port: 8080}}
-	macos := &instances.Instance{StoredMetadata: instances.StoredMetadata{MacOS: &images.MacOSImage{}}}
-	s := &ApiService{InstanceManager: macOSIngressTargetManager{inst: macos}}
-	require.Contains(t, s.macOSIngressTargetReason(context.Background(), []oapi.IngressRule{rule}), "macOS")
-
-	linux := &instances.Instance{}
-	s = &ApiService{InstanceManager: macOSIngressTargetManager{inst: linux}}
-	require.Empty(t, s.macOSIngressTargetReason(context.Background(), []oapi.IngressRule{rule}))
-
-	s = &ApiService{InstanceManager: macOSIngressTargetManager{err: errors.New("lookup failed")}}
-	require.NotEmpty(t, s.macOSIngressTargetReason(context.Background(), []oapi.IngressRule{rule}), "an unverifiable target is refused")
-
-	s = &ApiService{InstanceManager: macOSIngressTargetManager{err: fmt.Errorf("lookup: %w", instances.ErrNotFound)}}
-	require.Empty(t, s.macOSIngressTargetReason(context.Background(), []oapi.IngressRule{rule}), "the ingress manager reports a missing target as 400")
-
-	pattern := rule
-	pattern.Match.Hostname = "{instance}.example.test"
-	pattern.Target.Instance = "{instance}"
-	s = &ApiService{InstanceManager: macOSIngressTargetManager{err: errors.New("lookup failed")}}
-	require.Empty(t, s.macOSIngressTargetReason(context.Background(), []oapi.IngressRule{pattern}), "pattern targets resolve per request, where the resolver refuses macOS guests")
 }

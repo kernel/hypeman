@@ -98,8 +98,8 @@ at boot; the host does not call `GetAgentInfo` for them.
   Permission, cancellation, and command errors are reported. An RPC response is
   not proof the VMM has exited: the host must wait for teardown.
 - **Network identity reconfiguration:** returns gRPC `Unimplemented` on Darwin.
-  Current VZ NAT uses guest DHCP; no static-address, MAC-rekey, ingress, or network
-  policy parity is claimed.
+  The guest's address comes from a DHCP reservation on its own vmnet network; no
+  MAC-rekey or network policy parity is claimed.
 - **GPU status:** Linux NVIDIA initialization reporting is not macOS graphics
   readiness. A Darwin guest without that device reports the existing unknown
   state.

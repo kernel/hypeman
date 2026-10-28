@@ -366,6 +366,27 @@ func (m *manager) restoreSnapshot(ctx context.Context, id string, snapshotID str
 			}
 		}
 		prepareMacOSSnapshotRestoreMetadata(&restored, &sourceMeta.StoredMetadata, rec.Snapshot.Kind, targetState)
+		// The restored record carries the address the snapshot was taken with. If another
+		// instance has since taken it, a cold boot gets a new address; saved memory
+		// cannot change address, so its restore is refused. The current address is held
+		// if it changes, as a delete would.
+		if restored.IP != "" && restored.IP != sourceMeta.IP {
+			ok, err := m.macOSAddressAvailable(id, restored.IP)
+			if err != nil {
+				return nil, err
+			}
+			if !ok && rec.Snapshot.Kind == SnapshotKindStandby {
+				return nil, fmt.Errorf("%w: the snapshot's network address %s is now in use", ErrInvalidState, restored.IP)
+			}
+			if !ok {
+				restored.IP = ""
+			}
+		}
+		if sourceMeta.IP != "" && sourceMeta.IP != restored.IP {
+			if err := m.releaseMacOSAddress(id, sourceMeta.IP); err != nil {
+				return nil, fmt.Errorf("release macOS guest address: %w", err)
+			}
+		}
 		if err := m.replaceMacOSInstanceWithSnapshotPayload(snapshotID, &metadata{StoredMetadata: restored}); err != nil {
 			return nil, err
 		}

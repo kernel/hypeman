@@ -3,7 +3,7 @@
 package instances
 
 import (
-	vz "github.com/Code-Hex/vz/v3"
+	vz "github.com/Code-Hex/vz/v4"
 )
 
 // newMacMachineIdentifierData returns a fresh Apple machine identifier for a cloned guest.

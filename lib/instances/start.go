@@ -108,7 +108,10 @@ func (m *manager) startInstance(
 	defer cu.Clean()
 
 	// 4. Allocate fresh network if network enabled
-	netConfig := applyMacOSNetwork(stored)
+	netConfig, err := m.applyMacOSNetwork(stored)
+	if err != nil {
+		return nil, fmt.Errorf("assign macOS guest network: %w", err)
+	}
 	if stored.usesLinuxNetwork() {
 		log.DebugContext(ctx, "allocating network for start", "instance_id", id, "network", "default")
 		networkCtx, networkSpanEnd := m.startLifecycleStep(ctx, "allocate_network",

@@ -62,8 +62,12 @@ hypervisor:
 # - No TAP devices, user-created bridges, or iptables rules are needed
 # - The following settings are IGNORED on macOS because VZ owns the network:
 #   network.bridge_name, subnet_cidr, subnet_gateway, uplink_interface
+# - macOS guests do not use the shared NAT. Each gets its own vmnet network, a /29
+#   from network.macos_subnet_cidr, and keeps its address through stop and standby.
+#   Keep the pool clear of the shared NAT subnet and of networks the host uses.
 network:
   dns_server: 8.8.8.8
+  macos_subnet_cidr: 192.168.128.0/20
 
 # =============================================================================
 # Logging

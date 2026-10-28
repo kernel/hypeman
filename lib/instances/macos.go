@@ -3,11 +3,9 @@ package instances
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
-	"os"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -179,21 +177,23 @@ func (m *manager) createBootDisk(stored *StoredMetadata, img *images.Image) erro
 }
 
 // usesLinuxNetwork reports whether the instance's network is a hypeman TAP
-// allocation. Networked macOS guests use vmnet NAT instead.
+// allocation. Networked macOS guests get their own vmnet network instead.
 func (s *StoredMetadata) usesLinuxNetwork() bool {
 	return s.NetworkEnabled && s.MacOS == nil
 }
 
-// applyMacOSNetwork sets the template MAC on a networked macOS guest and returns its
-// network config. vmnet assigns the address, which is observed after boot, so no
-// Linux TAP or static IP is allocated. Other instances get nil.
-func applyMacOSNetwork(stored *StoredMetadata) *network.NetworkConfig {
+// applyMacOSNetwork sets the template MAC on a networked macOS guest, assigns its
+// address if it has none, and returns its network config. No Linux TAP is allocated.
+// Other instances get nil.
+func (m *manager) applyMacOSNetwork(stored *StoredMetadata) (*network.NetworkConfig, error) {
 	if stored.MacOS == nil || !stored.NetworkEnabled {
-		return nil
+		return nil, nil
 	}
 	stored.MAC = stored.MacOS.MAC
-	stored.IP = ""
-	return &network.NetworkConfig{MAC: stored.MAC}
+	if err := m.assignMacOSAddress(stored); err != nil {
+		return nil, err
+	}
+	return &network.NetworkConfig{MAC: stored.MAC, IP: stored.IP, Netmask: macOSGuestNetmask}, nil
 }
 
 // admitMacOSBoot holds the macOS boot lock and checks socket paths and identity
@@ -219,7 +219,7 @@ func (m *manager) macOSVMConfig(inst *Instance) hypervisor.VMConfig {
 		MacOS: &hypervisor.MacOSPlatform{HardwareModelData: inst.MacOS.HardwareModel, MachineIdentifierData: inst.MacOS.MachineIdentifier, AuxStoragePath: filepath.Join(inst.DataDir, macOSAuxStorageFile)},
 		Disks: []hypervisor.DiskConfig{{Path: m.paths.InstanceMacOSBootDisk(inst.Id)}}}
 	if inst.NetworkEnabled {
-		c.Networks = []hypervisor.NetworkConfig{{MAC: inst.MAC}}
+		c.Networks = []hypervisor.NetworkConfig{{MAC: inst.MAC, IP: inst.IP, Netmask: macOSGuestNetmask}}
 	}
 	return c
 }
@@ -300,52 +300,6 @@ const macOSMinStopTimeout = 30
 // admission follows at the caller, under the instance lock.
 func (m *manager) admitGuestOperation(stored *StoredMetadata) error {
 	return m.requireMacOSGuest(stored)
-}
-
-// vmnet stores octets without leading zeroes. A lease is observed addressing,
-// not a static-IP assignment or a guest-readiness signal.
-func macOSGuestIP(mac string) string {
-	wanted, err := net.ParseMAC(mac)
-	if err != nil {
-		return ""
-	}
-	data, err := os.ReadFile("/var/db/dhcpd_leases")
-	if err != nil {
-		return ""
-	}
-	return macOSLeaseIP(string(data), wanted)
-}
-
-// dhcpd appends newer leases, so the last matching block is the current one.
-func macOSLeaseIP(data string, wanted net.HardwareAddr) string {
-	found := ""
-	for _, block := range strings.Split(data, "}") {
-		var addr, ip string
-		for _, line := range strings.Split(block, "\n") {
-			k, v, ok := strings.Cut(strings.TrimSpace(line), "=")
-			if !ok {
-				continue
-			}
-			switch k {
-			case "hw_address":
-				_, addr, _ = strings.Cut(v, ",")
-			case "ip_address":
-				ip = v
-			}
-		}
-		var padded []string
-		for _, octet := range strings.Split(addr, ":") {
-			if len(octet) == 1 {
-				octet = "0" + octet
-			}
-			padded = append(padded, octet)
-		}
-		raw, err := hex.DecodeString(strings.Join(padded, ""))
-		if err == nil && string(raw) == string(wanted) && net.ParseIP(ip) != nil {
-			found = ip
-		}
-	}
-	return found
 }
 
 // VMStoragePath is the disk a macOS VM process holds open, used to find that process.

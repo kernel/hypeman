@@ -24,7 +24,7 @@ owns the behavior.
 | Update (PATCH), VM restart policy | Partial | Expiration/TTL and `restart_policy: always` or `never` are supported. Manual stop suppresses automatic restart. A shim that dies without removing its socket (for example, SIGKILL) reads as Stopped, so `always` restarts it. `on_failure` is rejected: no workload exit status is available. | PR 1 |
 | Exec health checks | Agent-gated | Supported at create and PATCH; `type: none` disables them. HTTP/TCP checks remain unsupported. | PR 3 |
 | Volumes, env and commands, credentials and auto-standby policies, passthrough, shaping | Unsupported | Rejected at create, start, or update. | — |
-| Ingress | Unsupported | Refused in macOS-only mode and for macOS targets. | — |
+| Ingress | Experimental | Routes to the guest's hypeman-assigned address on its own vmnet network, as on Linux, including in macOS-only mode. Caddy is not embedded on macOS (`make build-caddy-darwin`). New path needs native QA. | PR 5 |
 | Snapshot schedules | Experimental | State-based stopped or memory capture, existing cadence/retention, host save/restore gate and live configuration probe. New path needs native QA. | PR 4 |
 
 Limits that apply everywhere: one active VM per machine identifier, no clean-base

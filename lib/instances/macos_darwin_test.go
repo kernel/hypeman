@@ -4,7 +4,6 @@ package instances
 
 import (
 	"errors"
-	"net"
 	"os"
 	"path/filepath"
 	"testing"
@@ -70,14 +69,4 @@ func TestMacOSStorageClone(t *testing.T) {
 		_, err = os.Stat(aux)
 		require.ErrorIs(t, err, os.ErrNotExist)
 	})
-}
-
-func TestMacOSLeaseNormalization(t *testing.T) {
-	mac, err := net.ParseMAC("02:00:01:0a:0b:ff")
-	require.NoError(t, err)
-	data := "{\n ip_address=192.168.64.7\n hw_address=1,2:0:1:a:b:ff\n}\n"
-	require.Equal(t, "192.168.64.7", macOSLeaseIP(data, mac))
-	require.Empty(t, macOSLeaseIP("garbage", mac))
-	// A later lease for the same MAC supersedes the earlier one.
-	require.Equal(t, "192.168.64.9", macOSLeaseIP(data+"{\n ip_address=192.168.64.9\n hw_address=1,2:0:1:a:b:ff\n}\n", mac))
 }

@@ -4,7 +4,9 @@ package ingress
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 
 	"github.com/kernel/hypeman/lib/paths"
 )
@@ -13,13 +15,17 @@ import (
 const CaddyVersion = "v2.10.2"
 
 // ErrCaddyNotEmbedded indicates Caddy is not embedded on macOS.
-// Users should install Caddy via Homebrew or download from caddyserver.com.
-var ErrCaddyNotEmbedded = fmt.Errorf("caddy binary is not embedded on macOS; install via: brew install caddy")
+var ErrCaddyNotEmbedded = fmt.Errorf("caddy binary is not embedded on macOS; build it with `make build-caddy-darwin` and install it next to hypeman or on PATH")
 
-// ExtractCaddyBinary on macOS attempts to find Caddy in PATH.
+// ExtractCaddyBinary on macOS finds Caddy next to the hypeman binary, then on PATH.
 // Unlike Linux, we don't embed the binary on macOS.
 func ExtractCaddyBinary(p *paths.Paths) (string, error) {
-	// Try to find caddy in PATH
+	if exe, err := os.Executable(); err == nil {
+		path := filepath.Join(filepath.Dir(exe), "caddy")
+		if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() && info.Mode().Perm()&0111 != 0 {
+			return path, nil
+		}
+	}
 	path, err := exec.LookPath("caddy")
 	if err != nil {
 		return "", ErrCaddyNotEmbedded
@@ -27,7 +33,7 @@ func ExtractCaddyBinary(p *paths.Paths) (string, error) {
 	return path, nil
 }
 
-// GetCaddyBinaryPath returns path to Caddy, looking in PATH on macOS.
+// GetCaddyBinaryPath returns path to Caddy on macOS.
 func GetCaddyBinaryPath(p *paths.Paths) (string, error) {
 	return ExtractCaddyBinary(p)
 }

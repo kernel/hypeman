@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/netip"
 	"os"
 	"strconv"
 	"strings"
@@ -144,8 +145,13 @@ func ProvideInstanceManager(p *paths.Paths, cfg *config.Config, imageManager ima
 	if err := firecrackerUFFDCacheMaxBytes.UnmarshalText([]byte(cfg.Hypervisor.FirecrackerUFFDCacheMaxBytes)); err != nil {
 		return nil, fmt.Errorf("failed to parse hypervisor.firecracker_uffd_cache_max_bytes %q: %w", cfg.Hypervisor.FirecrackerUFFDCacheMaxBytes, err)
 	}
+	macOSGuestSubnet, err := netip.ParsePrefix(cfg.Network.MacOSSubnetCIDR)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse network.macos_subnet_cidr %q: %w", cfg.Network.MacOSSubnetCIDR, err)
+	}
 	managerConfig := instances.ManagerConfig{
 		MacOSOnly:                        cfg.MacOSOnly,
+		MacOSGuestSubnet:                 macOSGuestSubnet,
 		LifecycleEventBufferSize:         cfg.Instances.LifecycleEventBufferSize,
 		FirecrackerSnapshotMemoryBackend: cfg.Hypervisor.FirecrackerSnapshotMemoryBackend,
 		FirecrackerUFFDCacheMaxBytes:     int64(firecrackerUFFDCacheMaxBytes),

@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -67,6 +68,8 @@ type NetworkConfig struct {
 	DNSServer               string `koanf:"dns_server"`
 	UploadBurstMultiplier   int    `koanf:"upload_burst_multiplier"`
 	DownloadBurstMultiplier int    `koanf:"download_burst_multiplier"`
+	// MacOSSubnetCIDR is the pool macOS guest networks come from: one /29 per guest.
+	MacOSSubnetCIDR string `koanf:"macos_subnet_cidr"`
 }
 
 // CaddyConfig holds Caddy reverse-proxy / ingress settings.
@@ -338,6 +341,7 @@ func defaultConfig() *Config {
 			DNSServer:               "1.1.1.1",
 			UploadBurstMultiplier:   4,
 			DownloadBurstMultiplier: 4,
+			MacOSSubnetCIDR:         "192.168.128.0/20",
 		},
 
 		Caddy: CaddyConfig{
@@ -593,6 +597,11 @@ func expandHomePath(path string) string {
 func (c *Config) Validate() error {
 	if c.MacOSOnly && (runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" || c.Hypervisor.Default != "vz") {
 		return fmt.Errorf("macos_only requires vz on Apple silicon")
+	}
+	if pool, err := netip.ParsePrefix(c.Network.MacOSSubnetCIDR); err != nil || !pool.Addr().Is4() || pool.Bits() < 8 || pool.Bits() > 29 {
+		return fmt.Errorf("network.macos_subnet_cidr must be an IPv4 prefix from /8 to /29, got %q", c.Network.MacOSSubnetCIDR)
+	} else if linux, err := netip.ParsePrefix(c.Network.SubnetCIDR); err == nil && linux.Overlaps(pool) {
+		return fmt.Errorf("network.macos_subnet_cidr %s overlaps network.subnet_cidr %s", pool, linux)
 	}
 	if err := c.validateAPIListenPorts(); err != nil {
 		return err
