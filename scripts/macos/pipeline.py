@@ -87,12 +87,14 @@ class API:
         return image
 
 
-def build(api, ref, source, timeout):
+def build(api, ref, source, timeout, network_mode="isolated"):
+    require(network_mode in {"isolated", "egress"}, "invalid-network-mode")
     require(source.is_file() and source.stat().st_size <= 64 << 20, "invalid-source")
     boundary = "hypeman-" + uuid.uuid4().hex
     h = hashlib.sha256()
     with tempfile.TemporaryFile() as body:
-        for key, value in (("machine_base_image", ref), ("timeout_seconds", str(timeout))):
+        for key, value in (("machine_base_image", ref), ("timeout_seconds", str(timeout)),
+                           ("machine_network_mode", network_mode)):
             body.write((f"--{boundary}\r\nContent-Disposition: form-data; name=\"{key}\"\r\n\r\n{value}\r\n").encode())
         body.write((f"--{boundary}\r\nContent-Disposition: form-data; name=\"source\"; filename=\"source.tar.gz\"\r\nContent-Type: application/gzip\r\n\r\n").encode())
         copied = 0
@@ -143,6 +145,8 @@ def main():
     p.add_argument("--destination-api", required=True, help="Mac host that must pre-pull the promoted digest")
     p.add_argument("--output", required=True, type=Path)
     p.add_argument("--timeout", type=int, default=7200)
+    p.add_argument("--network-mode", choices=("isolated", "egress"), default="isolated",
+                   help="guest network policy; egress is unrestricted VZ NAT (default: isolated)")
     args = p.parse_args()
     require(1 <= args.timeout <= 86400, "invalid-timeout")
     require(tagged(args.target), "tagged-target-required")
@@ -159,10 +163,11 @@ def main():
         api = API(args.api, os.environ.get("HYPEMAN_TOKEN"), deadline)
         dest = API(args.destination_api, os.environ.get("HYPEMAN_DEST_TOKEN"), deadline)
         api.pull(ref)
-        build_id, image, source_hash = build(api, ref, args.source, args.timeout)
+        build_id, image, source_hash = build(api, ref, args.source, args.timeout, args.network_mode)
         push_id, promoted = promote(api, image, args.target)
         dest.pull(promoted)
         evidence = {"version": 1, "base": ref, "source_sha256": source_hash,
+                    "machine_network_mode": args.network_mode,
                     "build_id": build_id, "build_image": image, "push_id": push_id,
                     "promoted_image": promoted, "destination_prepull": "verified",
                     "boot_validation": "required-before-production-alias"}

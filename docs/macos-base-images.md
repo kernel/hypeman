@@ -7,6 +7,11 @@ GuestService provisioning are prerequisites. No automated first-ever installatio
 is implemented here. See [Darwin GuestService](macos-guest-agent.md) and
 [macOS builds](macos-builds.md) for the existing runtime/build contracts.
 
+Pristine macOS is not assumed to include Python 3 or full Xcode. Provision both
+explicitly from pinned, reviewed sources before auditing; Command Line Tools
+alone do not satisfy this audit's `xcodebuild -version` requirement. Missing tools
+are a failed prerequisite, not a signal to install software during the final audit.
+
 A development guest is **not** a clean production base. No real base was installed,
 sanitized, published, or boot-validated as part of adding this tooling.
 
@@ -45,6 +50,16 @@ variables. The normal host GuestService readiness gate and a successful final
 GuestService exec of this script establish transport/exec functionality; the
 plist flag or a readiness file alone does not. An audit run over SSH alone is
 not sufficient evidence for publication.
+
+Stage the reviewed script and baseline outside all audited homes, for example
+under root-owned `/opt/base-audit`, not `/var/root`, `/Users/Shared`, or an account's
+home. Copy the JSON result directly to the operator through GuestService rather
+than redirecting it into a guest home. Do not add the script, baseline, or report
+to the home allowlist to make an audit pass. The example's hash placeholders must
+be supplied as literal arguments to GuestService exec, not exported by opening an
+interactive root shell. Close existing shells before the final audit: a shell can
+rewrite history on exit after `--clean-transient` has removed it. The audit cannot
+prove there are no future writers, so keep the guest quiescent through shutdown.
 
 Example final guest command, issued through the normal authenticated instance
 exec interface (substitute reviewed paths/hashes; do not run on the Mac host):
@@ -213,8 +228,19 @@ python3 scripts/macos/pipeline.py \
   --source source.tar.gz \
   --target registry.example/macos-app:candidate-001 \
   --destination-api https://runtime-mac.example \
-  --output /private/base-release/derivative-receipt.json --timeout 7200
+  --output /private/base-release/derivative-receipt.json --timeout 7200 \
+  --network-mode isolated
 ```
+
+`--network-mode` defaults to `isolated` and always sends the explicit
+`machine_network_mode` multipart field. The example recipe needs no network.
+Recipes that download pinned browser/runtime artifacts must deliberately select
+`--network-mode egress`. **Egress is unrestricted VZ NAT**, not domain-allowlisted
+or Linux TAP-policy-equivalent networking; recipes must verify artifact hashes.
+There is no automatic fallback from isolated to egress. The API server must
+support the `machine_network_mode=isolated|egress` field; older servers reject the
+request rather than silently dropping this policy. The chosen mode is recorded
+in the derivative receipt.
 
 Set `HYPEMAN_TOKEN` and `HYPEMAN_DEST_TOKEN` using the existing protected credential
 mechanism. The script streams multipart source, bounds polling/HTTP requests,
