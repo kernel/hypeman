@@ -2,8 +2,8 @@ package builds
 
 import (
 	"context"
-	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
@@ -80,9 +80,11 @@ type guestMachineSession struct {
 	workspace, guestDir string
 	receipt             MachineStopReceipt
 	sanitized           bool
+	recipeHash          string
 }
 
-func (s *guestMachineSession) ID() string { return s.instance.Id }
+func (s *guestMachineSession) ID() string                { return s.instance.Id }
+func (s *guestMachineSession) machineRecipeHash() string { return s.recipeHash }
 func (s *guestMachineSession) dialer() (hypervisor.VsockDialer, error) {
 	return hypervisor.NewVsockDialer(s.instance.HypervisorType, s.instance.VsockSocket, s.instance.VsockCID)
 }
@@ -91,7 +93,9 @@ func (s *guestMachineSession) exec(ctx context.Context, command []string, cwd st
 	if err != nil {
 		return err
 	}
-	exit, err := guest.ExecIntoInstance(ctx, dialer, guest.ExecOptions{Command: command, Cwd: cwd, Env: env, WaitForAgent: wait})
+	// Drain output without retaining or publishing it. Redaction cannot reliably
+	// make arbitrary guest output safe: even successful commands may print secrets.
+	exit, err := guest.ExecIntoInstance(ctx, dialer, guest.ExecOptions{Command: command, Cwd: cwd, Env: env, WaitForAgent: wait, Stdout: io.Discard, Stderr: io.Discard})
 	if err != nil {
 		return err
 	}
@@ -115,6 +119,7 @@ func (s *guestMachineSession) Provision(ctx context.Context, source string) erro
 	if err != nil {
 		return err
 	}
+	s.recipeHash = recipe.hash
 	if err = s.exec(ctx, []string{"/bin/sh", "-c", `test "$(/usr/bin/id -u)" -eq 0`}, "", nil, 30*time.Second); err != nil {
 		return err
 	}
@@ -131,15 +136,9 @@ func (s *guestMachineSession) Provision(ctx context.Context, source string) erro
 	if err = guest.CopyToInstance(ctx, dialer, guest.CopyToInstanceOptions{SrcPath: root, DstPath: s.guestDir}); err != nil {
 		return err
 	}
-	for i, step := range recipe.Steps {
-		if err = s.exec(ctx, step.Command, s.guestDir, step.Env, 0); err != nil {
-			if exitErr := (*machineExitError)(nil); errors.As(err, &exitErr) {
-				return &machineStepError{step: i + 1, code: exitErr.code}
-			}
-			return err
-		}
-	}
-	return nil
+	return runMachineRecipe(ctx, recipe, func(ctx context.Context, step machineRecipeStep) error {
+		return s.exec(ctx, step.Command, s.guestDir, step.Env, 0)
+	})
 }
 
 func (s *guestMachineSession) Sanitize(ctx context.Context) error {

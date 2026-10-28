@@ -443,6 +443,9 @@ func buildToOAPI(b *builds.Build) oapi.Build {
 			BuildkitVersion: &b.Provenance.BuildkitVersion,
 			Timestamp:       &b.Provenance.Timestamp,
 		}
+		if b.Provenance.RecipeHash != "" {
+			oapiBuild.Provenance.RecipeHash = &b.Provenance.RecipeHash
+		}
 		if len(b.Provenance.LockfileHashes) > 0 {
 			oapiBuild.Provenance.LockfileHashes = &b.Provenance.LockfileHashes
 		}

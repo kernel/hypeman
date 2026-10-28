@@ -124,6 +124,11 @@ type BuildProvenance struct {
 	// SourceHash is the SHA256 of the source tarball
 	SourceHash string `json:"source_hash"`
 
+	// RecipeHash is the SHA256 of the exact validated machine recipe bytes.
+	// Omitted when the executor provides no recipe evidence. Machine toolchain
+	// versions are not inferred; BuildkitVersion remains empty for machine builds.
+	RecipeHash string `json:"recipe_hash,omitempty"`
+
 	// LockfileHashes maps lockfile names to their SHA256 hashes
 	LockfileHashes map[string]string `json:"lockfile_hashes,omitempty"`
 

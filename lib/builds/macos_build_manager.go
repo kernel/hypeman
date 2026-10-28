@@ -27,6 +27,13 @@ func (m *manager) skipMachineBuildRecovery(meta *buildMetadata) bool {
 // executeMachineBuild is a backend of the same queued build job. runBuild owns
 // deadline/status/log completion, and CreateBuild already staged verified source.
 func (m *manager) executeMachineBuild(ctx context.Context, id string, req CreateBuildRequest, policy *BuildPolicy) (*BuildResult, error) {
+	// The existing file-backed log reader supplies both GetBuildLogs and SSE.
+	// This callback receives only bounded host-authored progress, never guest output.
+	ctx = context.WithValue(ctx, machineProgressKey{}, func(progress machineProgress) {
+		if err := appendLog(m.paths, id, []byte(progress.line()+"\n")); err != nil {
+			m.logger.Warn("failed to append machine build progress", "id", id)
+		}
+	})
 	backend := m.config.MachineBuild
 	if backend == nil {
 		return nil, fmt.Errorf("machine build backend is not configured")
