@@ -125,6 +125,34 @@ func nvmlCreatableProfiles(gpus []string) (map[string][]creatableProfile, error)
 	return byGPU, errors.Join(errs...)
 }
 
+// nvmlSupportedProfileNames asks NVML for the name of every profile the GPUs
+// support, in either vGPU mode, whether or not one could be created now.
+func nvmlSupportedProfileNames(gpus []string) (map[string]struct{}, error) {
+	f, err := openNVML()
+	if err != nil {
+		return nil, err
+	}
+	names := make(map[string]struct{})
+	for _, gpu := range gpus {
+		var device uintptr
+		if err := f.check("nvmlDeviceGetHandleByPciBusId_v2", f.deviceGetHandleByPCIBusID(gpu, &device)); err != nil {
+			return nil, fmt.Errorf("GPU %s: %w", gpu, err)
+		}
+		typeIDs, err := f.supportedTypes(device)
+		if err != nil {
+			return nil, fmt.Errorf("GPU %s: %w", gpu, err)
+		}
+		for _, typeID := range typeIDs {
+			name, err := f.typeName(typeID)
+			if err != nil {
+				return nil, fmt.Errorf("GPU %s: %w", gpu, err)
+			}
+			names[name] = struct{}{}
+		}
+	}
+	return names, nil
+}
+
 func (f *nvmlFuncs) creatableProfiles(gpu string) ([]creatableProfile, error) {
 	var device uintptr
 	if err := f.check("nvmlDeviceGetHandleByPciBusId_v2", f.deviceGetHandleByPCIBusID(gpu, &device)); err != nil {

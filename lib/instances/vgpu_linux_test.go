@@ -40,6 +40,24 @@ func newVGPUAllocationManager(t *testing.T, vfs []devices.VirtualFunction) *mana
 	}
 }
 
+// A claim for a supported profile that no GPU has room for reports
+// insufficient resources, so the API answers 409 rather than a 500 the caller
+// retries on the same host. The supported list comes from the host's VFs.
+func TestVGPUClaimSupportedProfileWithoutRoomIsInsufficientResources(t *testing.T) {
+	vfs := []devices.VirtualFunction{{PCIAddress: "0000:82:00.4", ParentGPU: "0000:82:00.0"}}
+	m := newVGPUAllocationManager(t, vfs)
+	var queried []devices.VirtualFunction
+	m.vendorVFIOSupported = func(vfs []devices.VirtualFunction) (map[string]struct{}, error) {
+		queried = vfs
+		return map[string]struct{}{testVGPUProfile: {}, "NVIDIA L40S-4Q": {}}, nil
+	}
+	meta := saveTestVGPUInstance(t, m, "new")
+
+	_, err := m.claimVGPU(context.Background(), meta, "NVIDIA L40S-4Q")
+	require.ErrorIs(t, err, ErrInsufficientResources)
+	assert.Equal(t, vfs, queried)
+}
+
 func TestConcurrentVGPUClaimsUseDistinctVFs(t *testing.T) {
 	vfs := []devices.VirtualFunction{
 		{PCIAddress: "0000:82:00.4", ParentGPU: "0000:82:00.0"},
