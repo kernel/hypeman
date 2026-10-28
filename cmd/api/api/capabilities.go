@@ -6,7 +6,6 @@ import (
 	"sync"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
-	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/logger"
 	"github.com/kernel/hypeman/lib/network"
 	"github.com/kernel/hypeman/lib/oapi"
@@ -26,6 +25,8 @@ const (
 	featureLogs             = "logs"
 	featureDevices          = "devices"
 	featureRosettaEmulation = "rosetta-emulation"
+	featureMacOSImages      = "macos-machine-images"
+	featureMacOSBuilds      = "macos-machine-builds-v1"
 )
 
 // apiVersion is the API contract version from the embedded OpenAPI document.
@@ -133,13 +134,11 @@ func (s *ApiService) GetCapabilities(ctx context.Context, _ oapi.GetCapabilities
 		},
 		Runtimes: runtimes,
 		Network:  *networkCaps,
-		Images: oapi.CapabilitiesImages{
-			Platforms:       imagePlatforms(runtime.GOARCH, emulation),
-			DefaultPlatform: images.HostPlatformString(),
-		},
+		Images:   hostImageCapabilities(runtime.GOOS, runtime.GOARCH, emulation, s.Config.MacOSOnly),
 		Features: serverFeatures(runtime.GOOS, emulation),
 	}
 
+	resp.Features = append(resp.Features, machineImageFeatures(runtime.GOOS, runtime.GOARCH, s.Config.MacOSOnly && s.Config.MacOSBuilds)...)
 	return oapi.GetCapabilities200JSONResponse(resp), nil
 }
 
@@ -208,6 +207,33 @@ func imagePlatforms(goarch string, emulation bool) []string {
 		platforms = append(platforms, "linux/amd64")
 	}
 	return platforms
+}
+
+func hostImageCapabilities(goos, goarch string, emulation, macOSOnly bool) oapi.CapabilitiesImages {
+	caps := oapi.CapabilitiesImages{
+		Platforms:       imagePlatforms(goarch, emulation),
+		DefaultPlatform: "linux/" + goarch,
+	}
+	if goos == "darwin" && goarch == "arm64" {
+		if macOSOnly {
+			caps.Platforms = []string{"darwin/arm64"}
+			caps.DefaultPlatform = "darwin/arm64"
+		} else {
+			caps.Platforms = append(caps.Platforms, "darwin/arm64")
+		}
+	}
+	return caps
+}
+
+func machineImageFeatures(goos, goarch string, builds bool) []string {
+	if goos != "darwin" || goarch != "arm64" {
+		return nil
+	}
+	features := []string{featureMacOSImages}
+	if builds {
+		features = append(features, featureMacOSBuilds)
+	}
+	return features
 }
 
 // serverFeatures builds the server-level feature ID list: API surfaces that
