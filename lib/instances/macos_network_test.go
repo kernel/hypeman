@@ -1,11 +1,15 @@
 package instances
 
 import (
+	"context"
 	"net/netip"
 	"os"
+	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/paths"
 	"github.com/stretchr/testify/require"
 )
@@ -104,4 +108,42 @@ func TestMacOSGuestSubnet(t *testing.T) {
 	require.Equal(t, "192.168.128.8/29", subnet.String())
 	_, err = macOSGuestSubnet("fd00::2")
 	require.Error(t, err)
+}
+
+const deleteShutdownTestHypervisor hypervisor.Type = "macos-delete-shutdown-test"
+
+type shutdownRecordingHypervisor struct {
+	lifecycleNoopHypervisor
+	calls *atomic.Int32
+}
+
+func (h shutdownRecordingHypervisor) Shutdown(context.Context) error {
+	h.calls.Add(1)
+	return nil
+}
+
+func (h shutdownRecordingHypervisor) Capabilities() hypervisor.Capabilities {
+	return hypervisor.Capabilities{SupportsGracefulVMMShutdown: true}
+}
+
+// A killed vz-shim leaves its vmnet network behind and blocks its subnet, so delete
+// asks a networked macOS guest's shim to stop the VM instead of killing it.
+func TestDeleteStopsMacOSShimBeforeKilling(t *testing.T) {
+	var calls atomic.Int32
+	hypervisor.RegisterClientFactory(deleteShutdownTestHypervisor, func(string) (hypervisor.Hypervisor, error) {
+		return shutdownRecordingHypervisor{lifecycleNoopHypervisor: lifecycleNoopHypervisor{state: hypervisor.StateRunning}, calls: &calls}, nil
+	})
+	m := &manager{}
+	inst := func(macOS bool) *Instance {
+		stored := StoredMetadata{Id: "delete-shutdown", HypervisorType: deleteShutdownTestHypervisor, NetworkEnabled: true, SocketPath: filepath.Join(t.TempDir(), "vz.sock")}
+		if macOS {
+			stored.MacOS = macOSGuestMetadata(1).MacOS
+		}
+		return &Instance{StoredMetadata: stored}
+	}
+
+	require.NoError(t, m.stopHypervisorForDelete(context.Background(), inst(true)))
+	require.EqualValues(t, 1, calls.Load(), "a macOS shim is asked to stop its VM")
+	require.NoError(t, m.stopHypervisorForDelete(context.Background(), inst(false)))
+	require.EqualValues(t, 1, calls.Load(), "other guests are killed as before")
 }

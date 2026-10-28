@@ -86,6 +86,12 @@ ingress caches upstream addresses. Clones and forks get a new address. Instances
 started before this change get an address at their next start; until then they
 stay on vmnet's shared NAT and report none.
 
+The guest's vz-shim owns its vmnet network. If the shim is killed while the guest
+runs (SIGKILL, a crash), macOS keeps the network and refuses to create that subnet
+again until the host restarts, so that guest cannot start and its address cannot be
+reused. Stop and delete therefore ask the shim to stop the VM and exit, and kill it
+only if it does not.
+
 **Without the guest agent, `Running` means the VMM is running, not that SSH,
 the desktop or Chrome is ready.** Unmanaged templates still need an external
 readiness check. Templates provisioned with the shared Darwin GuestService can opt

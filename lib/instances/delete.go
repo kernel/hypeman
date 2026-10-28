@@ -132,7 +132,7 @@ func (m *manager) deleteInstanceWithOptions(
 			attribute.String("hypervisor", string(stored.HypervisorType)),
 			attribute.String("operation", "force_kill_hypervisor"),
 		)
-		err := m.killHypervisor(killCtx, &inst)
+		err := m.stopHypervisorForDelete(killCtx, &inst)
 		killSpanEnd(err)
 		if err != nil {
 			// The hypervisor may still be running, so tearing down its vGPU,
@@ -231,6 +231,18 @@ func resolveDeleteStopTimeout(stored *StoredMetadata) int {
 		bound = vfioDeleteGracefulShutdownTimeout
 	}
 	return min(resolveStopTimeout(stored), bound)
+}
+
+// stopHypervisorForDelete stops the hypervisor before a delete removes the instance.
+// A macOS guest's vz-shim owns its vmnet network, and macOS keeps a network whose
+// owner is killed while the VM is attached, which blocks that subnet until the host
+// restarts. Its shim is asked to stop the VM and exit first; shutdownHypervisor still
+// kills it if it does not. Other guests are killed as before.
+func (m *manager) stopHypervisorForDelete(ctx context.Context, inst *Instance) error {
+	if inst.MacOS != nil && inst.NetworkEnabled {
+		return m.shutdownHypervisor(ctx, inst)
+	}
+	return m.killHypervisor(ctx, inst)
 }
 
 // killHypervisor force kills the hypervisor process without graceful shutdown.
