@@ -11,6 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/instances"
@@ -99,6 +100,116 @@ func TestMachineStorageRestartRetainsReservations(t *testing.T) {
 	require.Empty(t, restarted.jobs)
 }
 
+func TestMachineReservationAtomicMarkers(t *testing.T) {
+	s := testMachineStorage(t)
+	// A process may exit while writing its unpublished temporary marker.
+	require.NoError(t, os.WriteFile(filepath.Join(s.markers, ".reservation-interrupted"), []byte("8"), 0600))
+	restarted, err := NewMachineBuildStorage(s.root, s.limits)
+	require.NoError(t, err)
+	require.Empty(t, restarted.jobs)
+	require.NoError(t, restarted.reserve(context.Background(), "job", restarted.root))
+	marker := filepath.Join(s.markers, "job")
+	data, err := os.ReadFile(marker)
+	require.NoError(t, err)
+	require.Equal(t, strconv.FormatInt(s.limits.MaxExportBytes, 10), string(data))
+	require.Error(t, restarted.writeMarker("job", "partial", false), "initial marker cannot overwrite an existing reservation")
+	data, err = os.ReadFile(marker)
+	require.NoError(t, err)
+	require.Equal(t, strconv.FormatInt(s.limits.MaxExportBytes, 10), string(data))
+	require.NoError(t, restarted.RecordPublication(context.Background(), "job", machineTestDigest))
+	data, err = os.ReadFile(marker)
+	require.NoError(t, err)
+	require.Equal(t, strconv.FormatInt(s.limits.MaxExportBytes, 10)+"\n"+machineTestDigest, string(data))
+}
+
+func TestMachinePublicationDigestSurvivesRestart(t *testing.T) {
+	s := testMachineStorage(t)
+	require.NoError(t, s.reserve(context.Background(), "job", s.root))
+	require.Error(t, s.RecordPublication(context.Background(), "job", "invalid"))
+	require.NoError(t, s.RecordPublication(context.Background(), "job", machineTestDigest))
+	require.NoError(t, s.finish("job", false))
+	restarted, err := NewMachineBuildStorage(s.root, s.limits)
+	require.NoError(t, err)
+	require.Equal(t, machineTestDigest, restarted.publicationDigest("job"))
+	require.True(t, restarted.quarantined("job"))
+}
+
+type delayedPublicationImages struct {
+	images.Manager
+	expected string
+	ready    atomic.Bool
+	lookedUp chan string
+	latest   atomic.Int32
+}
+
+func (i *delayedPublicationImages) GetImage(_ context.Context, ref string) (*images.Image, error) {
+	select {
+	case i.lookedUp <- ref:
+	default:
+	}
+	if !strings.Contains(ref, "@") {
+		i.latest.Add(1)
+		return &images.Image{Status: images.StatusReady, Digest: "sha256:" + strings.Repeat("b", 64)}, nil
+	}
+	if ref != i.expected || !i.ready.Load() {
+		return nil, images.ErrNotFound
+	}
+	return &images.Image{Status: images.StatusReady, Digest: machineTestDigest}, nil
+}
+
+func TestMachinePublicationWaitsForExactDelayedImport(t *testing.T) {
+	f := newMachineFixture()
+	m := newMachineTestManager(t, f, f, nil, false)
+	imageManager := &delayedPublicationImages{expected: "builds/job@" + machineTestDigest, lookedUp: make(chan string, 1)}
+	m.imageManager = imageManager
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- m.waitMachinePublication(ctx, "job", machineTestDigest) }()
+	select {
+	case ref := <-imageManager.lookedUp:
+		require.Equal(t, imageManager.expected, ref)
+	case <-ctx.Done():
+		t.Fatal("no image lookup")
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("returned before async conversion started: %v", err)
+	default:
+	}
+	imageManager.ready.Store(true)
+	require.NoError(t, <-done)
+	require.Zero(t, imageManager.latest.Load(), "stale latest must never satisfy publication")
+	imageManager.ready.Store(false)
+	bounded, stop := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer stop()
+	require.ErrorIs(t, m.waitMachinePublication(bounded, "job", machineTestDigest), context.DeadlineExceeded)
+}
+
+func TestMachineReconcileRetainsUncreatedPublication(t *testing.T) {
+	f := newMachineFixture()
+	m := newMachineTestManager(t, f, f, nil, false)
+	s := m.config.MachineBuild.Storage
+	require.NoError(t, s.reserve(context.Background(), "job", s.root))
+	require.NoError(t, s.RecordPublication(context.Background(), "job", machineTestDigest))
+	require.NoError(t, s.finish("job", false))
+	require.NoError(t, writeMetadata(m.paths, &buildMetadata{ID: "job", Status: StatusCancelled}))
+	imageManager := &delayedPublicationImages{expected: "builds/job@" + machineTestDigest, lookedUp: make(chan string, 1)}
+	m.imageManager = imageManager
+	require.NoError(t, m.reconcileMachineStorage(context.Background()))
+	require.True(t, s.quarantined("job"), "NotFound is not terminal after manifest submission")
+	imageManager.ready.Store(true)
+	require.NoError(t, m.reconcileMachineStorage(context.Background()))
+	require.Empty(t, s.jobs)
+	require.Zero(t, imageManager.latest.Load())
+	// Without a recorded digest the production publisher could not have committed.
+	require.NoError(t, s.reserve(context.Background(), "job", s.root))
+	require.NoError(t, s.finish("job", false))
+	imageManager.ready.Store(false)
+	require.NoError(t, m.reconcileMachineStorage(context.Background()))
+	require.Empty(t, s.jobs)
+}
+
 func TestMachineStorageSourceHeadroom(t *testing.T) {
 	s := testMachineStorage(t)
 	free := s.limits.MinFreeBytes + 10
@@ -167,7 +278,7 @@ type capacityImages struct {
 }
 
 func (i capacityImages) GetImage(context.Context, string) (*images.Image, error) {
-	return &images.Image{Status: i.status}, nil
+	return &images.Image{Status: i.status, Digest: machineTestDigest}, nil
 }
 
 func TestMachineStorageTerminalRecovery(t *testing.T) {
@@ -177,6 +288,7 @@ func TestMachineStorageTerminalRecovery(t *testing.T) {
 			m := newMachineTestManager(t, f, f, nil, false)
 			s := m.config.MachineBuild.Storage
 			require.NoError(t, s.reserve(context.Background(), "terminal", s.root))
+			require.NoError(t, s.RecordPublication(context.Background(), "terminal", machineTestDigest))
 			require.NoError(t, s.finish("terminal", false))
 			require.NoError(t, writeMetadata(m.paths, &buildMetadata{ID: "terminal", Status: StatusCancelled}))
 			m.instanceManager = &machineLifecycleInstances{missing: mode != "live-vm"}
@@ -204,7 +316,8 @@ func TestMachineStorageHeldThroughImageImport(t *testing.T) {
 			f := newMachineFixture()
 			r := machineTestRunner(t, f)
 			req := machineTestRequest()
-			req.onPublished = func(context.Context) error {
+			req.onPublished = func(_ context.Context, publication MachinePublication) error {
+				require.Equal(t, machineTestDigest, publication.Digest)
 				require.Len(t, r.Storage.jobs, 1)
 				if fail {
 					return context.DeadlineExceeded

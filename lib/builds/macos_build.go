@@ -19,11 +19,11 @@ import (
 // authorization. A concrete driver must require a provisioned system agent.
 type MachineBuildRequest struct {
 	ID          string
-	BaseImage   string                      // Installed darwin/arm64 image, pinned by sha256 digest.
-	SourceHash  string                      // Optional expected lowercase SHA256 of the source archive.
-	Policy      BuildPolicy                 // Zero CPU/memory inherit the base machine's exact resources.
-	onStarted   func(string) error          // Normal manager records the owned builder before provisioning.
-	onPublished func(context.Context) error // Hold storage until the shared image pipeline is terminal.
+	BaseImage   string                                          // Installed darwin/arm64 image, pinned by sha256 digest.
+	SourceHash  string                                          // Optional expected lowercase SHA256 of the source archive.
+	Policy      BuildPolicy                                     // Zero CPU/memory inherit the base machine's exact resources.
+	onStarted   func(string) error                              // Normal manager records the owned builder before provisioning.
+	onPublished func(context.Context, MachinePublication) error // Hold storage until the shared image pipeline is terminal.
 }
 
 type MachineStopReceipt = instances.MacOSBuildExportReceipt
@@ -263,7 +263,7 @@ func (r *MachineBuildBackend) runPrepared(ctx context.Context, req MachineBuildR
 		return nil, fmt.Errorf("machine publication receipt is unverified")
 	}
 	if req.onPublished != nil {
-		if e = req.onPublished(ctx); e != nil {
+		if e = req.onPublished(ctx, publication); e != nil {
 			return nil, machineFailure("image_ready", e)
 		}
 	}

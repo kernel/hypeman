@@ -30,8 +30,9 @@ import (
 // the manifest is committed last.
 // No credentials, redirect destinations or arbitrary output repositories come from recipes.
 type StreamingMachinePublisher struct {
-	RegistryURL string
-	Tokens      *RegistryTokenGenerator
+	RegistryURL          string
+	Tokens               *RegistryTokenGenerator
+	BeforeManifestCommit func(context.Context, string, string) error
 }
 
 type machineBlob struct {
@@ -130,6 +131,11 @@ func (p *StreamingMachinePublisher) Publish(ctx context.Context, id, bundle stri
 		response.Body.Close()
 		if e != nil || response.StatusCode != http.StatusOK || n != blob.descriptor.Size || hex.EncodeToString(sum.Sum(nil)) != blob.descriptor.Digest.Hex {
 			return MachinePublication{}, fmt.Errorf("machine blob verification failed")
+		}
+	}
+	if p.BeforeManifestCommit != nil {
+		if err := p.BeforeManifestCommit(ctx, id, digest); err != nil {
+			return MachinePublication{}, err
 		}
 	}
 	target := base + "/manifests/latest"

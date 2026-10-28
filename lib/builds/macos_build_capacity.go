@@ -28,7 +28,10 @@ func (l MachineBuildLimits) Validate() error {
 	return nil
 }
 
-type machineReservation struct{ quarantined bool }
+type machineReservation struct {
+	quarantined       bool
+	publicationDigest string
+}
 
 // MachineBuildStorage serializes admission against a single data filesystem.
 // Reservations intentionally double-count already-written active job bytes.
@@ -65,6 +68,11 @@ func NewMachineBuildStorage(root string, limits MachineBuildLimits) (*MachineBui
 		return nil, err
 	}
 	for _, entry := range entries {
+		// Incomplete atomic writes never authorized VM creation or manifest
+		// commit. Ignore their temporary files rather than blocking startup.
+		if strings.HasPrefix(entry.Name(), ".reservation-") {
+			continue
+		}
 		if !validMachineReservationID(entry.Name()) || !entry.Type().IsRegular() {
 			return nil, fmt.Errorf("invalid machine storage reservation")
 		}
@@ -72,10 +80,17 @@ func NewMachineBuildStorage(root string, limits MachineBuildLimits) (*MachineBui
 		if err != nil {
 			return nil, err
 		}
-		if string(data) != strconv.FormatInt(limits.MaxExportBytes, 10) {
+		parts := strings.Split(string(data), "\n")
+		if parts[0] != strconv.FormatInt(limits.MaxExportBytes, 10) {
 			return nil, fmt.Errorf("machine storage reservation requires its original export limit")
 		}
-		s.jobs[entry.Name()] = machineReservation{quarantined: true}
+		digest := ""
+		if len(parts) == 2 && ValidMachineDigest(parts[1]) {
+			digest = parts[1]
+		} else if len(parts) != 1 {
+			return nil, fmt.Errorf("invalid machine publication reservation")
+		}
+		s.jobs[entry.Name()] = machineReservation{quarantined: true, publicationDigest: digest}
 	}
 	return s, nil
 }
@@ -136,24 +151,8 @@ func (s *MachineBuildStorage) reserve(ctx context.Context, id, workDir string) e
 	}
 	// Persist before creating a VM. Restart must not forget a still-running
 	// sparse working disk's potential growth after interrupted cleanup.
-	marker, err := os.OpenFile(filepath.Join(s.markers, id), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
-	if err != nil {
-		return err
-	}
 	s.jobs[id] = machineReservation{quarantined: true}
-	_, writeErr := marker.WriteString(strconv.FormatInt(s.limits.MaxExportBytes, 10))
-	syncErr := marker.Sync()
-	closeErr := marker.Close()
-	if writeErr != nil {
-		return writeErr
-	}
-	if syncErr != nil {
-		return syncErr
-	}
-	if closeErr != nil {
-		return closeErr
-	}
-	if err := syncMachineReservationDir(s.markers); err != nil {
+	if err := s.writeMarker(id, strconv.FormatInt(s.limits.MaxExportBytes, 10), false); err != nil {
 		return err
 	}
 	s.jobs[id] = machineReservation{}
@@ -182,7 +181,9 @@ func (s *MachineBuildStorage) stageSource(path string, size int64, stage func() 
 func (s *MachineBuildStorage) finish(id string, clean bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.jobs[id] = machineReservation{quarantined: true}
+	job := s.jobs[id]
+	job.quarantined = true
+	s.jobs[id] = job
 	if clean {
 		if err := os.Remove(filepath.Join(s.markers, id)); err != nil {
 			return err
@@ -193,6 +194,68 @@ func (s *MachineBuildStorage) finish(id string, clean bool) error {
 		delete(s.jobs, id)
 	}
 	return nil
+}
+
+// RecordPublication durably records the exact manifest before a publisher may
+// commit it. A missing local image is not proof that its async import is done.
+func (s *MachineBuildStorage) RecordPublication(ctx context.Context, id, digest string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	job, ok := s.jobs[id]
+	if !ok || job.quarantined || !ValidMachineDigest(digest) || (job.publicationDigest != "" && job.publicationDigest != digest) {
+		return fmt.Errorf("active machine reservation and canonical publication digest required")
+	}
+	if err := s.writeMarker(id, strconv.FormatInt(s.limits.MaxExportBytes, 10)+"\n"+digest, true); err != nil {
+		return err
+	}
+	job.publicationDigest = digest
+	s.jobs[id] = job
+	return nil
+}
+
+func (s *MachineBuildStorage) writeMarker(id, data string, replace bool) error {
+	file, err := os.CreateTemp(s.markers, ".reservation-")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(file.Name())
+	_, writeErr := file.WriteString(data)
+	syncErr := file.Sync()
+	closeErr := file.Close()
+	if writeErr != nil {
+		return writeErr
+	}
+	if syncErr != nil {
+		return syncErr
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	target := filepath.Join(s.markers, id)
+	if replace {
+		if err := os.Rename(file.Name(), target); err != nil {
+			return err
+		}
+	} else {
+		// Link installs an already-synced complete marker without replacing a
+		// reservation that another caller may already have installed.
+		if err := os.Link(file.Name(), target); err != nil {
+			return err
+		}
+		if err := os.Remove(file.Name()); err != nil {
+			return err
+		}
+	}
+	return syncMachineReservationDir(s.markers)
+}
+
+func (s *MachineBuildStorage) publicationDigest(id string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.jobs[id].publicationDigest
 }
 
 func (s *MachineBuildStorage) quarantinedIDs() []string {

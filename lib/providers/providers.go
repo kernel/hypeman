@@ -472,7 +472,7 @@ func ProvideBuildManager(p *paths.Paths, cfg *config.Config, instanceManager ins
 		buildConfig.MachineBuild = &builds.MachineBuildBackend{
 			Storage:   storage,
 			Driver:    &builds.GuestMachineBuildDriver{Instances: instanceManager, WorkDir: workDir, Paths: p, Storage: storage},
-			Publisher: &builds.StreamingMachinePublisher{RegistryURL: registryURL, Tokens: builds.NewRegistryTokenGenerator(cfg.JwtSecret)},
+			Publisher: &builds.StreamingMachinePublisher{RegistryURL: registryURL, Tokens: builds.NewRegistryTokenGenerator(cfg.JwtSecret), BeforeManifestCommit: storage.RecordPublication},
 		}
 	}
 

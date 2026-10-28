@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/instances"
@@ -38,18 +39,9 @@ func (m *manager) executeMachineBuild(ctx context.Context, id string, req Create
 		return nil, machineFailure("reap_prior_builder", err)
 	}
 	if backend.Storage != nil {
-		if backend.Storage.quarantined(id) {
-			// A prior manifest submission may have outlived cancellation. Do not
-			// release its disk budget while the local image pipeline is running.
-			imageRef := "builds/" + id
-			prior, err := m.imageManager.GetImage(ctx, imageRef)
-			if err != nil && !errors.Is(err, images.ErrNotFound) {
+		if digest := backend.Storage.publicationDigest(id); digest != "" && backend.Storage.quarantined(id) {
+			if err := m.waitMachinePublication(ctx, id, digest); err != nil {
 				return nil, machineFailure("recover_image_storage", err)
-			}
-			if err == nil && prior.Status != images.StatusReady && prior.Status != images.StatusFailed {
-				if err := m.imageManager.WaitForReady(ctx, imageRef); err != nil {
-					return nil, machineFailure("recover_image_storage", err)
-				}
 			}
 		}
 		if err := backend.Storage.reaped(id); err != nil {
@@ -69,8 +61,10 @@ func (m *manager) executeMachineBuild(ctx context.Context, id string, req Create
 	defer removeMachineWorkspaces(m.paths.BuildDir(id))
 	job := MachineBuildRequest{
 		ID: id, BaseImage: req.MachineBaseImage, SourceHash: req.SourceHash, Policy: *policy,
-		onStarted:   func(instanceID string) error { return m.recordMachineBuilder(id, instanceID) },
-		onPublished: func(ctx context.Context) error { return m.imageManager.WaitForReady(ctx, "builds/"+id) },
+		onStarted: func(instanceID string) error { return m.recordMachineBuilder(id, instanceID) },
+		onPublished: func(ctx context.Context, publication MachinePublication) error {
+			return m.waitMachinePublication(ctx, id, publication.Digest)
+		},
 	}
 	result, err := backend.runPrepared(ctx, job, base, sourcePath, filepath.Dir(filepath.Dir(sourcePath)))
 	if err != nil {
@@ -81,6 +75,34 @@ func (m *manager) executeMachineBuild(ctx context.Context, id string, req Create
 		return nil, fmt.Errorf("machine publication is outside the authorized job repository")
 	}
 	return &BuildResult{Success: true, ImageDigest: result.Publication.Digest, ImageRef: result.Publication.Reference, Provenance: result.Provenance}, nil
+}
+
+func (m *manager) waitMachinePublication(ctx context.Context, id, digest string) error {
+	if !ValidMachineDigest(digest) {
+		return fmt.Errorf("canonical machine publication digest required")
+	}
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	ref := "builds/" + id + "@" + digest
+	for {
+		image, err := m.imageManager.GetImage(ctx, ref)
+		if err != nil && !errors.Is(err, images.ErrNotFound) {
+			return err
+		}
+		if err == nil && image.Digest == digest {
+			if image.Status == images.StatusReady {
+				return nil
+			}
+			if image.Status == images.StatusFailed {
+				return fmt.Errorf("machine image import failed")
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }
 
 // reconcileMachineStorage releases terminal jobs' reservations only after both
@@ -116,12 +138,17 @@ func (m *manager) reconcileMachineStorage(ctx context.Context) error {
 		if len(workspaces) != 0 {
 			continue
 		}
-		image, err := m.imageManager.GetImage(ctx, "builds/"+id)
-		if err != nil && !errors.Is(err, images.ErrNotFound) {
-			return err
-		}
-		if err == nil && image.Status != images.StatusReady && image.Status != images.StatusFailed {
-			continue
+		if digest := storage.publicationDigest(id); digest != "" {
+			image, err := m.imageManager.GetImage(ctx, "builds/"+id+"@"+digest)
+			if errors.Is(err, images.ErrNotFound) {
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			if image.Digest != digest || (image.Status != images.StatusReady && image.Status != images.StatusFailed) {
+				continue
+			}
 		}
 		if err := storage.reaped(id); err != nil {
 			return err
