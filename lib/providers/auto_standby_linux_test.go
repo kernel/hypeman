@@ -60,28 +60,58 @@ func TestAutoStandbyInstanceStoreListToleratesUnknownInstanceWithoutRuntime(t *t
 				State:          instances.StateRunning,
 			},
 			{
+				// Unknown because the VMM query failed; metadata is still readable.
+				StoredMetadata: instances.StoredMetadata{Id: "unknown-vmm"},
+				State:          instances.StateUnknown,
+			},
+			{
 				StoredMetadata: instances.StoredMetadata{Id: "corrupt"},
 				State:          instances.StateUnknown,
 				StateError:     &stateError,
 			},
 		}},
 		runtimeManager: &autoStandbyRuntimeManagerStub{
-			runtimeByID: map[string]*autostandby.Runtime{"running": {IdleSince: &idleSince}},
-			errByID:     map[string]error{"corrupt": unreadable},
+			runtimeByID: map[string]*autostandby.Runtime{
+				"running":     {IdleSince: &idleSince},
+				"unknown-vmm": {IdleSince: &idleSince},
+			},
+			errByID: map[string]error{"corrupt": unreadable},
 		},
 	}
 
 	listed, err := store.ListInstances(context.Background())
 	require.NoError(t, err)
-	require.Len(t, listed, 2)
+	require.Len(t, listed, 3)
 
 	require.Equal(t, "running", listed[0].ID)
 	require.NotNil(t, listed[0].Runtime)
 	require.Equal(t, idleSince, *listed[0].Runtime.IdleSince)
 
-	require.Equal(t, "corrupt", listed[1].ID)
+	require.Equal(t, "unknown-vmm", listed[1].ID)
 	require.Equal(t, string(instances.StateUnknown), listed[1].State)
-	require.Nil(t, listed[1].Runtime)
+	require.NotNil(t, listed[1].Runtime, "readable metadata keeps its runtime even when state is Unknown")
+
+	require.Equal(t, "corrupt", listed[2].ID)
+	require.Equal(t, string(instances.StateUnknown), listed[2].State)
+	require.Nil(t, listed[2].Runtime)
+}
+
+func TestAutoStandbyInstanceStoreListFailsOnRuntimeErrorForKnownState(t *testing.T) {
+	t.Parallel()
+
+	loadErr := errors.New("read metadata: permission denied")
+	store := autoStandbyInstanceStore{
+		manager: autoStandbyListManagerStub{insts: []instances.Instance{{
+			StoredMetadata: instances.StoredMetadata{Id: "running"},
+			State:          instances.StateRunning,
+		}}},
+		runtimeManager: &autoStandbyRuntimeManagerStub{
+			errByID: map[string]error{"running": loadErr},
+		},
+	}
+
+	_, err := store.ListInstances(context.Background())
+	require.ErrorIs(t, err, loadErr)
 }
 
 func TestAutoStandbyInstanceStoreSubscribeInstanceEventsIncludesRuntime(t *testing.T) {
