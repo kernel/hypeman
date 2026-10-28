@@ -39,6 +39,23 @@ permissions:
   contents: read
 
 jobs:
+  test-macos-pipeline-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.TEST_SOURCE_REPO }}
+          ref: ${{ env.TEST_SOURCE_REF }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check macOS pipeline contracts
+        run: |
+          python3 -m unittest discover -s scripts/macos -p 'test_*.py' -v
+          python3 -m json.tool docs/schemas/macos-build-v1.schema.json >/dev/null
+          sh -n scripts/macos/example/provision.sh
+
   test:
     runs-on: [self-hosted, linux, x64, kvm]
     steps:

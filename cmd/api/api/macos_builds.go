@@ -72,7 +72,7 @@ func parseMachineBuildMultipart(body *multipart.Reader) (builds.CreateBuildReque
 		switch name {
 		case "source":
 			limit = 64 << 20
-		case "machine_base_image", "timeout_seconds", "memory_mb", "cpus", "tags":
+		case "machine_base_image", "machine_network_mode", "timeout_seconds", "memory_mb", "cpus", "tags":
 		default:
 			return req, nil, fmt.Errorf("unsupported machine build field: %s", name)
 		}
@@ -88,6 +88,11 @@ func parseMachineBuildMultipart(body *multipart.Reader) (builds.CreateBuildReque
 			source = data
 		case "machine_base_image":
 			req.MachineBaseImage = string(data)
+		case "machine_network_mode":
+			if string(data) != "isolated" && string(data) != "egress" {
+				return req, nil, fmt.Errorf("machine_network_mode must be isolated or egress")
+			}
+			req.BuildPolicy.NetworkMode = string(data)
 		case "tags":
 			req.Tags, err = parseTagsJSON(string(data))
 			if err != nil {

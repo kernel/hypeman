@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Hypeman macOS build recipe v1",
+  "description": "The server additionally rejects duplicate JSON keys, invalid UTF-8, recipes over 64 KiB, and argument/environment values over 8192 UTF-8 bytes. Commands execute as root in the private staged source directory; output is discarded.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "steps"],
+  "properties": {
+    "version": {"const": 1},
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["command"],
+        "properties": {
+          "command": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 128,
+            "prefixItems": [{"type": "string", "pattern": "^/[^\u0000]*$", "maxLength": 8192}],
+            "items": {"type": "string", "pattern": "^[^\u0000]*$", "maxLength": 8192}
+          },
+          "env": {
+            "type": "object",
+            "maxProperties": 128,
+            "propertyNames": {"pattern": "^[A-Za-z_][A-Za-z0-9_]*$"},
+            "additionalProperties": {"type": "string", "pattern": "^[^\u0000]*$", "maxLength": 8192}
+          }
+        }
+      }
+    }
+  }
+}

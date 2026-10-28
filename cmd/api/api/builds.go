@@ -75,7 +75,7 @@ func (s *ApiService) CreateBuild(ctx context.Context, request oapi.CreateBuildRe
 		}
 
 		switch part.FormName() {
-		case "machine_base_image":
+		case "machine_base_image", "machine_network_mode":
 			return oapi.CreateBuild400JSONResponse{Code: "unsupported", Message: "machine builds require macos_only and macos_builds"}, nil
 		case "source":
 			sourceData, err = io.ReadAll(part)

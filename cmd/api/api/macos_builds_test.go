@@ -1,18 +1,17 @@
 package api
 
 import (
-	"time"
-
 	"bytes"
 	"context"
-	"github.com/golang-jwt/jwt/v5"
 	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/kernel/hypeman/cmd/api/config"
 	"github.com/kernel/hypeman/lib/builds"
 	"github.com/kernel/hypeman/lib/oapi"
@@ -90,6 +89,10 @@ func TestMachineBuildMultipartAdmission(t *testing.T) {
 	}{
 		{name: "inherit", ok: true},
 		{name: "policy", extra: [][2]string{{"cpus", "4"}, {"memory_mb", "8192"}, {"timeout_seconds", "1200"}}, ok: true},
+		{name: "isolated network", extra: [][2]string{{"machine_network_mode", "isolated"}}, ok: true},
+		{name: "egress network", extra: [][2]string{{"machine_network_mode", "egress"}}, ok: true},
+		{name: "invalid network", extra: [][2]string{{"machine_network_mode", "bridge"}}},
+		{name: "empty network", extra: [][2]string{{"machine_network_mode", ""}}},
 		{name: "duplicate", extra: [][2]string{{"source", "second"}}},
 		{name: "linux", extra: [][2]string{{"dockerfile", "FROM scratch"}}},
 		{name: "secret", extra: [][2]string{{"secrets", "[]"}}},
@@ -107,6 +110,9 @@ func TestMachineBuildMultipartAdmission(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, base, req.MachineBaseImage)
 			require.Equal(t, []byte("synthetic"), source)
+			if tc.name == "egress network" {
+				require.Equal(t, "egress", req.BuildPolicy.NetworkMode)
+			}
 		})
 	}
 	_, _, err := parseMachineBuildMultipart(machineMultipart(t, [2]string{"source", "synthetic"}, [2]string{"machine_base_image", "example.test/base:latest"}))

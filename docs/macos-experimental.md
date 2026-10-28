@@ -24,9 +24,12 @@ The local importer needs APFS clonefile support. The data directory path must be
 short enough that each guest's sockets fit the 103-byte macOS limit; a boot that
 would exceed it is refused. Images are `darwin/arm64` machine images, not OCI
 macOS containers. Registry pulls also support experimental complete-machine
-bundles described below. Additional tags within the same
-repository are supported; cross-repository promotion remains unsupported.
-Do not mutate the imported image files.
+bundles described below. Local tags can alias a complete machine image across
+repositories; the raw disk, auxiliary storage and platform metadata move together
+into the shared content layout. Local tagging does not publish a registry tag:
+use the normal push API for distribution. Do not mutate the imported image files.
+For a reviewed clean base and immutable registry publication, use the
+[base-image pipeline](macos-base-images.md), not a private development guest.
 
 ## Experimental OCI bundles
 
