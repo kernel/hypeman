@@ -56,6 +56,14 @@ FORBIDDEN = {".ssh", ".aws", ".azure", ".config", ".docker", ".kube", ".gnupg",
              ".bash_history", ".zsh_history", ".python_history", ".lesshst", ".zsh_sessions"}
 
 
+def audit_inputs_outside_homes(homes, paths):
+    roots = [home.resolve(strict=True) for home in homes]
+    for path in paths:
+        resolved = Path(path).resolve(strict=True)
+        require(not any(resolved == home or home in resolved.parents for home in roots),
+                "audit-input-in-home")
+
+
 def audit_homes(homes, baseline):
     seen = set()
     for home in homes:
@@ -122,6 +130,7 @@ def main():
             "unknown-home")
     for home in homes:
         require(home.is_dir() and not home.is_symlink(), "invalid-home")
+    audit_inputs_outside_homes(homes, [__file__, args.home_baseline])
     if args.clean_transient:
         for home in homes:
             for name in (".bash_history", ".zsh_history", ".python_history", ".lesshst"):

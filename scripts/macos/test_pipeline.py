@@ -65,6 +65,22 @@ class Tests(unittest.TestCase):
                 with self.assertRaises(audit.Rejected):
                     audit.audit_homes([Path(root)], {})
 
+    def test_audit_inputs_outside_homes(self):
+        with tempfile.TemporaryDirectory() as root:
+            home = Path(root) / "home"
+            home.mkdir()
+            outside = Path(root) / "audit.py"
+            outside.write_text("reviewed")
+            audit.audit_inputs_outside_homes([home], [outside])
+            inside = home / "baseline.json"
+            inside.write_text("{}")
+            with self.assertRaisesRegex(audit.Rejected, "audit-input-in-home"):
+                audit.audit_inputs_outside_homes([home], [inside])
+            alias = Path(root) / "alias.json"
+            alias.symlink_to(inside)
+            with self.assertRaisesRegex(audit.Rejected, "audit-input-in-home"):
+                audit.audit_inputs_outside_homes([home], [alias])
+
     def test_build_multipart_and_provenance(self):
         class Fake:
             def request(self, path, data, headers):
@@ -85,9 +101,24 @@ class Tests(unittest.TestCase):
             self.assertIn(b'name="machine_base_image"', fake.body)
             self.assertIn(REF.encode(), fake.body)
             self.assertNotIn(b"Authorization", fake.body)
+            self.assertEqual(fake.body.count(b'name="machine_network_mode"'), 1)
+            self.assertIn(b'name="machine_network_mode"\r\n\r\nisolated\r\n', fake.body)
+            self.assertEqual(pipeline.build(fake, REF, source, 60, "egress"), ("build-123", REF, source_hash))
+            self.assertEqual(fake.body.count(b'name="machine_network_mode"'), 1)
+            self.assertIn(b'name="machine_network_mode"\r\n\r\negress\r\n', fake.body)
+            self.assertEqual(int(fake.headers["Content-Length"]), len(fake.body))
             source_hash = "b" * 64
             with self.assertRaises(pipeline.PipelineError):
                 pipeline.build(fake, REF, source, 60)
+
+    def test_invalid_network_mode_before_submission(self):
+        with tempfile.TemporaryDirectory() as root:
+            source = Path(root) / "source.tar.gz"
+            source.write_bytes(b"source")
+            for mode in ("", "nat", "allowlist", "egress\r\ninjected"):
+                with self.subTest(mode=mode):
+                    with self.assertRaisesRegex(pipeline.PipelineError, "invalid-network-mode"):
+                        pipeline.build(None, REF, source, 60, mode)
 
     def test_promote_normal_endpoints(self):
         class Fake:
