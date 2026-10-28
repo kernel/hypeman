@@ -18,7 +18,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Code-Hex/vz/v3"
+	"github.com/Code-Hex/vz/v4"
 	"github.com/kernel/hypeman/lib/hypervisor/vz/shimconfig"
 )
 
@@ -131,23 +131,34 @@ func main() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGTERM, syscall.SIGINT)
 
-	// Monitor VM state
-	stateChanged := vm.StateChangedNotify()
+	// Monitor VM state. Notifications can be dropped and their values can be stale,
+	// so each one, and the start, re-reads the current state.
+	stateChanged := make(chan vz.VirtualMachineState, 8)
+	stopNotify, err := vm.StateChangedNotify(stateChanged)
+	if err != nil {
+		slog.Error("failed to watch VM state", "error", err)
+		os.Exit(1)
+	}
+	defer stopNotify()
 	go func() {
 		for {
-			select {
-			case <-ctx.Done():
-				return
-			case newState := <-stateChanged:
-				slog.Info("VM state changed", "state", newState)
-				if newState == vz.VirtualMachineStateStopped || newState == vz.VirtualMachineStateError {
-					if newState == vz.VirtualMachineStateStopped && !server.forcedStop.Load() {
-						writeStopReceipt(config.StopReceiptPath)
-					}
-					slog.Info("VM stopped, shutting down shim")
-					cancel()
+			newState := vm.State()
+			if newState != vz.VirtualMachineStateStopped && newState != vz.VirtualMachineStateError {
+				select {
+				case <-ctx.Done():
 					return
+				case <-stateChanged:
 				}
+				newState = vm.State()
+				slog.Info("VM state changed", "state", newState)
+			}
+			if newState == vz.VirtualMachineStateStopped || newState == vz.VirtualMachineStateError {
+				if newState == vz.VirtualMachineStateStopped && !server.forcedStop.Load() {
+					writeStopReceipt(config.StopReceiptPath)
+				}
+				slog.Info("VM stopped, shutting down shim")
+				cancel()
+				return
 			}
 		}
 	}()

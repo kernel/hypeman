@@ -10,6 +10,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,7 +19,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Code-Hex/vz/v3"
+	"github.com/Code-Hex/vz/v4"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/hypervisor/vz/shimconfig"
 	"github.com/kernel/hypeman/lib/logger"
@@ -232,10 +234,13 @@ func buildShimConfigFromVMConfig(config hypervisor.VMConfig, socketPath string) 
 			Readonly: disk.Readonly,
 		})
 	}
-	for _, net := range config.Networks {
-		cfg.Networks = append(cfg.Networks, shimconfig.NetworkConfig{
-			MAC: net.MAC,
-		})
+	for _, n := range config.Networks {
+		nc := shimconfig.NetworkConfig{MAC: n.MAC}
+		if config.MacOS != nil && n.IP != "" {
+			nc.IPv4Address = n.IP
+			nc.IPv4Subnet = guestSubnet(n.IP, n.Netmask)
+		}
+		cfg.Networks = append(cfg.Networks, nc)
 	}
 	return cfg
 }
@@ -332,4 +337,14 @@ func (s *Starter) waitForShim(ctx context.Context, socketPath string, timeout ti
 	}
 
 	return nil, fmt.Errorf("timeout waiting for shim socket: %s", socketPath)
+}
+
+// guestSubnet returns the subnet of ip under a dotted netmask, such as 192.168.128.0/29.
+func guestSubnet(ip, netmask string) string {
+	addr, err := netip.ParseAddr(ip)
+	if err != nil {
+		return ""
+	}
+	ones, _ := net.IPMask(net.ParseIP(netmask).To4()).Size()
+	return netip.PrefixFrom(addr, ones).Masked().String()
 }

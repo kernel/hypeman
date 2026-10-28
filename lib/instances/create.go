@@ -468,8 +468,13 @@ func (m *manager) createInstance(
 		})
 	}
 
-	if macOSNetwork := applyMacOSNetwork(stored); macOSNetwork != nil {
+	macOSNetwork, err := m.applyMacOSNetwork(stored)
+	if err != nil {
+		return nil, err
+	}
+	if macOSNetwork != nil {
 		netConfig = macOSNetwork
+		cu.Add(func() { m.forgetMacOSAddress(id) })
 	}
 
 	// 15. Validate and attach volumes

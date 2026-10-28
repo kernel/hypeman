@@ -2,7 +2,7 @@
 
 package api
 
-import "github.com/Code-Hex/vz/v3"
+import "github.com/Code-Hex/vz/v4"
 
 // rosettaInstalled reports whether Rosetta translation for Linux guests is
 // installed and usable right now, using the same Virtualization.framework

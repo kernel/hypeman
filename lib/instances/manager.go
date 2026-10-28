@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -88,6 +89,7 @@ type ResourceLimits struct {
 // ManagerConfig holds non-resource manager behavior settings.
 type ManagerConfig struct {
 	MacOSOnly                         bool
+	MacOSGuestSubnet                  netip.Prefix // pool for macOS guest networks; zero uses DefaultMacOSGuestSubnet
 	LifecycleEventBufferSize          int
 	FirecrackerSnapshotMemoryBackend  string
 	FirecrackerUFFDCacheMaxBytes      int64
@@ -177,6 +179,9 @@ type manager struct {
 	instanceLocks             sync.Map          // map[string]*sync.RWMutex - per-instance locks
 	forkMetadataMu            sync.Mutex
 	macOSBootMu               sync.Mutex // Serialize admission for preserved Mac identities.
+	macOSGuestSubnet          netip.Prefix
+	macOSAddressMu            sync.Mutex
+	macOSPendingAddresses     map[string]netip.Addr // assigned to creates not yet saved
 	macOSOnly                 bool
 	bootMarkerScans           sync.Map      // map[string]time.Time next allowed boot-marker rescan
 	hypervisorStateCache      sync.Map      // map[string]hypervisorStateCacheEntry - last observed hypervisor state per instance
@@ -295,6 +300,7 @@ func NewManagerWithConfigE(p *paths.Paths, imageManager images.Manager, systemMa
 	m := &manager{
 		paths:                            p,
 		macOSOnly:                        managerConfig.MacOSOnly,
+		macOSGuestSubnet:                 managerConfig.MacOSGuestSubnet,
 		imageManager:                     imageManager,
 		systemManager:                    systemManager,
 		networkManager:                   networkManager,

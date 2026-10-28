@@ -76,8 +76,15 @@ CPU and memory default to the imported template (minimum 2 CPUs and 4GB).
 Each instance gets its own writable complete boot disk (`boot.raw`) and auxiliary
 storage; instances created before that naming must be deleted and recreated. No
 Linux kernel, initrd, configuration disk, overlay filesystem or balloon is
-attached. NAT uses the preserved MAC. The IP is observed from the host's VZ
-DHCP leases, which may retain an old lease before the guest is ready.
+attached. A networked guest gets its own vmnet network (macOS 26 and later):
+hypeman assigns it a /29 from `network.macos_subnet_cidr` (default
+`192.168.128.0/20`) and vmnet's DHCP serves the guest a reservation for its
+preserved MAC. The guest's address is stored with the instance, kept through stop
+and standby, and reported whether or not the guest is running. Delete releases it,
+and a released address is not given to another guest for five minutes, longer than
+ingress caches upstream addresses. Clones and forks get a new address. Instances
+started before this change get an address at their next start; until then they
+stay on vmnet's shared NAT and report none.
 
 **Without the guest agent, `Running` means the VMM is running, not that SSH,
 the desktop or Chrome is ready.** Unmanaged templates still need an external
@@ -125,20 +132,20 @@ CDP from off the host, route it through ingress (below) or tunnel it via SSH.
 
 Ingress routes to macOS guests as it does to Linux guests: Caddy on the host
 resolves the target instance through hypeman's DNS server on each request and
-proxies to the guest's IP. For a macOS guest that IP is its current vmnet DHCP
-lease, the address the instance reports. A guest that is not running, or has no
-lease, has no upstream, and Caddy returns 502. As on Linux, the guest service must
-listen on the guest's network interface, not only on loopback.
+proxies to the guest's IP, the address hypeman assigned it. A guest that is not
+running has no network at that address, so Caddy returns 502; the address is never
+another guest's. As on Linux, the guest service must listen on the guest's network
+interface, not only on loopback.
 
 Caddy is not embedded in macOS builds. `make build-caddy-darwin` builds the same
 Caddy version and DNS modules as Linux into `bin/caddy`. Hypeman looks for `caddy`
 next to its own binary, then on `PATH`, and fails to start without it.
 
 Caddy needs local network access to reach guests. On macOS 15.5 and later, allow
-the vmnet subnet for every process once per host, then restart (Apple TN3179):
+the guest pool for every process once per host, then restart (Apple TN3179):
 
 ```sh
-sudo defaults write com.apple.network.local-network AllowedEthernetLocalNetworkAddresses -array "192.168.64.0/24"
+sudo defaults write com.apple.network.local-network AllowedEthernetLocalNetworkAddresses -array "192.168.128.0/20"
 ```
 
 Without it, only root has access. On the QA host (macOS 27.0), a launchd daemon
@@ -161,8 +168,8 @@ the screen was unlocked. Turn off the automatic screen lock for that user:
 sysadminctl -screenLock off -password -
 ```
 
-On the QA host (macOS 27.0), vmnet attaches each guest to the NAT bridge as a
-private member: guests cannot reach each other, but they can reach anything the
-host listens on, including Caddy's listeners, sshd and Screen Sharing. Hosts that
-run guests for different tenants should not expose other host services on the
-bridge. Ingress hostnames reach a guest through Caddy, as they do from outside.
+Each guest's network is separate, so guests cannot reach each other's addresses.
+A guest can still reach anything the host listens on, including Caddy's listeners,
+sshd and Screen Sharing, so hosts that run guests for different tenants should not
+expose other host services on guest networks. Ingress hostnames reach a guest
+through Caddy, as they do from outside.

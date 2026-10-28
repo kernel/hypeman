@@ -53,6 +53,11 @@ func writeMacOSMemorySnapshotPayload(t *testing.T, m *manager, guestDir string, 
 	}}
 	if stored.NetworkEnabled {
 		manifest.ShimConfig.Networks = []shimconfig.NetworkConfig{{MAC: stored.MAC}}
+		if stored.IP != "" {
+			subnet, err := macOSGuestSubnet(stored.IP)
+			require.NoError(t, err)
+			manifest.ShimConfig.Networks[0].IPv4Address, manifest.ShimConfig.Networks[0].IPv4Subnet = stored.IP, subnet.String()
+		}
 	}
 	writeMacOSSnapshotManifest(t, snapshotDir, manifest)
 	return manifest
@@ -138,6 +143,9 @@ func TestMacOSMemorySnapshotRejectsInvalidPayloadBeforeStorageSwap(t *testing.T)
 		{"disk", func(m *shimconfig.SnapshotManifest) { m.ShimConfig.Disks[0].Path = "/wrong-disk" }},
 		{"aux", func(m *shimconfig.SnapshotManifest) { m.ShimConfig.MacAuxStoragePath = "/wrong-aux" }},
 		{"network", func(m *shimconfig.SnapshotManifest) { m.ShimConfig.Networks[0].MAC = "02:00:00:00:00:02" }},
+		{"network-address", func(m *shimconfig.SnapshotManifest) {
+			m.ShimConfig.Networks[0].IPv4Address, m.ShimConfig.Networks[0].IPv4Subnet = "192.168.128.2", "192.168.128.0/29"
+		}},
 		{"state-path", func(m *shimconfig.SnapshotManifest) { m.MachineStateFile = "../../other-state" }},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -472,4 +480,27 @@ type resumeProbeHypervisor struct {
 func (h resumeProbeHypervisor) Resume(ctx context.Context) error {
 	h.onResume()
 	return h.Hypervisor.Resume(ctx)
+}
+
+// Saved memory cannot change its network address, so a memory restore whose address
+// another instance has taken since is refused rather than duplicating it.
+func TestMacOSMemoryRestoreRefusesAddressNowInUse(t *testing.T) {
+	m, meta := macOSMemorySnapshotFixture(t)
+	meta.IP = "192.168.128.2"
+	require.NoError(t, m.saveMetadata(meta))
+	writeMacOSMemorySnapshotPayload(t, m, meta.DataDir, &meta.StoredMetadata)
+	snapshot, err := m.CreateSnapshot(context.Background(), meta.Id, CreateSnapshotRequest{Kind: SnapshotKindStandby})
+	require.NoError(t, err)
+
+	meta, err = m.loadMetadata(meta.Id)
+	require.NoError(t, err)
+	meta.IP = "192.168.128.10"
+	require.NoError(t, m.saveMetadata(meta))
+	saveAddressedInstance(t, m, "mac-other", "192.168.128.2", true)
+
+	_, err = m.RestoreSnapshot(context.Background(), meta.Id, snapshot.Id, RestoreSnapshotRequest{})
+	require.ErrorIs(t, err, ErrInvalidState)
+	got, err := m.loadMetadata(meta.Id)
+	require.NoError(t, err)
+	require.Equal(t, "192.168.128.10", got.IP, "a refused restore keeps the instance's address")
 }

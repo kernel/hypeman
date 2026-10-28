@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/netip"
 	"os"
 	"runtime"
 	"strings"
 
-	"github.com/Code-Hex/vz/v3"
+	"github.com/Code-Hex/vz/v4"
+	"github.com/Code-Hex/vz/v4/vmnet"
 	"github.com/kernel/hypeman/lib/hypervisor/vz/shimconfig"
 )
 
@@ -190,7 +192,13 @@ func configureNetwork(vmConfig *vz.VirtualMachineConfiguration, networks []shimc
 
 	var devices []*vz.VirtioNetworkDeviceConfiguration
 	for _, netConfig := range networks {
-		dev, err := createNATNetworkDevice(netConfig.MAC)
+		var dev *vz.VirtioNetworkDeviceConfiguration
+		var err error
+		if netConfig.IPv4Address != "" {
+			dev, err = createVmnetNetworkDevice(netConfig)
+		} else {
+			dev, err = createNATNetworkDevice(netConfig.MAC)
+		}
 		if err != nil {
 			return err
 		}
@@ -218,6 +226,48 @@ func createNATNetworkDevice(macAddr string) (*vz.VirtioNetworkDeviceConfiguratio
 	networkConfig.SetMACAddress(mac)
 
 	return networkConfig, nil
+}
+
+// createVmnetNetworkDevice attaches the guest to its own shared-mode vmnet network
+// with the given subnet and a DHCP reservation for the guest's MAC, so the guest's
+// address is the one hypeman assigned. Saved state records this configuration, so a
+// guest saved on the shared NAT (no address in its config) is restored on NAT.
+func createVmnetNetworkDevice(netConfig shimconfig.NetworkConfig) (*vz.VirtioNetworkDeviceConfiguration, error) {
+	hw, err := net.ParseMAC(netConfig.MAC)
+	if err != nil {
+		return nil, fmt.Errorf("vmnet network needs the guest MAC: %w", err)
+	}
+	subnet, err := netip.ParsePrefix(netConfig.IPv4Subnet)
+	if err != nil {
+		return nil, fmt.Errorf("parse guest subnet: %w", err)
+	}
+	address, err := netip.ParseAddr(netConfig.IPv4Address)
+	if err != nil {
+		return nil, fmt.Errorf("parse guest address: %w", err)
+	}
+	cfg, err := vmnet.NewNetworkConfiguration(vmnet.ModeShared, vmnet.WithIPv4Subnet(subnet), vmnet.WithDHCPReservation(hw, address))
+	if err != nil {
+		return nil, fmt.Errorf("configure vmnet network %s: %w", subnet, err)
+	}
+	network, err := vmnet.NewNetwork(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("create vmnet network %s: %w", subnet, err)
+	}
+	attachment, err := vz.NewVMNetNetworkDeviceAttachment(network)
+	if err != nil {
+		return nil, fmt.Errorf("create vmnet attachment: %w", err)
+	}
+	dev, err := vz.NewVirtioNetworkDeviceConfiguration(attachment)
+	if err != nil {
+		return nil, fmt.Errorf("create network config: %w", err)
+	}
+	mac, err := assignMACAddress(netConfig.MAC)
+	if err != nil {
+		return nil, err
+	}
+	dev.SetMACAddress(mac)
+	slog.Info("attached guest vmnet network", "subnet", subnet.String(), "address", address.String(), "mac", netConfig.MAC)
+	return dev, nil
 }
 
 func assignMACAddress(macAddr string) (*vz.MACAddress, error) {

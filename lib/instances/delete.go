@@ -198,7 +198,15 @@ func (m *manager) deleteInstanceWithOptions(
 		}
 	}
 
-	// 8. Delete all instance data
+	// 8. Hold a macOS guest's address before its data goes, so it is not reused while
+	// ingress may still route to it.
+	if stored.MacOS != nil {
+		if err := m.releaseMacOSAddress(id, stored.IP); err != nil {
+			return fmt.Errorf("release macOS guest address: %w", err)
+		}
+	}
+
+	// 9. Delete all instance data
 	log.DebugContext(ctx, "deleting instance data", "instance_id", id)
 	_, dataSpanEnd := m.startLifecycleStep(ctx, "delete_instance_data",
 		attribute.String("instance_id", id),

@@ -76,6 +76,10 @@ type DiskConfig struct {
 // NetworkConfig represents a network interface.
 type NetworkConfig struct {
 	MAC string `json:"mac"`
+	// IPv4Subnet and IPv4Address, when set, give the guest its own vmnet network with
+	// a DHCP reservation for MAC. Otherwise the guest uses vmnet's shared NAT.
+	IPv4Subnet  string `json:"ipv4_subnet,omitempty"`
+	IPv4Address string `json:"ipv4_address,omitempty"`
 }
 
 // SnapshotManifest is persisted in snapshot directories to allow restore.

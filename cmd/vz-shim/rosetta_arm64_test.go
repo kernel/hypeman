@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Code-Hex/vz/v3"
+	"github.com/Code-Hex/vz/v4"
 	"github.com/kernel/hypeman/lib/hypervisor/vz/shimconfig"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

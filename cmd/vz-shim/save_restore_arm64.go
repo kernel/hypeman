@@ -5,7 +5,7 @@ package main
 import (
 	"fmt"
 
-	"github.com/Code-Hex/vz/v3"
+	"github.com/Code-Hex/vz/v4"
 )
 
 func validateSaveRestoreSupport(vmConfig *vz.VirtualMachineConfiguration) error {

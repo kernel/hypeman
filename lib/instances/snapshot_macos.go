@@ -172,6 +172,16 @@ func (m *manager) validateMacOSMemorySnapshotPayload(guestDir string, stored *St
 		if len(cfg.Networks) != 1 || !strings.EqualFold(cfg.Networks[0].MAC, stored.MAC) || !strings.EqualFold(stored.MAC, stored.MacOS.MAC) {
 			return fmt.Errorf("%w: macOS snapshot network identity does not match its metadata", ErrInvalidRequest)
 		}
+		// The saved network must be the guest's own, so it resumes at its recorded address.
+		if cfg.Networks[0].IPv4Address != stored.IP {
+			return fmt.Errorf("%w: macOS snapshot network address does not match its metadata", ErrInvalidRequest)
+		}
+		if stored.IP != "" {
+			subnet, err := macOSGuestSubnet(stored.IP)
+			if err != nil || cfg.Networks[0].IPv4Subnet != subnet.String() {
+				return fmt.Errorf("%w: macOS snapshot network subnet does not match its metadata", ErrInvalidRequest)
+			}
+		}
 	} else if len(cfg.Networks) != 0 {
 		return fmt.Errorf("%w: macOS snapshot unexpectedly enables networking", ErrInvalidRequest)
 	}
