@@ -142,7 +142,7 @@ func (f *machineEvidenceFixture) Start(ctx context.Context, name string, base *i
 
 func TestMachineRecipeProvenanceRoundTrip(t *testing.T) {
 	f := &machineEvidenceFixture{machineFixture: newMachineFixture()}
-	backend := MachineBuildBackend{Driver: f, Publisher: f}
+	backend := MachineBuildBackend{Driver: f, Publisher: f, Storage: testMachineStorage(t)}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	root := t.TempDir()
