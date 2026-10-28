@@ -203,6 +203,14 @@ func NewManager(
 		if err != nil {
 			return nil, fmt.Errorf("create metrics: %w", err)
 		}
+		if err := metrics.RegisterQueueCallbacks(m.queue, meter); err != nil {
+			return nil, fmt.Errorf("register build queue metrics: %w", err)
+		}
+		if config.MachineBuild != nil && config.MachineBuild.Storage != nil {
+			if err := registerMachineStorageMetrics(meter, config.MachineBuild.Storage); err != nil {
+				return nil, fmt.Errorf("register machine build storage metrics: %w", err)
+			}
+		}
 		m.metrics = metrics
 	}
 
