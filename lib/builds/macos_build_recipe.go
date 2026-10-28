@@ -5,6 +5,8 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -16,10 +18,19 @@ import (
 	"unicode/utf8"
 )
 
+// MachineRecipeVersion is the supported hypeman-macos-build.json schema version.
+// It describes recipe syntax, not a measured guest agent or compiler version.
+const MachineRecipeVersion = 1
+
 const machineRecipeName = "hypeman-macos-build.json"
 const maxMachineExtractBytes = 128 << 20
 
+// machineRecipe v1 runs 1–32 ordered commands as root in the private source
+// directory. Commands use argv (no implicit shell); env augments the guest
+// environment. There are no interpolation, secret, cwd or output-capture fields.
+// Use an explicit /bin/sh invocation when shell syntax is needed.
 type machineRecipe struct {
+	hash    string
 	Version int                 `json:"version"`
 	Steps   []machineRecipeStep `json:"steps"`
 }
@@ -137,6 +148,12 @@ func extractMachineRecipe(ctx context.Context, source, destination string) (*mac
 	if len(data) > 64<<10 {
 		return nil, fmt.Errorf("machine recipe too large")
 	}
+	if !utf8.Valid(data) {
+		return nil, fmt.Errorf("machine recipe must be UTF-8")
+	}
+	if err = validateMachineRecipeJSON(data); err != nil {
+		return nil, err
+	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	var recipe machineRecipe
@@ -146,7 +163,7 @@ func extractMachineRecipe(ctx context.Context, source, destination string) (*mac
 	if err = decoder.Decode(new(any)); err != io.EOF {
 		return nil, fmt.Errorf("recipe must contain one JSON object")
 	}
-	if recipe.Version != 1 || len(recipe.Steps) == 0 || len(recipe.Steps) > 32 {
+	if recipe.Version != MachineRecipeVersion || len(recipe.Steps) == 0 || len(recipe.Steps) > 32 {
 		return nil, fmt.Errorf("invalid machine recipe version or step count")
 	}
 	for _, step := range recipe.Steps {
@@ -164,6 +181,8 @@ func extractMachineRecipe(ctx context.Context, source, destination string) (*mac
 			}
 		}
 	}
+	digest := sha256.Sum256(data)
+	recipe.hash = hex.EncodeToString(digest[:])
 	complete = true
 	return &recipe, nil
 }

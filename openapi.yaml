@@ -1983,6 +1983,9 @@ components:
         source_hash:
           type: string
           description: SHA256 hash of source tarball
+        recipe_hash:
+          type: string
+          description: SHA256 of the exact validated machine recipe bytes, omitted without executor evidence. Machine builds do not infer toolchain versions.
         lockfile_hashes:
           type: object
           additionalProperties:

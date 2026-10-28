@@ -157,6 +157,12 @@ func (r *MachineBuildBackend) runPrepared(ctx context.Context, req MachineBuildR
 	if e = ctx.Err(); e != nil {
 		return nil, e
 	}
+	defer func() {
+		if err != nil {
+			reportMachineProgress(ctx, machineFailed)
+		}
+	}()
+	reportMachineProgress(ctx, machineStarting)
 	session, e := r.Driver.Start(ctx, machineBuilderName(req.ID), base, policy)
 	if session == nil {
 		if e == nil {
@@ -193,12 +199,15 @@ func (r *MachineBuildBackend) runPrepared(ctx context.Context, req MachineBuildR
 	if e != nil {
 		return nil, machineFailure("start", e)
 	}
+	reportMachineProgress(ctx, machineProvisioning)
 	if e = session.Provision(ctx, sourcePath); e != nil {
 		return nil, machineFailure("provision", e)
 	}
+	reportMachineProgress(ctx, machineSanitizing)
 	if e = session.Sanitize(ctx); e != nil {
 		return nil, machineFailure("sanitize", e)
 	}
+	reportMachineProgress(ctx, machineStopping)
 	receipt, e := session.Stop(ctx)
 	stopped = receipt.VMMExited
 	if e != nil || !receipt.Graceful || !stopped {
@@ -208,6 +217,7 @@ func (r *MachineBuildBackend) runPrepared(ctx context.Context, req MachineBuildR
 	if e = os.Mkdir(bundle, 0700); e != nil {
 		return nil, machineFailure("export", e)
 	}
+	reportMachineProgress(ctx, machineExporting)
 	if e = session.Export(ctx, bundle); e != nil {
 		return nil, machineFailure("export", e)
 	}
@@ -221,6 +231,7 @@ func (r *MachineBuildBackend) runPrepared(ctx context.Context, req MachineBuildR
 	if e = ctx.Err(); e != nil {
 		return nil, e
 	}
+	reportMachineProgress(ctx, machinePublishing)
 	publication, e := r.Publisher.Publish(ctx, req.ID, bundle)
 	if e != nil {
 		return nil, machineFailure("publish", e)
@@ -229,7 +240,14 @@ func (r *MachineBuildBackend) runPrepared(ctx context.Context, req MachineBuildR
 	if e != nil || !output.IsDigest() || !ValidMachineDigest(publication.Digest) || output.Digest() != publication.Digest {
 		return nil, fmt.Errorf("machine publication receipt is unverified")
 	}
-	return &MachineBuildResult{Publication: publication, Provenance: BuildProvenance{BaseImageDigest: base.Digest, SourceHash: req.SourceHash, Timestamp: time.Now().UTC()}}, nil
+	provenance := BuildProvenance{BaseImageDigest: base.Digest, SourceHash: req.SourceHash, Timestamp: time.Now().UTC()}
+	// Only the driver that actually parsed the executed recipe can attest it.
+	// No guest OS/compiler versions are inferred from the host or base name.
+	if evidence, ok := session.(interface{ machineRecipeHash() string }); ok {
+		provenance.RecipeHash = evidence.machineRecipeHash()
+	}
+	reportMachineProgress(ctx, machinePublished)
+	return &MachineBuildResult{Publication: publication, Provenance: provenance}, nil
 }
 
 // machineCleanupTimeout covers a strict graceful stop attempt (30s power-off
