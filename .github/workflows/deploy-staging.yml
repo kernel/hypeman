@@ -32,4 +32,5 @@ jobs:
             --field env=staging \
             --field ref="$HYPEMAN_REF" \
             --field cli-version=latest \
+            --field deploy-canary=true \
             --field triggered_by="${{ github.actor }}"
