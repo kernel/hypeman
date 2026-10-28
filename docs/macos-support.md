@@ -8,7 +8,7 @@ owns the behavior.
 | --- | --- | --- | --- |
 | Create, get, list, start, stop, delete | Supported | Start cold-boots the disk. CPU and memory default to the image; cold-create overrides are supported (at least 2 CPUs and 4 GiB in whole MiB, within VZ host limits). The API's Linux defaults (`size` 1GB, `vcpus` 2, `overlay_size` 10GB) do not apply: the request validator fills them in, so a macOS create ignores them unless the client sent the field. To tell the two apart, a macOS host refuses create bodies over 1 MiB with 413. | PR 1 |
 | Image import (offline bundle) | Supported | Local ready `darwin/arm64` image. | PR 1 |
-| Image pull (OCI machine image) | Partial | Repository-scoped. No tag promotion. | PR 2 |
+| Image pull (OCI machine image) | Partial | Repository-scoped. An instance create can pull an uncached image when `platform: darwin/arm64` is selected; pull readiness is asynchronous and the create may need retrying. No tag promotion. | PR 2, PR 6 |
 | Exec, file copy, stat | Agent-gated | Needs the shared guest agent declared by the image. | PR 3 |
 | Logs | Partial | `hypeman` and `vmm` (VZ shim log) sources. No app log file for VZ guests. | PR 1 |
 | Stats | Partial | CPU and memory from the VM process. Network counters are 0 under NAT. | PR 1 |

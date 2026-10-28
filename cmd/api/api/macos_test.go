@@ -84,6 +84,41 @@ func TestLinuxCreateDefaultsMatchSchema(t *testing.T) {
 	require.EqualValues(t, linuxDefaultVcpus, props["vcpus"].Value.Default)
 }
 
+func TestMacOSOnlyCreateDefaultsToDarwinPlatform(t *testing.T) {
+	useMacOSHost(t)
+	manager := newCaptureCreateManager(nil)
+	service := &ApiService{InstanceManager: manager, Config: &config.Config{MacOSOnly: true}}
+	ctx, status := recordCreateBody(t, `{"name":"macos","image":"registry.example/macos/app:latest"}`)
+	require.Equal(t, http.StatusOK, status)
+	size, overlay, vcpus := linuxDefaultSize, linuxDefaultOverlaySize, linuxDefaultVcpus
+	_, err := service.CreateInstance(ctx, oapi.CreateInstanceRequestObject{Body: &oapi.CreateInstanceRequest{
+		Name: "macos", Image: "registry.example/macos/app:latest", Size: &size, OverlaySize: &overlay, Vcpus: &vcpus,
+	}})
+	require.NoError(t, err)
+	require.Equal(t, "darwin/arm64", manager.lastReq.Platform)
+	require.Zero(t, manager.lastReq.Size)
+	require.Zero(t, manager.lastReq.OverlaySize)
+	require.Zero(t, manager.lastReq.Vcpus)
+}
+
+func TestMacOSCreateRecognizesUncachedDarwinImage(t *testing.T) {
+	useMacOSHost(t)
+	manager := newCaptureCreateManager(nil)
+	service := &ApiService{InstanceManager: manager, ImageManager: missingMacOSImageManager{}, Config: &config.Config{}}
+	ctx, status := recordCreateBody(t, `{"name":"macos","image":"registry.example/macos/app:latest","platform":"darwin/arm64"}`)
+	require.Equal(t, http.StatusOK, status)
+	platform, size, overlay, vcpus := "darwin/arm64", linuxDefaultSize, linuxDefaultOverlaySize, linuxDefaultVcpus
+	_, err := service.CreateInstance(ctx, oapi.CreateInstanceRequestObject{Body: &oapi.CreateInstanceRequest{
+		Name: "macos", Image: "registry.example/macos/app:latest", Platform: &platform,
+		Size: &size, OverlaySize: &overlay, Vcpus: &vcpus,
+	}})
+	require.NoError(t, err)
+	require.Equal(t, "darwin/arm64", manager.lastReq.Platform)
+	require.Zero(t, manager.lastReq.Size)
+	require.Zero(t, manager.lastReq.OverlaySize)
+	require.Zero(t, manager.lastReq.Vcpus)
+}
+
 func TestMacOSCreateIgnoresInjectedLinuxDefaults(t *testing.T) {
 	useMacOSHost(t)
 	m := newCaptureCreateManager(nil)
@@ -171,4 +206,10 @@ type macOSImageManager struct{ images.Manager }
 
 func (macOSImageManager) GetImage(context.Context, string) (*images.Image, error) {
 	return &images.Image{Platform: "darwin/arm64", MacOS: &images.MacOSImage{}}, nil
+}
+
+type missingMacOSImageManager struct{ images.Manager }
+
+func (missingMacOSImageManager) GetImage(context.Context, string) (*images.Image, error) {
+	return nil, images.ErrNotFound
 }

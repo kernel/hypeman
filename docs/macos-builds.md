@@ -35,6 +35,27 @@ Duplicates/unknown fields, malformed numbers and mutable bases return 400. Metad
 is limited to 64 KiB per field, source 64 MiB and the entire HTTP body 65 MiB before OpenAPI
 validation. These limits do not change Linux source parsing.
 
+## Use the built image on another Mac host
+
+A completed build returns an image reference that can be passed to the normal
+instance-create API. On a macOS-only server, an omitted platform defaults to
+`darwin/arm64`; on a mixed host, request that platform explicitly. If the image
+isn't cached locally, Hypeman starts a platform-specific pull. Large machine
+images may take longer than the create request's readiness wait, so retry the
+create after the image becomes ready or pull it explicitly first.
+
+```json
+{
+  "name": "macos-app",
+  "image": "registry.example/builds/<build-id>:latest",
+  "platform": "darwin/arm64"
+}
+```
+
+Each instance is pinned to the resolved image digest. Image pulls are
+repository-scoped; use the build's returned image reference rather than assuming
+it has been promoted to another repository or tag.
+
 ## Base and policy
 
 The ready installed base must be pinned by canonical SHA256, declare a provisioned
