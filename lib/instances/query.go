@@ -3,6 +3,7 @@ package instances
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -804,7 +805,9 @@ func parseSentinelTimestamp(line, sentinelPrefix string) (time.Time, bool) {
 	return time.Time{}, false
 }
 
-// listInstances returns all instances, skipping metadata files that cannot be loaded.
+// listInstances returns all instances. An instance whose metadata exists but
+// cannot be read or parsed is reported in StateUnknown with the load error, so
+// a corrupt metadata.json never hides a guest directory from operators.
 func (m *manager) listInstances(ctx context.Context) ([]Instance, error) {
 	ctx, span := m.tracerOrDefault().Start(ctx, "instances.list_metadata")
 	defer span.End()
@@ -828,9 +831,14 @@ func (m *manager) listInstances(ctx context.Context) ([]Instance, error) {
 			traceWithInstanceID(id),
 		)
 		meta, err := m.loadMetadata(id)
+		if errors.Is(err, ErrNotFound) {
+			// Deleted between the directory walk and the read.
+			hydrateSpan.End()
+			continue
+		}
 		if err != nil {
-			// Skip instances with invalid metadata
-			log.WarnContext(hydrateCtx, "skipping instance with invalid metadata", "instance_id", id, "error", err)
+			log.WarnContext(hydrateCtx, "instance metadata unreadable, reporting as unknown", "instance_id", id, "error", err)
+			result = append(result, m.unknownInstance(id, err))
 			hydrateSpan.End()
 			continue
 		}
@@ -843,6 +851,21 @@ func (m *manager) listInstances(ctx context.Context) ([]Instance, error) {
 	log.DebugContext(ctx, "listed instances", "count", len(result))
 	span.SetAttributes(attribute.Int("instances", len(result)))
 	return result, nil
+}
+
+// unknownInstance builds the placeholder returned for a guest directory whose
+// metadata cannot be loaded. It bypasses toInstance because deriveState on
+// empty metadata would report Stopped, not Unknown.
+func (m *manager) unknownInstance(id string, loadErr error) Instance {
+	msg := loadErr.Error()
+	return Instance{
+		StoredMetadata: StoredMetadata{
+			Id:      id,
+			DataDir: m.paths.InstanceDir(id),
+		},
+		State:      StateUnknown,
+		StateError: &msg,
+	}
 }
 
 func (m *manager) findInstanceMetadataByExactName(ctx context.Context, name string) (*metadata, error) {
