@@ -17,6 +17,8 @@ import (
 //go:embed binaries/cloud-hypervisor/v49.0/aarch64/cloud-hypervisor
 //go:embed binaries/cloud-hypervisor/v51.1/x86_64/cloud-hypervisor
 //go:embed binaries/cloud-hypervisor/v51.1/aarch64/cloud-hypervisor
+//go:embed binaries/cloud-hypervisor/v51.2/x86_64/cloud-hypervisor
+//go:embed binaries/cloud-hypervisor/v51.2/aarch64/cloud-hypervisor
 var binaryFS embed.FS
 
 type CHVersion string
@@ -24,11 +26,12 @@ type CHVersion string
 const (
 	V49_0 CHVersion = "v49.0"
 	V51_1 CHVersion = "v51.1"
+	V51_2 CHVersion = "v51.2"
 )
 
-const DefaultVersion = V51_1
+const DefaultVersion = V51_2
 
-var SupportedVersions = []CHVersion{V49_0, V51_1}
+var SupportedVersions = []CHVersion{V49_0, V51_1, V51_2}
 
 // ExtractBinary extracts the embedded Cloud Hypervisor binary to the data directory
 func ExtractBinary(p *paths.Paths, version CHVersion) (string, error) {
