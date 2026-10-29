@@ -99,6 +99,9 @@ func (m *manager) createInstance(
 	if err := validateExpiresAt(req.ExpiresAt, m.nowUTC()); err != nil {
 		return nil, err
 	}
+	if m.macOSOnly && strings.TrimSpace(req.Platform) == "" {
+		req.Platform = "darwin/arm64"
+	}
 	if req.GPU != nil && req.GPU.Profile != "" && !devices.Capabilities().SupportsVGPU {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidRequest, devices.ErrVGPUNotSupportedOnMacOS)
 	}

@@ -27,6 +27,14 @@ data_dir: ~/Library/Application Support/hypeman
 # Server configuration
 port: "4973"
 
+# Native macOS guests/builds are opt-in; these defaults retain Linux guests on VZ.
+macos_only: false
+macos_builds: false
+# For a dedicated native Mac builder, set both true after the release gates in
+# docs/macos-builds.md pass, and replace registry.url below with an explicit
+# system-trusted HTTPS address reachable by the build and destination hosts.
+# Machine publication runs on the host, not at the Linux guest NAT gateway.
+
 # =============================================================================
 # Hypervisor Configuration (IMPORTANT FOR MACOS)
 # =============================================================================

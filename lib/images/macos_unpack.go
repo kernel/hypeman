@@ -70,7 +70,8 @@ func (c *ociClient) unpackMachineLayers(ctx context.Context, layoutTag, targetDi
 }
 
 // unpackMachineLayer extracts one layer, spending its decompressed bytes from the
-// bundle's remaining budget.
+// bundle's remaining budget. A delta layer patches the boot disk unpacked beneath it
+// instead of writing files.
 func unpackMachineLayer(ctx context.Context, l gcr.Layer, diffID gcr.Hash, targetDir string, remaining *int64) error {
 	rc, err := l.Uncompressed()
 	if err != nil {
@@ -90,6 +91,12 @@ func unpackMachineLayer(ctx context.Context, l gcr.Layer, diffID gcr.Hash, targe
 		return err
 	}
 	archive := tar.NewReader(stream)
+	mediaType, err := l.MediaType()
+	if err != nil {
+		return err
+	}
+	delta := mediaType == MacOSDeltaMediaType
+	applier := &macOSDeltaApplier{targetDir: targetDir}
 	for {
 		header, err := archive.Next()
 		if errors.Is(err, io.EOF) {
@@ -101,6 +108,15 @@ func unpackMachineLayer(ctx context.Context, l gcr.Layer, diffID gcr.Hash, targe
 		name := filepath.Clean(header.Name)
 		if !filepath.IsLocal(name) || strings.HasPrefix(filepath.Base(name), ".wh.") {
 			return fmt.Errorf("machine layer entry %q is not a plain local path", header.Name)
+		}
+		if delta {
+			if header.Typeflag != tar.TypeReg || isGNUSparse(header) {
+				return fmt.Errorf("delta layer entry %q must be a regular file", header.Name)
+			}
+			if err := applier.entry(name, header.Size, archive); err != nil {
+				return overLimit(err)
+			}
+			continue
 		}
 		target := filepath.Join(targetDir, name)
 		switch header.Typeflag {
@@ -125,6 +141,11 @@ func unpackMachineLayer(ctx context.Context, l gcr.Layer, diffID gcr.Hash, targe
 			}
 		default:
 			return fmt.Errorf("machine layer entry %q has unsupported type %q", header.Name, header.Typeflag)
+		}
+	}
+	if delta {
+		if err := applier.complete(); err != nil {
+			return overLimit(err)
 		}
 	}
 	// Hash the trailing tar padding too, so the digest covers the whole stream.

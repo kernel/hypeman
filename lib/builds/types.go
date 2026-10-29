@@ -43,6 +43,10 @@ type CreateBuildRequest struct {
 	// The Dockerfile specifies the runtime (e.g., FROM node:20-alpine).
 	Dockerfile string `json:"dockerfile,omitempty"`
 
+	// MachineBaseImage selects the installed-machine backend. The HTTP multipart
+	// field machine_base_image maps here; it is enabled only with macos_builds.
+	MachineBaseImage string `json:"machine_base_image,omitempty"`
+
 	// BaseImageDigest optionally pins the base image by digest for reproducibility
 	BaseImageDigest string `json:"base_image_digest,omitempty"`
 
@@ -218,6 +222,9 @@ type BuildResult struct {
 
 	// ImageDigest is the digest of the pushed image (only on success)
 	ImageDigest string `json:"image_digest,omitempty"`
+
+	// ImageRef is the pullable output reference for machine builds.
+	ImageRef string `json:"image_ref,omitempty"`
 
 	// Error is the error message (only on failure)
 	Error string `json:"error,omitempty"`

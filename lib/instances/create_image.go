@@ -20,8 +20,22 @@ type createImageResolver interface {
 func resolveImageForCreate(ctx context.Context, imageManager createImageResolver, imageName, platform string, log *slog.Logger) (*images.Image, error) {
 	if p, err := images.ParsePlatform(platform); err == nil && p.OS == "darwin" {
 		img, err := imageManager.GetImage(ctx, imageName)
+		if err != nil && !errors.Is(err, images.ErrNotFound) {
+			return nil, fmt.Errorf("get macOS image: %w", err)
+		}
+		if err != nil || img.MacOS == nil {
+			img, err = imageManager.CreateImage(ctx, images.CreateImageRequest{Name: imageName, Platform: platform})
+			if err != nil {
+				return nil, fmt.Errorf("pull macOS image: %w", err)
+			}
+		}
+		pinned, err := pinnedImageName(imageName, img.Digest)
 		if err != nil {
-			return nil, fmt.Errorf("get imported macOS image: %w", err)
+			return nil, err
+		}
+		img, err = awaitReady(ctx, imageManager, img, pinned, log)
+		if err != nil {
+			return nil, err
 		}
 		if img.MacOS == nil {
 			return nil, fmt.Errorf("%w: image is not a macOS disk bundle", images.ErrInvalidPlatform)

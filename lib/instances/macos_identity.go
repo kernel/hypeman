@@ -186,7 +186,7 @@ func (m *manager) rekeyMacOSCloneOnStart(ctx context.Context, stored *StoredMeta
 	// Teardown runs even if saving the pending flag fails. Otherwise the clone would keep
 	// running, networked, with its source's SSH host keys.
 	saveErr := m.saveMetadata(&metadata{StoredMetadata: *stored})
-	_, stopErr := m.stopInstance(context.WithoutCancel(ctx), stored.Id)
+	_, stopErr := m.stopInstance(context.WithoutCancel(ctx), stored.Id, false)
 	if saveErr != nil || stopErr != nil {
 		return fmt.Errorf("macOS clone rekey failed and teardown needs attention: %w", errors.Join(err, saveErr, stopErr))
 	}

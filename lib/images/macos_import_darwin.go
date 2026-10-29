@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"time"
 
@@ -44,11 +43,8 @@ func ImportMacOSImage(ctx context.Context, p *paths.Paths, name, source string) 
 		if !info.Mode().IsRegular() {
 			return nil, fmt.Errorf("bundle file must be regular: %s", file)
 		}
-		if e = exec.CommandContext(ctx, "lsof", "-t", file).Run(); e == nil {
-			return nil, fmt.Errorf("bundle storage is open: stop its VM first")
-		}
-		if exit, ok := e.(*exec.ExitError); !ok || exit.ExitCode() != 1 {
-			return nil, fmt.Errorf("cannot verify storage is closed: %v", e)
+		if e = RequireClosedFile(ctx, file); e != nil {
+			return nil, e
 		}
 	}
 	root := p.ImageRepositoryDir(ref.Repository())
