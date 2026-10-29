@@ -35,7 +35,14 @@ func (s autoStandbyInstanceStore) ListInstances(ctx context.Context) ([]autostan
 	for _, inst := range insts {
 		runtime, err := s.runtimeManager.GetAutoStandbyRuntime(ctx, inst.Id)
 		if err != nil {
-			return nil, err
+			// The runtime lives in metadata.json. An instance listed as Unknown
+			// because that file is unreadable fails here too; the controller
+			// never acts on a non-running instance, so carry it without a
+			// runtime rather than failing the whole list.
+			if inst.State != instances.StateUnknown {
+				return nil, err
+			}
+			runtime = nil
 		}
 
 		out = append(out, autostandby.Instance{

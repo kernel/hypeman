@@ -29,7 +29,7 @@ func TestListMetadataForReconcileFailsOnInvalidMetadata(t *testing.T) {
 
 	listed, err := m.ListInstances(context.Background(), nil)
 	require.NoError(t, err)
-	require.Len(t, listed, 1)
+	require.Len(t, listed, 2)
 
 	_, err = m.listMetadataForReconcile()
 	require.Error(t, err)
@@ -40,6 +40,46 @@ func TestListMetadataForReconcileFailsOnInvalidMetadata(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, metadata, 1)
 	assert.Equal(t, "valid", metadata[0].Id)
+}
+
+func TestListInstancesReportsUnreadableMetadataAsUnknown(t *testing.T) {
+	m := &manager{paths: paths.New(t.TempDir())}
+
+	require.NoError(t, m.ensureDirectories("valid"))
+	require.NoError(t, m.saveMetadata(&metadata{StoredMetadata: StoredMetadata{
+		Id:        "valid",
+		Name:      "valid",
+		CreatedAt: time.Now(),
+		DataDir:   m.paths.InstanceDir("valid"),
+	}}))
+	// Zero-byte metadata, as left behind by a crash mid-write.
+	require.NoError(t, m.ensureDirectories("truncated"))
+	require.NoError(t, os.WriteFile(m.paths.InstanceMetadata("truncated"), nil, 0644))
+	// A directory with no metadata at all is an in-flight create, not an instance.
+	require.NoError(t, m.ensureDirectories("creating"))
+
+	listed, err := m.ListInstances(context.Background(), nil)
+	require.NoError(t, err)
+	require.Len(t, listed, 2)
+
+	byID := make(map[string]Instance, len(listed))
+	for _, inst := range listed {
+		byID[inst.Id] = inst
+	}
+	assert.Equal(t, StateStopped, byID["valid"].State)
+
+	unknown, ok := byID["truncated"]
+	require.True(t, ok, "instance with unreadable metadata must be listed")
+	assert.Equal(t, StateUnknown, unknown.State)
+	assert.Equal(t, m.paths.InstanceDir("truncated"), unknown.DataDir)
+	require.NotNil(t, unknown.StateError)
+	assert.Contains(t, *unknown.StateError, "unmarshal metadata")
+
+	state := StateUnknown
+	filtered, err := m.ListInstances(context.Background(), &ListInstancesFilter{State: &state})
+	require.NoError(t, err)
+	require.Len(t, filtered, 1)
+	assert.Equal(t, "truncated", filtered[0].Id)
 }
 
 func TestListMetadataForReconcileSkipsInstanceDeletedDuringListing(t *testing.T) {
