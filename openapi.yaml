@@ -4692,8 +4692,9 @@ paths:
                     is limited to 64 MiB compressed; only machine_network_mode,
                     timeout_seconds, memory_mb, cpus and tags are accepted alongside
                     source and this selector. CPU/memory zero inherit the base.
-                    Linux/cache/secrets/admin options are rejected. Output retains the
-                    base identity and cannot run concurrently with it.
+                    Linux/cache/secrets/admin options are rejected. The builder and its
+                    output get their own machine identifier and MAC, so the output can
+                    run beside the base.
                 machine_network_mode:
                   type: string
                   enum: [isolated, egress]

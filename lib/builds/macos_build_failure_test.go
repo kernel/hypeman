@@ -164,7 +164,7 @@ func TestMachineBuildMalformedExport(t *testing.T) {
 					if err != nil {
 						return err
 					}
-					return os.WriteFile(config, []byte(strings.Replace(string(data), "02:00:00:00:00:01", "02:00:00:00:00:01:02:03", 1)), 0600)
+					return os.WriteFile(config, []byte(strings.Replace(string(data), "02:00:00:00:00:02", "02:00:00:00:00:02:03:04", 1)), 0600)
 				case "identity", "unknown metadata":
 					var raw map[string]any
 					data, err := os.ReadFile(config)
@@ -175,7 +175,7 @@ func TestMachineBuildMalformedExport(t *testing.T) {
 						return err
 					}
 					if kind == "identity" {
-						raw["machine_identifier"] = []byte{9}
+						raw["machine_identifier"] = f.image.MacOS.MachineIdentifier // kept the base identity
 					} else {
 						raw["password"] = "must-not-publish"
 					}

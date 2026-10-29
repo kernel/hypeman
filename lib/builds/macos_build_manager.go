@@ -161,17 +161,10 @@ func (m *manager) admitMachineBuild(req *CreateBuildRequest, sourceData []byte) 
 	return policy, nil
 }
 
-// enqueueMachineBuild queues a machine build whose source is already staged.
-func machineBuildSerialKey(req CreateBuildRequest) string {
-	ref, err := images.ParseNormalizedRef(req.MachineBaseImage)
-	if err != nil || !ref.IsDigest() {
-		return "machine:" + req.MachineBaseImage
-	}
-	return "machine:" + ref.Digest()
-}
-
+// enqueueMachineBuild queues a machine build whose source is already staged. Each
+// builder has its own identity, so builds on one base are not serialized.
 func (m *manager) enqueueMachineBuild(meta *buildMetadata, req CreateBuildRequest, policy *BuildPolicy) *Build {
-	queuePos := m.queue.EnqueueSerial(meta.ID, req, machineBuildSerialKey(req), func() {
+	queuePos := m.queue.EnqueueSerial(meta.ID, req, "", func() {
 		m.runBuild(context.Background(), meta.ID, req, policy)
 	})
 	build := meta.toBuild()

@@ -385,6 +385,11 @@ func (m *manager) createInstance(
 		HealthCheck:              cloneHealthCheckPolicy(req.HealthCheck),
 		RestartPolicy:            cloneRestartPolicy(req.RestartPolicy),
 	}
+	if req.FreshMacOSIdentity {
+		if err := m.freshMacOSIdentity(stored); err != nil {
+			return nil, err
+		}
+	}
 
 	// 12. Ensure directories
 	log.DebugContext(ctx, "creating instance directories", "instance_id", id)

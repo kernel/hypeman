@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/kernel/hypeman/lib/images"
@@ -18,6 +19,7 @@ import (
 const machineTestDigest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
 type machineFixture struct {
+	mu                  sync.Mutex
 	image               *images.Image
 	calls               []string
 	fail                string
@@ -35,6 +37,8 @@ func newMachineFixture() *machineFixture {
 	return &machineFixture{image: &images.Image{Digest: machineTestDigest, Status: images.StatusReady, Platform: "darwin/arm64", MacOS: &images.MacOSImage{HardwareModel: []byte{1}, MachineIdentifier: []byte{2}, MAC: "02:00:00:00:00:01", CPUs: 4, Memory: 8 << 30, GuestAgent: true}}, stop: MachineStopReceipt{Graceful: true, VMMExited: true}}
 }
 func (f *machineFixture) record(phase string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.calls = append(f.calls, phase)
 	if f.fail == phase {
 		return errors.New("sensitive-command-argument")
@@ -84,7 +88,10 @@ func (f *machineFixture) Export(_ context.Context, root string) error {
 	if err := f.record("export"); err != nil {
 		return err
 	}
-	data, _ := json.Marshal(*f.image.MacOS)
+	// The builder has its own identity; the export carries it, not the base's.
+	output := *f.image.MacOS
+	output.MachineIdentifier, output.MAC = []byte{3}, "02:00:00:00:00:02"
+	data, _ := json.Marshal(output)
 	for name, content := range map[string][]byte{"disk.img": []byte("disk"), "aux.img": []byte("aux"), "config.json": data} {
 		if err := os.WriteFile(filepath.Join(root, name), content, 0666); err != nil {
 			return err

@@ -21,7 +21,8 @@ type machineExportManager interface {
 
 // GuestMachineBuildDriver uses ordinary instance lifecycle and the shared system
 // GuestService. It never installs an agent or silently upgrades an unmanaged base.
-// The backend validates the base and policy before Start.
+// The backend validates the base and policy before Start. The builder gets its own
+// machine identifier and MAC, so it and its output can run beside the base.
 type GuestMachineBuildDriver struct {
 	Instances instances.Manager
 	WorkDir   string
@@ -50,7 +51,7 @@ func (d *GuestMachineBuildDriver) Start(ctx context.Context, name string, base *
 	if err != nil {
 		return nil, err
 	}
-	inst, err := d.Instances.CreateInstance(ctx, instances.CreateInstanceRequest{Name: name, Image: ref.Repository() + "@" + base.Digest, Platform: "darwin/arm64", Hypervisor: hypervisor.TypeVZ, Size: int64(base.MacOS.Memory), Vcpus: int(base.MacOS.CPUs), NetworkEnabled: policy.NetworkMode == "egress"})
+	inst, err := d.Instances.CreateInstance(ctx, instances.CreateInstanceRequest{Name: name, Image: ref.Repository() + "@" + base.Digest, Platform: "darwin/arm64", Hypervisor: hypervisor.TypeVZ, FreshMacOSIdentity: true, Size: int64(base.MacOS.Memory), Vcpus: int(base.MacOS.CPUs), NetworkEnabled: policy.NetworkMode == "egress"})
 	if inst == nil {
 		_ = os.RemoveAll(dir)
 		if err == nil {

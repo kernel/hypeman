@@ -1546,11 +1546,7 @@ func (m *manager) RecoverPendingBuilds() {
 				continue
 			}
 
-			serialKey := meta.Request.BuilderID
-			if machineBuild(meta.Request) {
-				serialKey = machineBuildSerialKey(*meta.Request)
-			}
-			m.queue.EnqueueSerial(meta.ID, *meta.Request, serialKey, func() {
+			m.queue.EnqueueSerial(meta.ID, *meta.Request, meta.Request.BuilderID, func() {
 				policy := DefaultBuildPolicy()
 				if meta.Request.BuildPolicy != nil {
 					policy = *meta.Request.BuildPolicy

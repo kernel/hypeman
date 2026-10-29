@@ -267,6 +267,7 @@ type CreateInstanceRequest struct {
 	Name                     string                      // Required
 	Image                    string                      // Required: OCI reference
 	Platform                 string                      // Optional: target platform as os/arch[/variant]; drives image resolution and auto-pull. Empty means host platform.
+	FreshMacOSIdentity       bool                        // Internal: give a macOS instance its own machine identifier and MAC instead of the image's.
 	Size                     int64                       // Base memory in bytes (default: 1GB)
 	HotplugSize              int64                       // Hotplug memory in bytes (default: 0, set explicitly to enable)
 	OverlaySize              int64                       // Overlay disk size in bytes (default: 10GB)

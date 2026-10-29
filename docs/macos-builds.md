@@ -2,8 +2,8 @@
 
 A build job can provision a digest-pinned installed macOS base in an isolated VZ
 VM, run the source's `build.sh` in it, and publish the result as an OCI machine
-image. This is not macOS installation, Linux rootfs conversion, memory forking or
-identity rekeying. It depends on the shared system GuestService.
+image. This is not macOS installation, Linux rootfs conversion or memory forking.
+It depends on the shared system GuestService.
 
 The normal build manager owns the queue, persisted request, deadline, source
 staging, status, provenance and the image-readiness gate. `GuestMachineBuildDriver`
@@ -50,8 +50,9 @@ Networking defaults to isolated. `machine_network_mode=egress` gives unrestricte
 VZ NAT for checksum-verified downloads; it is not a domain allowlist. Linux builder,
 cache, build-arg, secret and admin options are rejected.
 
-Jobs on the same base digest are serialized. Identity is preserved, so concurrent
-guests with the same identity are never allowed.
+Each builder gets its own machine identifier and MAC, and its SSH host keys are
+rekeyed on first start, the same way a cold clone is. The output keeps that identity.
+Builds on one base run concurrently, and an output can run beside its base.
 
 ## Source
 

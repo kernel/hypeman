@@ -224,6 +224,29 @@ func (m *manager) clearMacOSStopReceipt(stored *StoredMetadata) error {
 	return nil
 }
 
+// freshMacOSIdentity gives a new macOS instance its own machine identifier and MAC
+// instead of its image's, so it can run beside the image's other instances. The
+// guest's SSH host keys are rekeyed on first start.
+func (m *manager) freshMacOSIdentity(stored *StoredMetadata) error {
+	if stored.MacOS == nil {
+		return nil
+	}
+	if err := prepareMacOSClone(stored); err != nil {
+		return err
+	}
+	used, err := m.storedMACs(stored.Id)
+	if err != nil {
+		return fmt.Errorf("list MACs for macOS identity: %w", err)
+	}
+	mac, err := network.NewUniqueMAC(used)
+	if err != nil {
+		return fmt.Errorf("allocate macOS MAC: %w", err)
+	}
+	stored.MacOS.MAC = mac
+	stored.MAC = mac
+	return nil
+}
+
 // assignMacOSCloneMAC gives a networked clone a MAC no stored instance uses. It runs
 // under the fork admission lock, so concurrent forks cannot pick the same MAC.
 func (m *manager) assignMacOSCloneMAC(clone *StoredMetadata) error {

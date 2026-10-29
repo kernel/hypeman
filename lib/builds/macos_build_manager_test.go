@@ -104,10 +104,27 @@ func TestMachineBuildUsesSharedQueueStatusAndSourceLifecycle(t *testing.T) {
 	require.Error(t, err, "machine builds must not persist a builder config or registry token")
 	require.NoFileExists(t, filepath.Join(m.paths.BuildSourceDir(build.ID), "source.tar.gz"))
 }
-func TestMachineBuildSerializesByBaseDigest(t *testing.T) {
-	first := CreateBuildRequest{MachineBaseImage: "registry-a/base@" + machineTestDigest}
-	second := CreateBuildRequest{MachineBaseImage: "registry-b/another-name@" + machineTestDigest}
-	require.Equal(t, machineBuildSerialKey(first), machineBuildSerialKey(second))
+func TestMachineBuildsOnOneBaseRunConcurrently(t *testing.T) {
+	fixture := newMachineFixture()
+	fixture.waitForCancel = true
+	m := newMachineTestManager(t, fixture, fixture, nil, false)
+	req := CreateBuildRequest{MachineBaseImage: "registry/base@" + machineTestDigest}
+	var ids []string
+	for range 2 {
+		build, err := m.CreateBuild(context.Background(), req, []byte("source"))
+		require.NoError(t, err)
+		ids = append(ids, build.ID)
+	}
+	require.Eventually(t, func() bool { return m.queue.ActiveCount() == 2 }, 5*time.Second, 10*time.Millisecond, "builds on one base must not serialize")
+	for _, id := range ids {
+		// Cancel only once the attempt has recorded its builder, so it is Building.
+		require.Eventually(t, func() bool {
+			meta, err := readMetadata(m.paths, id)
+			return err == nil && meta.BuilderInstance != nil
+		}, 5*time.Second, 10*time.Millisecond)
+		require.NoError(t, m.CancelBuild(context.Background(), id))
+	}
+	require.Eventually(t, func() bool { return m.queue.ActiveCount() == 0 }, 5*time.Second, 10*time.Millisecond)
 }
 
 func TestMachineBuildAdmissionAndSourceHash(t *testing.T) {
@@ -134,16 +151,19 @@ func TestQueuedMachineCancellationRemovesSource(t *testing.T) {
 	fixture.waitForCancel = true
 	m := newMachineTestManager(t, fixture, fixture, nil, false)
 	req := CreateBuildRequest{MachineBaseImage: "registry/base@" + machineTestDigest}
-	first, err := m.CreateBuild(context.Background(), req, []byte("synthetic source"))
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		_ = m.CancelBuild(context.Background(), first.ID)
-		require.Eventually(t, func() bool { _, active := m.machineBuilds.Load(first.ID); return !active }, 5*time.Second, 10*time.Millisecond)
-	})
-	require.Eventually(t, func() bool {
-		meta, err := readMetadata(m.paths, first.ID)
-		return err == nil && meta.BuilderInstance != nil
-	}, 5*time.Second, 10*time.Millisecond)
+	// Fill both concurrency slots so the next build stays queued.
+	for range m.config.MaxConcurrentBuilds {
+		first, err := m.CreateBuild(context.Background(), req, []byte("synthetic source"))
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			_ = m.CancelBuild(context.Background(), first.ID)
+			require.Eventually(t, func() bool { _, active := m.machineBuilds.Load(first.ID); return !active }, 5*time.Second, 10*time.Millisecond)
+		})
+		require.Eventually(t, func() bool {
+			meta, err := readMetadata(m.paths, first.ID)
+			return err == nil && meta.BuilderInstance != nil
+		}, 5*time.Second, 10*time.Millisecond)
+	}
 	queued, err := m.CreateBuild(context.Background(), req, []byte("queued source"))
 	require.NoError(t, err)
 	source := filepath.Join(m.paths.BuildSourceDir(queued.ID), "source.tar.gz")
