@@ -196,6 +196,7 @@ type manager struct {
 	createVGPU                func(context.Context, string, string) (*devices.VGPUDevice, error)
 	configureVGPU             func(context.Context, string, string) error
 	vendorVFIOProfiles        func([]devices.VirtualFunction) (map[string][]devices.VGPUProfileType, error)
+	vendorVFIOSupported       func([]devices.VirtualFunction) (map[string]struct{}, error)
 	quarantinedVFs            func() (map[string]struct{}, error)
 	pickVFIndex               func(n int) int
 	destroyVGPU               func(context.Context, devices.VGPUAssignment) error

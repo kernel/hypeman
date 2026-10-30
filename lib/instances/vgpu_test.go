@@ -142,6 +142,67 @@ func TestSelectVendorVFIOVFNoCreatableProfilesIsInsufficientResources(t *testing
 	require.ErrorIs(t, err, ErrInsufficientResources)
 }
 
+// A profile no VF can create while other profiles still fit, as when the free
+// framebuffer is split into pieces smaller than it, is out of room if the GPUs
+// support it and a bad request if they don't. Without the driver's supported
+// list it stays a plain create error.
+func TestSelectVendorVFIOVFUncreatableProfile(t *testing.T) {
+	const requested = "NVIDIA L40S-4Q"
+	tests := []struct {
+		name      string
+		supported func() (map[string]struct{}, error)
+		want      error
+	}{
+		{
+			name: "supported profile without room",
+			supported: func() (map[string]struct{}, error) {
+				return map[string]struct{}{testVGPUProfile: {}, requested: {}}, nil
+			},
+			want: ErrInsufficientResources,
+		},
+		{
+			name:      "unsupported profile",
+			supported: func() (map[string]struct{}, error) { return map[string]struct{}{testVGPUProfile: {}}, nil },
+			want:      ErrInvalidRequest,
+		},
+		{
+			name:      "supported list unavailable",
+			supported: func() (map[string]struct{}, error) { return nil, errors.New("NVML unavailable") },
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, _, err := selectVendorVFIOVF(vendorVFIOCandidates{
+				vfs:          []devices.VirtualFunction{{PCIAddress: "0000:82:00.4", ParentGPU: "0000:82:00.0"}},
+				profilesByVF: testVFProfiles("0000:82:00.4"),
+				supported:    tt.supported,
+			}, requested, nil)
+			if tt.want != nil {
+				require.ErrorIs(t, err, tt.want)
+				return
+			}
+			require.ErrorContains(t, err, "unknown profile or insufficient capacity")
+			require.NotErrorIs(t, err, ErrInsufficientResources)
+			require.NotErrorIs(t, err, ErrInvalidRequest)
+		})
+	}
+}
+
+// The supported list is an extra driver query, so a claim reads it only for a
+// profile no VF can create.
+func TestSelectVendorVFIOVFCreatableProfileSkipsSupportedList(t *testing.T) {
+	address, _, err := selectVendorVFIOVF(vendorVFIOCandidates{
+		vfs:          []devices.VirtualFunction{{PCIAddress: "0000:82:00.4", ParentGPU: "0000:82:00.0"}},
+		profilesByVF: testVFProfiles("0000:82:00.4"),
+		supported: func() (map[string]struct{}, error) {
+			t.Fatal("a creatable profile must not read the supported list")
+			return nil, nil
+		},
+	}, testVGPUProfile, nil)
+	require.NoError(t, err)
+	assert.Equal(t, "0000:82:00.4", address)
+}
+
 func testVFProfiles(addresses ...string) map[string][]devices.VGPUProfileType {
 	profiles := make(map[string][]devices.VGPUProfileType, len(addresses))
 	for _, address := range addresses {
