@@ -349,9 +349,7 @@ func run() error {
 		"kernel", kernelVer)
 
 	// Initialize network manager (creates default network if needed)
-	// Get instance IDs that might have a running VMM for TAP cleanup safety.
-	// Include Unknown state: we couldn't confirm their state, but they might still
-	// have a running VMM. Better to leave a stale TAP than crash a running VM.
+	// Preserve TAPs for running, paused, and potentially live VMMs.
 	var preserveTAPs []string
 	allInstances, err := app.InstanceManager.ListInstances(app.Ctx, nil)
 	if err != nil {
@@ -360,13 +358,7 @@ func run() error {
 		logger.Warn("failed to list instances for TAP cleanup, skipping cleanup", "error", err)
 		preserveTAPs = nil
 	} else {
-		// Initialize to empty slice (not nil) so cleanup runs even with no running VMs
-		preserveTAPs = []string{}
-		for _, inst := range allInstances {
-			if inst.State == instances.StateRunning || inst.State == instances.StateInitializing || inst.State == instances.StateUnknown {
-				preserveTAPs = append(preserveTAPs, inst.Id)
-			}
-		}
+		preserveTAPs = instances.TAPPreserveIDs(allInstances)
 	}
 	logger.Info("Initializing network manager...")
 	if err := app.NetworkManager.Initialize(app.Ctx, preserveTAPs); err != nil {
