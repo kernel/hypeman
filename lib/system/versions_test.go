@@ -16,12 +16,12 @@ func TestParseKernelVersion(t *testing.T) {
 }
 
 func TestKernel202610301Registration(t *testing.T) {
-	version, ok := ParseKernelVersion("ch-6.12.8-kernel-3.1-202610301")
+	version, ok := ParseKernelVersion("ch-6.12.8-kernel-3.2-202610301")
 	assert.True(t, ok)
 	assert.Equal(t, Kernel_202610301, version)
 	assert.Equal(t, Kernel_202605291, DefaultKernelVersion)
 
-	baseURL := "https://github.com/kernel/linux/releases/download/ch-6.12.8-kernel-3.1-202610301/"
+	baseURL := "https://github.com/kernel/linux/releases/download/ch-6.12.8-kernel-3.2-202610301/"
 	assert.Equal(t, map[string]string{
 		"x86_64":  baseURL + "vmlinux-x86_64",
 		"aarch64": baseURL + "Image-arm64",
