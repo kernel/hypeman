@@ -30,16 +30,16 @@ const (
 
 var (
 	// DefaultKernelVersion is the kernel version used for new instances
-	DefaultKernelVersion = Kernel_202605291
+	DefaultKernelVersion = Kernel_202610301
 
 	// SupportedKernelVersions lists all supported kernel versions
 	SupportedKernelVersions = []KernelVersion{
+		Kernel_202610301,
 		Kernel_202605291,
 		Kernel_202603301,
 		Kernel_202603091,
 		Kernel_202602101,
 		Kernel_202601152,
-		Kernel_202610301,
 	}
 )
 
