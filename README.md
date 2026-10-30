@@ -238,6 +238,19 @@ hypeman restore my-app
 hypeman rm --force --all
 ```
 
+### Experimental live forks on macOS
+
+```bash
+hypeman fork --from-running --target-state Running source copy
+```
+
+VZ live forks preserve running Linux processes and RAM. Restoring saved state
+requires retaining the source's Apple platform machine identifier, but Apple
+specifies undefined guest behavior when two VMs with that identifier run
+concurrently. This capability remains experimental; it does not silently replace
+saved RAM with a cold boot. Forked NAT connectivity is also not yet reliable.
+See [VZ live-fork tests and limitations](docs/testing/vz-live-forks.md).
+
 ### Ingress (Reverse Proxy)
 
 Create a reverse proxy from the host to your VM:
