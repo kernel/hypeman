@@ -2,10 +2,12 @@ package images
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 )
 
@@ -17,6 +19,19 @@ type macOSMachinePayload struct {
 	Disk     string
 	Aux      string
 	Platform *MacOSImage
+}
+
+// RequireClosedFile fails unless no process holds path open. lsof exits 1 when
+// nothing holds the file; any other failure leaves the storage unverified.
+func RequireClosedFile(ctx context.Context, path string) error {
+	err := exec.CommandContext(ctx, "/usr/sbin/lsof", "-t", path).Run()
+	if err == nil {
+		return fmt.Errorf("storage is open: stop its VM first")
+	}
+	if exit, ok := err.(*exec.ExitError); !ok || exit.ExitCode() != 1 {
+		return fmt.Errorf("cannot verify storage is closed: %w", err)
+	}
+	return nil
 }
 
 // ValidateMacOSBundle validates a fixed-layout export, rejecting unknown metadata

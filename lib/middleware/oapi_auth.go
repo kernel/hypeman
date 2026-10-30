@@ -203,6 +203,7 @@ func extractRepoFromPath(path string) string {
 }
 
 // isWriteOperation returns true if the HTTP method implies a write operation
+
 func isWriteOperation(method string) bool {
 	return method == http.MethodPut || method == http.MethodPost || method == http.MethodPatch || method == http.MethodDelete
 }

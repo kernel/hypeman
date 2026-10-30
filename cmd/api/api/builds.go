@@ -44,9 +44,15 @@ func (s *ApiService) ListBuilds(ctx context.Context, request oapi.ListBuildsRequ
 // CreateBuild creates a new build job
 func (s *ApiService) CreateBuild(ctx context.Context, request oapi.CreateBuildRequestObject) (oapi.CreateBuildResponseObject, error) {
 	if s.Config != nil && s.Config.MacOSOnly {
-		return oapi.CreateBuild501JSONResponse{Code: "unsupported", Message: "Linux builder VMs are unavailable in macOS-only mode"}, nil
+		if !s.Config.MacOSBuilds {
+			return oapi.CreateBuild501JSONResponse{Code: "unsupported", Message: "Linux builder VMs are unavailable in macOS-only mode"}, nil
+		}
+		req, source, err := parseMachineBuildMultipart(request.Body)
+		if err != nil {
+			return oapi.CreateBuild400JSONResponse{Code: "invalid_request", Message: err.Error()}, nil
+		}
+		return s.submitBuild(ctx, req, source)
 	}
-	log := logger.FromContext(ctx)
 
 	// Parse multipart form fields
 	var sourceData []byte
@@ -69,6 +75,8 @@ func (s *ApiService) CreateBuild(ctx context.Context, request oapi.CreateBuildRe
 		}
 
 		switch part.FormName() {
+		case "machine_base_image", "machine_network_mode":
+			return oapi.CreateBuild400JSONResponse{Code: "unsupported", Message: "machine builds require macos_only and macos_builds"}, nil
 		case "source":
 			sourceData, err = io.ReadAll(part)
 			if err != nil {
@@ -256,6 +264,11 @@ func (s *ApiService) CreateBuild(ctx context.Context, request oapi.CreateBuildRe
 		}
 	}
 
+	return s.submitBuild(ctx, domainReq, sourceData)
+}
+
+func (s *ApiService) submitBuild(ctx context.Context, domainReq builds.CreateBuildRequest, sourceData []byte) (oapi.CreateBuildResponseObject, error) {
+	log := logger.FromContext(ctx)
 	build, err := s.BuildManager.CreateBuild(ctx, domainReq, sourceData)
 	if err != nil {
 		switch {

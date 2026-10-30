@@ -114,7 +114,7 @@ func (m *manager) deleteInstanceWithOptions(
 			attribute.String("operation", "graceful_guest_shutdown"),
 			attribute.Int("stop_timeout_seconds", stopTimeout),
 		)
-		gracefulShutdown = m.tryGracefulGuestShutdown(gracefulCtx, &inst, stopTimeout)
+		gracefulShutdown = m.tryGuestShutdown(gracefulCtx, &inst, stopTimeout, false)
 		if gracefulShutdown {
 			gracefulSpanEnd(nil)
 		} else {

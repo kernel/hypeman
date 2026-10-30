@@ -527,6 +527,11 @@ func run() error {
 			r.Use(api.RecordCreateFields)
 		}
 
+		// Bound machine multipart input before OpenAPI validation reads the body.
+		if app.Config.MacOSBuilds {
+			r.Use(api.LimitMachineBuildBody(app.Config.JwtSecret))
+		}
+
 		// OpenAPI request validation with authentication
 		validatorOptions := &nethttpmiddleware.Options{
 			Options: openapi3filter.Options{
@@ -624,10 +629,10 @@ func run() error {
 			logger.Error("failed to start builders manager", "error", err)
 			return err
 		}
-		if err := app.BuildManager.Start(gctx); err != nil {
-			logger.Error("failed to start build manager", "error", err)
-			return err
-		}
+	}
+	if err := app.BuildManager.Start(gctx); err != nil {
+		logger.Error("failed to start build manager", "error", err)
+		return err
 	}
 
 	grp.Go(func() error {

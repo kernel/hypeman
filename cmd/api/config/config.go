@@ -285,7 +285,8 @@ type Config struct {
 	JwtSecret     string `koanf:"jwt_secret"`
 	Env           string `koanf:"env"`
 	Version       string `koanf:"version"`
-	MacOSOnly     bool   `koanf:"macos_only"` // Experimental: omit Linux boot downloads and reject Linux creates.
+	MacOSBuilds   bool   `koanf:"macos_builds"` // Experimental: enable machine builds on the macOS-only server.
+	MacOSOnly     bool   `koanf:"macos_only"`   // Experimental: omit Linux boot downloads and reject Linux creates.
 
 	Network          NetworkConfig          `koanf:"network"`
 	Caddy            CaddyConfig            `koanf:"caddy"`
@@ -606,6 +607,9 @@ func (c *Config) Validate() error {
 	if err := c.validateAPIListenPorts(); err != nil {
 		return err
 	}
+	if err := c.validateMacOSBuilds(); err != nil {
+		return err
+	}
 	if strings.TrimSpace(c.Metrics.ListenAddress) == "" {
 		return fmt.Errorf("metrics.listen_address must not be empty")
 	}
@@ -851,4 +855,22 @@ func (c *Config) validateFirecrackerUFFDGraduation() error {
 
 func intPtr(v int) *int {
 	return &v
+}
+
+// validateMacOSBuilds checks the experimental machine-build gate. The publisher
+// validates the registry URL itself, since the base publication tool shares it.
+func (c *Config) validateMacOSBuilds() error {
+	if !c.MacOSBuilds {
+		return nil
+	}
+	if !c.MacOSOnly {
+		return fmt.Errorf("macos_builds requires macos_only")
+	}
+	if c.Registry.URL == "" {
+		return fmt.Errorf("macos_builds requires an explicit registry URL")
+	}
+	if c.Registry.CACertFile != "" || c.Registry.Insecure {
+		return fmt.Errorf("macos_builds requires system-trusted registry TLS or loopback HTTP")
+	}
+	return nil
 }

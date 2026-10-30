@@ -186,7 +186,7 @@ func (m *manager) rekeyMacOSCloneOnStart(ctx context.Context, stored *StoredMeta
 	// Teardown runs even if saving the pending flag fails. Otherwise the clone would keep
 	// running, networked, with its source's SSH host keys.
 	saveErr := m.saveMetadata(&metadata{StoredMetadata: *stored})
-	_, stopErr := m.stopInstance(context.WithoutCancel(ctx), stored.Id)
+	_, stopErr := m.stopInstance(context.WithoutCancel(ctx), stored.Id, false)
 	if saveErr != nil || stopErr != nil {
 		return fmt.Errorf("macOS clone rekey failed and teardown needs attention: %w", errors.Join(err, saveErr, stopErr))
 	}
@@ -221,6 +221,29 @@ func (m *manager) clearMacOSStopReceipt(stored *StoredMetadata) error {
 	if err := m.saveMetadata(meta); err != nil {
 		return fmt.Errorf("clear macOS stop receipt: %w", err)
 	}
+	return nil
+}
+
+// freshMacOSIdentity gives a new macOS instance its own machine identifier and MAC
+// instead of its image's, so it can run beside the image's other instances. The
+// guest's SSH host keys are rekeyed on first start.
+func (m *manager) freshMacOSIdentity(stored *StoredMetadata) error {
+	if stored.MacOS == nil {
+		return nil
+	}
+	if err := prepareMacOSClone(stored); err != nil {
+		return err
+	}
+	used, err := m.storedMACs(stored.Id)
+	if err != nil {
+		return fmt.Errorf("list MACs for macOS identity: %w", err)
+	}
+	mac, err := network.NewUniqueMAC(used)
+	if err != nil {
+		return fmt.Errorf("allocate macOS MAC: %w", err)
+	}
+	stored.MacOS.MAC = mac
+	stored.MAC = mac
 	return nil
 }
 

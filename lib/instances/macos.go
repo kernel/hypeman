@@ -24,20 +24,17 @@ import (
 // macOSAuxStorageFile is the instance's copy of the image's auxiliary storage.
 const macOSAuxStorageFile = "mac-aux.img"
 
-// requireMacOSImageName refuses a create on a macOS-only server unless the image
-// is an already imported macOS image, so a Linux image is never pulled there.
+// requireMacOSImageName checks lookup errors before resolving the reference as
+// darwin/arm64. The resolved image is validated by checkMacOSCreate.
 func (m *manager) requireMacOSImageName(ctx context.Context, name string) error {
 	if !m.macOSOnly {
 		return nil
 	}
-	cached, err := m.imageManager.GetImage(ctx, name)
-	if err != nil && !errors.Is(err, images.ErrNotFound) {
-		return err
+	_, err := m.imageManager.GetImage(ctx, name)
+	if errors.Is(err, images.ErrNotFound) {
+		return nil
 	}
-	if err != nil || cached.MacOS == nil {
-		return fmt.Errorf("%w: macOS-only server requires an already imported macOS image", ErrInvalidRequest)
-	}
-	return nil
+	return err
 }
 
 // checkMacOSCreate applies macOS machine defaults to a create from a macOS image.

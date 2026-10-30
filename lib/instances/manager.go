@@ -736,7 +736,7 @@ func (m *manager) StopInstance(ctx context.Context, id string) (*Instance, error
 	if err := m.markRestartManualStopLocked(ctx, id); err != nil {
 		return nil, err
 	}
-	inst, err := m.stopInstance(ctx, id)
+	inst, err := m.stopInstance(ctx, id, false)
 	if err == nil {
 		m.notifyLifecycleEvent(ctx, LifecycleEventStop, inst)
 	}

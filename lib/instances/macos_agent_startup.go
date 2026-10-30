@@ -83,7 +83,7 @@ func (m *manager) stopOverdueMacOSAgentStartup(ctx context.Context, id string, l
 		reason += ": " + last.(string)
 	}
 	log.WarnContext(ctx, "stopping macOS guest whose agent did not start", "instance_id", id, "reason", reason)
-	if _, err := m.stopInstance(ctx, id); err != nil {
+	if _, err := m.stopInstance(ctx, id, false); err != nil {
 		return err
 	}
 	meta, err = m.loadMetadata(id)

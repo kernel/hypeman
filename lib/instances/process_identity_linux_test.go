@@ -255,7 +255,7 @@ func TestGracefulShutdownWaitsForSocketOwnerInsteadOfExitedStoredPID(t *testing.
 	}}
 
 	m := &manager{}
-	assert.False(t, m.tryGracefulGuestShutdown(context.Background(), inst, 1),
+	assert.False(t, m.tryGuestShutdown(context.Background(), inst, 1, false),
 		"stop and delete must fall back to the hardened kill path while the socket owner is alive")
 	assert.True(t, ProcessExists(owner.Process.Pid))
 }
@@ -297,7 +297,7 @@ func TestGracefulShutdownFallbackKillsCapturedPIDAfterListenerCloses(t *testing.
 		VsockSocket:               filepath.Join(t.TempDir(), "missing-vsock.sock"),
 	}}
 
-	assert.False(t, m.tryGracefulGuestShutdown(context.Background(), inst, 0))
+	assert.False(t, m.tryGuestShutdown(context.Background(), inst, 0, false))
 	require.NoError(t, m.killHypervisor(context.Background(), inst))
 	assert.False(t, ProcessExists(owner.Process.Pid))
 }
@@ -752,7 +752,7 @@ func TestMacOSGracefulShutdownWithoutLiveVMMIsNotGraceful(t *testing.T) {
 		sent = true
 		return nil
 	}}
-	assert.False(t, m.tryGracefulGuestShutdown(context.Background(), inst, 1),
+	assert.False(t, m.tryGuestShutdown(context.Background(), inst, 1, false),
 		"a macOS stop with no VMM to signal must not produce a graceful receipt")
 	assert.False(t, sent)
 }
@@ -800,7 +800,7 @@ func TestMacOSGracefulShutdownRequiresGuestStopReceipt(t *testing.T) {
 				return err
 			}}
 
-			assert.Equal(t, guestStopped, m.tryGracefulGuestShutdown(context.Background(), inst, 5))
+			assert.Equal(t, guestStopped, m.tryGuestShutdown(context.Background(), inst, 5, false))
 			assert.NoFileExists(t, receipt, "the receipt is consumed")
 		})
 	}
