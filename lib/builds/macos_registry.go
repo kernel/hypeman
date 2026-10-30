@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/types"
@@ -79,27 +78,22 @@ func machineFetch(ctx context.Context, client *http.Client, token, target, diges
 	return kept.Bytes(), nil
 }
 
-// mountMachineBlob links a base layer into the build repository from its source. The
-// registry answers 201 only when it already stores the blob; the size is then checked
-// with a HEAD request. The bytes are not downloaded or hashed again.
-func mountMachineBlob(ctx context.Context, client *http.Client, token, base string, blob machineBlob) error {
-	digest := blob.descriptor.Digest.String()
-	target := base + "/blobs/uploads/?mount=" + digest + "&from=" + url.QueryEscape(blob.mountFrom)
-	response, err := machineRegistryRequest(ctx, client, token, http.MethodPost, target, "", nil, 0)
+// machineBlobStored reports whether the registry already holds a blob of the
+// descriptor's digest and size. The store is shared by digest across repositories.
+func machineBlobStored(ctx context.Context, client *http.Client, token, base string, descriptor v1.Descriptor) (bool, error) {
+	head, err := machineRegistryRequest(ctx, client, token, http.MethodHead, base+"/blobs/"+descriptor.Digest.String(), "", nil, 0)
 	if err != nil {
-		return err
-	}
-	response.Body.Close()
-	if response.StatusCode != http.StatusCreated {
-		return fmt.Errorf("base layer %s was not mounted", digest)
-	}
-	head, err := machineRegistryRequest(ctx, client, token, http.MethodHead, base+"/blobs/"+digest, "", nil, 0)
-	if err != nil {
-		return err
+		return false, err
 	}
 	head.Body.Close()
-	if head.StatusCode != http.StatusOK || head.ContentLength != blob.descriptor.Size {
-		return fmt.Errorf("mounted base layer %s is not verified", digest)
+	switch head.StatusCode {
+	case http.StatusOK:
+		if head.ContentLength != descriptor.Size {
+			return false, fmt.Errorf("stored blob %s has size %d, want %d", descriptor.Digest, head.ContentLength, descriptor.Size)
+		}
+		return true, nil
+	case http.StatusNotFound:
+		return false, nil
 	}
-	return nil
+	return false, fmt.Errorf("blob check returned status %d", head.StatusCode)
 }

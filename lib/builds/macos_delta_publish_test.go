@@ -1,11 +1,9 @@
 package builds_test
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -30,7 +28,6 @@ const deltaTestSecret = "synthetic registry secret"
 type deltaTestRegistry struct {
 	server  *httptest.Server
 	tokens  *builds.RegistryTokenGenerator
-	mounts  atomic.Int32
 	uploads atomic.Int32
 	puts    atomic.Int32
 }
@@ -42,9 +39,7 @@ func newDeltaTestRegistry(t *testing.T) *deltaTestRegistry {
 	require.NoError(t, err)
 	dr := &deltaTestRegistry{tokens: builds.NewRegistryTokenGenerator(deltaTestSecret)}
 	handler := middleware.JwtAuth(deltaTestSecret)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost && r.URL.Query().Get("mount") != "" {
-			dr.mounts.Add(1)
-		} else if r.Method == http.MethodPost && r.URL.Query().Get("digest") != "" {
+		if r.Method == http.MethodPost && r.URL.Query().Get("digest") != "" {
 			dr.uploads.Add(1)
 		}
 		if r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/manifests/") {
@@ -106,7 +101,7 @@ func (dr *deltaTestRegistry) pullManifest(t *testing.T, repo, digest string) v1.
 	return manifest
 }
 
-func TestStreamingMachinePublisherDerivedMountsBaseLayers(t *testing.T) {
+func TestStreamingMachinePublisherDerivedReusesStoredBaseLayers(t *testing.T) {
 	dr := newDeltaTestRegistry(t)
 	publisher := &builds.StreamingMachinePublisher{RegistryURL: dr.server.URL, Tokens: dr.tokens}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -122,7 +117,6 @@ func TestStreamingMachinePublisherDerivedMountsBaseLayers(t *testing.T) {
 		derived[3*64<<10+j] = 0xAA
 	}
 	derivedBundle := deltaTestBundle(t, derived, "derived aux")
-	dr.mounts.Store(0)
 	dr.uploads.Store(0)
 	result, err := publisher.PublishDerived(ctx, "derived-x", derivedBundle, builds.MachineDeltaBase{
 		Repo:     "builds/base-x",
@@ -130,8 +124,7 @@ func TestStreamingMachinePublisherDerivedMountsBaseLayers(t *testing.T) {
 		DiskPath: filepath.Join(baseBundle, "disk.img"),
 	})
 	require.NoError(t, err)
-	require.Equal(t, int32(1), dr.mounts.Load(), "the base layer is mounted, not uploaded")
-	require.Equal(t, int32(2), dr.uploads.Load(), "only the config and the delta layer are uploaded")
+	require.Equal(t, int32(2), dr.uploads.Load(), "only the config and the delta layer are uploaded; the base layer is already stored")
 
 	derivedManifest := dr.pullManifest(t, "builds/derived-x", result.Digest)
 	require.Len(t, derivedManifest.Layers, 2)
@@ -164,39 +157,4 @@ func TestStreamingMachinePublisherDerivedRejectsNonBaseRepo(t *testing.T) {
 		DiskPath: filepath.Join(bundle, "disk.img"),
 	})
 	require.ErrorContains(t, err, "under builds/")
-}
-
-// mountRequest posts a blob mount with the given token and reports the status.
-func (dr *deltaTestRegistry) mountRequest(t *testing.T, token, repo, digest, from string) int {
-	t.Helper()
-	target := dr.server.URL + "/v2/" + repo + "/blobs/uploads/?mount=" + digest + "&from=" + from
-	request, err := http.NewRequest(http.MethodPost, target, bytes.NewReader(nil))
-	require.NoError(t, err)
-	request.Header.Set("Authorization", "Bearer "+token)
-	response, err := http.DefaultClient.Do(request)
-	require.NoError(t, err)
-	defer response.Body.Close()
-	_, _ = io.Copy(io.Discard, response.Body)
-	return response.StatusCode
-}
-
-func TestBlobMountFallsThroughToUploadForMissingBlob(t *testing.T) {
-	dr := newDeltaTestRegistry(t)
-	token, err := dr.tokens.GenerateToken("mounter", []builds.RepoPermission{
-		{Repo: "builds/target-x", Scope: "push"},
-		{Repo: "builds/source-x", Scope: "pull"},
-	}, time.Minute)
-	require.NoError(t, err)
-	status := dr.mountRequest(t, token, "builds/target-x", fmt.Sprintf("sha256:%064x", 3), "builds/source-x")
-	require.Equal(t, http.StatusAccepted, status, "a missing blob opens an upload session")
-}
-
-func TestBlobMountRefusedFromUnauthorizedSource(t *testing.T) {
-	dr := newDeltaTestRegistry(t)
-	token, err := dr.tokens.GenerateToken("mounter", []builds.RepoPermission{
-		{Repo: "builds/target-x", Scope: "push"},
-	}, time.Minute)
-	require.NoError(t, err)
-	status := dr.mountRequest(t, token, "builds/target-x", fmt.Sprintf("sha256:%064x", 4), "builds/other-private")
-	require.Equal(t, http.StatusForbidden, status, "a token without pull on the source cannot mount from it")
 }

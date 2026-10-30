@@ -203,25 +203,6 @@ func extractRepoFromPath(path string) string {
 }
 
 // isWriteOperation returns true if the HTTP method implies a write operation
-// authorizeBlobMount checks the source of a cross-repository blob mount. The blob
-// store is shared by digest, so a mount is the only way a build could link another
-// repository's blob into its own; the token must allow pulling from that source.
-func authorizeBlobMount(claims *RegistryTokenClaims, r *http.Request) error {
-	query := r.URL.Query()
-	from := query.Get("from")
-	if query.Get("mount") == "" && from == "" {
-		return nil
-	}
-	if r.Method != http.MethodPost || query.Get("mount") == "" || from == "" {
-		return fmt.Errorf("blob mount requires POST with mount and from")
-	}
-	for _, perm := range claims.RepoAccess {
-		if perm.Repo == from && (perm.Scope == "pull" || perm.Scope == "push") {
-			return nil
-		}
-	}
-	return fmt.Errorf("%w: mount source %s", errRepoNotAllowed, from)
-}
 
 func isWriteOperation(method string) bool {
 	return method == http.MethodPut || method == http.MethodPost || method == http.MethodPatch || method == http.MethodDelete
@@ -414,10 +395,6 @@ func JwtAuth(jwtSecret string) func(http.Handler) http.Handler {
 						// Try to validate as a registry-scoped token
 						registryClaims, err := validateRegistryToken(token, jwtSecret, r.URL.Path, r.Method)
 						if err == nil {
-							if err := authorizeBlobMount(registryClaims, r); err != nil {
-								http.Error(w, err.Error(), http.StatusForbidden)
-								return
-							}
 							// Valid registry token - set build ID as user for audit trail
 							log.DebugContext(r.Context(), "registry token validated",
 								"build_id", registryClaims.BuildID,

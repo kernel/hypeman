@@ -36,7 +36,6 @@ type StreamingMachinePublisher struct {
 type machineBlob struct {
 	open       func() (io.ReadCloser, error)
 	descriptor v1.Descriptor
-	mountFrom  string // set for a base layer mounted from this repository instead of uploaded
 }
 
 // Publish commits bundle as a standalone machine image in builds/{id}.
@@ -112,10 +111,13 @@ func (p *StreamingMachinePublisher) publish(ctx context.Context, id, bundle stri
 	}
 	digest := machineHash(manifestBytes).String()
 	for _, blob := range append([]machineBlob{configBlob}, layers...) {
-		if blob.mountFrom != "" {
-			if err := mountMachineBlob(ctx, client, token, base, blob); err != nil {
-				return MachinePublication{}, err
-			}
+		// The blob store is keyed by digest, so a blob the registry already holds
+		// (a base layer, or a retried publish) is not uploaded again.
+		stored, e := machineBlobStored(ctx, client, token, base, blob.descriptor)
+		if e != nil {
+			return MachinePublication{}, e
+		}
+		if stored {
 			continue
 		}
 		body, e := blob.open()

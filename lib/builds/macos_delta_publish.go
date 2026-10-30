@@ -43,8 +43,9 @@ func (m MachineDeltaBase) validate() error {
 }
 
 // machineLayers returns a machine image's layer blobs and their diff IDs. A
-// standalone image has one uploaded layer. A derivative mounts the base's layers
-// and uploads one delta layer that patches the base disk.
+// standalone image has one uploaded layer. A derivative lists the base's layers,
+// which the registry already holds, and uploads one delta layer that patches the
+// base disk.
 func machineLayers(ctx context.Context, client *http.Client, token, registry, bundle string, source *MachineDeltaBase) ([]machineBlob, []v1.Hash, error) {
 	if source == nil {
 		layer, err := machineTarballLayer(ctx, bundle)
@@ -72,7 +73,7 @@ func machineLayers(ctx context.Context, client *http.Client, token, registry, bu
 	}
 	blobs := make([]machineBlob, 0, len(baseLayers)+1)
 	for _, descriptor := range baseLayers {
-		blobs = append(blobs, machineBlob{descriptor: descriptor, mountFrom: source.Repo})
+		blobs = append(blobs, machineBlob{descriptor: descriptor})
 	}
 	diskPath := filepath.Join(bundle, "disk.img")
 	delta, err := images.ComputeMacOSDelta(source.DiskPath, diskPath)

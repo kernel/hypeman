@@ -111,12 +111,6 @@ func isCacheRepo(repo string) bool {
 // This wraps the underlying registry to intercept manifest PUTs and trigger conversion.
 func (r *Registry) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		if req.Method == http.MethodPost && req.URL.Query().Get("mount") != "" {
-			if matches := blobUploadPattern.FindStringSubmatch(req.URL.Path); matches != nil && r.mountBlob(w, req, matches[1]) {
-				return
-			}
-		}
-
 		// Intercept manifest PUT requests to store in blob store and trigger conversion
 		if req.Method == http.MethodPut {
 			matches := manifestPutPattern.FindStringSubmatch(req.URL.Path)
@@ -165,27 +159,6 @@ func (r *Registry) Handler() http.Handler {
 
 		r.handler.ServeHTTP(w, req)
 	})
-}
-
-// blobUploadPattern matches POST /v2/{name}/blobs/uploads/.
-var blobUploadPattern = regexp.MustCompile(`^/v2/(.+)/blobs/uploads/?$`)
-
-// mountBlob answers a cross-repository mount when the blob is already stored, so
-// the client does not upload it again. The middleware has already checked that the
-// token may pull from the source repository. It returns false, leaving the request
-// to the upload handler, when the blob is not stored.
-func (r *Registry) mountBlob(w http.ResponseWriter, req *http.Request, repo string) bool {
-	hash, err := v1.NewHash(req.URL.Query().Get("mount"))
-	if err != nil {
-		return false
-	}
-	if _, err := r.blobStore.Stat(req.Context(), repo, hash); err != nil {
-		return false
-	}
-	w.Header().Set("Location", "/v2/"+repo+"/blobs/"+hash.String())
-	w.Header().Set("Docker-Content-Digest", hash.String())
-	w.WriteHeader(http.StatusCreated)
-	return true
 }
 
 // storeManifestBlob stores a manifest in the blob store by its digest.
