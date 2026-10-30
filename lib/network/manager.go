@@ -25,6 +25,10 @@ type Manager interface {
 	// can't be derived (e.g. metadata read failed). Deletes the TAP device using the
 	// deterministic name from the instance ID.
 	ReleaseByInstanceID(ctx context.Context, instanceID string) error
+	// HoldReleasedIP keeps a guest IP that is leaving the allocation set out of new
+	// allocations for a short time. ReleaseAllocation does not, because standby
+	// keeps the IP.
+	HoldReleasedIP(ctx context.Context, ip string)
 
 	// SetupHTB initializes HTB qdisc on the bridge for upload fair sharing.
 	// Should be called during network initialization with the total network capacity.
@@ -63,7 +67,8 @@ type manager struct {
 	networkMu          sync.RWMutex
 	defaultNetwork     *Network
 	pendingAllocations map[string]pendingAllocation
-	tcMu               sync.Mutex // Serializes shared bridge tc mutations.
+	ipReleases         map[string]time.Time // Guest IPs in their reuse hold, by release time.
+	tcMu               sync.Mutex           // Serializes shared bridge tc mutations.
 	metrics            *Metrics
 }
 

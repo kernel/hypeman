@@ -390,8 +390,15 @@ func (m *manager) restoreSnapshot(ctx context.Context, id string, snapshotID str
 		if err := m.replaceMacOSInstanceWithSnapshotPayload(snapshotID, &metadata{StoredMetadata: restored}); err != nil {
 			return nil, err
 		}
-	} else if err := m.replaceInstanceWithSnapshotPayload(snapshotID, id); err != nil {
-		return nil, err
+	} else {
+		// The restored record carries the IP the snapshot was taken with, so the current
+		// IP leaves the allocation set and is held as a delete would hold it.
+		if sourceMeta.usesLinuxNetwork() && sourceMeta.IP != "" && sourceMeta.IP != restored.IP {
+			m.networkManager.HoldReleasedIP(ctx, sourceMeta.IP)
+		}
+		if err := m.replaceInstanceWithSnapshotPayload(snapshotID, id); err != nil {
+			return nil, err
+		}
 	}
 
 	// The macOS staged metadata is already the committed record. Writing it again

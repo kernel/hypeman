@@ -200,7 +200,7 @@ func (m *manager) reserveAllocationIdentityLocked(ctx context.Context, network *
 		attribute.String("operation", "allocate_ip"),
 		attribute.String("instance_id", req.InstanceID),
 	)
-	ip, err := allocateNextIPFromAllocations(network.Subnet, allocations)
+	ip, err := allocateNextIPFromAllocations(network.Subnet, allocations, m.heldIPsLocked(ctx))
 	ipSpanEnd(err)
 	if err != nil {
 		return nil, fmt.Errorf("allocate IP: %w", err)
@@ -475,22 +475,29 @@ func (m *manager) allocateNextIP(ctx context.Context, subnet string) (string, er
 		return "", fmt.Errorf("list allocations: %w", err)
 	}
 
-	ip, err := allocateNextIPFromAllocations(subnet, allocations)
+	m.mu.Lock()
+	held := m.heldIPsLocked(chooseCtx)
+	m.mu.Unlock()
+
+	ip, err := allocateNextIPFromAllocations(subnet, allocations, held)
 	if err != nil {
 		chooseErr = err
 	}
 	return ip, err
 }
 
-func allocateNextIPFromAllocations(subnet string, allocations []Allocation) (string, error) {
+func allocateNextIPFromAllocations(subnet string, allocations []Allocation, held map[string]bool) (string, error) {
 	// Parse subnet
 	_, ipNet, err := net.ParseCIDR(subnet)
 	if err != nil {
 		return "", fmt.Errorf("parse subnet: %w", err)
 	}
 
-	// Build set of used IPs
+	// Build set of used IPs, including those in their reuse hold
 	usedIPs := make(map[string]bool)
+	for ip := range held {
+		usedIPs[ip] = true
+	}
 	for _, alloc := range allocations {
 		usedIPs[alloc.IP] = true
 	}

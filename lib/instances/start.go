@@ -129,6 +129,7 @@ func (m *manager) startInstance(
 			log.ErrorContext(ctx, "failed to allocate network", "instance_id", id, "error", err)
 			return nil, fmt.Errorf("allocate network: %w", err)
 		}
+		previousIP := stored.IP
 		// Update stored metadata with new IP/MAC
 		stored.IP = netConfig.IP
 		stored.MAC = netConfig.MAC
@@ -139,6 +140,11 @@ func (m *manager) startInstance(
 				TAPDevice:  netConfig.TAPDevice,
 			})
 		})
+		// A stopped instance keeps its last IP until it starts with a new one, so that
+		// IP leaves the allocation set here and is held as a delete would hold it.
+		if previousIP != "" && previousIP != netConfig.IP {
+			m.networkManager.HoldReleasedIP(ctx, previousIP)
+		}
 	}
 
 	var proxyGuestConfig *egressproxy.GuestConfig

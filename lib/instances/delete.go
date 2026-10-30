@@ -206,6 +206,12 @@ func (m *manager) deleteInstanceWithOptions(
 		}
 	}
 
+	// 8b. Hold the guest IP before its metadata goes, so it is not handed to a new
+	// guest while clients may still dial it.
+	if inst.usesLinuxNetwork() && stored.IP != "" {
+		m.networkManager.HoldReleasedIP(ctx, stored.IP)
+	}
+
 	// 9. Delete all instance data
 	log.DebugContext(ctx, "deleting instance data", "instance_id", id)
 	_, dataSpanEnd := m.startLifecycleStep(ctx, "delete_instance_data",

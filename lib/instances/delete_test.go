@@ -1,11 +1,15 @@
 package instances
 
 import (
+	"context"
+	"os"
 	"os/exec"
 	"syscall"
 	"testing"
 	"time"
 
+	"github.com/kernel/hypeman/lib/hypervisor"
+	"github.com/kernel/hypeman/lib/network"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -64,4 +68,28 @@ func TestResolveDeleteStopTimeout(t *testing.T) {
 			assert.Equal(t, tt.want, resolveDeleteStopTimeout(&tt.stored))
 		})
 	}
+}
+
+type holdRecordingNetworkManager struct {
+	network.Manager
+	held []string
+}
+
+func (n *holdRecordingNetworkManager) HoldReleasedIP(_ context.Context, ip string) {
+	n.held = append(n.held, ip)
+}
+
+func TestDeleteHoldsGuestIP(t *testing.T) {
+	m := createTestManager(t, ResourceLimits{})
+	nm := &holdRecordingNetworkManager{Manager: m.networkManager}
+	m.networkManager = nm
+
+	const id = "delete-hold"
+	stored := StoredMetadata{Id: id, Name: id, NetworkEnabled: true, IP: "10.100.0.42", MAC: "02:00:00:00:00:42", HypervisorType: hypervisor.TypeCloudHypervisor}
+	require.NoError(t, os.MkdirAll(m.paths.InstanceDir(id), 0755))
+	require.NoError(t, m.saveMetadata(&metadata{StoredMetadata: stored}))
+
+	require.NoError(t, m.deleteInstance(context.Background(), id))
+	require.Equal(t, []string{"10.100.0.42"}, nm.held)
+	require.NoDirExists(t, m.paths.InstanceDir(id))
 }
