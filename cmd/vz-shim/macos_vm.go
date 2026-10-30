@@ -45,6 +45,9 @@ func createMacVM(config *shimconfig.ShimConfig) (*vz.VirtualMachine, *vz.Virtual
 	if err := configureMacPlatform(vmConfig, config); err != nil {
 		return nil, nil, fmt.Errorf("configure Mac platform: %w", err)
 	}
+	if err := configureMacAudio(vmConfig); err != nil {
+		return nil, nil, fmt.Errorf("configure audio: %w", err)
+	}
 
 	vsockConfig, err := vz.NewVirtioSocketDeviceConfiguration()
 	if err != nil {
@@ -64,4 +67,27 @@ func createMacVM(config *shimconfig.ShimConfig) (*vz.VirtualMachine, *vz.Virtual
 		return nil, nil, fmt.Errorf("create virtual machine: %w", err)
 	}
 	return vm, vmConfig, nil
+}
+
+// configureMacAudio gives the guest an audio device. Virtualization attaches audio
+// only through a sound device, so without one the guest boots with no CoreAudio
+// devices at all: `system_profiler SPAudioDataType` lists none and `afplay` fails
+// with `AudioQueueStart failed (-66680)`.
+//
+// The output stream has no host sink. The samples are discarded on the host, which
+// is what a headless browser VM wants -- nothing should play on the machine running
+// the guests -- while the guest still has a real output device, so applications can
+// render audio and ScreenCaptureKit has a mix to capture for the live view.
+func configureMacAudio(vmConfig *vz.VirtualMachineConfiguration) error {
+	soundConfig, err := vz.NewVirtioSoundDeviceConfiguration()
+	if err != nil {
+		return fmt.Errorf("create sound device: %w", err)
+	}
+	output, err := vz.NewVirtioSoundDeviceOutputStreamConfiguration()
+	if err != nil {
+		return fmt.Errorf("create output stream: %w", err)
+	}
+	soundConfig.SetStreams(output)
+	vmConfig.SetAudioDevicesVirtualMachineConfiguration([]vz.AudioDeviceConfiguration{soundConfig})
+	return nil
 }
