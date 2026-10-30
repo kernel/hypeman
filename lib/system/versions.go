@@ -24,8 +24,8 @@ const (
 	// Kernel_202605291 is the current kernel version with VMGenID support for snapshot resume detection
 	Kernel_202605291 KernelVersion = "ch-6.12.8-kernel-3.0-202605291"
 
-	// Kernel_202610301_UDPTest is an opt-in test kernel with IPv4 TPROXY and policy routing.
-	Kernel_202610301_UDPTest KernelVersion = "ch-6.12.8-kernel-3.1-udp-test-202610301"
+	// Kernel_202610301 adds IPv4 TPROXY and policy routing.
+	Kernel_202610301 KernelVersion = "ch-6.12.8-kernel-3.1-202610301"
 )
 
 var (
@@ -39,15 +39,15 @@ var (
 		Kernel_202603091,
 		Kernel_202602101,
 		Kernel_202601152,
-		Kernel_202610301_UDPTest,
+		Kernel_202610301,
 	}
 )
 
 // KernelDownloadURLs maps kernel versions and architectures to download URLs
 var KernelDownloadURLs = map[KernelVersion]map[string]string{
-	Kernel_202610301_UDPTest: {
-		"x86_64":  "https://github.com/kernel/linux/releases/download/ch-6.12.8-kernel-3.1-udp-test-202610301/vmlinux-x86_64",
-		"aarch64": "https://github.com/kernel/linux/releases/download/ch-6.12.8-kernel-3.1-udp-test-202610301/Image-arm64",
+	Kernel_202610301: {
+		"x86_64":  "https://github.com/kernel/linux/releases/download/ch-6.12.8-kernel-3.1-202610301/vmlinux-x86_64",
+		"aarch64": "https://github.com/kernel/linux/releases/download/ch-6.12.8-kernel-3.1-202610301/Image-arm64",
 	},
 	Kernel_202605291: {
 		"x86_64":  "https://github.com/kernel/linux/releases/download/ch-6.12.8-kernel-3.0-202605291/vmlinux-x86_64",
@@ -74,9 +74,9 @@ var KernelDownloadURLs = map[KernelVersion]map[string]string{
 // KernelHeaderURLs maps kernel versions and architectures to kernel header tarball URLs
 // These tarballs contain kernel headers needed for DKMS to build out-of-tree modules (e.g., NVIDIA vGPU drivers)
 var KernelHeaderURLs = map[KernelVersion]map[string]string{
-	Kernel_202610301_UDPTest: {
-		"x86_64":  "https://github.com/kernel/linux/releases/download/ch-6.12.8-kernel-3.1-udp-test-202610301/kernel-headers-x86_64.tar.gz",
-		"aarch64": "https://github.com/kernel/linux/releases/download/ch-6.12.8-kernel-3.1-udp-test-202610301/kernel-headers-aarch64.tar.gz",
+	Kernel_202610301: {
+		"x86_64":  "https://github.com/kernel/linux/releases/download/ch-6.12.8-kernel-3.1-202610301/kernel-headers-x86_64.tar.gz",
+		"aarch64": "https://github.com/kernel/linux/releases/download/ch-6.12.8-kernel-3.1-202610301/kernel-headers-aarch64.tar.gz",
 	},
 	Kernel_202605291: {
 		"x86_64":  "https://github.com/kernel/linux/releases/download/ch-6.12.8-kernel-3.0-202605291/kernel-headers-x86_64.tar.gz",
