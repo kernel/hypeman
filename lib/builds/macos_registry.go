@@ -1,7 +1,6 @@
 package builds
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -41,11 +40,9 @@ func machineHash(data []byte) v1.Hash {
 	return v1.Hash{Algorithm: "sha256", Hex: hex.EncodeToString(sum[:])}
 }
 
-// machineFetch GETs a registry object and checks it against digest. A size of 0
-// marks metadata: the body is buffered up to maxMachineMetadataBytes and returned.
-// Any other size must match exactly and is only hashed, never kept, so layers of
-// tens of gigabytes are not held in memory.
-func machineFetch(ctx context.Context, client *http.Client, token, target, digest string, size int64) ([]byte, error) {
+// machineFetch GETs registry metadata, a manifest or config, and checks it against
+// digest. The body is buffered up to maxMachineMetadataBytes and returned.
+func machineFetch(ctx context.Context, client *http.Client, token, target, digest string) ([]byte, error) {
 	response, err := machineRegistryRequest(ctx, client, token, http.MethodGet, target, "", nil, 0)
 	if err != nil {
 		return nil, err
@@ -54,31 +51,14 @@ func machineFetch(ctx context.Context, client *http.Client, token, target, diges
 	if response.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("registry returned status %d", response.StatusCode)
 	}
-	metadata := size == 0
-	limit := size + 1
-	if metadata {
-		limit = maxMachineMetadataBytes + 1
-	}
-	sum := sha256.New()
-	var kept bytes.Buffer
-	out := io.Writer(sum)
-	if metadata {
-		out = io.MultiWriter(sum, &kept)
-	}
-	n, err := io.Copy(out, io.LimitReader(response.Body, limit))
+	data, err := io.ReadAll(io.LimitReader(response.Body, maxMachineMetadataBytes+1))
 	if err != nil {
 		return nil, err
 	}
-	if n >= limit || (!metadata && n != size) {
+	if len(data) > maxMachineMetadataBytes || machineHash(data).String() != digest {
 		return nil, fmt.Errorf("object does not match digest %s", digest)
 	}
-	if (v1.Hash{Algorithm: "sha256", Hex: hex.EncodeToString(sum.Sum(nil))}).String() != digest {
-		return nil, fmt.Errorf("object does not match digest %s", digest)
-	}
-	if !metadata {
-		return nil, nil
-	}
-	return kept.Bytes(), nil
+	return data, nil
 }
 
 // machineBlobStored reports whether the registry already holds a blob of the

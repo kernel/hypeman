@@ -24,8 +24,8 @@ import (
 // StreamingMachinePublisher targets only the configured internal registry and a
 // build-scoped repository. go-containerregistry hashes and compresses each layer
 // from a reopenable tar stream, so nothing is written to disk. Blobs use the
-// registry's disk-streaming monolithic upload and are independently verified before
-// the manifest is committed last.
+// registry's disk-streaming monolithic upload, which commits a blob only if it
+// matches its digest, and the manifest is committed last.
 // No credentials, redirect destinations or arbitrary output repositories come from the source.
 type StreamingMachinePublisher struct {
 	RegistryURL string
@@ -147,11 +147,9 @@ func (p *StreamingMachinePublisher) Publish(ctx context.Context, id string, stor
 		}
 		status := response.StatusCode
 		response.Body.Close()
+		// The registry hashes the body and commits it only if it matches the digest.
 		if status != http.StatusCreated {
 			return MachinePublication{}, fmt.Errorf("machine blob upload was not committed")
-		}
-		if _, e = machineFetch(ctx, client, token, target+"/blobs/"+blob.descriptor.Digest.String(), blob.descriptor.Digest.String(), blob.descriptor.Size); e != nil {
-			return MachinePublication{}, fmt.Errorf("machine blob verification failed: %w", e)
 		}
 	}
 	response, err := machineRegistryRequest(ctx, client, token, http.MethodPut, target+"/manifests/latest", string(types.OCIManifestSchema1), bytes.NewReader(manifestBytes), int64(len(manifestBytes)))
@@ -164,7 +162,7 @@ func (p *StreamingMachinePublisher) Publish(ctx context.Context, id string, stor
 		return MachinePublication{}, fmt.Errorf("machine manifest commit unconfirmed")
 	}
 	// The digest covers manifestBytes exactly, so a matching fetch is the same bytes.
-	if _, err = machineFetch(ctx, client, token, target+"/manifests/"+digest, digest, int64(len(manifestBytes))); err != nil {
+	if _, err = machineFetch(ctx, client, token, target+"/manifests/"+digest, digest); err != nil {
 		return MachinePublication{}, fmt.Errorf("machine manifest verification failed: %w", err)
 	}
 	return MachinePublication{Reference: registry.Host + "/" + repo + "@" + digest, Digest: digest}, nil
@@ -230,7 +228,7 @@ func machineLayers(ctx context.Context, client *http.Client, token, registry str
 // the base's layer descriptors and diff IDs.
 func fetchMachineBase(ctx context.Context, client *http.Client, token, registry string, base MachineBase) ([]v1.Descriptor, []v1.Hash, error) {
 	root := strings.TrimRight(registry, "/") + "/v2/" + base.Repo
-	manifestBytes, err := machineFetch(ctx, client, token, root+"/manifests/"+base.Digest, base.Digest, 0)
+	manifestBytes, err := machineFetch(ctx, client, token, root+"/manifests/"+base.Digest, base.Digest)
 	if err != nil {
 		return nil, nil, fmt.Errorf("base manifest: %w", err)
 	}
@@ -239,7 +237,7 @@ func fetchMachineBase(ctx context.Context, client *http.Client, token, registry 
 		return nil, nil, fmt.Errorf("base manifest: %w", err)
 	}
 	configDigest := manifest.Config.Digest.String()
-	configBytes, err := machineFetch(ctx, client, token, root+"/blobs/"+configDigest, configDigest, 0)
+	configBytes, err := machineFetch(ctx, client, token, root+"/blobs/"+configDigest, configDigest)
 	if err != nil {
 		return nil, nil, fmt.Errorf("base config: %w", err)
 	}

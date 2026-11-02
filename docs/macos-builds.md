@@ -101,8 +101,9 @@ The publisher uses a server-configured registry and a token scoped to `builds/{i
 Plaintext is allowed only on loopback; redirects are never followed and proxies are
 disabled. The layer is never written to disk: a first pass computes its digest, size
 and DiffID, the upload regenerates the same bytes, and the registry rejects any
-mismatch. Blobs the registry already holds are skipped. Blobs use monolithic POST uploads, every persisted blob is re-read and
-hashed, the manifest is committed last, and the digest content is verified. Ambiguous
+mismatch. Blobs the registry already holds are skipped. Blobs use monolithic POST uploads
+that the registry commits only if they match their digest, the manifest is committed
+last, and the manifest is read back by digest. Ambiguous
 errors never return success.
 
 The image is the base's layers plus one layer holding the builder's overlay,
