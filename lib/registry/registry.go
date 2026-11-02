@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -28,6 +29,7 @@ type Registry struct {
 	paths        *paths.Paths
 	imageManager images.Manager
 	blobStore    *BlobStore
+	uploads      *chunkedUploads
 	handler      http.Handler
 
 	// pushedTags tracks pushed (repo, reference) tags to their manifest
@@ -52,6 +54,11 @@ func New(p *paths.Paths, imgManager images.Manager) (*Registry, error) {
 		return nil, err
 	}
 
+	uploads, err := newChunkedUploads(filepath.Join(p.SystemOCICache(), "uploads"), blobStore)
+	if err != nil {
+		return nil, fmt.Errorf("create upload directory: %w", err)
+	}
+
 	// Create registry with custom blob handler
 	regHandler := registry.New(
 		registry.WithBlobHandler(blobStore),
@@ -61,6 +68,7 @@ func New(p *paths.Paths, imgManager images.Manager) (*Registry, error) {
 		paths:        p,
 		imageManager: imgManager,
 		blobStore:    blobStore,
+		uploads:      uploads,
 		handler:      regHandler,
 		pushedTags:   make(map[string]string),
 	}
@@ -111,6 +119,9 @@ func isCacheRepo(repo string) bool {
 // This wraps the underlying registry to intercept manifest PUTs and trigger conversion.
 func (r *Registry) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if r.uploads.serve(w, req) {
+			return
+		}
 		// Intercept manifest PUT requests to store in blob store and trigger conversion
 		if req.Method == http.MethodPut {
 			matches := manifestPutPattern.FindStringSubmatch(req.URL.Path)
