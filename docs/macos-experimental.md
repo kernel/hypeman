@@ -46,9 +46,11 @@ labels describe a complete installed machine:
 
 Each layer carries one ASIF disk, and each layer's disk is an overlay on the
 previous layer's, so the layers form the boot disk's chain, base first. The
-auxiliary storage and platform come from the last layer that has them. A base
-image is one layer; an image built on it adds one layer holding only the build's
-writes. All files must be distinct, nonempty regular files inside the unpacked
+auxiliary storage and platform come from the top layer; lower layers' copies are
+ignored. A base image is one layer; an image built on it adds one layer holding
+only the build's writes. A pull clones any lower layer whose diff ID a ready image
+on the host already has instead of unpacking it, so images built on one base share
+its disk. All files must be distinct, nonempty regular files inside the unpacked
 image. Platform configuration uses the local bundle's `MacOSImage` schema and
 is limited to 64 KiB. Absolute paths, traversal and symlink escapes are rejected.
 The installed disk is materialized directly rather than converted to a Linux

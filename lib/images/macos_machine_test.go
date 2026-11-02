@@ -244,6 +244,74 @@ func TestMacOSMachineOCIRoundTrip(t *testing.T) {
 	require.ErrorIs(t, err, ErrInvalidPlatform)
 }
 
+// TestMacOSMachinePullReusesReadyLayers pulls two images that share a base layer
+// and expects the second to clone the first's installed base disk, not unpack it.
+func TestMacOSMachinePullReusesReadyLayers(t *testing.T) {
+	allowMacOSMachines(t)
+	work := t.TempDir()
+	base, overlay := macOSFixtureChain(t, work)
+	aux, config := filepath.Join(work, "aux.img"), filepath.Join(work, "config.json")
+	require.NoError(t, os.WriteFile(aux, []byte("synthetic aux"), 0600))
+	require.NoError(t, os.WriteFile(config, macOSFixturePlatform(t), 0600))
+	baseLayer := machineFixtureLayer(t, work, "base", map[string]string{"disk.asif": base})
+	server := httptest.NewServer(registry.New())
+	defer server.Close()
+	p := paths.New(filepath.Join(work, "hypeman-data"))
+	mgr, err := NewManager(p, 1, nil)
+	require.NoError(t, err)
+	client := mgr.(*manager).ociClient
+	lookup := client.readyMachineLayer
+	var reused []string
+	client.readyMachineLayer = func(diffID string) string {
+		path := lookup(diffID)
+		if path != "" {
+			reused = append(reused, path)
+		}
+		return path
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	pull := func(repo string, top gcr.Layer) []string {
+		image, err := mutate.AppendLayers(empty.Image, baseLayer, top)
+		require.NoError(t, err)
+		cfg, err := image.ConfigFile()
+		require.NoError(t, err)
+		cfg.OS, cfg.Architecture = "darwin", "arm64"
+		cfg.Config.Labels = macOSFixtureMetadata().Labels
+		image, err = mutate.ConfigFile(image, cfg)
+		require.NoError(t, err)
+		ref, err := name.ParseReference(strings.TrimPrefix(server.URL, "http://") + "/" + repo + ":latest")
+		require.NoError(t, err)
+		require.NoError(t, remote.Write(ref, image))
+		pulled, err := mgr.CreateImage(ctx, CreateImageRequest{Name: ref.Name(), Platform: "darwin/arm64"})
+		require.NoError(t, err)
+		require.NoError(t, mgr.WaitForReady(ctx, pulled.Name))
+		pulled, err = mgr.GetImage(ctx, pulled.Name)
+		require.NoError(t, err)
+		chain, err := MacOSDiskChain(p, pulled.Name, pulled.Digest)
+		require.NoError(t, err)
+		return chain
+	}
+	first := pull("first", machineFixtureLayer(t, work, "first", map[string]string{"disk.asif": overlay, "aux.img": aux, "config.json": config}))
+	require.Empty(t, reused, "no ready image has the base layer yet")
+
+	img, err := diskimagekit.Open(base, diskimagekit.WithOpenMode(diskimagekit.ReadOnly))
+	require.NoError(t, err)
+	second := filepath.Join(work, "second.asif")
+	require.NoError(t, img.CreateLayer(second, diskimagekit.Overlay))
+	require.NoError(t, img.Close())
+	chain := pull("second", machineFixtureLayer(t, work, "second", map[string]string{"disk.asif": second, "aux.img": aux, "config.json": config}))
+	require.Equal(t, []string{first[0]}, reused, "the shared base layer is cloned from the first image; the top layer is unpacked")
+	want, err := fileSHA256(ctx, base)
+	require.NoError(t, err)
+	got, err := fileSHA256(ctx, chain[0])
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+	stacked, err := OpenMacOSDiskChain(chain)
+	require.NoError(t, err)
+	require.NoError(t, stacked.Close())
+}
+
 // TestMacOSMachinePullRejectsBrokenChain pulls an image whose overlay layer does not
 // belong to its base, and expects the pull to fail.
 func TestMacOSMachinePullRejectsBrokenChain(t *testing.T) {

@@ -18,7 +18,8 @@ type imageMetadata struct {
 	Digest            string              `json:"digest"` // Always present: sha256:...
 	Platform          string              `json:"platform,omitempty"`
 	MacOS             *MacOSImage         `json:"macos,omitempty"`
-	MacOSDiskLayers   int                 `json:"macos_disk_layers,omitempty"` // length of the macOS boot disk chain
+	MacOSDiskLayers   int                 `json:"macos_disk_layers,omitempty"`   // length of the macOS boot disk chain
+	MacOSDiskDiffIDs  []string            `json:"macos_disk_diff_ids,omitempty"` // OCI diff ID of each chain layer; empty for local imports
 	Status            string              `json:"status"`
 	Error             *string             `json:"error,omitempty"`
 	Request           *CreateImageRequest `json:"request,omitempty"`

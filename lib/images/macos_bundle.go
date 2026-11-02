@@ -77,7 +77,7 @@ func readMacOSMachineBundle(root, diskName, auxName, configName string, strict b
 // the highest layer that has them.
 func readMacOSMachineLayers(root, diskName, auxName, configName string) (*macOSMachinePayload, error) {
 	var payload macOSMachinePayload
-	var config string
+	var top string
 	for i := 0; ; i++ {
 		dir := filepath.Join(root, strconv.Itoa(i))
 		if _, err := os.Stat(dir); errors.Is(err, os.ErrNotExist) {
@@ -88,19 +88,21 @@ func readMacOSMachineLayers(root, diskName, auxName, configName string) (*macOSM
 			return nil, fmt.Errorf("machine layer %d: %w", i, err)
 		}
 		payload.Disks = append(payload.Disks, disk)
-		if aux, err := machineBundleFile(dir, auxName); err == nil {
-			payload.Aux = aux
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return nil, fmt.Errorf("machine layer %d: %w", i, err)
-		}
-		if c, err := machineBundleFile(dir, configName); err == nil {
-			config = c
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return nil, fmt.Errorf("machine layer %d: %w", i, err)
-		}
+		top = dir
 	}
-	if len(payload.Disks) == 0 || payload.Aux == "" || config == "" {
-		return nil, fmt.Errorf("machine image needs a disk in every layer and auxiliary storage and platform in one")
+	if len(payload.Disks) == 0 {
+		return nil, fmt.Errorf("machine image needs a disk in every layer")
+	}
+	// Only the top layer's auxiliary storage and platform count, so a lower layer
+	// can be reused from another image without unpacking it.
+	aux, err := machineBundleFile(top, auxName)
+	if err != nil {
+		return nil, fmt.Errorf("machine image top layer: %w", err)
+	}
+	payload.Aux = aux
+	config, err := machineBundleFile(top, configName)
+	if err != nil {
+		return nil, fmt.Errorf("machine image top layer: %w", err)
 	}
 	platform, err := readMacOSPlatform(config, false)
 	if err != nil {

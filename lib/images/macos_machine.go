@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"time"
 
 	gcr "github.com/google/go-containerregistry/pkg/v1"
@@ -27,6 +28,7 @@ type stagedMacOS struct {
 	layers   []string // staged overlays above the base, in order, beside their final paths
 	aux      string   // staged auxiliary storage, beside its final path
 	platform *MacOSImage
+	diffIDs  []string // OCI diff ID of each chain layer, base first
 }
 
 // finalDiskPath is where finalization installs the staged disk: the layout's rootfs
@@ -62,6 +64,7 @@ func installMacOSMachine(layout imageLayout, staged stagedImageFiles, meta *imag
 	}
 	meta.MacOS = staged.macos.platform
 	meta.MacOSDiskLayers = len(staged.macos.layers) + 1
+	meta.MacOSDiskDiffIDs = staged.macos.diffIDs
 	return append(installed, auxPath), nil
 }
 
@@ -94,17 +97,42 @@ func checkCachedMachinePlatform(p *paths.Paths, ref *ResolvedRef, requested Plat
 	return nil
 }
 
+// readyMacOSLayer returns the disk of a ready macOS image's chain layer that has
+// diffID, or "" if no ready image has one.
+func (m *manager) readyMacOSLayer(diffID string) string {
+	metas, err := listAllMetadata(m.paths)
+	if err != nil {
+		return ""
+	}
+	for _, meta := range metas {
+		if meta.Status != StatusReady || meta.MacOS == nil || len(meta.MacOSDiskDiffIDs) != meta.MacOSDiskLayers {
+			continue
+		}
+		i := slices.Index(meta.MacOSDiskDiffIDs, diffID)
+		if i < 0 {
+			continue
+		}
+		if chain, err := MacOSDiskChain(m.paths, meta.Name, meta.Digest); err == nil {
+			return chain[i]
+		}
+	}
+	return ""
+}
+
 // stageMacOSOutputs stages a macOS machine image's boot disk chain and auxiliary
 // storage in layoutDir, outside the manager lock. For other images it stages nothing
 // and returns diskTemp for the rootfs export.
-func (m *manager) stageMacOSOutputs(ctx context.Context, digest, root string, meta *containerMetadata, layoutDir, diskTemp, buildID string) (stagedImageFiles, error) {
+func (m *manager) stageMacOSOutputs(ctx context.Context, digest, root string, result *pullResult, layoutDir, diskTemp, buildID string) (stagedImageFiles, error) {
 	staged := stagedImageFiles{disk: diskTemp}
-	if !isMacOSMachine(meta) {
+	if !isMacOSMachine(result.Metadata) {
 		return staged, nil
 	}
 	start := time.Now()
 	staged.disk = filepath.Join(layoutDir, machineDiskFile+".tmp-"+buildID)
-	err := stageMacOSMachine(&staged, root, meta, layoutDir, buildID)
+	err := stageMacOSMachine(&staged, root, result.Metadata, layoutDir, buildID)
+	if err == nil && result.Manifest != nil {
+		staged.macos.diffIDs = result.Manifest.Config.DiffIDs
+	}
 	m.recordImageBuildPhase(ctx, digest, "filesystem_export", time.Since(start), phaseStatus(err), "not_applicable")
 	return staged, err
 }

@@ -16,6 +16,7 @@ import (
 
 	gcr "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/layout"
+	"github.com/kernel/hypeman/lib/forkvm"
 )
 
 // machineUnpackChunk is the granularity of hole detection when writing machine files.
@@ -34,7 +35,8 @@ var maxMachineUnpackedBytes int64 = 1 << 40
 // the rootfs unpack, it writes files sparsely: zero chunks become holes, so a
 // mostly empty boot disk occupies only its data. Machine bundles hold only regular
 // files and directories; any other entry is rejected. Each layer is checked
-// against its config diff ID.
+// against its config diff ID. A layer below the top whose disk a ready image
+// already has is cloned from that image instead of unpacked.
 func (c *ociClient) unpackMachineLayers(ctx context.Context, layoutTag, targetDir string) error {
 	path, err := layout.FromPath(c.cacheDir)
 	if err != nil {
@@ -64,11 +66,36 @@ func (c *ociClient) unpackMachineLayers(ctx context.Context, layoutTag, targetDi
 	}
 	remaining := maxMachineUnpackedBytes
 	for i, l := range layers {
-		if err := unpackMachineLayer(ctx, l, configFile.RootFS.DiffIDs[i], filepath.Join(targetDir, strconv.Itoa(i)), &remaining); err != nil {
+		dir := filepath.Join(targetDir, strconv.Itoa(i))
+		if i < len(layers)-1 && c.reuseMachineLayer(configFile.RootFS.DiffIDs[i], dir, configFile.Config.Labels[MacOSMachineDiskLabel]) {
+			continue
+		}
+		if err := unpackMachineLayer(ctx, l, configFile.RootFS.DiffIDs[i], dir, &remaining); err != nil {
 			return fmt.Errorf("unpack machine layer %d: %w", i, err)
 		}
 	}
 	return nil
+}
+
+// reuseMachineLayer clones a ready image's disk with diffID into dir, where
+// unpacking the layer would put it, and reports whether it did. A failed clone, as
+// when that image is being deleted, leaves dir absent for an unpack.
+func (c *ociClient) reuseMachineLayer(diffID gcr.Hash, dir, diskName string) bool {
+	if c.readyMachineLayer == nil {
+		return false
+	}
+	source := c.readyMachineLayer(diffID.String())
+	if source == "" {
+		return false
+	}
+	target := filepath.Join(dir, diskName)
+	if err := os.MkdirAll(filepath.Dir(target), 0700); err == nil {
+		if err = forkvm.CopyRegularFile(source, target); err == nil {
+			return true
+		}
+	}
+	os.RemoveAll(dir)
+	return false
 }
 
 // unpackMachineLayer extracts one layer, spending its decompressed bytes from the

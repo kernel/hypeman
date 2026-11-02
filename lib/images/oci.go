@@ -25,6 +25,8 @@ import (
 // ociClient handles OCI image operations without requiring Docker daemon
 type ociClient struct {
 	cacheDir string
+	// readyMachineLayer returns a ready image's disk for a macOS layer diff ID, or "".
+	readyMachineLayer func(diffID string) string
 }
 
 type credentialedManifestInspector struct {

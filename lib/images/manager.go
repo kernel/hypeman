@@ -110,6 +110,7 @@ func NewManager(p *paths.Paths, maxConcurrentBuilds int, meter metric.Meter) (Ma
 		tagGenerations:             make(map[string]uint64),
 		requestedTags:              make(map[string]string),
 	}
+	ociClient.readyMachineLayer = m.readyMacOSLayer
 
 	// Initialize metrics if meter is provided
 	if meter != nil {
@@ -522,7 +523,7 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef, credentials 
 	diskPath := layout.disk
 	// Keep the temporary filesystem beside its final path so finalization stays
 	// atomic even when system/builds and images are on different filesystems.
-	staged, err := m.stageMacOSOutputs(ctx, ref.Digest(), tempDir, result.Metadata, layout.dir, diskPath+".tmp-"+buildID, buildID)
+	staged, err := m.stageMacOSOutputs(ctx, ref.Digest(), tempDir, result, layout.dir, diskPath+".tmp-"+buildID, buildID)
 	defer staged.remove()
 	if err != nil {
 		m.updateStatusByDigest(ref, StatusFailed, err, buildID)
