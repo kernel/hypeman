@@ -16,7 +16,7 @@ import (
 
 type machineExportManager interface {
 	StopMacOSBuildInstance(context.Context, string) (instances.MacOSBuildExportReceipt, error)
-	ExportStoppedMacOSBuildInstance(context.Context, string, string) error
+	MacOSBuildStorage(context.Context, string) (instances.MacOSStorage, error)
 }
 
 // GuestMachineBuildDriver uses ordinary instance lifecycle and the shared system
@@ -166,13 +166,13 @@ func (s *guestMachineSession) Stop(ctx context.Context, force bool) (MachineStop
 	return s.receipt, nil
 }
 
-// Export copies only from closed storage of a Stopped instance, under the
+// Storage returns the closed storage of the Stopped instance, checked under the
 // instance lock, after a strict graceful receipt and sanitation.
-func (s *guestMachineSession) Export(ctx context.Context, destination string) error {
+func (s *guestMachineSession) Storage(ctx context.Context) (MachineStorage, error) {
 	if !s.receipt.Graceful || !s.receipt.VMMExited || !s.sanitized {
-		return fmt.Errorf("sanitized strict stop receipt required")
+		return MachineStorage{}, fmt.Errorf("sanitized strict stop receipt required")
 	}
-	return s.exporter.ExportStoppedMacOSBuildInstance(ctx, s.ID(), destination)
+	return s.exporter.MacOSBuildStorage(ctx, s.ID())
 }
 
 func (s *guestMachineSession) Destroy(ctx context.Context) error {

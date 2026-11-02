@@ -251,8 +251,9 @@ func (p *Paths) InstanceOverlay(id string) string {
 	return filepath.Join(p.InstanceDir(id), "overlay.raw")
 }
 
-// MacOSBootDiskFile is a macOS guest's complete raw boot disk, cloned from its image.
-const MacOSBootDiskFile = "boot.raw"
+// MacOSBootDiskFile is a macOS guest's writable ASIF overlay, the top of its boot
+// disk chain. The read-only layers below it are cloned from its image.
+const MacOSBootDiskFile = "boot.asif"
 
 // InstanceMacOSBootDisk returns the path to a macOS guest's boot disk.
 func (p *Paths) InstanceMacOSBootDisk(id string) string {

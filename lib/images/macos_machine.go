@@ -22,9 +22,10 @@ const (
 	MacOSMachinePlatformLabel = "io.hypeman.machine-image.platform-path"
 )
 
-// stagedMacOS is the part of a staged macOS machine image beyond its boot disk.
+// stagedMacOS is the part of a staged macOS machine image beyond its base disk.
 type stagedMacOS struct {
-	aux      string // staged auxiliary storage, beside its final path
+	layers   []string // staged overlays above the base, in order, beside their final paths
+	aux      string   // staged auxiliary storage, beside its final path
 	platform *MacOSImage
 }
 
@@ -37,9 +38,9 @@ func (s stagedImageFiles) finalDiskPath(layout imageLayout) string {
 	return layout.disk
 }
 
-// installMacOSMachine installs a macOS machine image's auxiliary storage and records
-// its platform on meta. It returns the paths installed, for rollback. Rootfs images
-// install nothing here.
+// installMacOSMachine installs a macOS machine image's overlays and auxiliary
+// storage and records its platform and chain length on meta. It returns the paths
+// installed, for rollback. Rootfs images install nothing here.
 func installMacOSMachine(layout imageLayout, staged stagedImageFiles, meta *imageMetadata, actualPlatform Platform) ([]string, error) {
 	if actualPlatform.OS == "darwin" && staged.macos == nil {
 		return nil, fmt.Errorf("macOS image requires a validated machine bundle")
@@ -47,12 +48,21 @@ func installMacOSMachine(layout imageLayout, staged stagedImageFiles, meta *imag
 	if staged.macos == nil {
 		return nil, nil
 	}
+	var installed []string
+	for i, layer := range staged.macos.layers {
+		path := filepath.Join(layout.dir, macOSDiskLayerFile(i+1))
+		if err := os.Rename(layer, path); err != nil {
+			return installed, err
+		}
+		installed = append(installed, path)
+	}
 	auxPath := filepath.Join(layout.dir, "aux.img")
 	if err := os.Rename(staged.macos.aux, auxPath); err != nil {
-		return nil, err
+		return installed, err
 	}
 	meta.MacOS = staged.macos.platform
-	return []string{auxPath}, nil
+	meta.MacOSDiskLayers = len(staged.macos.layers) + 1
+	return append(installed, auxPath), nil
 }
 
 // checkCachedMachinePlatform refuses to reuse a record whose platform does not match
@@ -84,7 +94,7 @@ func checkCachedMachinePlatform(p *paths.Paths, ref *ResolvedRef, requested Plat
 	return nil
 }
 
-// stageMacOSOutputs stages a macOS machine image's raw boot disk and auxiliary
+// stageMacOSOutputs stages a macOS machine image's boot disk chain and auxiliary
 // storage in layoutDir, outside the manager lock. For other images it stages nothing
 // and returns diskTemp for the rootfs export.
 func (m *manager) stageMacOSOutputs(ctx context.Context, digest, root string, meta *containerMetadata, layoutDir, diskTemp, buildID string) (stagedImageFiles, error) {
@@ -94,29 +104,41 @@ func (m *manager) stageMacOSOutputs(ctx context.Context, digest, root string, me
 	}
 	start := time.Now()
 	staged.disk = filepath.Join(layoutDir, machineDiskFile+".tmp-"+buildID)
-	err := stageMacOSMachine(&staged, root, meta, filepath.Join(layoutDir, "aux.img.tmp-"+buildID))
+	err := stageMacOSMachine(&staged, root, meta, layoutDir, buildID)
 	m.recordImageBuildPhase(ctx, digest, "filesystem_export", time.Since(start), phaseStatus(err), "not_applicable")
 	return staged, err
 }
 
-// readMacOSMachine reads the unpacked bundle that validated labels describe.
+// readMacOSMachine reads the unpacked layers that validated labels describe.
 func readMacOSMachine(root string, meta *containerMetadata) (*macOSMachinePayload, error) {
 	labels := meta.Labels
-	return readMacOSMachineBundle(root, labels[MacOSMachineDiskLabel], labels[MacOSMachineAuxLabel], labels[MacOSMachinePlatformLabel], false)
+	return readMacOSMachineLayers(root, labels[MacOSMachineDiskLabel], labels[MacOSMachineAuxLabel], labels[MacOSMachinePlatformLabel])
 }
 
-// stageMacOSMachine copies an unpacked bundle's files to the staging paths. The
-// recorded size is the boot disk's logical size, as for a local import.
-func stageMacOSMachine(staged *stagedImageFiles, root string, meta *containerMetadata, auxTemp string) error {
+// stageMacOSMachine copies an unpacked image's disk chain and auxiliary storage to
+// staging paths in layoutDir and checks that the chain stacks. The recorded size is
+// the chain's logical size, as for a local import.
+func stageMacOSMachine(staged *stagedImageFiles, root string, meta *containerMetadata, layoutDir, buildID string) error {
 	payload, err := readMacOSMachine(root, meta)
 	if err != nil {
 		return err
 	}
-	if staged.sizeBytes, err = stageMachineFile(payload.Disk, staged.disk); err != nil {
-		return fmt.Errorf("stage boot disk: %w", err)
+	staged.macos = &stagedMacOS{aux: filepath.Join(layoutDir, "aux.img.tmp-"+buildID), platform: payload.Platform}
+	chain := []string{staged.disk}
+	for i, disk := range payload.Disks {
+		if i > 0 {
+			layer := filepath.Join(layoutDir, macOSDiskLayerFile(i)+".tmp-"+buildID)
+			staged.macos.layers = append(staged.macos.layers, layer)
+			chain = append(chain, layer)
+		}
+		if _, err := stageMachineFile(disk, chain[i]); err != nil {
+			return fmt.Errorf("stage boot disk layer %d: %w", i, err)
+		}
 	}
-	staged.macos = &stagedMacOS{aux: auxTemp, platform: payload.Platform}
-	if _, err := stageMachineFile(payload.Aux, auxTemp); err != nil {
+	if staged.sizeBytes, err = macOSChainSize(chain); err != nil {
+		return fmt.Errorf("machine boot disk: %w", err)
+	}
+	if _, err := stageMachineFile(payload.Aux, staged.macos.aux); err != nil {
 		return fmt.Errorf("stage auxiliary storage: %w", err)
 	}
 	return nil
@@ -188,7 +210,7 @@ func validateMacOSMachine(meta *containerMetadata) error {
 		return fmt.Errorf("macOS machine requires darwin/arm64, not %s", normalized)
 	}
 	labels := meta.Labels
-	for _, want := range [][2]string{{MacOSMachineVersionLabel, "1"}, {MacOSMachineKindLabel, "macos-image"}, {MacOSMachineFormatLabel, "raw"}} {
+	for _, want := range [][2]string{{MacOSMachineVersionLabel, "2"}, {MacOSMachineKindLabel, "macos-image"}, {MacOSMachineFormatLabel, "asif"}} {
 		if label := want[0]; labels[label] != want[1] {
 			return fmt.Errorf("darwin artifact requires %s=%q, got %q; ordinary container images are not macOS machines", label, want[1], labels[label])
 		}

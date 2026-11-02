@@ -36,7 +36,7 @@ func TestMacOSStoppedSnapshotForkRebindsIdentity(t *testing.T) {
 	source.Phases.Record(phasetracking.PhaseStopped, now)
 	require.NoError(t, vz.NewStarter().ValidateConfig(m.plannedStoredVMConfig(SnapshotKindStopped, source)))
 	require.NoError(t, m.saveSnapshotRecord(&snapshotRecord{Snapshot: Snapshot{Id: snapshotID, Kind: SnapshotKindStopped, SourceInstanceID: source.Id, SourceName: source.Name, SourceHypervisor: source.HypervisorType, CreatedAt: now}, StoredMetadata: source}))
-	writeGuestFiles(t, p.SnapshotGuestDir(snapshotID), map[string]string{"boot.raw": "snapshot-disk", macOSAuxStorageFile: "snapshot-aux"})
+	writeGuestFiles(t, p.SnapshotGuestDir(snapshotID), map[string]string{paths.MacOSBootDiskFile: "snapshot-disk", macOSAuxStorageFile: "snapshot-aux"})
 
 	first, err := m.ForkSnapshot(context.Background(), snapshotID, ForkSnapshotRequest{Name: "mac-snapshot-clone-1"})
 	require.NoError(t, err)
@@ -67,7 +67,7 @@ func TestMacOSStoppedSnapshotForkRebindsIdentity(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, source.MacOS, persisted.StoredMetadata.MacOS)
 	require.NoError(t, os.WriteFile(p.InstanceMacOSBootDisk(first.Id), []byte("clone-write"), 0600))
-	data, err := os.ReadFile(filepath.Join(p.SnapshotGuestDir(snapshotID), "boot.raw"))
+	data, err := os.ReadFile(filepath.Join(p.SnapshotGuestDir(snapshotID), paths.MacOSBootDiskFile))
 	require.NoError(t, err)
 	require.Equal(t, "snapshot-disk", string(data))
 }

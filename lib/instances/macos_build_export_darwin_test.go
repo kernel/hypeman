@@ -8,39 +8,36 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/paths"
 	"github.com/stretchr/testify/require"
 )
 
-func TestMacOSBuildBundleRequiresClosedDistinctStorage(t *testing.T) {
+func TestMacOSBuildStorageRequiresClosedDistinctFiles(t *testing.T) {
 	root := t.TempDir()
-	disk := filepath.Join(root, paths.MacOSBootDiskFile)
-	aux := filepath.Join(root, "mac-aux.img")
-	require.NoError(t, os.WriteFile(disk, []byte("synthetic disk"), 0600))
-	require.NoError(t, os.WriteFile(aux, []byte("synthetic aux"), 0600))
-	inst := &Instance{State: StateStopped, StoredMetadata: StoredMetadata{DataDir: root, MacOS: &images.MacOSImage{HardwareModel: []byte{1}, MachineIdentifier: []byte{2}, MAC: "02:00:00:00:00:01", CPUs: 4, Memory: 8 << 30, GuestAgent: true}}}
-	file, e := os.Open(disk)
-	require.NoError(t, e)
-	require.Error(t, writeStoppedMacOSBuildBundle(context.Background(), inst, disk, t.TempDir()))
-	require.NoError(t, file.Close())
-	out := t.TempDir()
-	require.NoError(t, writeStoppedMacOSBuildBundle(context.Background(), inst, disk, out))
-	_, e = images.ValidateMacOSBundle(out)
-	require.NoError(t, e)
-	for _, name := range []string{"disk.img", "aux.img", "config.json"} {
-		info, e := os.Stat(filepath.Join(out, name))
-		require.NoError(t, e)
-		require.Equal(t, os.FileMode(0600), info.Mode().Perm())
+	storage := MacOSStorage{
+		Layers:  []string{filepath.Join(root, "disk.0.asif")},
+		Overlay: filepath.Join(root, paths.MacOSBootDiskFile),
+		Aux:     filepath.Join(root, "mac-aux.img"),
 	}
-	require.NoError(t, os.Remove(aux))
-	require.NoError(t, os.Link(disk, aux))
-	require.Error(t, writeStoppedMacOSBuildBundle(context.Background(), inst, disk, t.TempDir()))
-	inst.State = StateRunning
-	require.Error(t, writeStoppedMacOSBuildBundle(context.Background(), inst, disk, t.TempDir()))
+	for _, path := range []string{storage.Layers[0], storage.Overlay, storage.Aux} {
+		require.NoError(t, os.WriteFile(path, []byte("synthetic"), 0600))
+	}
+	require.NoError(t, checkClosedMacOSStorage(context.Background(), storage))
+
+	file, err := os.Open(storage.Layers[0])
+	require.NoError(t, err)
+	require.Error(t, checkClosedMacOSStorage(context.Background(), storage), "an open layer is refused")
+	require.NoError(t, file.Close())
+
+	require.NoError(t, os.Remove(storage.Aux))
+	require.NoError(t, os.Link(storage.Overlay, storage.Aux))
+	require.Error(t, checkClosedMacOSStorage(context.Background(), storage), "aliased files are refused")
+	require.NoError(t, os.Remove(storage.Aux))
+	require.NoError(t, os.WriteFile(storage.Aux, nil, 0600))
+	require.Error(t, checkClosedMacOSStorage(context.Background(), storage), "empty files are refused")
 }
 
-func TestMacOSBuildStopAndExportRequireBoundedInputs(t *testing.T) {
+func TestMacOSBuildStopAndStorageRequireBoundedInputs(t *testing.T) {
 	m := &manager{}
 	_, e := m.StopMacOSBuildInstance(context.Background(), "unused")
 	require.Error(t, e)
@@ -48,6 +45,8 @@ func TestMacOSBuildStopAndExportRequireBoundedInputs(t *testing.T) {
 	cancel()
 	_, e = m.StopMacOSBuildInstance(ctx, "unused")
 	require.ErrorIs(t, e, context.Canceled)
-	require.Error(t, m.ExportStoppedMacOSBuildInstance(context.Background(), "unused", t.TempDir()))
-	require.Error(t, m.ExportStoppedMacOSBuildInstance(ctx, "unused", t.TempDir()))
+	_, e = m.MacOSBuildStorage(context.Background(), "unused")
+	require.Error(t, e)
+	_, e = m.MacOSBuildStorage(ctx, "unused")
+	require.ErrorIs(t, e, context.Canceled)
 }

@@ -2,7 +2,6 @@ package builds_test
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -12,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Code-Hex/vz/v4/diskimagekit"
 	"github.com/kernel/hypeman/lib/builds"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/middleware"
@@ -30,16 +30,23 @@ func (m *machineImportStub) ImportLocalImage(_ context.Context, repo, reference,
 	return &images.Image{Status: images.StatusReady, Digest: digest}, nil
 }
 
-func machinePublisherBundle(t *testing.T) string {
+func machinePublisherPlatform() images.MacOSImage {
+	return images.MacOSImage{HardwareModel: []byte{1}, MachineIdentifier: []byte{2}, MAC: "02:00:00:00:00:01", CPUs: 4, Memory: 8 << 30, GuestAgent: true}
+}
+
+// machinePublisherStorage writes a standalone ASIF disk and aux file, as a base
+// bundle has.
+func machinePublisherStorage(t *testing.T) builds.MachineStorage {
 	t.Helper()
 	root := t.TempDir()
-	platform := images.MacOSImage{HardwareModel: []byte{1}, MachineIdentifier: []byte{2}, MAC: "02:00:00:00:00:01", CPUs: 4, Memory: 8 << 30, GuestAgent: true}
-	data, e := json.Marshal(platform)
+	storage := builds.MachineStorage{Overlay: filepath.Join(root, "disk.asif"), Aux: filepath.Join(root, "aux.img"), Platform: machinePublisherPlatform()}
+	img, e := diskimagekit.CreateASIF(storage.Overlay, (4<<20)/512)
 	require.NoError(t, e)
-	for name, data := range map[string][]byte{"config.json": data, "disk.img": []byte("synthetic disk"), "aux.img": []byte("synthetic aux")} {
-		require.NoError(t, os.WriteFile(filepath.Join(root, name), data, 0600))
-	}
-	return root
+	_, e = img.WriteAt([]byte("synthetic disk"), 0)
+	require.NoError(t, e)
+	require.NoError(t, img.Close())
+	require.NoError(t, os.WriteFile(storage.Aux, []byte("synthetic aux"), 0600))
+	return storage
 }
 
 func TestStreamingMachinePublisherAuthenticatedRegistry(t *testing.T) {
@@ -68,7 +75,7 @@ func TestStreamingMachinePublisherAuthenticatedRegistry(t *testing.T) {
 	publisher := &builds.StreamingMachinePublisher{RegistryURL: server.URL, Tokens: builds.NewRegistryTokenGenerator("synthetic registry secret")}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	result, e := publisher.Publish(ctx, "qa-build", machinePublisherBundle(t))
+	result, e := publisher.Publish(ctx, "qa-build", machinePublisherStorage(t), nil)
 	require.NoError(t, e)
 	require.Contains(t, result.Reference, "/builds/qa-build@sha256:")
 	select {
@@ -90,7 +97,51 @@ func TestStreamingMachinePublisherRejectsRedirectWithoutLeakingToken(t *testing.
 	publisher := &builds.StreamingMachinePublisher{RegistryURL: server.URL, Tokens: builds.NewRegistryTokenGenerator("synthetic secret")}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_, e := publisher.Publish(ctx, "qa-build", machinePublisherBundle(t))
+	_, e := publisher.Publish(ctx, "qa-build", machinePublisherStorage(t), nil)
 	require.Error(t, e)
 	require.False(t, visited.Load())
+}
+
+func TestStreamingMachinePublisherReusesBaseLayers(t *testing.T) {
+	imports := &machineImportStub{imported: make(chan string, 2)}
+	reg, e := registry.New(paths.New(t.TempDir()), imports)
+	require.NoError(t, e)
+	var uploads atomic.Int32
+	server := httptest.NewServer(middleware.JwtAuth("synthetic registry secret")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			uploads.Add(1)
+		}
+		reg.Handler().ServeHTTP(w, r)
+	})))
+	defer server.Close()
+	publisher := &builds.StreamingMachinePublisher{RegistryURL: server.URL, Tokens: builds.NewRegistryTokenGenerator("synthetic registry secret")}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	baseStorage := machinePublisherStorage(t)
+	base, e := publisher.Publish(ctx, "qa-base", baseStorage, nil)
+	require.NoError(t, e)
+	require.Equal(t, int32(2), uploads.Load(), "config and one layer")
+
+	// A build stacks a writable overlay on the base disk.
+	img, e := diskimagekit.Open(baseStorage.Overlay)
+	require.NoError(t, e)
+	derived := builds.MachineStorage{Layers: []string{baseStorage.Overlay}, Overlay: filepath.Join(t.TempDir(), "boot.asif"), Aux: filepath.Join(t.TempDir(), "aux.img"), Platform: machinePublisherPlatform()}
+	require.NoError(t, img.CreateLayer(derived.Overlay, diskimagekit.Overlay))
+	_, e = img.WriteAt([]byte("build output"), 1<<20)
+	require.NoError(t, e)
+	require.NoError(t, img.Close())
+	require.NoError(t, os.WriteFile(derived.Aux, []byte("build aux"), 0600))
+	derived.Platform.MachineIdentifier = []byte{3}
+
+	uploads.Store(0)
+	machineBase := &builds.MachineBase{Repo: "builds/qa-base", Digest: base.Digest}
+	result, e := publisher.Publish(ctx, "qa-derived", derived, machineBase)
+	require.NoError(t, e)
+	require.Equal(t, int32(2), uploads.Load(), "only the config and the overlay layer are uploaded")
+	require.NotEqual(t, base.Digest, result.Digest)
+
+	derived.Layers = nil
+	_, e = publisher.Publish(ctx, "qa-derived", derived, machineBase)
+	require.ErrorContains(t, e, "machine base has 1 layers but the disk stacks on 0")
 }

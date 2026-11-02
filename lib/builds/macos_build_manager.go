@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -47,18 +48,15 @@ func (m *manager) executeMachineBuild(ctx context.Context, id string, req Create
 	if err != nil {
 		return nil, err
 	}
-	// An interrupted attempt skips its own cleanup; drop its workspace first.
-	removeMachineWorkspaces(m.paths.BuildDir(id))
-	defer removeMachineWorkspaces(m.paths.BuildDir(id))
 	job := MachineBuildRequest{
 		ID: id, BaseImage: req.MachineBaseImage, SourceHash: req.SourceHash, Policy: *policy,
-		deltaBase: m.machineDeltaBase(backend.Publisher, req.MachineBaseImage, base),
-		onStarted: func(instanceID string) error { return m.recordMachineBuilder(id, instanceID) },
+		registryBase: machineRegistryBase(backend.Publisher, req.MachineBaseImage),
+		onStarted:    func(instanceID string) error { return m.recordMachineBuilder(id, instanceID) },
 		onPublished: func(ctx context.Context, publication MachinePublication) error {
 			return m.waitMachinePublication(ctx, id, publication.Digest)
 		},
 	}
-	result, err := backend.runPrepared(ctx, job, base, sourcePath, filepath.Dir(filepath.Dir(sourcePath)))
+	result, err := backend.runPrepared(ctx, job, base, sourcePath)
 	if err != nil {
 		return nil, err
 	}
@@ -175,13 +173,31 @@ func (m *manager) enqueueMachineBuild(meta *buildMetadata, req CreateBuildReques
 	return build
 }
 
-// removeMachineWorkspaces deletes export workspaces under a build directory. Each
-// holds a full exported disk.
-func removeMachineWorkspaces(buildDir string) {
-	matches, _ := filepath.Glob(filepath.Join(buildDir, "machine-build-*"))
-	for _, dir := range matches {
-		_ = os.RemoveAll(dir)
+// machineRegistryBase returns the base as a registry base when the publisher
+// writes to the registry that stores it, so its layers are reused. Any other base
+// publishes all of its layers.
+func machineRegistryBase(publisher MachineBuildPublisher, baseImage string) *MachineBase {
+	streaming, ok := publisher.(*StreamingMachinePublisher)
+	if !ok {
+		return nil
 	}
+	address := streaming.RegistryURL
+	if !strings.Contains(address, "://") {
+		address = "https://" + address
+	}
+	registry, err := url.Parse(address)
+	if err != nil || registry.Host == "" {
+		return nil
+	}
+	ref, err := images.ParseNormalizedRef(baseImage)
+	if err != nil || !ref.IsDigest() {
+		return nil
+	}
+	repo, ok := strings.CutPrefix(ref.Repository(), registry.Host+"/")
+	if !ok {
+		return nil
+	}
+	return &MachineBase{Repo: repo, Digest: ref.Digest()}
 }
 
 // removeMachineSource deletes a machine build's staged source after the job is terminal.

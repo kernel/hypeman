@@ -58,7 +58,7 @@ func (m *manager) checkMacOSCreate(req *CreateInstanceRequest, img *images.Image
 	config := hypervisor.VMConfig{
 		BootMode: hypervisor.BootModeMacOS, VCPUs: prepared.Vcpus, MemoryBytes: prepared.Size,
 		MacOS: &hypervisor.MacOSPlatform{HardwareModelData: img.MacOS.HardwareModel, MachineIdentifierData: img.MacOS.MachineIdentifier, AuxStoragePath: "mac-aux.img"},
-		Disks: []hypervisor.DiskConfig{{Path: "disk.img"}},
+		Disks: []hypervisor.DiskConfig{{Path: paths.MacOSBootDiskFile}},
 	}
 	if err := validatePlannedVMConfig(starter, hvType, config); err != nil {
 		return err
@@ -159,18 +159,37 @@ func (m *manager) checkMacOSStart(stored *StoredMetadata, req StartInstanceReque
 	return nil
 }
 
-// createBootDisk creates the Linux overlay, or clones a macOS image's boot disk and
-// aux storage into the instance.
+// createBootDisk creates the Linux overlay, or the macOS boot disk: the image's
+// ASIF chain and auxiliary storage cloned into the instance, with an empty
+// writable overlay on top.
 func (m *manager) createBootDisk(stored *StoredMetadata, img *images.Image) error {
 	if stored.MacOS == nil {
 		return m.createOverlayDisk(stored.Id, stored.OverlaySize)
 	}
-	disk, err := images.GetDiskPath(m.paths, img.Name, img.Digest)
+	chain, err := images.MacOSDiskChain(m.paths, img.Name, img.Digest)
 	if err != nil {
 		return err
 	}
-	aux := filepath.Join(filepath.Dir(disk), "aux.img")
-	return cloneMacOSStorage(disk, aux, m.paths.InstanceMacOSBootDisk(stored.Id), filepath.Join(stored.DataDir, macOSAuxStorageFile))
+	aux := filepath.Join(filepath.Dir(chain[0]), "aux.img")
+	if err := createMacOSStorage(chain, aux, stored.DataDir); err != nil {
+		return err
+	}
+	stored.MacOSDiskLayers = len(chain)
+	return nil
+}
+
+// macOSDiskLayer is the ith read-only layer of a macOS guest's boot disk chain.
+func macOSDiskLayer(dataDir string, i int) string {
+	return filepath.Join(dataDir, fmt.Sprintf("disk.%d.asif", i))
+}
+
+// macOSDiskParents returns the read-only layers below a macOS guest's boot overlay.
+func macOSDiskParents(stored *StoredMetadata) []string {
+	parents := make([]string, stored.MacOSDiskLayers)
+	for i := range parents {
+		parents[i] = macOSDiskLayer(stored.DataDir, i)
+	}
+	return parents
 }
 
 // usesLinuxNetwork reports whether the instance's network is a hypeman TAP
@@ -214,7 +233,7 @@ func (m *manager) admitMacOSBoot(ctx context.Context, stored *StoredMetadata) (f
 func (m *manager) macOSVMConfig(inst *Instance) hypervisor.VMConfig {
 	c := hypervisor.VMConfig{BootMode: hypervisor.BootModeMacOS, VCPUs: inst.Vcpus, MemoryBytes: inst.Size, VsockCID: inst.VsockCID, VsockSocket: inst.VsockSocket,
 		MacOS: &hypervisor.MacOSPlatform{HardwareModelData: inst.MacOS.HardwareModel, MachineIdentifierData: inst.MacOS.MachineIdentifier, AuxStoragePath: filepath.Join(inst.DataDir, macOSAuxStorageFile)},
-		Disks: []hypervisor.DiskConfig{{Path: m.paths.InstanceMacOSBootDisk(inst.Id)}}}
+		Disks: []hypervisor.DiskConfig{{Path: m.paths.InstanceMacOSBootDisk(inst.Id), Parents: macOSDiskParents(&inst.StoredMetadata)}}}
 	if inst.NetworkEnabled {
 		c.Networks = []hypervisor.NetworkConfig{{MAC: inst.MAC, IP: inst.IP, Netmask: macOSGuestNetmask}}
 	}

@@ -2,11 +2,9 @@ package builds
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -128,71 +126,46 @@ func TestMachineBuildPublicationReceipt(t *testing.T) {
 	}
 }
 
-func TestMachineBuildMalformedExport(t *testing.T) {
-	for _, kind := range []string{"empty disk", "empty aux", "symlink disk", "hardlink payloads", "truncated config", "oversized config", "resource change", "bad MAC", "identity", "extra file", "unknown metadata"} {
+func TestMachineBuildMalformedStorage(t *testing.T) {
+	for _, kind := range []string{"missing overlay", "empty aux", "symlink overlay", "aliased aux", "unrelated overlay", "raw overlay", "resource change", "bad MAC", "identity"} {
 		t.Run(kind, func(t *testing.T) {
 			f := newMachineFixture()
-			f.mutateExport = func(root string) error {
-				disk, aux, config := filepath.Join(root, "disk.img"), filepath.Join(root, "aux.img"), filepath.Join(root, "config.json")
+			f.mutateStorage = func(s *MachineStorage) error {
 				switch kind {
-				case "empty disk":
-					return os.Truncate(disk, 0)
+				case "missing overlay":
+					return os.Remove(s.Overlay)
 				case "empty aux":
-					return os.Truncate(aux, 0)
-				case "symlink disk":
-					if err := os.Remove(disk); err != nil {
+					return os.Truncate(s.Aux, 0)
+				case "symlink overlay":
+					if err := os.Rename(s.Overlay, s.Overlay+".real"); err != nil {
 						return err
 					}
-					return os.Symlink(aux, disk)
-				case "hardlink payloads":
-					if err := os.Remove(aux); err != nil {
+					return os.Symlink(s.Overlay+".real", s.Overlay)
+				case "aliased aux":
+					if err := os.Remove(s.Aux); err != nil {
 						return err
 					}
-					return os.Link(disk, aux)
-				case "truncated config":
-					return os.WriteFile(config, []byte(`{"hardware_model":`), 0600)
-				case "oversized config":
-					return os.WriteFile(config, []byte(strings.Repeat(" ", 65<<10)), 0600)
+					return os.Link(s.Overlay, s.Aux)
+				case "unrelated overlay":
+					other, err := machineStorageFixture(t.TempDir())
+					if err != nil {
+						return err
+					}
+					s.Overlay = other.Overlay
+				case "raw overlay":
+					return os.WriteFile(s.Overlay, []byte("not an asif image"), 0600)
 				case "resource change":
-					data, err := os.ReadFile(config)
-					if err != nil {
-						return err
-					}
-					return os.WriteFile(config, []byte(strings.Replace(string(data), `"cpus":4`, `"cpus":2`, 1)), 0600)
+					s.Platform.CPUs = 2
 				case "bad MAC":
-					data, err := os.ReadFile(config)
-					if err != nil {
-						return err
-					}
-					return os.WriteFile(config, []byte(strings.Replace(string(data), "02:00:00:00:00:02", "02:00:00:00:00:02:03:04", 1)), 0600)
-				case "identity", "unknown metadata":
-					var raw map[string]any
-					data, err := os.ReadFile(config)
-					if err == nil {
-						err = json.Unmarshal(data, &raw)
-					}
-					if err != nil {
-						return err
-					}
-					if kind == "identity" {
-						raw["machine_identifier"] = f.image.MacOS.MachineIdentifier // kept the base identity
-					} else {
-						raw["password"] = "must-not-publish"
-					}
-					data, _ = json.Marshal(raw)
-					return os.WriteFile(config, data, 0600)
-				case "extra file":
-					return os.WriteFile(filepath.Join(root, "secret.txt"), []byte("must-not-publish"), 0600)
+					s.Platform.MAC = "02:00:00:00:00:02:03:04"
+				case "identity":
+					s.Platform.MachineIdentifier = f.image.MacOS.MachineIdentifier // kept the base identity
 				}
 				return nil
 			}
 			_, err := runMachineBuildFailure(t, f, context.Background(), machineTestRequest(), strings.NewReader("source"))
-			if f.publisherCalled {
-				t.Fatal("malformed export published")
-			}
-			if strings.Contains(err.Error(), "must-not-publish") {
-				t.Fatal("export secret leaked in failure")
-			}
+			require.False(t, f.publisherCalled, "malformed storage published")
+			require.Contains(t, err.Error(), "validate_storage")
 		})
 	}
 }

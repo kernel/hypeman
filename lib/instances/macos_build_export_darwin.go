@@ -4,12 +4,9 @@ package instances
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 
-	"github.com/kernel/hypeman/lib/forkvm"
 	"github.com/kernel/hypeman/lib/images"
 )
 
@@ -45,89 +42,49 @@ func (m *manager) StopMacOSBuildInstance(ctx context.Context, id string) (receip
 	return receipt, nil
 }
 
-// ExportStoppedMacOSBuildInstance copies closed storage for an instance that is
-// still Stopped when the copy starts. The instance lock excludes Start during the
-// check and copy; a concurrently restarted instance fails export instead.
-func (m *manager) ExportStoppedMacOSBuildInstance(ctx context.Context, id, destination string) error {
+// MacOSBuildStorage returns the closed storage of a Stopped macOS instance, checked
+// under the instance lock. The caller publishes from these paths. A start in the
+// meantime changes the overlay under the publisher, whose digest check then fails
+// the upload instead of publishing it.
+func (m *manager) MacOSBuildStorage(ctx context.Context, id string) (MacOSStorage, error) {
 	if err := ctx.Err(); err != nil {
-		return err
+		return MacOSStorage{}, err
 	}
 	if _, bounded := ctx.Deadline(); !bounded {
-		return fmt.Errorf("machine export requires a deadline")
-	}
-	if !filepath.IsAbs(destination) {
-		return fmt.Errorf("export destination must be absolute")
+		return MacOSStorage{}, fmt.Errorf("machine storage requires a deadline")
 	}
 	lock := m.getInstanceLock(id)
 	lock.Lock()
 	defer lock.Unlock()
 	current, err := m.currentInstanceWithoutHydration(ctx, id)
 	if err != nil {
-		return err
+		return MacOSStorage{}, err
 	}
 	if current.State != StateStopped || current.MacOS == nil {
-		return fmt.Errorf("export requires a stopped macOS instance")
+		return MacOSStorage{}, fmt.Errorf("machine storage requires a stopped macOS instance")
 	}
-	if rel, e := filepath.Rel(current.DataDir, destination); e != nil || filepath.IsLocal(rel) {
-		return fmt.Errorf("export must be outside instance storage")
+	storage := MacOSStorage{
+		Layers:   macOSDiskParents(&current.StoredMetadata),
+		Overlay:  m.paths.InstanceMacOSBootDisk(id),
+		Aux:      filepath.Join(current.DataDir, macOSAuxStorageFile),
+		Platform: *current.MacOS,
 	}
-	return writeStoppedMacOSBuildBundle(ctx, current, m.paths.InstanceMacOSBootDisk(id), destination)
+	if err := checkClosedMacOSStorage(ctx, storage); err != nil {
+		return MacOSStorage{}, err
+	}
+	return storage, nil
 }
 
-func writeStoppedMacOSBuildBundle(ctx context.Context, inst *Instance, disk, destination string) error {
-	if inst.State != StateStopped || inst.MacOS == nil {
-		return fmt.Errorf("machine must be stopped")
-	}
-	aux := filepath.Join(inst.DataDir, "mac-aux.img")
-	var diskInfo os.FileInfo
-	for _, source := range []string{disk, aux} {
-		info, err := os.Lstat(source)
-		if err != nil {
-			return err
-		}
-		if !info.Mode().IsRegular() || info.Size() == 0 {
-			return fmt.Errorf("machine storage must be nonempty regular files")
-		}
-		if diskInfo != nil && os.SameFile(diskInfo, info) {
-			return fmt.Errorf("machine storage files must be distinct")
-		}
-		diskInfo = info
-		if err = images.RequireClosedFile(ctx, source); err != nil {
-			return err
-		}
-	}
-	for _, file := range []struct{ source, name string }{{disk, "disk.img"}, {aux, "aux.img"}} {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		path := filepath.Join(destination, file.name)
-		if err := forkvm.CopyRegularFile(file.source, path); err != nil {
-			return err
-		}
-		if err := os.Chmod(path, 0600); err != nil {
-			return err
-		}
-	}
-	data, err := json.Marshal(inst.MacOS)
-	if err != nil {
+// checkClosedMacOSStorage requires every storage file to be a distinct nonempty
+// regular file that no process holds open.
+func checkClosedMacOSStorage(ctx context.Context, storage MacOSStorage) error {
+	if err := storage.CheckFiles(); err != nil {
 		return err
 	}
-	path := filepath.Join(destination, "config.json")
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
-	if err != nil {
-		return err
+	for _, path := range storage.Files() {
+		if err := images.RequireClosedFile(ctx, path); err != nil {
+			return err
+		}
 	}
-	_, writeErr := file.Write(data)
-	closeErr := file.Close()
-	if writeErr != nil {
-		return writeErr
-	}
-	if closeErr != nil {
-		return closeErr
-	}
-	if err = ctx.Err(); err != nil {
-		return err
-	}
-	_, err = images.ValidateMacOSBundle(destination)
-	return err
+	return nil
 }

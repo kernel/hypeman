@@ -58,15 +58,15 @@ type machineJobPublisher struct {
 	sourcePath func(id string) string
 }
 
-func (p *machineJobPublisher) Publish(ctx context.Context, id, bundle string) (MachinePublication, error) {
+func (p *machineJobPublisher) Publish(ctx context.Context, id string, storage MachineStorage, base *MachineBase) (MachinePublication, error) {
 	p.publishedID = id
 	if p.sourcePath != nil {
 		if _, err := os.Stat(p.sourcePath(id)); err != nil {
 			return MachinePublication{}, errors.New("source removed before publish")
 		}
 	}
-	// Reuse the fixture's export assertions with its fixed ID.
-	receipt, err := p.fixture.Publish(ctx, "build-test", bundle)
+	// Reuse the fixture's storage assertions with its fixed ID.
+	receipt, err := p.fixture.Publish(ctx, "build-test", storage, base)
 	if err == nil {
 		receipt.Reference = "localhost:4973/builds/" + id + "@" + receipt.Digest
 	}

@@ -33,5 +33,5 @@ func (r *machineRunnerFixture) Run(ctx context.Context, req MachineBuildRequest,
 	if req.SourceHash == "" {
 		req.SourceHash = hash
 	}
-	return r.runPrepared(ctx, req, r.Driver.(*machineFixture).image, sourcePath, r.WorkDir)
+	return r.runPrepared(ctx, req, r.Driver.(*machineFixture).image, sourcePath)
 }

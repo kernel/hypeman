@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -17,16 +16,20 @@ import (
 // MachineBuildRequest is the internal backend contract for one machine build.
 // The normal build manager owns ID, source staging and publish authorization. A concrete driver must require a provisioned system agent.
 type MachineBuildRequest struct {
-	ID          string
-	BaseImage   string                                          // Installed darwin/arm64 image, pinned by sha256 digest.
-	SourceHash  string                                          // Optional expected lowercase SHA256 of the source archive.
-	Policy      BuildPolicy                                     // Zero CPU/memory inherit the base machine's exact resources.
-	onStarted   func(string) error                              // Normal manager records the owned builder before provisioning.
-	onPublished func(context.Context, MachinePublication) error // Hold storage until the shared image pipeline is terminal.
-	deltaBase   *MachineDeltaBase                               // Set when the base is in the publisher's registry; publishes a derivative.
+	ID           string
+	BaseImage    string                                          // Installed darwin/arm64 image, pinned by sha256 digest.
+	SourceHash   string                                          // Optional expected lowercase SHA256 of the source archive.
+	Policy       BuildPolicy                                     // Zero CPU/memory inherit the base machine's exact resources.
+	onStarted    func(string) error                              // Normal manager records the owned builder before provisioning.
+	onPublished  func(context.Context, MachinePublication) error // Hold storage until the shared image pipeline is terminal.
+	registryBase *MachineBase                                    // Set when the base is in the publisher's registry; its layers are reused.
 }
 
 type MachineStopReceipt = instances.MacOSBuildExportReceipt
+
+// MachineStorage is a stopped guest's closed ASIF disk chain, auxiliary storage
+// and platform. Publication streams from these files.
+type MachineStorage = instances.MacOSStorage
 type MachinePublication struct{ Reference, Digest string }
 type MachineBuildResult struct {
 	Publication MachinePublication
@@ -44,19 +47,21 @@ type MachineBuildSession interface {
 	Provision(context.Context, string) error // Build-owned staged source, never a client host path.
 	Sanitize(context.Context) error          // Remove build credentials, source and secret injection artifacts.
 	// Stop must await actual VMM exit. Only a strict graceful stop may produce a
-	// receipt that permits export. With force, a failed strict stop falls back to
-	// a forced stop, which is failure-only cleanup: nothing is exported after it.
+	// receipt that permits publication. With force, a failed strict stop falls back
+	// to a forced stop, which is failure-only cleanup: nothing is published after it.
 	Stop(ctx context.Context, force bool) (MachineStopReceipt, error)
-	Export(context.Context, string) error // Stopped disk.img, aux.img, config.json only.
-	// Destroy removes instance storage only after proven VMM exit, not the export.
+	// Storage returns the stopped guest's closed storage. Only a strict stop permits it.
+	Storage(context.Context) (MachineStorage, error)
+	// Destroy removes instance storage only after proven VMM exit.
 	Destroy(context.Context) error
 }
 
 type MachineBuildPublisher interface {
 	// Publisher owns registry address, scoped token and builds/{id} destination.
 	// It must stream blobs and commit/verify the manifest last. An ambiguous
-	// network error is not a verified successful publication.
-	Publish(context.Context, string, string) (MachinePublication, error)
+	// network error is not a verified successful publication. A non-nil base is
+	// the registry image the storage's layers came from.
+	Publish(ctx context.Context, id string, storage MachineStorage, base *MachineBase) (MachinePublication, error)
 }
 
 type MachineBuildBackend struct {
@@ -113,9 +118,9 @@ func normalizeMachinePolicy(policy *BuildPolicy) error {
 
 // runPrepared executes only machine-specific phases. The shared build manager
 // owns resolution, source staging/hash verification, deadline, queue and status.
-func (r *MachineBuildBackend) runPrepared(ctx context.Context, req MachineBuildRequest, base *images.Image, sourcePath, workDir string) (result *MachineBuildResult, err error) {
-	if r.Driver == nil || r.Publisher == nil || !filepath.IsAbs(workDir) || !filepath.IsAbs(sourcePath) || len(req.SourceHash) != 64 || strings.Trim(req.SourceHash, "0123456789abcdef") != "" {
-		return nil, fmt.Errorf("machine driver, publisher, private workspace and verified source required")
+func (r *MachineBuildBackend) runPrepared(ctx context.Context, req MachineBuildRequest, base *images.Image, sourcePath string) (result *MachineBuildResult, err error) {
+	if r.Driver == nil || r.Publisher == nil || !filepath.IsAbs(sourcePath) || len(req.SourceHash) != 64 || strings.Trim(req.SourceHash, "0123456789abcdef") != "" {
+		return nil, fmt.Errorf("machine driver, publisher and verified source required")
 	}
 	if _, bounded := ctx.Deadline(); !bounded {
 		return nil, fmt.Errorf("prepared machine job requires a deadline")
@@ -147,16 +152,6 @@ func (r *MachineBuildBackend) runPrepared(ctx context.Context, req MachineBuildR
 	if e = policy.Validate(); e != nil {
 		return nil, e
 	}
-	workspace, e := os.MkdirTemp(workDir, "machine-build-")
-	if e != nil {
-		return nil, machineFailure("workspace", e)
-	}
-	defer func() {
-		if cleanupErr := os.RemoveAll(workspace); cleanupErr != nil {
-			err = errors.Join(err, machineFailure("cleanup_workspace", cleanupErr))
-			result = nil
-		}
-	}()
 	if e = verifyBuildSource(ctx, sourcePath, req.SourceHash); e != nil {
 		return nil, machineFailure("verify_source", e)
 	}
@@ -210,27 +205,26 @@ func (r *MachineBuildBackend) runPrepared(ctx context.Context, req MachineBuildR
 	if e != nil || !receipt.Graceful || !stopped {
 		return nil, machineFailure("graceful_stop", e)
 	}
-	bundle := filepath.Join(workspace, "bundle")
-	if e = os.Mkdir(bundle, 0700); e != nil {
-		return nil, machineFailure("export", e)
+	storage, e := session.Storage(ctx)
+	if e != nil {
+		return nil, machineFailure("storage", e)
 	}
-	if e = session.Export(ctx, bundle); e != nil {
-		return nil, machineFailure("export", e)
+	if e = validateMachineStorage(storage, base.MacOS); e != nil {
+		return nil, machineFailure("validate_storage", e)
 	}
-	if e = validateMachineExport(bundle, base.MacOS); e != nil {
-		return nil, machineFailure("validate_export", e)
+	if e = ctx.Err(); e != nil {
+		return nil, e
+	}
+	// The stopped builder's storage is the publication source; the builder is
+	// destroyed once the registry has verified the result.
+	publication, e := r.Publisher.Publish(ctx, req.ID, storage, req.registryBase)
+	if e != nil {
+		return nil, machineFailure("publish", e)
 	}
 	if e = session.Destroy(ctx); e != nil {
 		return nil, machineFailure("cleanup", e)
 	}
 	destroyed = true
-	if e = ctx.Err(); e != nil {
-		return nil, e
-	}
-	publication, e := r.publishBuild(ctx, req, bundle)
-	if e != nil {
-		return nil, machineFailure("publish", e)
-	}
 	output, e := images.ParseNormalizedRef(publication.Reference)
 	if e != nil || !output.IsDigest() || !ValidMachineDigest(publication.Digest) || output.Digest() != publication.Digest {
 		return nil, fmt.Errorf("machine publication receipt is unverified")
@@ -257,42 +251,29 @@ func ValidMachineDigest(s string) bool {
 	return strings.Trim(s[7:], "0123456789abcdef") == ""
 }
 
-func validateMachineExport(root string, base *images.MacOSImage) error {
-	directory, err := os.Lstat(root)
-	if err != nil || !directory.IsDir() {
-		return fmt.Errorf("export root must be a real directory")
-	}
-	entries, err := os.ReadDir(root)
-	if err != nil {
+// validateMachineStorage checks storage before publication: the platform is valid,
+// the files are distinct regular files, and the overlay stacks on its layers as
+// ASIF. Against base, the hardware model and resources must match while the
+// identity differs.
+func validateMachineStorage(storage MachineStorage, base *images.MacOSImage) error {
+	if err := storage.Platform.Validate(); err != nil {
 		return err
 	}
-	if len(entries) != 3 {
-		return fmt.Errorf("export must contain only machine payload files")
-	}
-	for _, entry := range entries {
-		if entry.Name() != "disk.img" && entry.Name() != "aux.img" && entry.Name() != "config.json" {
-			return fmt.Errorf("unexpected export file")
-		}
-		info, err := os.Lstat(filepath.Join(root, entry.Name()))
-		if err != nil || !info.Mode().IsRegular() {
-			return fmt.Errorf("export files must be regular")
-		}
-	}
-	platform, err := images.ValidateMacOSBundle(root)
-	if err != nil {
+	if err := storage.CheckFiles(); err != nil {
 		return err
 	}
+	disk, err := images.OpenMacOSDiskChain(append(append([]string(nil), storage.Layers...), storage.Overlay))
+	if err != nil {
+		return fmt.Errorf("machine disk: %w", err)
+	}
+	disk.Close()
 	if base != nil {
+		platform := storage.Platform
 		if !bytes.Equal(platform.HardwareModel, base.HardwareModel) || platform.CPUs != base.CPUs || platform.Memory != base.Memory {
-			return fmt.Errorf("machine export changed hardware model or resources")
+			return fmt.Errorf("machine storage changed hardware model or resources")
 		}
 		if bytes.Equal(platform.MachineIdentifier, base.MachineIdentifier) || strings.EqualFold(platform.MAC, base.MAC) {
-			return fmt.Errorf("machine export kept the base identity")
-		}
-	}
-	for _, entry := range entries {
-		if err = os.Chmod(filepath.Join(root, entry.Name()), 0600); err != nil {
-			return err
+			return fmt.Errorf("machine storage kept the base identity")
 		}
 	}
 	return nil

@@ -50,8 +50,8 @@ type abortExporter struct {
 func (e abortExporter) StopMacOSBuildInstance(context.Context, string) (instances.MacOSBuildExportReceipt, error) {
 	return e.receipt, e.err
 }
-func (abortExporter) ExportStoppedMacOSBuildInstance(context.Context, string, string) error {
-	return errors.New("abort must not export")
+func (abortExporter) MacOSBuildStorage(context.Context, string) (instances.MacOSStorage, error) {
+	return instances.MacOSStorage{}, errors.New("abort must not publish")
 }
 
 func TestMachineForcedStopCleanup(t *testing.T) {

@@ -17,20 +17,20 @@ func TestMacOSBundleValidation(t *testing.T) {
 	for _, name := range []string{"valid", "empty-disk", "hardlink", "escape", "oversized", "truncated", "trailing", "unknown-field", "invalid-mac"} {
 		t.Run(name, func(t *testing.T) {
 			root := t.TempDir()
-			require.NoError(t, os.WriteFile(filepath.Join(root, "disk.img"), []byte("disk"), 0600))
+			require.NoError(t, os.WriteFile(filepath.Join(root, "disk.asif"), []byte("disk"), 0600))
 			require.NoError(t, os.WriteFile(filepath.Join(root, "aux.img"), []byte("aux"), 0600))
 			config := append([]byte(nil), data...)
 			switch name {
 			case "empty-disk":
-				require.NoError(t, os.WriteFile(filepath.Join(root, "disk.img"), nil, 0600))
+				require.NoError(t, os.WriteFile(filepath.Join(root, "disk.asif"), nil, 0600))
 			case "hardlink":
 				require.NoError(t, os.Remove(filepath.Join(root, "aux.img")))
-				require.NoError(t, os.Link(filepath.Join(root, "disk.img"), filepath.Join(root, "aux.img")))
+				require.NoError(t, os.Link(filepath.Join(root, "disk.asif"), filepath.Join(root, "aux.img")))
 			case "escape":
 				outside := filepath.Join(t.TempDir(), "disk")
 				require.NoError(t, os.WriteFile(outside, []byte("outside"), 0600))
-				require.NoError(t, os.Remove(filepath.Join(root, "disk.img")))
-				require.NoError(t, os.Symlink(outside, filepath.Join(root, "disk.img")))
+				require.NoError(t, os.Remove(filepath.Join(root, "disk.asif")))
+				require.NoError(t, os.Symlink(outside, filepath.Join(root, "disk.asif")))
 			case "oversized":
 				config = []byte(strings.Repeat(" ", maxMacOSMetadataBytes+1))
 			case "truncated":
@@ -51,7 +51,7 @@ func TestMacOSBundleValidation(t *testing.T) {
 				require.Error(t, err)
 			}
 			if name == "unknown-field" {
-				bundle, err := readMacOSMachineBundle(root, "disk.img", "aux.img", "config.json", false)
+				bundle, err := readMacOSMachineBundle(root, "disk.asif", "aux.img", "config.json", false)
 				require.NoError(t, err, "import/OCI compatibility permits unknown non-export metadata")
 				require.Equal(t, &platform, bundle.Platform)
 			}

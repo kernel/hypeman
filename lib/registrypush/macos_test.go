@@ -23,8 +23,8 @@ func TestPushMacOSImagePreservesManifestAndPlatform(t *testing.T) {
 	require.NoError(t, err)
 	config.OS, config.Architecture = "darwin", "arm64"
 	config.Config.Labels = map[string]string{
-		images.MacOSMachineVersionLabel: "1", images.MacOSMachineKindLabel: "macos-image",
-		images.MacOSMachineFormatLabel: "raw", images.MacOSMachineDiskLabel: "disk.img",
+		images.MacOSMachineVersionLabel: "2", images.MacOSMachineKindLabel: "macos-image",
+		images.MacOSMachineFormatLabel: "asif", images.MacOSMachineDiskLabel: "disk.asif",
 		images.MacOSMachineAuxLabel: "aux.img", images.MacOSMachinePlatformLabel: "config.json",
 	}
 	img, err = mutate.ConfigFile(img, config)

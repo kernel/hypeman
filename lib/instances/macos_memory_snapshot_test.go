@@ -34,8 +34,10 @@ func macOSMemorySnapshotFixture(t *testing.T) (*manager, *metadata) {
 	meta.MAC, meta.NetworkEnabled = meta.MacOS.MAC, true
 	meta.SkipGuestAgent = true
 	meta.StopGraceful = true
+	meta.MacOSDiskLayers = 1
 	require.NoError(t, m.saveMetadata(meta))
 	require.NoError(t, os.Rename(m.paths.InstanceOverlay(id), m.paths.InstanceMacOSBootDisk(id)))
+	require.NoError(t, os.WriteFile(macOSDiskLayer(meta.DataDir, 0), []byte("image layer"), 0400))
 	require.NoError(t, os.WriteFile(filepath.Join(meta.DataDir, macOSAuxStorageFile), []byte("aux-at-checkpoint"), 0600))
 	return m, meta
 }
@@ -49,7 +51,7 @@ func writeMacOSMemorySnapshotPayload(t *testing.T, m *manager, guestDir string, 
 		VCPUs: stored.Vcpus, MemoryBytes: stored.Size,
 		MacHardwareModelData: base64.StdEncoding.EncodeToString(stored.MacOS.HardwareModel), MacMachineIdentifierData: base64.StdEncoding.EncodeToString(stored.MacOS.MachineIdentifier),
 		MacAuxStoragePath: filepath.Join(m.paths.InstanceDir(stored.Id), macOSAuxStorageFile),
-		Disks:             []shimconfig.DiskConfig{{Path: m.paths.InstanceMacOSBootDisk(stored.Id)}},
+		Disks:             []shimconfig.DiskConfig{{Path: m.paths.InstanceMacOSBootDisk(stored.Id), Parents: macOSDiskParents(stored)}},
 	}}
 	if stored.NetworkEnabled {
 		manifest.ShimConfig.Networks = []shimconfig.NetworkConfig{{MAC: stored.MAC}}
@@ -112,13 +114,13 @@ func TestMacOSMemorySnapshotCaptureRestoreAndIsolation(t *testing.T) {
 	require.Equal(t, current.Phases.Cumulative[phasetracking.PhaseRunning], restored.Phases.Cumulative[phasetracking.PhaseRunning], "same-instance restore must not rewind host phase accounting")
 	require.NotNil(t, restored.ExpiresAt)
 	require.True(t, expiresAt.Equal(*restored.ExpiresAt))
-	for name, want := range map[string]string{"boot.raw": "overlay", macOSAuxStorageFile: "aux-at-checkpoint", "snapshots/snapshot-latest/" + shimconfig.SnapshotMachineStateFile: "saved-memory"} {
+	for name, want := range map[string]string{paths.MacOSBootDiskFile: "overlay", macOSAuxStorageFile: "aux-at-checkpoint", "snapshots/snapshot-latest/" + shimconfig.SnapshotMachineStateFile: "saved-memory"} {
 		data, err := os.ReadFile(filepath.Join(meta.DataDir, name))
 		require.NoError(t, err)
 		require.Equal(t, want, string(data))
 	}
 	require.NoError(t, os.WriteFile(m.paths.InstanceMacOSBootDisk(meta.Id), []byte("restored-write"), 0600))
-	data, err := os.ReadFile(filepath.Join(m.paths.SnapshotGuestDir(snapshot.Id), "boot.raw"))
+	data, err := os.ReadFile(filepath.Join(m.paths.SnapshotGuestDir(snapshot.Id), paths.MacOSBootDiskFile))
 	require.NoError(t, err)
 	require.Equal(t, "overlay", string(data), "restoring must not alias the persistent snapshot")
 

@@ -69,22 +69,26 @@ and the host copy is removed. No registry token, host credential or secret is
 injected. Guest stdout and stderr are discarded, so build logs never contain guest
 output. Failures report the phase and, for the script, its exit code.
 
-## Stop, export and cleanup
+## Stop, publish and cleanup
 
-Publication is two instance operations. `StopMacOSBuildInstance` does a strict
+Publication follows two instance operations. `StopMacOSBuildInstance` does a strict
 graceful stop and rejects forced fallback, an instance already Stopped, non-macOS
 guests, and any stop without shutdown acknowledgement and confirmed VMM exit.
-`ExportStoppedMacOSBuildInstance` then copies the closed storage of a still-Stopped
-instance under the instance lock, so a concurrent Start makes export fail. The output
-is a private 0700 directory holding only `disk.img`, `aux.img` and `config.json`.
+`MacOSBuildStorage` then returns the closed storage of the still-Stopped instance,
+checked under the instance lock: its read-only ASIF layers, its writable overlay
+`boot.asif`, its auxiliary storage and its platform. Nothing is copied. The build
+checks that the overlay opens as an ASIF stack on those layers, that the hardware
+model and resources match the base and that the identity differs. A Start during
+publication changes the overlay, so the registry's digest check fails the upload.
 
-Failure cleanup uses a forced stop and exports nothing. Storage is deleted only after
+Failure cleanup uses a forced stop and publishes nothing. Storage is deleted only after
 confirmed VMM exit; a VM with no confirmed exit stays quarantined for an operator.
 Cleanup has its own 2-minute budget. A re-enqueued attempt first reaps the builder
 left by the interrupted attempt, and fails rather than start a second one if that
 delete fails. Builders orphaned outside this path have no general reaper.
 
-The builder is destroyed **before** publication. Source stays staged until a terminal
+The builder is destroyed **after** the registry has verified the publication, since
+its storage is the publication source. Source stays staged until a terminal
 status is persisted, so a job interrupted while pushing is rebuilt on recovery.
 Startup on a macOS-only server recovers machine jobs without preparing Linux builder
 state, reaps cancelled builders and removes terminal-job source. Cancellation
@@ -97,21 +101,22 @@ The publisher uses a server-configured registry and a token scoped to `builds/{i
 Plaintext is allowed only on loopback; redirects are never followed and proxies are
 disabled. The layer is never written to disk: a first pass computes its digest, size
 and DiffID, the upload regenerates the same bytes, and the registry rejects any
-mismatch. Blobs use monolithic POST uploads, every persisted blob is re-read and
+mismatch. Blobs the registry already holds are skipped. Blobs use monolithic POST uploads, every persisted blob is re-read and
 hashed, the manifest is committed last, and the digest content is verified. Ambiguous
 errors never return success.
 
-A derivative built from a base in the same registry publishes a delta: the base's
-layers are mounted by digest and only a layer of changed 64 KiB disk chunks is
-uploaded. See `lib/images/macos_delta.go`. Bases outside the registry publish
-standalone. There is no garbage-collection rule yet; deleting a base that a derivative
-references breaks a later re-pull of that derivative.
+The image is the base's layers plus one layer holding the builder's overlay,
+auxiliary storage and platform. The overlay holds only the build's writes, so for a
+base in the same registry only that layer is uploaded; the base's layers are reused
+by digest. A base outside the registry has its layers uploaded too. There is no
+garbage-collection rule yet; deleting a base that a derivative references breaks a
+later re-pull of that derivative.
 
 ## Status and gates
 
 Race tests cover admission, the shared queue, cancellation without publication, phase
-failures and quarantine, export validation, and authenticated publication with
-manifest-last ordering. Test disks are synthetic and prove nothing about bootability.
+failures and quarantine, storage validation, and authenticated publication with
+manifest-last ordering and base-layer reuse. Test disks are synthetic and prove nothing about bootability.
 A development base has been run end to end through the HTTP API on Apple silicon,
 including a cold boot of the result; this trimmed branch has not been re-run natively.
 

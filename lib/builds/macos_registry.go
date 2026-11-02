@@ -13,6 +13,9 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/types"
 )
 
+// maxMachineMetadataBytes bounds a base manifest or config fetched from the registry.
+const maxMachineMetadataBytes = 4 << 20
+
 // machineRegistryRequest sends one authenticated registry request. The caller
 // closes the response body.
 func machineRegistryRequest(ctx context.Context, client *http.Client, token, method, target, media string, body io.Reader, size int64) (*http.Response, error) {

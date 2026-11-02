@@ -4,6 +4,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"github.com/kernel/hypeman/lib/paths"
@@ -56,7 +57,7 @@ func Collect(p *paths.Paths) (Breakdown, error) {
 			return false
 		}
 		name := entry.Name()
-		return name == "rootfs.erofs" || name == "rootfs.ext4" || name == "rootfs.raw"
+		return name == "rootfs.erofs" || name == "rootfs.ext4" || (strings.HasPrefix(name, "disk.") && strings.HasSuffix(name, ".asif"))
 	})
 	if err != nil {
 		return Breakdown{}, err

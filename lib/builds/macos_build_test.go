@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -13,6 +12,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/Code-Hex/vz/v4/diskimagekit"
 	"github.com/kernel/hypeman/lib/images"
 )
 
@@ -26,7 +26,8 @@ type machineFixture struct {
 	stop                MachineStopReceipt
 	cancel              context.CancelFunc
 	waitForCancel       bool
-	mutateExport        func(string) error
+	mutateStorage       func(*MachineStorage) error
+	storageDir          string
 	publicationOverride *MachinePublication
 	publisherCalled     bool
 	cleanupContextLive  bool
@@ -84,29 +85,58 @@ func (f *machineFixture) Stop(ctx context.Context, force bool) (MachineStopRecei
 	}
 	return f.stop, f.record(phase)
 }
-func (f *machineFixture) Export(_ context.Context, root string) error {
-	if err := f.record("export"); err != nil {
-		return err
+func (f *machineFixture) Storage(context.Context) (MachineStorage, error) {
+	if err := f.record("storage"); err != nil {
+		return MachineStorage{}, err
 	}
-	// The builder has its own identity; the export carries it, not the base's.
-	output := *f.image.MacOS
-	output.MachineIdentifier, output.MAC = []byte{3}, "02:00:00:00:00:02"
-	data, _ := json.Marshal(output)
-	for name, content := range map[string][]byte{"disk.img": []byte("disk"), "aux.img": []byte("aux"), "config.json": data} {
-		if err := os.WriteFile(filepath.Join(root, name), content, 0666); err != nil {
-			return err
+	dir, err := os.MkdirTemp("", "machine-storage-")
+	if err != nil {
+		return MachineStorage{}, err
+	}
+	f.storageDir = dir
+	storage, err := machineStorageFixture(dir)
+	if err != nil {
+		return MachineStorage{}, err
+	}
+	storage.Platform = *f.image.MacOS
+	// The builder has its own identity; its storage carries it, not the base's.
+	storage.Platform.MachineIdentifier, storage.Platform.MAC = []byte{3}, "02:00:00:00:00:02"
+	if f.mutateStorage != nil {
+		if err := f.mutateStorage(&storage); err != nil {
+			return MachineStorage{}, err
 		}
 	}
-	if f.mutateExport != nil {
-		return f.mutateExport(root)
+	return storage, nil
+}
+
+// machineStorageFixture writes a one-layer ASIF chain, its writable overlay and an
+// aux file to dir, as a stopped builder has. The platform is left to the caller.
+func machineStorageFixture(dir string) (MachineStorage, error) {
+	storage := MachineStorage{Layers: []string{filepath.Join(dir, "disk.0.asif")}, Overlay: filepath.Join(dir, "boot.asif"), Aux: filepath.Join(dir, "mac-aux.img")}
+	img, err := diskimagekit.CreateASIF(storage.Layers[0], (4<<20)/512)
+	if err != nil {
+		return storage, err
 	}
-	return nil
+	defer img.Close()
+	if _, err := img.WriteAt([]byte("base"), 0); err != nil {
+		return storage, err
+	}
+	if err := img.CreateLayer(storage.Overlay, diskimagekit.Overlay); err != nil {
+		return storage, err
+	}
+	if _, err := img.WriteAt([]byte("build output"), 1<<20); err != nil {
+		return storage, err
+	}
+	return storage, os.WriteFile(storage.Aux, []byte("aux"), 0600)
 }
 func (f *machineFixture) Destroy(ctx context.Context) error {
 	f.cleanupContextLive = ctx.Err() == nil
+	if f.storageDir != "" {
+		os.RemoveAll(f.storageDir)
+	}
 	return f.record("destroy")
 }
-func (f *machineFixture) Publish(ctx context.Context, id, root string) (MachinePublication, error) {
+func (f *machineFixture) Publish(ctx context.Context, id string, storage MachineStorage, _ *MachineBase) (MachinePublication, error) {
 	f.publisherCalled = true
 	if err := ctx.Err(); err != nil {
 		return MachinePublication{}, err
@@ -114,10 +144,9 @@ func (f *machineFixture) Publish(ctx context.Context, id, root string) (MachineP
 	if id != "build-test" {
 		return MachinePublication{}, errors.New("wrong job namespace")
 	}
-	for _, name := range []string{"disk.img", "aux.img", "config.json"} {
-		info, err := os.Stat(filepath.Join(root, name))
-		if err != nil || info.Mode().Perm() != 0600 {
-			return MachinePublication{}, errors.New("unsafe export mode")
+	for _, path := range append([]string{storage.Overlay, storage.Aux}, storage.Layers...) {
+		if _, err := os.Stat(path); err != nil {
+			return MachinePublication{}, errors.New("storage missing at publish")
 		}
 	}
 	publication := MachinePublication{Reference: "localhost/builds/build-test@" + machineTestDigest, Digest: machineTestDigest}
@@ -141,7 +170,7 @@ func TestMachineBuildPublicationOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	expected := []string{"start", "provision", "sanitize", "stop", "export", "destroy", "publish"}
+	expected := []string{"start", "provision", "sanitize", "stop", "storage", "publish", "destroy"}
 	if !reflect.DeepEqual(f.calls, expected) {
 		t.Fatalf("wrong phase order: %v", f.calls)
 	}
@@ -165,8 +194,7 @@ func TestMachineBuildFailuresDoNotPublish(t *testing.T) {
 		{name: "provision", phase: "provision"},
 		{name: "sanitize", phase: "sanitize"},
 		{name: "stop", phase: "stop"},
-		{name: "export", phase: "export"},
-		{name: "destroy", phase: "destroy"},
+		{name: "storage", phase: "storage"},
 		{name: "unconfirmed stop", receipt: &MachineStopReceipt{}},
 		{name: "forced stop", receipt: &MachineStopReceipt{VMMExited: true}},
 	} {
@@ -184,8 +212,8 @@ func TestMachineBuildFailuresDoNotPublish(t *testing.T) {
 				t.Fatal("raw guest error leaked")
 			}
 			for _, phase := range f.calls {
-				if phase == "export" && tc.receipt != nil {
-					t.Fatal("unconfirmed stop exported")
+				if phase == "storage" && tc.receipt != nil {
+					t.Fatal("unconfirmed stop reached storage")
 				}
 				if phase == "destroy" && tc.receipt != nil && !tc.receipt.VMMExited {
 					t.Fatal("destroyed unconfirmed live storage")

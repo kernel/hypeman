@@ -4,19 +4,22 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 )
 
 const maxMacOSMetadataBytes = 64 << 10
 
-// macOSMachinePayload is a complete cold-boot bundle, not a container rootfs.
-// Admission of live storage and export sanitation belong to the caller.
+// macOSMachinePayload is a complete cold-boot bundle, not a container rootfs: an
+// ASIF boot disk chain, base first, with the auxiliary storage and platform of its
+// top layer. Admission of live storage and export sanitation belong to the caller.
 type macOSMachinePayload struct {
-	Disk     string
+	Disks    []string
 	Aux      string
 	Platform *MacOSImage
 }
@@ -34,10 +37,11 @@ func RequireClosedFile(ctx context.Context, path string) error {
 	return nil
 }
 
-// ValidateMacOSBundle validates a fixed-layout export, rejecting unknown metadata
-// fields so an accidental credential field cannot become part of an image.
+// ValidateMacOSBundle validates a fixed-layout export of one ASIF disk, rejecting
+// unknown metadata fields so an accidental credential field cannot become part of
+// an image.
 func ValidateMacOSBundle(root string) (*MacOSImage, error) {
-	bundle, err := readMacOSMachineBundle(root, "disk.img", "aux.img", "config.json", true)
+	bundle, err := readMacOSMachineBundle(root, "disk.asif", "aux.img", "config.json", true)
 	if err != nil {
 		return nil, err
 	}
@@ -61,6 +65,52 @@ func readMacOSMachineBundle(root, diskName, auxName, configName string, strict b
 	if sameFile(disk, aux) || sameFile(disk, config) || sameFile(aux, config) {
 		return nil, fmt.Errorf("machine bundle files must be distinct")
 	}
+	platform, err := readMacOSPlatform(config, strict)
+	if err != nil {
+		return nil, err
+	}
+	return &macOSMachinePayload{Disks: []string{disk}, Aux: aux, Platform: platform}, nil
+}
+
+// readMacOSMachineLayers reads a pulled image unpacked one layer per numbered
+// directory. Every layer holds a disk; the auxiliary storage and platform come from
+// the highest layer that has them.
+func readMacOSMachineLayers(root, diskName, auxName, configName string) (*macOSMachinePayload, error) {
+	var payload macOSMachinePayload
+	var config string
+	for i := 0; ; i++ {
+		dir := filepath.Join(root, strconv.Itoa(i))
+		if _, err := os.Stat(dir); errors.Is(err, os.ErrNotExist) {
+			break
+		}
+		disk, err := machineBundleFile(dir, diskName)
+		if err != nil {
+			return nil, fmt.Errorf("machine layer %d: %w", i, err)
+		}
+		payload.Disks = append(payload.Disks, disk)
+		if aux, err := machineBundleFile(dir, auxName); err == nil {
+			payload.Aux = aux
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("machine layer %d: %w", i, err)
+		}
+		if c, err := machineBundleFile(dir, configName); err == nil {
+			config = c
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("machine layer %d: %w", i, err)
+		}
+	}
+	if len(payload.Disks) == 0 || payload.Aux == "" || config == "" {
+		return nil, fmt.Errorf("machine image needs a disk in every layer and auxiliary storage and platform in one")
+	}
+	platform, err := readMacOSPlatform(config, false)
+	if err != nil {
+		return nil, err
+	}
+	payload.Platform = platform
+	return &payload, nil
+}
+
+func readMacOSPlatform(config string, strict bool) (*MacOSImage, error) {
 	file, err := os.Open(config)
 	if err != nil {
 		return nil, err
@@ -87,7 +137,7 @@ func readMacOSMachineBundle(root, diskName, auxName, configName string, strict b
 	if err := platform.Validate(); err != nil {
 		return nil, err
 	}
-	return &macOSMachinePayload{Disk: disk, Aux: aux, Platform: &platform}, nil
+	return &platform, nil
 }
 
 func machineBundleFile(root, relative string) (string, error) {

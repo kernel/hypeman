@@ -18,6 +18,7 @@ type imageMetadata struct {
 	Digest            string              `json:"digest"` // Always present: sha256:...
 	Platform          string              `json:"platform,omitempty"`
 	MacOS             *MacOSImage         `json:"macos,omitempty"`
+	MacOSDiskLayers   int                 `json:"macos_disk_layers,omitempty"` // length of the macOS boot disk chain
 	Status            string              `json:"status"`
 	Error             *string             `json:"error,omitempty"`
 	Request           *CreateImageRequest `json:"request,omitempty"`
@@ -154,15 +155,15 @@ func legacyLayout(p *paths.Paths, repository, digestHex string) imageLayout {
 	return withMachineDisk(imageLayout{dir: p.ImageDigestDir(repository, digestHex), metadata: p.ImageMetadata(repository, digestHex), disk: p.ImageDigestPath(repository, digestHex)})
 }
 
-// machineDiskFile is a macOS machine image's raw boot disk, whether imported locally
-// or pulled. Rootfs images use erofs or ext4 instead.
-const machineDiskFile = "rootfs.raw"
+// machineDiskFile is the base of a macOS machine image's ASIF boot disk chain,
+// whether imported locally or pulled. Rootfs images use erofs or ext4 instead.
+var machineDiskFile = macOSDiskLayerFile(0)
 
-// withMachineDisk points layout at a machine image's raw disk when the directory has
-// one. Rootfs layouts never do, so a stat is enough to pick the file.
+// withMachineDisk points layout at a machine image's base disk when the directory
+// has one. Rootfs layouts never do, so a stat is enough to pick the file.
 func withMachineDisk(layout imageLayout) imageLayout {
-	if raw := filepath.Join(layout.dir, machineDiskFile); pathExists(raw) {
-		layout.disk = raw
+	if base := filepath.Join(layout.dir, machineDiskFile); pathExists(base) {
+		layout.disk = base
 	}
 	return layout
 }

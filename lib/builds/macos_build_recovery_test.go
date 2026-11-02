@@ -2,7 +2,6 @@ package builds
 
 import (
 	"context"
-	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -20,10 +19,6 @@ func TestMachineOnlyStartRecoversInterruptedBuilds(t *testing.T) {
 			require.NoError(t, normalizeMachinePolicy(policy))
 			meta := &buildMetadata{ID: "build-test", Status: status, Request: &CreateBuildRequest{MachineBaseImage: "registry/base@" + machineTestDigest, BuildPolicy: policy}}
 			require.NoError(t, m.storeMachineSource(context.Background(), meta, []byte("synthetic compressed-source bytes")))
-			// A workspace left by the interrupted attempt.
-			stale := filepath.Join(m.paths.BuildDir(meta.ID), "machine-build-interrupted")
-			require.NoError(t, os.MkdirAll(filepath.Join(stale, "bundle"), 0700))
-			require.NoError(t, os.WriteFile(filepath.Join(stale, "bundle", "disk.img"), []byte("disk"), 0600))
 			require.NoError(t, writeMetadata(m.paths, &buildMetadata{ID: "linux-job", Status: StatusQueued, Request: &CreateBuildRequest{BuilderID: "linux-builder"}}))
 			t.Cleanup(func() {
 				require.Eventually(t, func() bool { return m.queue.ActiveCount() == 0 }, 5*time.Second, 10*time.Millisecond)
@@ -39,7 +34,6 @@ func TestMachineOnlyStartRecoversInterruptedBuilds(t *testing.T) {
 			build, err := m.GetBuild(context.Background(), meta.ID)
 			require.NoError(t, err)
 			require.Equal(t, StatusReady, build.Status, "failure: %v", build.Error)
-			require.NoDirExists(t, stale, "the interrupted attempt's workspace is removed")
 			require.NoFileExists(t, filepath.Join(m.paths.BuildSourceDir(meta.ID), "source.tar.gz"), "source is removed once the image is ready")
 			require.False(t, m.ReadyForBuilds(), "Linux builder image must not be prepared")
 			var starts int

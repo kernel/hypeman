@@ -18,9 +18,9 @@ import (
 )
 
 // ImportMacOSImage is an offline, administrator-only import of a STOPPED macvm
-// bundle. It intentionally is not exposed as an HTTP host-filesystem read API.
-// Imports preserve identity: instances from this image may run sequentially,
-// not concurrently, until rekeying is validated.
+// bundle. It intentionally is not exposed as an HTTP host-filesystem read API. The
+// bundle's boot disk is disk.asif, cloned as is, or a raw disk.img, converted to
+// ASIF. The image is a one-layer chain.
 func ImportMacOSImage(ctx context.Context, p *paths.Paths, name, source string) (*Image, error) {
 	ref, err := ParseNormalizedRef(name)
 	if err != nil {
@@ -29,12 +29,16 @@ func ImportMacOSImage(ctx context.Context, p *paths.Paths, name, source string) 
 	if ref.IsDigest() {
 		return nil, fmt.Errorf("%w: import requires a tagged name", ErrInvalidName)
 	}
-	bundle, err := readMacOSMachineBundle(source, "disk.img", "aux.img", "config.json", false)
+	diskName := "disk.asif"
+	if _, err := os.Lstat(filepath.Join(source, diskName)); os.IsNotExist(err) {
+		diskName = "disk.img"
+	}
+	bundle, err := readMacOSMachineBundle(source, diskName, "aux.img", "config.json", false)
 	if err != nil {
 		return nil, err
 	}
 	mac := bundle.Platform
-	for _, file := range []string{"disk.img", "aux.img"} {
+	for _, file := range []string{diskName, "aux.img"} {
 		file = filepath.Join(source, file)
 		info, e := os.Lstat(file)
 		if e != nil {
@@ -58,21 +62,32 @@ func ImportMacOSImage(ctx context.Context, p *paths.Paths, name, source string) 
 		return nil, err
 	}
 	defer os.RemoveAll(stage)
-	for src, dst := range map[string]string{bundle.Disk: "rootfs.raw", bundle.Aux: "aux.img"} {
+	clones := map[string]string{bundle.Aux: "aux.img"}
+	if diskName == "disk.asif" {
+		clones[bundle.Disks[0]] = machineDiskFile
+	} else if err = ConvertRawToASIF(ctx, bundle.Disks[0], filepath.Join(stage, machineDiskFile)); err != nil {
+		return nil, fmt.Errorf("convert boot disk to ASIF: %w", err)
+	}
+	for src, dst := range clones {
 		if err = unix.Clonefile(src, filepath.Join(stage, dst), unix.CLONE_NOFOLLOW|unix.CLONE_NOOWNERCOPY); err != nil {
 			return nil, fmt.Errorf("clone bundle: %w", err)
 		}
-		if err = os.Chmod(filepath.Join(stage, dst), 0600); err != nil {
+	}
+	for _, name := range []string{machineDiskFile, "aux.img"} {
+		if err = os.Chmod(filepath.Join(stage, name), 0600); err != nil {
 			return nil, err
 		}
+	}
+	logicalSize, err := macOSChainSize([]string{filepath.Join(stage, machineDiskFile)})
+	if err != nil {
+		return nil, fmt.Errorf("imported boot disk: %w", err)
 	}
 	// Hash cloned content, not the caller's mutable paths. Per-file hashes and
 	// logical sizes make the digest unambiguous, including sparse zero ranges.
 	h := sha256.New()
 	canonical, _ := json.Marshal(mac)
 	h.Write(canonical)
-	var logicalSize int64
-	for _, name := range []string{"rootfs.raw", "aux.img"} {
+	for _, name := range []string{machineDiskFile, "aux.img"} {
 		f, e := os.Open(filepath.Join(stage, name))
 		if e != nil {
 			return nil, e
@@ -84,13 +99,10 @@ func ImportMacOSImage(ctx context.Context, p *paths.Paths, name, source string) 
 			return nil, e
 		}
 		fmt.Fprintf(h, "\n%s:%d:%x", name, n, fh.Sum(nil))
-		if name == "rootfs.raw" {
-			logicalSize = n
-		}
 	}
 	digestHex := hex.EncodeToString(h.Sum(nil))
 	digest := "sha256:" + digestHex
-	meta := &imageMetadata{Name: ref.Repository() + "@" + digest, Digest: digest, Platform: "darwin/arm64", MacOS: mac, Status: StatusReady, SizeBytes: logicalSize, CreatedAt: time.Now().UTC()}
+	meta := &imageMetadata{Name: ref.Repository() + "@" + digest, Digest: digest, Platform: "darwin/arm64", MacOS: mac, MacOSDiskLayers: 1, Status: StatusReady, SizeBytes: logicalSize, CreatedAt: time.Now().UTC()}
 	if err = writeMetadataFile(filepath.Join(stage, "metadata.json"), meta); err != nil {
 		return nil, err
 	}
