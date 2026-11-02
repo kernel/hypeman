@@ -26,7 +26,6 @@ const (
 	featureDevices          = "devices"
 	featureRosettaEmulation = "rosetta-emulation"
 	featureMacOSImages      = "macos-machine-images"
-	featureMacOSBuilds      = "macos-machine-builds-v1"
 )
 
 // apiVersion is the API contract version from the embedded OpenAPI document.
@@ -138,7 +137,7 @@ func (s *ApiService) GetCapabilities(ctx context.Context, _ oapi.GetCapabilities
 		Features: serverFeatures(runtime.GOOS, emulation),
 	}
 
-	resp.Features = append(resp.Features, machineImageFeatures(runtime.GOOS, runtime.GOARCH, s.Config.MacOSBuilds)...)
+	resp.Features = append(resp.Features, machineImageFeatures(runtime.GOOS, runtime.GOARCH)...)
 	return oapi.GetCapabilities200JSONResponse(resp), nil
 }
 
@@ -225,15 +224,11 @@ func hostImageCapabilities(goos, goarch string, emulation, macOSOnly bool) oapi.
 	return caps
 }
 
-func machineImageFeatures(goos, goarch string, builds bool) []string {
+func machineImageFeatures(goos, goarch string) []string {
 	if goos != "darwin" || goarch != "arm64" {
 		return nil
 	}
-	features := []string{featureMacOSImages}
-	if builds {
-		features = append(features, featureMacOSBuilds)
-	}
-	return features
+	return []string{featureMacOSImages}
 }
 
 // serverFeatures builds the server-level feature ID list: API surfaces that

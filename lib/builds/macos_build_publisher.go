@@ -25,6 +25,57 @@ import (
 	"github.com/kernel/hypeman/lib/images"
 )
 
+// MachineStorage is a closed macOS boot disk and platform to publish: the read-only
+// ASIF layers below its overlay, base first, the overlay, and its auxiliary storage.
+// A standalone base disk is an Overlay with no Layers.
+type MachineStorage struct {
+	Layers   []string
+	Overlay  string
+	Aux      string
+	Platform images.MacOSImage
+}
+
+// MachinePublication is a verified publication: a digest-pinned reference.
+type MachinePublication struct{ Reference, Digest string }
+
+// ValidMachineDigest reports whether s is a canonical sha256 digest.
+func ValidMachineDigest(s string) bool {
+	if !strings.HasPrefix(s, "sha256:") || len(s) != 71 {
+		return false
+	}
+	return strings.Trim(s[7:], "0123456789abcdef") == ""
+}
+
+// validateMachineStorage checks storage before publication: the platform is valid,
+// the files are distinct nonempty regular files, and the overlay stacks on its
+// layers as ASIF.
+func validateMachineStorage(storage MachineStorage) error {
+	if err := storage.Platform.Validate(); err != nil {
+		return err
+	}
+	var seen []os.FileInfo
+	for _, path := range append([]string{storage.Overlay, storage.Aux}, storage.Layers...) {
+		info, err := os.Lstat(path)
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() || info.Size() == 0 {
+			return fmt.Errorf("machine storage must be nonempty regular files")
+		}
+		for _, other := range seen {
+			if os.SameFile(other, info) {
+				return fmt.Errorf("machine storage files must be distinct")
+			}
+		}
+		seen = append(seen, info)
+	}
+	disk, err := images.OpenMacOSDiskChain(append(append([]string(nil), storage.Layers...), storage.Overlay))
+	if err != nil {
+		return fmt.Errorf("machine disk: %w", err)
+	}
+	return disk.Close()
+}
+
 // StreamingMachinePublisher targets only the configured internal registry and a
 // build-scoped repository. go-containerregistry hashes and compresses each layer
 // from a reopenable tar stream, so nothing is written to disk, skips blobs the
@@ -80,7 +131,7 @@ func (p *StreamingMachinePublisher) Publish(ctx context.Context, id string, stor
 	if err != nil {
 		return MachinePublication{}, err
 	}
-	if err := validateMachineStorage(storage, nil); err != nil {
+	if err := validateMachineStorage(storage); err != nil {
 		return MachinePublication{}, err
 	}
 	repo := "builds/" + id
@@ -249,7 +300,7 @@ func writeMachineTar(ctx context.Context, entries []machineTarEntry, w io.Writer
 			err = archive.WriteHeader(&tar.Header{Name: entry.name, Mode: 0600, Size: info.Size(), Typeflag: tar.TypeReg})
 		}
 		if err == nil {
-			_, err = io.CopyN(archive, buildContextReader{ctx, source}, info.Size())
+			_, err = io.CopyN(archive, contextReader{ctx, source}, info.Size())
 		}
 		closeErr := source.Close()
 		if err != nil {
@@ -260,4 +311,17 @@ func writeMachineTar(ctx context.Context, entries []machineTarEntry, w io.Writer
 		}
 	}
 	return archive.Close()
+}
+
+// contextReader stops a long read when ctx is done.
+type contextReader struct {
+	ctx context.Context
+	r   io.Reader
+}
+
+func (r contextReader) Read(p []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return r.r.Read(p)
 }

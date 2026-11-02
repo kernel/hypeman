@@ -173,7 +173,7 @@ func (m *manager) HandleHealthCheckUnhealthy(ctx context.Context, id string) err
 		return err
 	}
 
-	stopped, err := m.stopInstance(ctx, id, false)
+	stopped, err := m.stopInstance(ctx, id)
 	if err != nil {
 		_ = m.updateRestartStatusLocked(id, restartStatusAfterFailedAttempt(policy, nextStatus, reason, now))
 		return err

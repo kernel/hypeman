@@ -44,21 +44,6 @@ func TestPrepareMacOSCloneRebindsIdentityWithoutAliasingSource(t *testing.T) {
 	require.False(t, source.IdentityRekeyPending)
 }
 
-func TestFreshMacOSIdentityRebindsIdentifierAndMAC(t *testing.T) {
-	p := paths.New(t.TempDir())
-	require.NoError(t, os.MkdirAll(p.GuestsDir(), 0700))
-	m := &manager{paths: p}
-	stored := testMacOSSource()
-	stored.Id = "builder"
-	require.NoError(t, m.freshMacOSIdentity(stored))
-	require.True(t, stored.IdentityRekeyPending)
-	require.NotEqual(t, []byte("source-identifier"), stored.MacOS.MachineIdentifier)
-	require.NotEqual(t, "a6:fd:95:db:a2:62", stored.MacOS.MAC)
-	require.Equal(t, stored.MacOS.MAC, stored.MAC)
-	_, err := net.ParseMAC(stored.MAC)
-	require.NoError(t, err)
-}
-
 func TestPrepareMacOSCloneRefusesWithoutGuestAgent(t *testing.T) {
 	for _, disable := range []func(*StoredMetadata){
 		func(s *StoredMetadata) { s.MacOS.GuestAgent = false },

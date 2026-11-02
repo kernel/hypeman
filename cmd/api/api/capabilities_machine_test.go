@@ -27,8 +27,7 @@ func TestHostMachineImageCapabilities(t *testing.T) {
 }
 
 func TestMachineImageFeatureActivation(t *testing.T) {
-	require.Empty(t, machineImageFeatures("linux", "arm64", true))
-	require.Empty(t, machineImageFeatures("darwin", "amd64", true))
-	require.Equal(t, []string{"macos-machine-images"}, machineImageFeatures("darwin", "arm64", false))
-	require.Equal(t, []string{"macos-machine-images", "macos-machine-builds-v1"}, machineImageFeatures("darwin", "arm64", true))
+	require.Empty(t, machineImageFeatures("linux", "arm64"))
+	require.Empty(t, machineImageFeatures("darwin", "amd64"))
+	require.Equal(t, []string{"macos-machine-images"}, machineImageFeatures("darwin", "arm64"))
 }
