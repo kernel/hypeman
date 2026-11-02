@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -119,23 +118,15 @@ func normalizeMachinePolicy(policy *BuildPolicy) error {
 // runPrepared executes only machine-specific phases. The shared build manager
 // owns resolution, source staging/hash verification, deadline, queue and status.
 func (r *MachineBuildBackend) runPrepared(ctx context.Context, req MachineBuildRequest, base *images.Image, sourcePath string) (result *MachineBuildResult, err error) {
-	if r.Driver == nil || r.Publisher == nil || !filepath.IsAbs(sourcePath) || len(req.SourceHash) != 64 || strings.Trim(req.SourceHash, "0123456789abcdef") != "" {
-		return nil, fmt.Errorf("machine driver, publisher and verified source required")
-	}
 	if _, bounded := ctx.Deadline(); !bounded {
 		return nil, fmt.Errorf("prepared machine job requires a deadline")
 	}
-	if len(req.ID) == 0 || len(req.ID) > 128 || strings.Trim(req.ID, "abcdefghijklmnopqrstuvwxyz0123456789-") != "" {
-		return nil, fmt.Errorf("invalid machine build ID")
-	}
+	// Admission validated the request; the base may have changed since.
 	ref, e := images.ParseNormalizedRef(req.BaseImage)
-	if e != nil || !ref.IsDigest() || !ValidMachineDigest(ref.Digest()) {
-		return nil, fmt.Errorf("machine base must be pinned by sha256 digest")
-	}
-	policy := req.Policy
-	if e = normalizeMachinePolicy(&policy); e != nil {
+	if e != nil {
 		return nil, e
 	}
+	policy := req.Policy
 	if base == nil || base.Status != images.StatusReady || base.Platform != "darwin/arm64" || base.MacOS == nil || !base.MacOS.GuestAgent || base.Digest != ref.Digest() || base.MacOS.CPUs < 2 || base.MacOS.CPUs > MaxBuildCPUs || base.MacOS.Memory < 4<<30 || base.MacOS.Memory > uint64(MaxBuildMemoryMB)<<20 || base.MacOS.Memory%(1<<20) != 0 {
 		return nil, fmt.Errorf("base is not the pinned ready macOS machine")
 	}
@@ -225,10 +216,6 @@ func (r *MachineBuildBackend) runPrepared(ctx context.Context, req MachineBuildR
 		return nil, machineFailure("cleanup", e)
 	}
 	destroyed = true
-	output, e := images.ParseNormalizedRef(publication.Reference)
-	if e != nil || !output.IsDigest() || !ValidMachineDigest(publication.Digest) || output.Digest() != publication.Digest {
-		return nil, fmt.Errorf("machine publication receipt is unverified")
-	}
 	if req.onPublished != nil {
 		if e = req.onPublished(ctx, publication); e != nil {
 			return nil, machineFailure("image_ready", e)

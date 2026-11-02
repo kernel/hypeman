@@ -19,19 +19,18 @@ import (
 const machineTestDigest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
 type machineFixture struct {
-	mu                  sync.Mutex
-	image               *images.Image
-	calls               []string
-	fail                string
-	stop                MachineStopReceipt
-	cancel              context.CancelFunc
-	waitForCancel       bool
-	mutateStorage       func(*MachineStorage) error
-	storageDir          string
-	publicationOverride *MachinePublication
-	publisherCalled     bool
-	cleanupContextLive  bool
-	startGate           chan struct{}
+	mu                 sync.Mutex
+	image              *images.Image
+	calls              []string
+	fail               string
+	stop               MachineStopReceipt
+	cancel             context.CancelFunc
+	waitForCancel      bool
+	mutateStorage      func(*MachineStorage) error
+	storageDir         string
+	publisherCalled    bool
+	cleanupContextLive bool
+	startGate          chan struct{}
 }
 
 func newMachineFixture() *machineFixture {
@@ -45,12 +44,6 @@ func (f *machineFixture) record(phase string) error {
 		return errors.New("sensitive-command-argument")
 	}
 	return nil
-}
-func (f *machineFixture) ResolveBase(context.Context, string) (*images.Image, error) {
-	if err := f.record("resolve"); err != nil {
-		return nil, err
-	}
-	return f.image, nil
 }
 func (f *machineFixture) Start(_ context.Context, _ string, _ *images.Image, p BuildPolicy) (MachineBuildSession, error) {
 	if p.CPUs != 4 || p.MemoryMB != 8192 {
@@ -150,9 +143,6 @@ func (f *machineFixture) Publish(ctx context.Context, id string, storage Machine
 		}
 	}
 	publication := MachinePublication{Reference: "localhost/builds/build-test@" + machineTestDigest, Digest: machineTestDigest}
-	if f.publicationOverride != nil {
-		publication = *f.publicationOverride
-	}
 	return publication, f.record("publish")
 }
 func machineTestRunner(t *testing.T, f *machineFixture) *machineRunnerFixture {

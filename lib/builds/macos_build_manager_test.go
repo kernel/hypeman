@@ -28,7 +28,7 @@ func (m machineJobImages) GetImage(ctx context.Context, ref string) (*images.Ima
 		return nil, m.resolveErr
 	}
 	if ref == "registry/base@"+machineTestDigest {
-		return m.fixture.ResolveBase(ctx, ref)
+		return m.fixture.image, nil
 	}
 	return &images.Image{Status: images.StatusReady, Digest: machineTestDigest}, nil
 }

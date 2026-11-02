@@ -43,17 +43,12 @@ func TestMacOSBundleValidation(t *testing.T) {
 				config = []byte(strings.Replace(string(config), platform.MAC, "invalid", 1))
 			}
 			require.NoError(t, os.WriteFile(filepath.Join(root, "config.json"), config, 0600))
-			got, err := ValidateMacOSBundle(root)
-			if name == "valid" {
+			bundle, err := readMacOSMachineBundle(root, "disk.asif", "aux.img", "config.json")
+			if name == "valid" || name == "unknown-field" {
 				require.NoError(t, err)
-				require.Equal(t, &platform, got)
+				require.Equal(t, &platform, bundle.Platform)
 			} else {
 				require.Error(t, err)
-			}
-			if name == "unknown-field" {
-				bundle, err := readMacOSMachineBundle(root, "disk.asif", "aux.img", "config.json", false)
-				require.NoError(t, err, "import/OCI compatibility permits unknown non-export metadata")
-				require.Equal(t, &platform, bundle.Platform)
 			}
 		})
 	}

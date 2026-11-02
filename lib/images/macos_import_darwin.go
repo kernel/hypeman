@@ -33,7 +33,7 @@ func ImportMacOSImage(ctx context.Context, p *paths.Paths, name, source string) 
 	if _, err := os.Lstat(filepath.Join(source, diskName)); os.IsNotExist(err) {
 		diskName = "disk.img"
 	}
-	bundle, err := readMacOSMachineBundle(source, diskName, "aux.img", "config.json", false)
+	bundle, err := readMacOSMachineBundle(source, diskName, "aux.img", "config.json")
 	if err != nil {
 		return nil, err
 	}

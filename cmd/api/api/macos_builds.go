@@ -82,9 +82,6 @@ func parseMachineBuildMultipart(body *multipart.Reader) (builds.CreateBuildReque
 		if err != nil || int64(len(data)) > limit {
 			return req, nil, fmt.Errorf("invalid or oversized %s field", name)
 		}
-		if err = part.Close(); err != nil {
-			return req, nil, fmt.Errorf("invalid multipart field")
-		}
 		switch name {
 		case "source":
 			source = data

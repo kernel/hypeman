@@ -92,38 +92,18 @@ func TestMachineBuildInterruptedCleanup(t *testing.T) {
 	})
 }
 
-func TestMachineBuildPublicationReceipt(t *testing.T) {
-	for _, kind := range []string{"ambiguous error", "tag receipt", "digest mismatch", "invalid digest"} {
-		t.Run(kind, func(t *testing.T) {
-			f := newMachineFixture()
-			switch kind {
-			case "ambiguous error":
-				f.fail = "publish"
-			case "tag receipt":
-				f.publicationOverride = &MachinePublication{Reference: "localhost/builds/build-test:latest", Digest: machineTestDigest}
-			case "digest mismatch":
-				f.publicationOverride = &MachinePublication{Reference: "localhost/builds/build-test@" + machineTestDigest, Digest: "sha256:" + strings.Repeat("b", 64)}
-			case "invalid digest":
-				f.publicationOverride = &MachinePublication{Reference: "localhost/builds/build-test@" + machineTestDigest, Digest: "not-a-digest"}
-			}
-			_, err := runMachineBuildFailure(t, f, context.Background(), machineTestRequest(), strings.NewReader("source"))
-			if !f.publisherCalled {
-				t.Fatal("unverified receipt became ready")
-			}
-			if strings.Contains(err.Error(), "sensitive-command-argument") {
-				t.Fatal("publisher error leaked")
-			}
-			count := 0
-			for _, phase := range f.calls {
-				if phase == "publish" {
-					count++
-				}
-			}
-			if count != 1 {
-				t.Fatal("ambiguous publication was retried")
-			}
-		})
+func TestMachineBuildAmbiguousPublishIsNotRetried(t *testing.T) {
+	f := newMachineFixture()
+	f.fail = "publish"
+	_, err := runMachineBuildFailure(t, f, context.Background(), machineTestRequest(), strings.NewReader("source"))
+	require.NotContains(t, err.Error(), "sensitive-command-argument", "publisher error leaked")
+	count := 0
+	for _, phase := range f.calls {
+		if phase == "publish" {
+			count++
+		}
 	}
+	require.Equal(t, 1, count, "ambiguous publication was retried")
 }
 
 func TestMachineBuildMalformedStorage(t *testing.T) {

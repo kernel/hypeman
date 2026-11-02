@@ -112,7 +112,7 @@ final class Shim: NSObject, VZVirtualMachineDelegate {
   private static let routes: [String: Set<String>] = [
     "/api/v1/vm.info": ["GET"], "/api/v1/vm.pause": ["PUT"], "/api/v1/vm.resume": ["PUT"],
     "/api/v1/vm.shutdown": ["PUT"], "/api/v1/vm.snapshot": ["PUT"], "/api/v1/vm.snapshot-support": ["GET"],
-    "/api/v1/vm.balloon": ["GET", "PUT"], "/api/v1/vm.power-button": ["PUT"],
+    "/api/v1/vm.balloon": ["GET", "PUT"],
     "/api/v1/vmm.ping": ["GET"], "/api/v1/vmm.shutdown": ["PUT"],
   ]
 
@@ -133,8 +133,7 @@ final class Shim: NSObject, VZVirtualMachineDelegate {
     case ("GET", "/api/v1/vm.info"): return info()
     case ("PUT", "/api/v1/vm.pause"): return pause()
     case ("PUT", "/api/v1/vm.resume"): return resume()
-    case ("PUT", "/api/v1/vm.shutdown"): return requestStop("shutdown failed", "VM graceful shutdown requested (ACPI power button)")
-    case ("PUT", "/api/v1/vm.power-button"): return requestStop("power button failed", "power button sent")
+    case ("PUT", "/api/v1/vm.shutdown"): return requestStop()
     case ("GET", "/api/v1/vm.snapshot-support"): return snapshotSupport()
     case ("PUT", "/api/v1/vm.snapshot"): return snapshot(request.body)
     case ("GET", "/api/v1/vm.balloon"): return getBalloon()
@@ -173,14 +172,14 @@ final class Shim: NSObject, VZVirtualMachineDelegate {
 
   // requestStop sends the guest a power-button event. The instance manager handles
   // the timeout and forced stop if the guest does not shut down.
-  private func requestStop(_ failure: String, _ success: String) -> HTTPResponse {
+  private func requestStop() -> HTTPResponse {
     do {
       try onMain { try vm.requestStop() }
     } catch {
       Log.error("RequestStop failed", ["error": error.localizedDescription])
-      return .text(500, "\(failure): \(error.localizedDescription)")
+      return .text(500, "shutdown failed: \(error.localizedDescription)")
     }
-    Log.info(success)
+    Log.info("VM graceful shutdown requested (ACPI power button)")
     return .noContent()
   }
 

@@ -37,18 +37,7 @@ func RequireClosedFile(ctx context.Context, path string) error {
 	return nil
 }
 
-// ValidateMacOSBundle validates a fixed-layout export of one ASIF disk, rejecting
-// unknown metadata fields so an accidental credential field cannot become part of
-// an image.
-func ValidateMacOSBundle(root string) (*MacOSImage, error) {
-	bundle, err := readMacOSMachineBundle(root, "disk.asif", "aux.img", "config.json", true)
-	if err != nil {
-		return nil, err
-	}
-	return bundle.Platform, nil
-}
-
-func readMacOSMachineBundle(root, diskName, auxName, configName string, strict bool) (*macOSMachinePayload, error) {
+func readMacOSMachineBundle(root, diskName, auxName, configName string) (*macOSMachinePayload, error) {
 	disk, err := machineBundleFile(root, diskName)
 	if err != nil {
 		return nil, err
@@ -65,7 +54,7 @@ func readMacOSMachineBundle(root, diskName, auxName, configName string, strict b
 	if sameFile(disk, aux) || sameFile(disk, config) || sameFile(aux, config) {
 		return nil, fmt.Errorf("machine bundle files must be distinct")
 	}
-	platform, err := readMacOSPlatform(config, strict)
+	platform, err := readMacOSPlatform(config)
 	if err != nil {
 		return nil, err
 	}
@@ -104,7 +93,7 @@ func readMacOSMachineLayers(root, diskName, auxName, configName string) (*macOSM
 	if err != nil {
 		return nil, fmt.Errorf("machine image top layer: %w", err)
 	}
-	platform, err := readMacOSPlatform(config, false)
+	platform, err := readMacOSPlatform(config)
 	if err != nil {
 		return nil, err
 	}
@@ -112,7 +101,7 @@ func readMacOSMachineLayers(root, diskName, auxName, configName string) (*macOSM
 	return &payload, nil
 }
 
-func readMacOSPlatform(config string, strict bool) (*MacOSImage, error) {
+func readMacOSPlatform(config string) (*MacOSImage, error) {
 	file, err := os.Open(config)
 	if err != nil {
 		return nil, err
@@ -126,9 +115,6 @@ func readMacOSPlatform(config string, strict bool) (*MacOSImage, error) {
 		return nil, fmt.Errorf("machine platform metadata is too large")
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
-	if strict {
-		decoder.DisallowUnknownFields()
-	}
 	var platform MacOSImage
 	if err := decoder.Decode(&platform); err != nil {
 		return nil, err

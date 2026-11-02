@@ -234,17 +234,7 @@ func (m *manager) freshMacOSIdentity(stored *StoredMetadata) error {
 	if err := prepareMacOSClone(stored); err != nil {
 		return err
 	}
-	used, err := m.storedMACs(stored.Id)
-	if err != nil {
-		return fmt.Errorf("list MACs for macOS identity: %w", err)
-	}
-	mac, err := network.NewUniqueMAC(used)
-	if err != nil {
-		return fmt.Errorf("allocate macOS MAC: %w", err)
-	}
-	stored.MacOS.MAC = mac
-	stored.MAC = mac
-	return nil
+	return m.assignMacOSMAC(stored)
 }
 
 // assignMacOSCloneMAC gives a networked clone a MAC no stored instance uses. It runs
@@ -253,17 +243,23 @@ func (m *manager) assignMacOSCloneMAC(clone *StoredMetadata) error {
 	if clone.MacOS == nil || !clone.NetworkEnabled {
 		return nil
 	}
-	used, err := m.storedMACs(clone.Id)
+	return m.assignMacOSMAC(clone)
+}
+
+// assignMacOSMAC gives a macOS instance a MAC no stored instance uses. Its platform
+// is copied first, since a clone's may be shared with its source.
+func (m *manager) assignMacOSMAC(stored *StoredMetadata) error {
+	used, err := m.storedMACs(stored.Id)
 	if err != nil {
-		return fmt.Errorf("list MACs for macOS clone: %w", err)
+		return fmt.Errorf("list MACs for macOS instance: %w", err)
 	}
 	mac, err := network.NewUniqueMAC(used)
 	if err != nil {
-		return fmt.Errorf("allocate macOS clone MAC: %w", err)
+		return fmt.Errorf("allocate macOS MAC: %w", err)
 	}
-	macos := *clone.MacOS
+	macos := *stored.MacOS
 	macos.MAC = mac
-	clone.MacOS = &macos
-	clone.MAC = mac
+	stored.MacOS = &macos
+	stored.MAC = mac
 	return nil
 }

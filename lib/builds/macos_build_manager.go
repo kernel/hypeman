@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -53,7 +52,10 @@ func (m *manager) executeMachineBuild(ctx context.Context, id string, req Create
 		registryBase: machineRegistryBase(backend.Publisher, req.MachineBaseImage),
 		onStarted:    func(instanceID string) error { return m.recordMachineBuilder(id, instanceID) },
 		onPublished: func(ctx context.Context, publication MachinePublication) error {
-			return m.waitMachinePublication(ctx, id, publication.Digest)
+			if err := m.imageManager.WaitForReady(ctx, "builds/"+id+"@"+publication.Digest); err != nil {
+				return fmt.Errorf("machine image import: %w", err)
+			}
+			return nil
 		},
 	}
 	result, err := backend.runPrepared(ctx, job, base, sourcePath)
@@ -65,16 +67,6 @@ func (m *manager) executeMachineBuild(ctx context.Context, id string, req Create
 		return nil, fmt.Errorf("machine publication is outside the authorized job repository")
 	}
 	return &BuildResult{Success: true, ImageDigest: result.Publication.Digest, ImageRef: result.Publication.Reference, Provenance: result.Provenance}, nil
-}
-
-func (m *manager) waitMachinePublication(ctx context.Context, id, digest string) error {
-	if !ValidMachineDigest(digest) {
-		return fmt.Errorf("canonical machine publication digest required")
-	}
-	if err := m.imageManager.WaitForReady(ctx, "builds/"+id+"@"+digest); err != nil {
-		return fmt.Errorf("machine image import: %w", err)
-	}
-	return nil
 }
 
 // reapPriorMachineBuilder removes the builder recorded by an interrupted attempt of
@@ -159,20 +151,6 @@ func (m *manager) admitMachineBuild(req *CreateBuildRequest, sourceData []byte) 
 	return policy, nil
 }
 
-// enqueueMachineBuild queues a machine build whose source is already staged. Each
-// builder has its own identity, so builds on one base are not serialized.
-func (m *manager) enqueueMachineBuild(meta *buildMetadata, req CreateBuildRequest, policy *BuildPolicy) *Build {
-	queuePos := m.queue.EnqueueSerial(meta.ID, req, "", func() {
-		m.runBuild(context.Background(), meta.ID, req, policy)
-	})
-	build := meta.toBuild()
-	if queuePos > 0 {
-		build.QueuePosition = &queuePos
-	}
-	m.logger.Info("build created", "id", meta.ID, "queue_position", queuePos)
-	return build
-}
-
 // machineRegistryBase returns the base as a registry base when the publisher
 // writes to the registry that stores it, so its layers are reused. Any other base
 // publishes all of its layers.
@@ -181,12 +159,8 @@ func machineRegistryBase(publisher MachineBuildPublisher, baseImage string) *Mac
 	if !ok {
 		return nil
 	}
-	address := streaming.RegistryURL
-	if !strings.Contains(address, "://") {
-		address = "https://" + address
-	}
-	registry, err := url.Parse(address)
-	if err != nil || registry.Host == "" {
+	registry, err := streaming.registry()
+	if err != nil {
 		return nil
 	}
 	ref, err := images.ParseNormalizedRef(baseImage)

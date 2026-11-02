@@ -503,7 +503,7 @@ func (m *manager) CreateBuild(ctx context.Context, req CreateBuildRequest, sourc
 			deleteBuild(m.paths, id)
 			return nil, err
 		}
-		return m.enqueueMachineBuild(meta, req, policy), nil
+		return m.enqueueBuild(meta, req, policy), nil
 	}
 
 	// Write initial metadata
@@ -625,20 +625,23 @@ func (m *manager) CreateBuild(ctx context.Context, req CreateBuildRequest, sourc
 		return nil, fmt.Errorf("write build config: %w", err)
 	}
 
-	// Enqueue the build. Builds sharing a builder are serialized by builder
-	// ID so a waiting same-builder build stays pending instead of holding a
-	// global concurrency slot while blocked on the builder's disk.
-	queuePos := m.queue.EnqueueSerial(id, req, req.BuilderID, func() {
-		m.runBuild(context.Background(), id, req, policy)
-	})
+	return m.enqueueBuild(meta, req, policy), nil
+}
 
+// enqueueBuild queues a build whose inputs are stored. Builds sharing a builder
+// are serialized by builder ID so a waiting same-builder build stays pending
+// instead of holding a global concurrency slot while blocked on the builder's
+// disk. Machine builds have no builder ID, so builds on one base run concurrently.
+func (m *manager) enqueueBuild(meta *buildMetadata, req CreateBuildRequest, policy *BuildPolicy) *Build {
+	queuePos := m.queue.EnqueueSerial(meta.ID, req, req.BuilderID, func() {
+		m.runBuild(context.Background(), meta.ID, req, policy)
+	})
 	build := meta.toBuild()
 	if queuePos > 0 {
 		build.QueuePosition = &queuePos
 	}
-
-	m.logger.Info("build created", "id", id, "queue_position", queuePos)
-	return build, nil
+	m.logger.Info("build created", "id", meta.ID, "queue_position", queuePos)
+	return build
 }
 
 // gcBoundsForDisk computes the BuildKit GC bounds for a builder disk:

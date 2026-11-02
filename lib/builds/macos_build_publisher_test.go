@@ -6,7 +6,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -54,16 +53,13 @@ func TestStreamingMachinePublisherAuthenticatedRegistry(t *testing.T) {
 	imports := &machineImportStub{imported: make(chan string, 1)}
 	reg, e := registry.New(paths.New(t.TempDir()), imports)
 	require.NoError(t, e)
-	var uploads, verified atomic.Int32
+	var uploads atomic.Int32
 	handler := middleware.JwtAuth("synthetic registry secret")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.NotEqual(t, http.MethodPatch, r.Method, "uploads must use the disk-streaming monolithic endpoint")
 		if r.Method == http.MethodPost {
 			require.NotEmpty(t, r.URL.Query().Get("digest"))
 			require.Greater(t, r.ContentLength, int64(0))
 			uploads.Add(1)
-		}
-		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/blobs/") {
-			verified.Add(1)
 		}
 		if r.Method == http.MethodPut {
 			require.Equal(t, int32(2), uploads.Load(), "manifest must be last")

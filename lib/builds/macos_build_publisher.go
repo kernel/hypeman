@@ -77,17 +77,11 @@ func (p *StreamingMachinePublisher) Publish(ctx context.Context, id string, stor
 			return MachinePublication{}, err
 		}
 	}
-	address := p.RegistryURL
-	if !strings.Contains(address, "://") {
-		address = "https://" + address
+	registry, err := p.registry()
+	if err != nil {
+		return MachinePublication{}, err
 	}
-	registry, err := url.Parse(address)
-	if err != nil || registry.Host == "" || registry.User != nil || registry.RawQuery != "" || registry.Fragment != "" || (registry.Path != "" && registry.Path != "/") || (registry.Scheme != "http" && registry.Scheme != "https") {
-		return MachinePublication{}, fmt.Errorf("invalid internal registry address")
-	}
-	if registry.Scheme == "http" && registry.Hostname() != "localhost" && !net.ParseIP(registry.Hostname()).IsLoopback() {
-		return MachinePublication{}, fmt.Errorf("plaintext registry must be loopback")
-	}
+	address := registry.String()
 	if err := validateMachineStorage(storage, nil); err != nil {
 		return MachinePublication{}, err
 	}
@@ -174,6 +168,23 @@ func (p *StreamingMachinePublisher) Publish(ctx context.Context, id string, stor
 		return MachinePublication{}, fmt.Errorf("machine manifest verification failed: %w", err)
 	}
 	return MachinePublication{Reference: registry.Host + "/" + repo + "@" + digest, Digest: digest}, nil
+}
+
+// registry parses the configured registry address, defaulting to HTTPS. Plaintext
+// is allowed only on loopback.
+func (p *StreamingMachinePublisher) registry() (*url.URL, error) {
+	address := p.RegistryURL
+	if !strings.Contains(address, "://") {
+		address = "https://" + address
+	}
+	registry, err := url.Parse(address)
+	if err != nil || registry.Host == "" || registry.User != nil || registry.RawQuery != "" || registry.Fragment != "" || (registry.Path != "" && registry.Path != "/") || (registry.Scheme != "http" && registry.Scheme != "https") {
+		return nil, fmt.Errorf("invalid internal registry address")
+	}
+	if registry.Scheme == "http" && registry.Hostname() != "localhost" && !net.ParseIP(registry.Hostname()).IsLoopback() {
+		return nil, fmt.Errorf("plaintext registry must be loopback")
+	}
+	return registry, nil
 }
 
 // machineLayers returns a machine image's layer blobs and diff IDs: the base's

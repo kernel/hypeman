@@ -159,38 +159,30 @@ func stageMacOSMachine(staged *stagedImageFiles, root string, meta *containerMet
 			staged.macos.layers = append(staged.macos.layers, layer)
 			chain = append(chain, layer)
 		}
-		if _, err := stageMachineFile(disk, chain[i]); err != nil {
+		if err := stageMachineFile(disk, chain[i]); err != nil {
 			return fmt.Errorf("stage boot disk layer %d: %w", i, err)
 		}
 	}
 	if staged.sizeBytes, err = macOSChainSize(chain); err != nil {
 		return fmt.Errorf("machine boot disk: %w", err)
 	}
-	if _, err := stageMachineFile(payload.Aux, staged.macos.aux); err != nil {
+	if err := stageMachineFile(payload.Aux, staged.macos.aux); err != nil {
 		return fmt.Errorf("stage auxiliary storage: %w", err)
 	}
 	return nil
 }
 
-func stageMachineFile(src, dst string) (int64, error) {
+func stageMachineFile(src, dst string) error {
 	// Copy helpers create the destination with the registry-supplied source mode,
 	// and a multi-GB copy would expose contents before any later chmod. The copy
 	// happens in installAtomically's fresh 0700 directory and is made 0600 before
 	// it appears at the canonical staging path.
-	err := installAtomically(dst, func(path string) error {
+	return installAtomically(dst, func(path string) error {
 		if err := forkvm.CopyRegularFile(src, path); err != nil {
 			return err
 		}
 		return os.Chmod(path, 0600)
 	})
-	if err != nil {
-		return 0, err
-	}
-	info, err := os.Stat(dst)
-	if err != nil {
-		return 0, err
-	}
-	return info.Size(), nil
 }
 
 // macOSMachineHost is true where macOS machine images can boot. Other hosts
