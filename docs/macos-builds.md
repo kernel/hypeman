@@ -98,13 +98,14 @@ secrets are masked in strings and logs.
 ## Publication
 
 The publisher uses a server-configured registry and a token scoped to `builds/{id}`.
-Plaintext is allowed only on loopback; redirects are never followed and proxies are
-disabled. The layer is never written to disk: a first pass computes its digest, size
-and DiffID, the upload regenerates the same bytes, and the registry rejects any
-mismatch. Blobs the registry already holds are skipped. Blobs use monolithic POST uploads
-that the registry commits only if they match their digest, the manifest is committed
-last, and the manifest is read back by digest. Ambiguous
-errors never return success.
+Plaintext is allowed only on loopback; redirects are refused and proxies are
+disabled. It writes the image with go-containerregistry's `remote.Write`. The layer is
+never written to disk on the publishing side: a first pass computes its digest, size
+and DiffID, and the upload regenerates the same bytes. Blobs the registry already
+holds are skipped, and the manifest is committed last. The registry writes chunked
+uploads to disk, hashing as they arrive, and commits a blob only if it matches its
+digest. It serves manifests by digest from its blob store, so a base stays usable
+after a restart. Ambiguous errors never return success.
 
 The image is the base's layers plus one layer holding the builder's overlay,
 auxiliary storage and platform. The overlay holds only the build's writes, so for a
