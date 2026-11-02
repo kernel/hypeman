@@ -232,6 +232,7 @@ func buildShimConfigFromVMConfig(config hypervisor.VMConfig, socketPath string) 
 		cfg.Disks = append(cfg.Disks, shimconfig.DiskConfig{
 			Path:     disk.Path,
 			Readonly: disk.Readonly,
+			Parents:  disk.Parents,
 		})
 	}
 	for _, n := range config.Networks {
