@@ -17,6 +17,7 @@ import (
 
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
+	"github.com/google/go-containerregistry/pkg/v1/random"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/google/go-containerregistry/pkg/v1/types"
 	"github.com/kernel/hypeman/lib/paths"
@@ -137,4 +138,33 @@ func TestChunkedUploadRejectsBadChunks(t *testing.T) {
 	entries, err := os.ReadDir(reg.uploads.dir)
 	require.NoError(t, err)
 	require.Empty(t, entries, "ended uploads leave no files")
+}
+
+func TestManifestByDigestSurvivesRestart(t *testing.T) {
+	p := paths.New(t.TempDir())
+	serve := func() *httptest.Server {
+		reg, err := New(p, nil)
+		require.NoError(t, err)
+		return httptest.NewServer(reg.Handler())
+	}
+	img, err := random.Image(64, 1)
+	require.NoError(t, err)
+	digest, err := img.Digest()
+	require.NoError(t, err)
+
+	first := serve()
+	ref, err := name.ParseReference(strings.TrimPrefix(first.URL, "http://")+"/cache/app:latest", name.Insecure)
+	require.NoError(t, err)
+	require.NoError(t, remote.Write(ref, img))
+	first.Close()
+
+	second := serve()
+	defer second.Close()
+	byDigest, err := name.NewDigest(strings.TrimPrefix(second.URL, "http://")+"/cache/app@"+digest.String(), name.Insecure)
+	require.NoError(t, err)
+	pulled, err := remote.Image(byDigest)
+	require.NoError(t, err)
+	got, err := pulled.Digest()
+	require.NoError(t, err)
+	require.Equal(t, digest, got)
 }

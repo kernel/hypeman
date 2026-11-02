@@ -7,12 +7,14 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -119,7 +121,7 @@ func isCacheRepo(repo string) bool {
 // This wraps the underlying registry to intercept manifest PUTs and trigger conversion.
 func (r *Registry) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		if r.uploads.serve(w, req) {
+		if r.uploads.serve(w, req) || r.serveStoredManifest(w, req) {
 			return
 		}
 		// Intercept manifest PUT requests to store in blob store and trigger conversion
@@ -171,6 +173,43 @@ func (r *Registry) Handler() http.Handler {
 		r.handler.ServeHTTP(w, req)
 	})
 }
+
+// serveStoredManifest answers a manifest request by digest from the blob store,
+// where every pushed manifest is kept. The upstream registry holds manifests in
+// memory, so without this a manifest pushed before a restart is unknown by digest.
+func (r *Registry) serveStoredManifest(w http.ResponseWriter, req *http.Request) bool {
+	matches := manifestPutPattern.FindStringSubmatch(req.URL.Path)
+	if matches == nil || (req.Method != http.MethodGet && req.Method != http.MethodHead) {
+		return false
+	}
+	h, err := v1.NewHash(matches[2])
+	if err != nil {
+		return false
+	}
+	path := r.blobStore.blobPath(h.String())
+	if info, err := os.Stat(path); err != nil || info.Size() > maxStoredManifestBytes {
+		return false
+	}
+	data, err := os.ReadFile(path)
+	var manifest struct {
+		MediaType string `json:"mediaType"`
+	}
+	if err != nil || json.Unmarshal(data, &manifest) != nil || manifest.MediaType == "" || computeDigest(data) != h.String() {
+		return false
+	}
+	w.Header().Set("Content-Type", manifest.MediaType)
+	w.Header().Set("Docker-Content-Digest", h.String())
+	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+	w.WriteHeader(http.StatusOK)
+	if req.Method == http.MethodGet {
+		w.Write(data)
+	}
+	return true
+}
+
+// maxStoredManifestBytes bounds a stored blob served as a manifest, so a layer
+// requested as one is not read into memory.
+const maxStoredManifestBytes = 4 << 20
 
 // storeManifestBlob stores a manifest in the blob store by its digest.
 func (r *Registry) storeManifestBlob(digest string, data []byte) error {
