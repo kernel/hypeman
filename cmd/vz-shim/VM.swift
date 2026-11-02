@@ -1,9 +1,7 @@
 import Foundation
 import Virtualization
+import DiskImageKit
 import vmnet
-#if canImport(DiskImageKit)
-  import DiskImageKit
-#endif
 
 // makeConfiguration builds a validated VM configuration. A Linux guest without a
 // machine identifier gets a new one, recorded in config so snapshots keep it.
@@ -217,33 +215,29 @@ func makeStorageDevices(_ disks: [DiskConfig]) throws -> [VZStorageDeviceConfigu
 // stackedAttachment attaches an ASIF overlay above its read-only parents, base
 // first. Each image must name the one below it as its parent; hypeman creates them.
 func stackedAttachment(parents: [String], overlay: String, readOnly: Bool) throws -> VZStorageDeviceAttachment {
-  #if canImport(DiskImageKit)
-    if #available(macOS 27.0, *) {
-      for path in parents where !FileManager.default.fileExists(atPath: path) {
-        throw ShimError("configure storage: disk parent not found: \(path)")
-      }
-      var stacked = try DiskImage(opening: .open(url: URL(fileURLWithPath: parents[0]), mode: .readOnly))
-      for path in parents.dropFirst() {
-        stacked = try stacked.appending(try openOverlay(path, mode: .readOnly))
-      }
-      stacked = try stacked.appending(try openOverlay(overlay, mode: readOnly ? .readOnly : .readWrite))
-      Log.info("attached stacked disk", ["base": parents[0], "overlay": overlay, "layers": (stacked as? any StackedImage)?.layers.count ?? 1])
-      return try VZDiskImageStorageDeviceAttachment(diskImage: stacked, cachingMode: .automatic, synchronizationMode: .full)
-    }
-  #endif
-  throw ShimError("configure storage: stacked disks require DiskImageKit on macOS 27 or newer")
+  guard #available(macOS 27.0, *) else {
+    throw ShimError("configure storage: stacked disks require macOS 27 or newer")
+  }
+  for path in parents where !FileManager.default.fileExists(atPath: path) {
+    throw ShimError("configure storage: disk parent not found: \(path)")
+  }
+  var stacked = try DiskImage(opening: .open(url: URL(fileURLWithPath: parents[0]), mode: .readOnly))
+  for path in parents.dropFirst() {
+    stacked = try stacked.appending(try openOverlay(path, mode: .readOnly))
+  }
+  stacked = try stacked.appending(try openOverlay(overlay, mode: readOnly ? .readOnly : .readWrite))
+  Log.info("attached stacked disk", ["base": parents[0], "overlay": overlay, "layers": (stacked as? any StackedImage)?.layers.count ?? 1])
+  return try VZDiskImageStorageDeviceAttachment(diskImage: stacked, cachingMode: .automatic, synchronizationMode: .full)
 }
 
-#if canImport(DiskImageKit)
-  @available(macOS 27.0, *)
-  func openOverlay(_ path: String, mode: OpenConfiguration.Mode) throws -> DiskImage {
-    let image = try DiskImage(opening: .open(url: URL(fileURLWithPath: path), mode: mode))
-    guard image.format == .asif else {
-      throw ShimError("configure storage: overlay must use ASIF format: \(path)")
-    }
-    return image
+@available(macOS 27.0, *)
+func openOverlay(_ path: String, mode: OpenConfiguration.Mode) throws -> DiskImage {
+  let image = try DiskImage(opening: .open(url: URL(fileURLWithPath: path), mode: mode))
+  guard image.format == .asif else {
+    throw ShimError("configure storage: overlay must use ASIF format: \(path)")
   }
-#endif
+  return image
+}
 
 func makeNetworkDevices(_ networks: [NetworkConfig]) throws -> [VZNetworkDeviceConfiguration] {
   // No networks configured (NetworkEnabled=false): no NIC is attached.

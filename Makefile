@@ -409,7 +409,8 @@ ENTITLEMENTS_FILE ?= vz.entitlements
 
 # Build vz-shim (subprocess that hosts vz VMs) from the Swift sources in
 # cmd/vz-shim. Also copies to embed directory so it gets embedded in the hypeman
-# binary. Stacked ASIF disks need DiskImageKit, so they need the macOS 27 SDK.
+# binary. It links DiskImageKit and the vmnet network API, so it needs the macOS 27
+# SDK (Xcode 27); the binary runs on macOS 26, and stacked disks need macOS 27.
 VZ_SHIM_SOURCES := $(wildcard cmd/vz-shim/*.swift)
 VZ_SHIM_TARGET ?= $(shell uname -m)-apple-macos26.0
 
@@ -421,6 +422,7 @@ DARWIN_LDFLAGS := -ldflags=-extldflags=-Wl,-no_warn_duplicate_libraries
 .PHONY: build-vz-shim
 build-vz-shim: | $(BIN_DIR)
 	@echo "Building vz-shim for macOS..."
+	@sdk=$$(xcrun --sdk macosx --show-sdk-version); case $$sdk in 2[7-9]*|[3-9][0-9]*) ;; *) echo "vz-shim needs the macOS 27 SDK (Xcode 27); found $$sdk" >&2; exit 1;; esac
 	swiftc -O -target $(VZ_SHIM_TARGET) -o $(BIN_DIR)/vz-shim $(VZ_SHIM_SOURCES)
 	mkdir -p lib/hypervisor/vz/vz-shim
 	cp $(BIN_DIR)/vz-shim lib/hypervisor/vz/vz-shim/vz-shim
