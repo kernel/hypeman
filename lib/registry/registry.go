@@ -121,7 +121,7 @@ func isCacheRepo(repo string) bool {
 // This wraps the underlying registry to intercept manifest PUTs and trigger conversion.
 func (r *Registry) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		if r.uploads.serve(w, req) || r.serveStoredManifest(w, req) {
+		if r.uploads.serve(w, req) || r.serveManifestByDigest(w, req) {
 			return
 		}
 		// Intercept manifest PUT requests to store in blob store and trigger conversion
@@ -174,10 +174,12 @@ func (r *Registry) Handler() http.Handler {
 	})
 }
 
-// serveStoredManifest answers a manifest request by digest from the blob store,
-// where every pushed manifest is kept. The upstream registry holds manifests in
-// memory, so without this a manifest pushed before a restart is unknown by digest.
-func (r *Registry) serveStoredManifest(w http.ResponseWriter, req *http.Request) bool {
+// serveManifestByDigest answers a manifest read by digest, from the upstream
+// registry or, when it does not know the manifest, from the blob store, where every
+// pushed manifest is kept. The upstream registry holds manifests in memory, so a
+// manifest pushed before a restart is otherwise unknown by digest. Other requests
+// are not handled.
+func (r *Registry) serveManifestByDigest(w http.ResponseWriter, req *http.Request) bool {
 	matches := manifestPutPattern.FindStringSubmatch(req.URL.Path)
 	if matches == nil || (req.Method != http.MethodGet && req.Method != http.MethodHead) {
 		return false
@@ -186,6 +188,33 @@ func (r *Registry) serveStoredManifest(w http.ResponseWriter, req *http.Request)
 	if err != nil {
 		return false
 	}
+	// Manifests are small, so the upstream answer is buffered to fall back on a 404.
+	upstream := &bufferedResponse{header: make(http.Header), status: http.StatusOK}
+	r.handler.ServeHTTP(upstream, req)
+	if upstream.status != http.StatusNotFound || !r.serveStoredManifest(w, req, h) {
+		for key, values := range upstream.header {
+			w.Header()[key] = values
+		}
+		w.WriteHeader(upstream.status)
+		w.Write(upstream.body.Bytes())
+	}
+	return true
+}
+
+// bufferedResponse records a response for serveManifestByDigest.
+type bufferedResponse struct {
+	header http.Header
+	status int
+	body   bytes.Buffer
+}
+
+func (b *bufferedResponse) Header() http.Header            { return b.header }
+func (b *bufferedResponse) WriteHeader(status int)         { b.status = status }
+func (b *bufferedResponse) Write(data []byte) (int, error) { return b.body.Write(data) }
+
+// serveStoredManifest writes the manifest h from the blob store and reports
+// whether it had one.
+func (r *Registry) serveStoredManifest(w http.ResponseWriter, req *http.Request, h v1.Hash) bool {
 	path := r.blobStore.blobPath(h.String())
 	if info, err := os.Stat(path); err != nil || info.Size() > maxStoredManifestBytes {
 		return false
