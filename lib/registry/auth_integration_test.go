@@ -19,7 +19,7 @@ import (
 // and expects a proper WWW-Authenticate challenge to retry with credentials.
 func TestBuildKitAuthFlow(t *testing.T) {
 	jwtSecret := "test-secret-key"
-	tokenHandler := NewTokenHandler(jwtSecret, nil)
+	tokenHandler := NewTokenHandler(newTestVerifier(t, jwtSecret), nil)
 
 	// Create a router that mimics the hypeman /v2 endpoint structure
 	r := chi.NewRouter()
@@ -127,7 +127,7 @@ func TestBuildKitAuthFlow(t *testing.T) {
 // format work correctly with the token endpoint.
 func TestDockerConfigCredentialLookup(t *testing.T) {
 	jwtSecret := "test-secret"
-	tokenHandler := NewTokenHandler(jwtSecret, nil)
+	tokenHandler := NewTokenHandler(newTestVerifier(t, jwtSecret), nil)
 
 	// Simulate docker config.json auth format: base64(username:password)
 	// For our use case: base64(jwt_token:)

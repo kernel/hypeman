@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/netip"
 	"os"
@@ -287,6 +288,9 @@ type Config struct {
 	Version       string `koanf:"version"`
 	MacOSOnly     bool   `koanf:"macos_only"` // Experimental: omit Linux boot downloads and reject Linux creates.
 
+	// JwtVerificationSecrets accepts additional keys without using them to sign tokens.
+	JwtVerificationSecrets []string `koanf:"jwt_verification_secrets"`
+
 	// RevokedTokenHashes lists hex SHA-256 digests of API tokens to reject
 	// even though they are signed with JwtSecret and not yet expired.
 	RevokedTokenHashes []string `koanf:"revoked_token_hashes"`
@@ -557,9 +561,18 @@ func Load(configPath string) (*Config, error) {
 	// The "__" delimiter maps double-underscore in env var names to nested
 	// koanf key separators: CADDY__LISTEN_ADDRESS → caddy.listen_address.
 	// Single underscores are preserved: JWT_SECRET → jwt_secret (top-level).
+	var verificationSecrets []string
+	if value := os.Getenv("JWT_VERIFICATION_SECRETS"); value != "" {
+		if err := json.Unmarshal([]byte(value), &verificationSecrets); err != nil || verificationSecrets == nil {
+			return nil, fmt.Errorf("JWT_VERIFICATION_SECRETS must be a JSON array of strings")
+		}
+	}
 	envProvider := env.ProviderWithValue("", "__", func(key string, value string) (string, interface{}) {
 		if value == "" {
 			return "", nil
+		}
+		if key == "JWT_VERIFICATION_SECRETS" {
+			return "jwt_verification_secrets", verificationSecrets
 		}
 		return strings.ToLower(key), value
 	})
@@ -599,6 +612,11 @@ func expandHomePath(path string) string {
 // Validate checks configuration values for correctness.
 // Returns an error if any configuration value is invalid.
 func (c *Config) Validate() error {
+	for i, secret := range c.JwtVerificationSecrets {
+		if secret == "" {
+			return fmt.Errorf("jwt_verification_secrets entry %d must not be empty", i)
+		}
+	}
 	if c.MacOSOnly && (runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" || c.Hypervisor.Default != "vz") {
 		return fmt.Errorf("macos_only requires vz on Apple silicon")
 	}

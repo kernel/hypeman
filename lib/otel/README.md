@@ -48,6 +48,16 @@ This keeps pull and push views aligned because both are sourced from the same OT
 | `hypeman_http_requests_total` | counter | method, path, status | Total HTTP requests |
 | `hypeman_http_request_duration_seconds` | histogram | method, path, status | Request latency |
 
+### JWT authentication
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `hypeman_jwt_validations_total` | counter | key_role | Successful signature and claims validations using `primary` or `fallback` keys |
+
+This counts validation attempts, not authorized requests: registry auth may validate
+one token more than once before checking its type and repository scope. Revoked
+tokens are rejected before validation. No tokens, secrets, or key fingerprints are
+included in labels. See [JWT rotation](../../docs/jwt-rotation.md).
+
 ### Images
 | Metric | Type | Labels | Description |
 |--------|------|--------|-------------|

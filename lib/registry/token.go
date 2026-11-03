@@ -2,15 +2,16 @@
 package registry
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/kernel/hypeman/lib/jwtauth"
 	"github.com/kernel/hypeman/lib/logger"
 	"github.com/kernel/hypeman/lib/tokenrevocation"
 )
@@ -45,16 +46,16 @@ type TokenErrorResponse struct {
 // TokenHandler handles /v2/token requests implementing Docker Registry Token Authentication.
 // This endpoint is called by Docker/BuildKit clients after receiving a 401 with WWW-Authenticate.
 type TokenHandler struct {
-	jwtSecret string
-	revoked   *tokenrevocation.List
+	verifier *jwtauth.Verifier
+	revoked  *tokenrevocation.List
 }
 
 // NewTokenHandler creates a new token endpoint handler.
 // All clients must provide explicit credentials (Basic or Bearer auth with JWT).
-func NewTokenHandler(jwtSecret string, revoked *tokenrevocation.List) *TokenHandler {
+func NewTokenHandler(verifier *jwtauth.Verifier, revoked *tokenrevocation.List) *TokenHandler {
 	return &TokenHandler{
-		jwtSecret: jwtSecret,
-		revoked:   revoked,
+		verifier: verifier,
+		revoked:  revoked,
 	}
 }
 
@@ -85,7 +86,7 @@ func (h *TokenHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Validate the JWT
-		claims, err := h.validateJWT(token)
+		claims, err := h.validateJWT(r.Context(), token)
 		if err != nil {
 			log.DebugContext(r.Context(), "token validation failed", "error", err, "auth_method", authMethod)
 			h.writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "invalid credentials")
@@ -172,17 +173,9 @@ func (h *TokenHandler) extractToken(r *http.Request) (string, string) {
 }
 
 // validateJWT parses and validates a JWT token.
-func (h *TokenHandler) validateJWT(tokenString string) (jwt.MapClaims, error) {
+func (h *TokenHandler) validateJWT(ctx context.Context, tokenString string) (jwt.MapClaims, error) {
 	claims := jwt.MapClaims{}
-	token, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (interface{}, error) {
-		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
-		}
-		if h.jwtSecret == "" {
-			return nil, errors.New("JWT secret not configured")
-		}
-		return []byte(h.jwtSecret), nil
-	})
+	token, err := h.verifier.ParseWithClaims(ctx, tokenString, claims)
 
 	if err != nil {
 		return nil, fmt.Errorf("parse token: %w", err)
