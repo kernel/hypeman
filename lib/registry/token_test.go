@@ -1,6 +1,7 @@
 package registry
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/kernel/hypeman/lib/jwtauth"
 	"github.com/kernel/hypeman/lib/tokenrevocation"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -34,7 +36,7 @@ func generateRegistryToken(t *testing.T, buildID string, repos []string, scope s
 }
 
 func TestTokenHandler_BasicAuth(t *testing.T) {
-	handler := NewTokenHandler(testJWTSecret, nil)
+	handler := NewTokenHandler(newTestVerifier(t, testJWTSecret), nil)
 
 	t.Run("valid basic auth returns token", func(t *testing.T) {
 		registryToken := generateRegistryToken(t, "build-123", []string{"builds/build-123"}, "push", time.Hour)
@@ -69,7 +71,7 @@ func TestTokenHandler_BasicAuth(t *testing.T) {
 }
 
 func TestTokenHandler_BearerAuth(t *testing.T) {
-	handler := NewTokenHandler(testJWTSecret, nil)
+	handler := NewTokenHandler(newTestVerifier(t, testJWTSecret), nil)
 
 	t.Run("valid bearer auth returns token", func(t *testing.T) {
 		registryToken := generateRegistryToken(t, "build-456", []string{"builds/build-456"}, "push", time.Hour)
@@ -90,7 +92,7 @@ func TestTokenHandler_BearerAuth(t *testing.T) {
 }
 
 func TestTokenHandler_ScopeValidation(t *testing.T) {
-	handler := NewTokenHandler(testJWTSecret, nil)
+	handler := NewTokenHandler(newTestVerifier(t, testJWTSecret), nil)
 
 	t.Run("scope not in token still returns token for mirror fallback", func(t *testing.T) {
 		// Token allows builds/build-123, but request is for builds/other.
@@ -140,7 +142,7 @@ func TestTokenHandler_ScopeValidation(t *testing.T) {
 }
 
 func TestTokenHandler_NoAuth(t *testing.T) {
-	handler := NewTokenHandler(testJWTSecret, nil)
+	handler := NewTokenHandler(newTestVerifier(t, testJWTSecret), nil)
 
 	t.Run("no auth returns 401", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/v2/token?scope=repository:builds/build-123:push", nil)
@@ -172,7 +174,7 @@ func TestTokenHandler_NoAuth(t *testing.T) {
 }
 
 func TestTokenHandler_ExpiredToken(t *testing.T) {
-	handler := NewTokenHandler(testJWTSecret, nil)
+	handler := NewTokenHandler(newTestVerifier(t, testJWTSecret), nil)
 
 	t.Run("expired token returns 401", func(t *testing.T) {
 		expiredToken := generateRegistryToken(t, "build-123", []string{"builds/build-123"}, "push", -time.Hour)
@@ -192,7 +194,7 @@ func TestTokenHandler_RevokedToken(t *testing.T) {
 	revokedToken := generateRegistryToken(t, "build-123", []string{"builds/build-123"}, "push", time.Hour)
 	revoked, err := tokenrevocation.New([]string{tokenrevocation.Hash(revokedToken)})
 	require.NoError(t, err)
-	handler := NewTokenHandler(testJWTSecret, revoked)
+	handler := NewTokenHandler(newTestVerifier(t, testJWTSecret), revoked)
 
 	req := httptest.NewRequest(http.MethodGet, "/v2/token?scope=repository:builds/build-123:push", nil)
 	req.Header.Set("Authorization", "Bearer "+revokedToken)
@@ -251,7 +253,7 @@ func TestTokenHandler_RejectsEmptySecret(t *testing.T) {
 	}).SignedString([]byte(""))
 	require.NoError(t, err)
 
-	handler := NewTokenHandler("", nil)
-	_, err = handler.validateJWT(forged)
+	handler := NewTokenHandler(&jwtauth.Verifier{}, nil)
+	_, err = handler.validateJWT(context.Background(), forged)
 	assert.Error(t, err)
 }

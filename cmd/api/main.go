@@ -30,6 +30,7 @@ import (
 	"github.com/kernel/hypeman/lib/imageretention"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/instances"
+	"github.com/kernel/hypeman/lib/jwtauth"
 	loglib "github.com/kernel/hypeman/lib/logger"
 	mw "github.com/kernel/hypeman/lib/middleware"
 	"github.com/kernel/hypeman/lib/oapi"
@@ -309,9 +310,9 @@ func run() error {
 		logger.Info("OpenTelemetry push disabled; Prometheus pull metrics remain available")
 	}
 
-	// Refuse to start without a JWT secret: an empty HMAC key makes forged tokens valid
-	if app.Config.JwtSecret == "" {
-		return errors.New("JWT_SECRET must be set")
+	jwtVerifier, err := jwtauth.NewVerifier(app.Config.JwtSecret, app.Config.JwtVerificationSecrets, otelProvider.Meter)
+	if err != nil {
+		return fmt.Errorf("initialize JWT verifier: %w", err)
 	}
 	revokedTokens, err := tokenrevocation.New(app.Config.RevokedTokenHashes)
 	if err != nil {
@@ -451,7 +452,7 @@ func run() error {
 		middleware.Recoverer,
 		mw.InjectLogger(logger),
 		mw.AccessLogger(accessLogger),
-		mw.JwtAuth(app.Config.JwtSecret, revokedTokens),
+		mw.JwtAuth(jwtVerifier, revokedTokens),
 		scopes.RequireScope(scopes.InstanceWrite),
 		mw.ResolveResource(app.ApiService.NewResolvers(), api.ResolverErrorResponder),
 	).Get("/instances/{id}/exec", app.ApiService.ExecHandler)
@@ -463,7 +464,7 @@ func run() error {
 		middleware.Recoverer,
 		mw.InjectLogger(logger),
 		mw.AccessLogger(accessLogger),
-		mw.JwtAuth(app.Config.JwtSecret, revokedTokens),
+		mw.JwtAuth(jwtVerifier, revokedTokens),
 		scopes.RequireScope(scopes.InstanceWrite),
 		mw.ResolveResource(app.ApiService.NewResolvers(), api.ResolverErrorResponder),
 	).Get("/instances/{id}/cp", app.ApiService.CpHandler)
@@ -472,7 +473,7 @@ func run() error {
 	// This validates that token requests from builder VMs are for their authorized repos only
 	// Create token handler for Docker Registry Token Authentication
 	// All clients must provide explicit credentials (Basic or Bearer auth with JWT)
-	tokenHandler := registry.NewTokenHandler(app.Config.JwtSecret, revokedTokens)
+	tokenHandler := registry.NewTokenHandler(jwtVerifier, revokedTokens)
 
 	// OCI Distribution registry endpoints for image push (outside OpenAPI spec)
 	r.Route("/v2", func(r chi.Router) {
@@ -484,7 +485,7 @@ func run() error {
 		}
 		r.Use(mw.InjectLogger(logger))
 		r.Use(mw.AccessLogger(accessLogger))
-		r.Use(mw.JwtAuth(app.Config.JwtSecret, revokedTokens))
+		r.Use(mw.JwtAuth(jwtVerifier, revokedTokens))
 
 		// Token endpoint for Docker Registry Token Authentication
 		// This is called by clients (like BuildKit) after receiving a 401 with WWW-Authenticate
@@ -538,7 +539,7 @@ func run() error {
 		// OpenAPI request validation with authentication
 		validatorOptions := &nethttpmiddleware.Options{
 			Options: openapi3filter.Options{
-				AuthenticationFunc: mw.OapiAuthenticationFunc(app.Config.JwtSecret, revokedTokens),
+				AuthenticationFunc: mw.OapiAuthenticationFunc(jwtVerifier, revokedTokens),
 			},
 			ErrorHandler: mw.OapiErrorHandler,
 		}
