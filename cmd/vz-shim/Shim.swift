@@ -14,6 +14,9 @@ final class Shim: NSObject, VZVirtualMachineDelegate {
   private var forcedStop = false
   private var listeners: [UnixListener] = []
   private var stateObservation: NSKeyValueObservation?
+  // Control requests still being served, which finish waits for.
+  private let inFlight = DispatchGroup()
+  private var finishing = false
 
   init(vm: VZVirtualMachine, vmConfig: VZVirtualMachineConfiguration, config: ShimConfig) {
     self.vm = vm
@@ -32,7 +35,11 @@ final class Shim: NSObject, VZVirtualMachineDelegate {
     let control = try UnixListener(path: config.controlSocket ?? "")
     let vsock = try UnixListener(path: config.vsockSocket ?? "")
     listeners = [control, vsock]
-    control.serve { [self] fd in serveHTTP(fd, route) }
+    control.serve { [self] fd in
+      inFlight.enter()
+      defer { inFlight.leave() }
+      serveHTTP(fd, route)
+    }
     vsock.serve { [self] fd in proxyVsock(fd) }
     Log.info("control API listening", ["socket": control.path])
     Log.info("vsock proxy listening", ["socket": vsock.path])
@@ -62,12 +69,21 @@ final class Shim: NSObject, VZVirtualMachineDelegate {
     finish()
   }
 
+  // finish runs on the main queue. It stops accepting requests and exits once the
+  // control requests in flight are done, waiting at most five seconds, as the Go
+  // shim's server shutdown did. The wait is off the main queue, which those
+  // requests may need.
   private func finish() {
+    guard !finishing else { return }
+    finishing = true
     for listener in listeners {
       listener.close()
     }
-    Log.info("vz-shim shutdown complete")
-    exit(0)
+    DispatchQueue.global().async { [self] in
+      _ = inFlight.wait(timeout: .now() + 5)
+      Log.info("vz-shim shutdown complete")
+      exit(0)
+    }
   }
 
   // writeStopReceipt records that the guest stopped the VM itself. The host counts
@@ -109,45 +125,69 @@ final class Shim: NSObject, VZVirtualMachineDelegate {
 
   // MARK: Control API
 
-  private static let routes: [String: Set<String>] = [
-    "/api/v1/vm.info": ["GET"], "/api/v1/vm.pause": ["PUT"], "/api/v1/vm.resume": ["PUT"],
-    "/api/v1/vm.shutdown": ["PUT"], "/api/v1/vm.snapshot": ["PUT"], "/api/v1/vm.snapshot-support": ["GET"],
-    "/api/v1/vm.balloon": ["GET", "PUT"],
-    "/api/v1/vmm.ping": ["GET"], "/api/v1/vmm.shutdown": ["PUT"],
-  ]
+  // Endpoint is a control API route: a method and a path.
+  private enum Endpoint: String, CaseIterable {
+    case ping = "GET /api/v1/vmm.ping"
+    case vmmShutdown = "PUT /api/v1/vmm.shutdown"
+    case info = "GET /api/v1/vm.info"
+    case pause = "PUT /api/v1/vm.pause"
+    case resume = "PUT /api/v1/vm.resume"
+    case shutdown = "PUT /api/v1/vm.shutdown"
+    case snapshotSupport = "GET /api/v1/vm.snapshot-support"
+    case snapshot = "PUT /api/v1/vm.snapshot"
+    case getBalloon = "GET /api/v1/vm.balloon"
+    case setBalloon = "PUT /api/v1/vm.balloon"
+
+    var path: Substring { rawValue.split(separator: " ")[1] }
+  }
+
+  private static let paths = Set(Endpoint.allCases.map(\.path))
 
   private func route(_ request: HTTPRequest) -> HTTPResponse {
-    guard let methods = Shim.routes[request.path] else { return .text(404, "404 page not found") }
-    guard methods.contains(request.method) else { return .text(405, "Method Not Allowed") }
-    switch (request.method, request.path) {
-    case ("GET", "/api/v1/vmm.ping"):
-      return HTTPResponse(status: 200, body: Data("OK".utf8))
-    case ("PUT", "/api/v1/vmm.shutdown"):
-      return vmmShutdown()
-    default:
-      break
+    guard let endpoint = Endpoint(rawValue: "\(request.method) \(request.path)") else {
+      return Shim.paths.contains(Substring(request.path)) ? .text(405, "Method Not Allowed") : .text(404, "404 page not found")
+    }
+    switch endpoint {
+    case .ping: return HTTPResponse(status: 200, body: Data("OK".utf8))
+    case .vmmShutdown: return vmmShutdown()
+    default: break
     }
     ops.lock()
     defer { ops.unlock() }
-    switch (request.method, request.path) {
-    case ("GET", "/api/v1/vm.info"): return info()
-    case ("PUT", "/api/v1/vm.pause"): return pause()
-    case ("PUT", "/api/v1/vm.resume"): return resume()
-    case ("PUT", "/api/v1/vm.shutdown"): return requestStop()
-    case ("GET", "/api/v1/vm.snapshot-support"): return snapshotSupport()
-    case ("PUT", "/api/v1/vm.snapshot"): return snapshot(request.body)
-    case ("GET", "/api/v1/vm.balloon"): return getBalloon()
-    default: return setBalloon(request.body)
+    switch endpoint {
+    case .ping, .vmmShutdown: fatalError("served above")
+    case .info: return info()
+    case .pause: return pause()
+    case .resume: return resume()
+    case .shutdown: return requestStop()
+    case .snapshotSupport: return snapshotSupport()
+    case .snapshot: return snapshot(request.body)
+    case .getBalloon: return getBalloon()
+    case .setBalloon: return setBalloon(request.body)
     }
+  }
+
+  private struct VMInfo: Encodable {
+    let state: String
+    let memoryBalloonDevices: Int?
+  }
+
+  private struct SnapshotSupport: Encodable {
+    let supported: Bool
+    let reason: String?
+  }
+
+  private struct SnapshotRequest: Decodable {
+    let destinationPath: String
+  }
+
+  private struct Balloon: Codable {
+    let targetGuestMemoryBytes: Int64
   }
 
   private func info() -> HTTPResponse {
     let (state, balloons) = onMain { (stateName(vm.state), vm.memoryBalloonDevices.count) }
-    var response: [String: Any] = ["state": state]
-    if balloons > 0 {
-      response["memory_balloon_devices"] = balloons
-    }
-    return .json(response)
+    return .json(VMInfo(state: state, memoryBalloonDevices: balloons > 0 ? balloons : nil))
   }
 
   private func pause() -> HTTPResponse {
@@ -184,12 +224,8 @@ final class Shim: NSObject, VZVirtualMachineDelegate {
   }
 
   private func snapshotSupport() -> HTTPResponse {
-    var response: [String: Any] = ["supported": true]
-    if let reason = saveRestoreUnsupportedReason() {
-      response["supported"] = false
-      response["reason"] = reason
-    }
-    return .json(response)
+    let reason = saveRestoreUnsupportedReason()
+    return .json(SnapshotSupport(supported: reason == nil, reason: reason))
   }
 
   func saveRestoreUnsupportedReason() -> String? {
@@ -204,8 +240,7 @@ final class Shim: NSObject, VZVirtualMachineDelegate {
   private func snapshot(_ body: Data) -> HTTPResponse {
     let destination: String
     do {
-      let object = try JSONSerialization.jsonObject(with: body) as? [String: Any]
-      destination = object?["destination_path"] as? String ?? ""
+      destination = try snakeCaseDecoder.decode(SnapshotRequest.self, from: body).destinationPath
     } catch {
       return .text(400, "invalid snapshot request: \(error.localizedDescription)")
     }
@@ -236,10 +271,12 @@ final class Shim: NSObject, VZVirtualMachineDelegate {
     do {
       let manifest = SnapshotManifest(hypervisor: "vz", machineStateFile: snapshotMachineStateFile, shimConfig: shimConfig)
       try JSONEncoder().encode(manifest).write(to: URL(fileURLWithPath: manifestPath + ".tmp"))
-      try? fm.removeItem(atPath: manifestPath)
-      try fm.moveItem(atPath: manifestPath + ".tmp", toPath: manifestPath)
     } catch {
       return .text(500, "write manifest failed: \(error.localizedDescription)")
+    }
+    // rename(2) replaces the manifest atomically, as the Go shim's os.Rename did.
+    guard rename(manifestPath + ".tmp", manifestPath) == 0 else {
+      return .text(500, "write manifest failed: \(errnoString())")
     }
     complete = true
     Log.info("VM snapshot saved", ["destination": destination, "machine_state": statePath])
@@ -254,13 +291,12 @@ final class Shim: NSObject, VZVirtualMachineDelegate {
     guard let target = onMain({ balloon()?.targetVirtualMachineMemorySize }) else {
       return .text(404, "no memory balloon device configured")
     }
-    return .json(["target_guest_memory_bytes": Int64(target)])
+    return .json(Balloon(targetGuestMemoryBytes: Int64(target)))
   }
 
   private func setBalloon(_ body: Data) -> HTTPResponse {
     guard onMain({ balloon() != nil }) else { return .text(404, "no memory balloon device configured") }
-    let object = try? JSONSerialization.jsonObject(with: body) as? [String: Any]
-    guard let target = (object?["target_guest_memory_bytes"] as? NSNumber)?.int64Value else {
+    guard let target = try? snakeCaseDecoder.decode(Balloon.self, from: body).targetGuestMemoryBytes else {
       return .text(400, "invalid balloon request: target_guest_memory_bytes is required")
     }
     guard target >= 0 else { return .text(400, "target_guest_memory_bytes must be non-negative") }

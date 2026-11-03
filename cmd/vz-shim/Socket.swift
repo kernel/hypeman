@@ -118,13 +118,23 @@ struct HTTPResponse {
     HTTPResponse(status: status, body: (message + "\n").data(using: .utf8)!)
   }
 
-  static func json(_ object: Any) -> HTTPResponse {
-    let data = (try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])) ?? Data("{}".utf8)
+  static func json<T: Encodable>(_ value: T) -> HTTPResponse {
+    let encoder = JSONEncoder()
+    encoder.keyEncodingStrategy = .convertToSnakeCase
+    encoder.outputFormatting = .sortedKeys
+    let data = (try? encoder.encode(value)) ?? Data("{}".utf8)
     return HTTPResponse(status: 200, contentType: "application/json", body: data + Data([0x0a]))
   }
 }
 
-private let reasons = [200: "OK", 204: "No Content", 400: "Bad Request", 404: "Not Found", 405: "Method Not Allowed", 413: "Payload Too Large", 500: "Internal Server Error"]
+// snakeCaseDecoder decodes control API request bodies, which use snake_case keys.
+let snakeCaseDecoder: JSONDecoder = {
+  let decoder = JSONDecoder()
+  decoder.keyDecodingStrategy = .convertFromSnakeCase
+  return decoder
+}()
+
+private let reasons = [200: "OK", 204: "No Content", 400: "Bad Request", 404: "Not Found", 405: "Method Not Allowed", 500: "Internal Server Error"]
 
 func serveHTTP(_ fd: Int32, _ handle: (HTTPRequest) -> HTTPResponse) {
   defer { close(fd) }
