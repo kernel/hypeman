@@ -83,7 +83,10 @@ overlay.
    the recovery partition and grows APFS), regenerate the guest's SSH host keys
    (`rm -f /etc/ssh/ssh_host_* && ssh-keygen -A`), and end by shutting the guest
    down from inside, with `skip_clean = true` on that step. `tart stop` is a hard
-   power-off.
+   power-off. For the guest agent, install the launcher once in the base with
+   `lib/system/guest_agent/macos/install-launcher.sh` and publish with
+   `--guest-agent`; hypeman supplies the agent on its own disk (see
+   [macos-guest-agent.md](macos-guest-agent.md#agent-disk)).
 4. Publish the stopped VM over the base:
 
 ```sh

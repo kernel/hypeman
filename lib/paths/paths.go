@@ -260,6 +260,20 @@ func (p *Paths) InstanceMacOSBootDisk(id string) string {
 	return filepath.Join(p.InstanceDir(id), MacOSBootDiskFile)
 }
 
+// MacOSAgentDiskFile is a macOS guest's copy of the read-only guest agent disk.
+const MacOSAgentDiskFile = "agent.img"
+
+// InstanceMacOSAgentDisk returns the path to a macOS guest's guest agent disk.
+func (p *Paths) InstanceMacOSAgentDisk(id string) string {
+	return filepath.Join(p.InstanceDir(id), MacOSAgentDiskFile)
+}
+
+// SystemMacOSAgentDisk returns the path to the guest agent disk built for an agent
+// version, from which macOS guests take their copies.
+func (p *Paths) SystemMacOSAgentDisk(version string) string {
+	return filepath.Join(p.DataDir(), "system", "macos-agent", version+".img")
+}
+
 // RestoreStagingDir holds a macOS restore in progress inside its instance directory,
 // so deleting the instance also deletes any staging it left behind.
 const RestoreStagingDir = "restore-staging"

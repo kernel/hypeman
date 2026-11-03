@@ -246,6 +246,12 @@ lib/system/guest_agent/guest-agent: lib/system/guest_agent/*.go
 	@echo "Building guest-agent for Linux..."
 	cd lib/system/guest_agent && CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o guest-agent .
 
+# Build the macOS guest-agent, carried on the read-only agent disk of macOS guests.
+# Darwin AF_VSOCK needs cgo, so it builds only on macOS, the only host that embeds it.
+lib/system/guest_agent/guest-agent-darwin: lib/system/guest_agent/*.go
+	@echo "Building guest-agent for macOS..."
+	cd lib/system/guest_agent && CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o guest-agent-darwin .
+
 # Build init binary (runs as PID 1 in guest VM) for embedding
 # Cross-compile for Linux since it runs inside the VM
 lib/system/init/init: lib/system/init/*.go
@@ -254,6 +260,9 @@ lib/system/init/init: lib/system/init/*.go
 
 build-embedded:
 	@$(MAKE) -B lib/system/guest_agent/guest-agent
+ifeq ($(shell uname -s),Darwin)
+	@$(MAKE) -B lib/system/guest_agent/guest-agent-darwin
+endif
 	@$(MAKE) -B lib/system/init/init
 
 # Build the binary
@@ -391,7 +400,7 @@ clean:
 	rm -rf lib/vmm/binaries/cloud-hypervisor/
 	rm -rf lib/hypervisor/firecracker/binaries/firecracker/
 	rm -rf lib/ingress/binaries/
-	rm -f lib/system/guest_agent/guest-agent
+	rm -f lib/system/guest_agent/guest-agent lib/system/guest_agent/guest-agent-darwin
 	rm -f lib/system/init/init
 	rm -f lib/hypervisor/vz/vz-shim/vz-shim
 

@@ -5,7 +5,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/kernel/hypeman/lib/forkvm"
+	"github.com/kernel/hypeman/lib/system"
 	"net"
+	"os"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -162,7 +165,7 @@ func (m *manager) checkMacOSStart(stored *StoredMetadata, req StartInstanceReque
 // createBootDisk creates the Linux overlay, or the macOS boot disk: the image's
 // ASIF chain and auxiliary storage cloned into the instance, with an empty
 // writable overlay on top.
-func (m *manager) createBootDisk(stored *StoredMetadata, img *images.Image) error {
+func (m *manager) createBootDisk(ctx context.Context, stored *StoredMetadata, img *images.Image) error {
 	if stored.MacOS == nil {
 		return m.createOverlayDisk(stored.Id, stored.OverlaySize)
 	}
@@ -175,12 +178,53 @@ func (m *manager) createBootDisk(stored *StoredMetadata, img *images.Image) erro
 		return err
 	}
 	stored.MacOSDiskLayers = len(chain)
-	return nil
+	if !stored.GuestAgentEnabled() {
+		return nil
+	}
+	stored.MacOSAgentDisk = true
+	return m.installMacOSAgentDisk(ctx, stored)
+}
+
+// macOSAgentDiskSource returns the host's current guest agent disk. Tests replace it.
+var macOSAgentDiskSource = system.MacOSAgentDisk
+
+// installMacOSAgentDisk gives a macOS guest a copy of the host's current guest agent
+// disk. Each guest keeps its own copy, so saved state restores with the disk it was
+// saved with; a cold start takes the host's current agent.
+func (m *manager) installMacOSAgentDisk(ctx context.Context, stored *StoredMetadata) error {
+	if !stored.MacOSAgentDisk {
+		return nil
+	}
+	source, err := macOSAgentDiskSource(ctx, m.paths)
+	if err != nil {
+		return err
+	}
+	disk := m.paths.InstanceMacOSAgentDisk(stored.Id)
+	staged := disk + ".tmp"
+	_ = os.Remove(staged)
+	if err := forkvm.CopyRegularFile(source, staged); err != nil {
+		return fmt.Errorf("copy macOS agent disk: %w", err)
+	}
+	if err := os.Chmod(staged, 0400); err != nil {
+		_ = os.Remove(staged)
+		return err
+	}
+	return os.Rename(staged, disk)
 }
 
 // macOSDiskLayer is the ith read-only layer of a macOS guest's boot disk chain.
 func macOSDiskLayer(dataDir string, i int) string {
 	return filepath.Join(dataDir, fmt.Sprintf("disk.%d.asif", i))
+}
+
+// macOSDisks returns a macOS guest's disks: its boot disk, then its read-only guest
+// agent disk. The boot disk must come first; VZ does not boot with it second.
+func macOSDisks(p *paths.Paths, stored *StoredMetadata) []hypervisor.DiskConfig {
+	disks := []hypervisor.DiskConfig{{Path: p.InstanceMacOSBootDisk(stored.Id), Parents: macOSDiskParents(stored)}}
+	if stored.MacOSAgentDisk {
+		disks = append(disks, hypervisor.DiskConfig{Path: p.InstanceMacOSAgentDisk(stored.Id), Readonly: true})
+	}
+	return disks
 }
 
 // macOSDiskParents returns the read-only layers below a macOS guest's boot overlay.
@@ -233,7 +277,7 @@ func (m *manager) admitMacOSBoot(ctx context.Context, stored *StoredMetadata) (f
 func (m *manager) macOSVMConfig(inst *Instance) hypervisor.VMConfig {
 	c := hypervisor.VMConfig{BootMode: hypervisor.BootModeMacOS, VCPUs: inst.Vcpus, MemoryBytes: inst.Size, VsockCID: inst.VsockCID, VsockSocket: inst.VsockSocket,
 		MacOS: &hypervisor.MacOSPlatform{HardwareModelData: inst.MacOS.HardwareModel, MachineIdentifierData: inst.MacOS.MachineIdentifier, AuxStoragePath: filepath.Join(inst.DataDir, macOSAuxStorageFile)},
-		Disks: []hypervisor.DiskConfig{{Path: m.paths.InstanceMacOSBootDisk(inst.Id), Parents: macOSDiskParents(&inst.StoredMetadata)}}}
+		Disks: macOSDisks(m.paths, &inst.StoredMetadata)}
 	if inst.NetworkEnabled {
 		c.Networks = []hypervisor.NetworkConfig{{MAC: inst.MAC, IP: inst.IP, Netmask: macOSGuestNetmask}}
 	}

@@ -424,7 +424,7 @@ func (m *manager) createInstance(
 
 	// 13. Create overlay disk with specified size
 	log.DebugContext(ctx, "creating overlay disk", "instance_id", id, "size_bytes", stored.OverlaySize)
-	if err := m.createBootDisk(stored, imageInfo); err != nil {
+	if err := m.createBootDisk(ctx, stored, imageInfo); err != nil {
 		log.ErrorContext(ctx, "failed to create overlay disk", "instance_id", id, "error", err)
 		return nil, fmt.Errorf("create overlay disk: %w", err)
 	}

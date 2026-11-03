@@ -51,8 +51,10 @@ func writeMacOSMemorySnapshotPayload(t *testing.T, m *manager, guestDir string, 
 		VCPUs: stored.Vcpus, MemoryBytes: stored.Size,
 		MacHardwareModelData: base64.StdEncoding.EncodeToString(stored.MacOS.HardwareModel), MacMachineIdentifierData: base64.StdEncoding.EncodeToString(stored.MacOS.MachineIdentifier),
 		MacAuxStoragePath: filepath.Join(m.paths.InstanceDir(stored.Id), macOSAuxStorageFile),
-		Disks:             []shimconfig.DiskConfig{{Path: m.paths.InstanceMacOSBootDisk(stored.Id), Parents: macOSDiskParents(stored)}},
 	}}
+	for _, disk := range macOSDisks(m.paths, stored) {
+		manifest.ShimConfig.Disks = append(manifest.ShimConfig.Disks, shimconfig.DiskConfig{Path: disk.Path, Readonly: disk.Readonly, Parents: disk.Parents})
+	}
 	if stored.NetworkEnabled {
 		manifest.ShimConfig.Networks = []shimconfig.NetworkConfig{{MAC: stored.MAC}}
 		if stored.IP != "" {
@@ -144,6 +146,9 @@ func TestMacOSMemorySnapshotRejectsInvalidPayloadBeforeStorageSwap(t *testing.T)
 		{"hardware", func(m *shimconfig.SnapshotManifest) { m.ShimConfig.MacHardwareModelData = "different" }},
 		{"disk", func(m *shimconfig.SnapshotManifest) { m.ShimConfig.Disks[0].Path = "/wrong-disk" }},
 		{"aux", func(m *shimconfig.SnapshotManifest) { m.ShimConfig.MacAuxStoragePath = "/wrong-aux" }},
+		{"extra-disk", func(m *shimconfig.SnapshotManifest) {
+			m.ShimConfig.Disks = append(m.ShimConfig.Disks, shimconfig.DiskConfig{Path: "/agent.img", Readonly: true})
+		}},
 		{"network", func(m *shimconfig.SnapshotManifest) { m.ShimConfig.Networks[0].MAC = "02:00:00:00:00:02" }},
 		{"network-address", func(m *shimconfig.SnapshotManifest) {
 			m.ShimConfig.Networks[0].IPv4Address, m.ShimConfig.Networks[0].IPv4Subnet = "192.168.128.2", "192.168.128.0/29"
