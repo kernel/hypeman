@@ -110,7 +110,7 @@ func NewManager(p *paths.Paths, maxConcurrentBuilds int, meter metric.Meter) (Ma
 		tagGenerations:             make(map[string]uint64),
 		requestedTags:              make(map[string]string),
 	}
-	ociClient.readyMachineLayer = m.readyMacOSLayer
+	ociClient.reusableMachineLayers = m.reusableMacOSLayers
 
 	// Initialize metrics if meter is provided
 	if meter != nil {

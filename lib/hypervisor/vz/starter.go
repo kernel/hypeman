@@ -119,10 +119,11 @@ func (s *Starter) ValidateConfig(config hypervisor.VMConfig) error {
 	if config.HotplugBytes != 0 || config.EnableRosetta || config.GuestMemory.EnableBalloon || config.GuestMemory.RequireBalloon || len(config.PCIDevices) != 0 || config.VGPUDevicePath != "" {
 		return fmt.Errorf("macOS does not support hotplug, ballooning, Rosetta shares or PCI passthrough")
 	}
-	// The boot disk comes first; VZ does not boot macOS from a later disk. Any other
-	// disk, such as the guest agent disk, is read-only.
-	if len(config.Disks) == 0 || config.Disks[0].Readonly || config.Disks[0].EffectiveFormat() != hypervisor.DiskFormatRaw {
-		return fmt.Errorf("macOS requires a writable raw boot disk first")
+	// The boot disk comes first; VZ does not boot macOS from a later disk. It is a
+	// writable ASIF overlay on its image's layers. Any other disk, such as the guest
+	// agent disk, is read-only and raw.
+	if boot := config.Disks; len(boot) == 0 || boot[0].Readonly || boot[0].EffectiveFormat() != hypervisor.DiskFormatASIF || len(boot[0].Parents) == 0 {
+		return fmt.Errorf("macOS requires a writable ASIF boot disk with its image layers first")
 	}
 	for _, disk := range config.Disks[1:] {
 		if !disk.Readonly || len(disk.Parents) != 0 || disk.EffectiveFormat() != hypervisor.DiskFormatRaw {

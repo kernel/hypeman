@@ -260,14 +260,16 @@ func TestMacOSMachinePullReusesReadyLayers(t *testing.T) {
 	mgr, err := NewManager(p, 1, nil)
 	require.NoError(t, err)
 	client := mgr.(*manager).ociClient
-	lookup := client.readyMachineLayer
+	lookup := client.reusableMachineLayers
 	var reused []string
-	client.readyMachineLayer = func(diffID string) string {
-		path := lookup(diffID)
-		if path != "" {
-			reused = append(reused, path)
+	client.reusableMachineLayers = func(diffIDs []string) []string {
+		paths := lookup(diffIDs)
+		for _, path := range paths {
+			if path != "" {
+				reused = append(reused, path)
+			}
 		}
-		return path
+		return paths
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()

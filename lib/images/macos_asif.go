@@ -13,10 +13,11 @@ import (
 	"github.com/kernel/hypeman/lib/paths"
 )
 
-// A macOS machine image's boot disk is an ASIF chain: disk.0.asif is the base and
-// each later file is an overlay on the one before it. A pulled image has one file
-// per OCI layer; an imported image has one.
-func macOSDiskLayerFile(i int) string {
+// MacOSDiskLayerFile names the ith file of a macOS boot disk chain, in an image or
+// an instance. The chain is ASIF: disk.0.asif is the base and each later file is an
+// overlay on the one before it. A pulled image has one file per OCI layer; an
+// imported image has one.
+func MacOSDiskLayerFile(i int) string {
 	return fmt.Sprintf("disk.%d.asif", i)
 }
 
@@ -36,7 +37,7 @@ func MacOSDiskChain(p *paths.Paths, imageName, digest string) ([]string, error) 
 	}
 	chain := make([]string, meta.MacOSDiskLayers)
 	for i := range chain {
-		chain[i] = filepath.Join(layout.dir, macOSDiskLayerFile(i))
+		chain[i] = filepath.Join(layout.dir, MacOSDiskLayerFile(i))
 	}
 	return chain, nil
 }

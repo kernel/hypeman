@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
+	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/paths"
 	"github.com/stretchr/testify/require"
 )
@@ -49,7 +50,7 @@ func TestMacOSAgentDiskInstallAndRefresh(t *testing.T) {
 func TestMacOSDisksAttachAgentDiskSecond(t *testing.T) {
 	p := paths.New(t.TempDir())
 	stored := &StoredMetadata{Id: "mac", DataDir: p.InstanceDir("mac"), MacOSDiskLayers: 1}
-	require.Equal(t, []hypervisor.DiskConfig{{Path: p.InstanceMacOSBootDisk("mac"), Parents: []string{macOSDiskLayer(stored.DataDir, 0)}}}, macOSDisks(p, stored))
+	require.Equal(t, []hypervisor.DiskConfig{{Path: p.InstanceMacOSBootDisk("mac"), Format: hypervisor.DiskFormatASIF, Parents: []string{filepath.Join(stored.DataDir, images.MacOSDiskLayerFile(0))}}}, macOSDisks(p, stored))
 	stored.MacOSAgentDisk = true
 	disks := macOSDisks(p, stored)
 	require.Len(t, disks, 2)

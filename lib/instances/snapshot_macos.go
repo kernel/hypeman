@@ -16,6 +16,7 @@ import (
 	"github.com/kernel/hypeman/lib/forkvm"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/hypervisor/vz/shimconfig"
+	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/instances/phasetracking"
 	"github.com/kernel/hypeman/lib/paths"
 	restartpolicy "github.com/kernel/hypeman/lib/restart-policy"
@@ -190,7 +191,7 @@ func (m *manager) validateMacOSMemorySnapshotPayload(guestDir string, stored *St
 	}
 	payload := []string{filepath.Join(guestDir, paths.MacOSBootDiskFile), filepath.Join(guestDir, macOSAuxStorageFile), filepath.Join(snapshotDir, shimconfig.SnapshotMachineStateFile)}
 	for i := range stored.MacOSDiskLayers {
-		payload = append(payload, macOSDiskLayer(guestDir, i))
+		payload = append(payload, filepath.Join(guestDir, images.MacOSDiskLayerFile(i)))
 	}
 	if stored.MacOSAgentDisk {
 		payload = append(payload, filepath.Join(guestDir, paths.MacOSAgentDiskFile))

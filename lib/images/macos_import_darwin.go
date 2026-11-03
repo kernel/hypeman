@@ -29,16 +29,16 @@ func ImportMacOSImage(ctx context.Context, p *paths.Paths, name, source string) 
 	if ref.IsDigest() {
 		return nil, fmt.Errorf("%w: import requires a tagged name", ErrInvalidName)
 	}
-	diskName := "disk.asif"
+	diskName := MacOSMachineDiskFile
 	if _, err := os.Lstat(filepath.Join(source, diskName)); os.IsNotExist(err) {
 		diskName = "disk.img"
 	}
-	bundle, err := readMacOSMachineBundle(source, diskName, "aux.img", "config.json")
+	bundle, err := readMacOSMachineBundle(source, diskName, MacOSMachineAuxFile, MacOSMachinePlatformFile)
 	if err != nil {
 		return nil, err
 	}
 	mac := bundle.Platform
-	for _, file := range []string{diskName, "aux.img"} {
+	for _, file := range []string{diskName, MacOSMachineAuxFile} {
 		file = filepath.Join(source, file)
 		info, e := os.Lstat(file)
 		if e != nil {
@@ -62,8 +62,8 @@ func ImportMacOSImage(ctx context.Context, p *paths.Paths, name, source string) 
 		return nil, err
 	}
 	defer os.RemoveAll(stage)
-	clones := map[string]string{bundle.Aux: "aux.img"}
-	if diskName == "disk.asif" {
+	clones := map[string]string{bundle.Aux: MacOSMachineAuxFile}
+	if diskName == MacOSMachineDiskFile {
 		clones[bundle.Disks[0]] = machineDiskFile
 	} else if err = ConvertRawToASIF(ctx, bundle.Disks[0], filepath.Join(stage, machineDiskFile)); err != nil {
 		return nil, fmt.Errorf("convert boot disk to ASIF: %w", err)
@@ -73,7 +73,7 @@ func ImportMacOSImage(ctx context.Context, p *paths.Paths, name, source string) 
 			return nil, fmt.Errorf("clone bundle: %w", err)
 		}
 	}
-	for _, name := range []string{machineDiskFile, "aux.img"} {
+	for _, name := range []string{machineDiskFile, MacOSMachineAuxFile} {
 		if err = os.Chmod(filepath.Join(stage, name), 0600); err != nil {
 			return nil, err
 		}
@@ -87,7 +87,7 @@ func ImportMacOSImage(ctx context.Context, p *paths.Paths, name, source string) 
 	h := sha256.New()
 	canonical, _ := json.Marshal(mac)
 	h.Write(canonical)
-	for _, name := range []string{machineDiskFile, "aux.img"} {
+	for _, name := range []string{machineDiskFile, MacOSMachineAuxFile} {
 		f, e := os.Open(filepath.Join(stage, name))
 		if e != nil {
 			return nil, e

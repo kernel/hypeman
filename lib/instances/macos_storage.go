@@ -26,7 +26,7 @@ func createMacOSStorage(chain []string, aux, dataDir string) (err error) {
 	}()
 	copies := make([]string, len(chain))
 	for i, layer := range chain {
-		copies[i] = macOSDiskLayer(dataDir, i)
+		copies[i] = filepath.Join(dataDir, images.MacOSDiskLayerFile(i))
 		if err = copyMacOSStorageFile(layer, copies[i], 0400, &created); err != nil {
 			return err
 		}

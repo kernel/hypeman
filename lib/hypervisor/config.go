@@ -104,6 +104,8 @@ type DiskFormat string
 const (
 	DiskFormatRaw   DiskFormat = "raw"
 	DiskFormatQCOW2 DiskFormat = "qcow2"
+	// DiskFormatASIF is an ASIF overlay on its Parents, only for macOS boot disks.
+	DiskFormatASIF DiskFormat = "asif"
 )
 
 // EffectiveFormat preserves raw disks for existing callers.

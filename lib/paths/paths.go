@@ -260,6 +260,9 @@ func (p *Paths) InstanceMacOSBootDisk(id string) string {
 	return filepath.Join(p.InstanceDir(id), MacOSBootDiskFile)
 }
 
+// MacOSAuxStorageFile is a macOS guest's copy of its image's auxiliary storage.
+const MacOSAuxStorageFile = "mac-aux.img"
+
 // MacOSAgentDiskFile is a macOS guest's copy of the read-only guest agent disk.
 const MacOSAgentDiskFile = "agent.img"
 

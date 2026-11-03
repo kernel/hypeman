@@ -5,8 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/kernel/hypeman/lib/forkvm"
-	"github.com/kernel/hypeman/lib/system"
 	"net"
 	"os"
 	"path/filepath"
@@ -14,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/kernel/hypeman/lib/forkvm"
 	"github.com/kernel/hypeman/lib/healthcheck"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/hypervisor/vz/shimconfig"
@@ -22,10 +21,10 @@ import (
 	"github.com/kernel/hypeman/lib/network"
 	"github.com/kernel/hypeman/lib/paths"
 	restartpolicy "github.com/kernel/hypeman/lib/restart-policy"
+	"github.com/kernel/hypeman/lib/system"
 )
 
-// macOSAuxStorageFile is the instance's copy of the image's auxiliary storage.
-const macOSAuxStorageFile = "mac-aux.img"
+const macOSAuxStorageFile = paths.MacOSAuxStorageFile
 
 // requireMacOSImageName checks lookup errors before resolving the reference as
 // darwin/arm64. The resolved image is validated by checkMacOSCreate.
@@ -60,8 +59,8 @@ func (m *manager) checkMacOSCreate(req *CreateInstanceRequest, img *images.Image
 	}
 	config := hypervisor.VMConfig{
 		BootMode: hypervisor.BootModeMacOS, VCPUs: prepared.Vcpus, MemoryBytes: prepared.Size,
-		MacOS: &hypervisor.MacOSPlatform{HardwareModelData: img.MacOS.HardwareModel, MachineIdentifierData: img.MacOS.MachineIdentifier, AuxStoragePath: "mac-aux.img"},
-		Disks: []hypervisor.DiskConfig{{Path: paths.MacOSBootDiskFile}},
+		MacOS: &hypervisor.MacOSPlatform{HardwareModelData: img.MacOS.HardwareModel, MachineIdentifierData: img.MacOS.MachineIdentifier, AuxStoragePath: macOSAuxStorageFile},
+		Disks: []hypervisor.DiskConfig{{Path: paths.MacOSBootDiskFile, Format: hypervisor.DiskFormatASIF, Parents: []string{images.MacOSDiskLayerFile(0)}}},
 	}
 	if err := validatePlannedVMConfig(starter, hvType, config); err != nil {
 		return err
@@ -162,6 +161,15 @@ func (m *manager) checkMacOSStart(stored *StoredMetadata, req StartInstanceReque
 	return nil
 }
 
+// DefaultPlatform returns the create platform: a macOS-only server defaults an
+// unset one to darwin/arm64.
+func DefaultPlatform(macOSOnly bool, platform string) string {
+	if macOSOnly && strings.TrimSpace(platform) == "" {
+		return "darwin/arm64"
+	}
+	return platform
+}
+
 // createBootDisk creates the Linux overlay, or the macOS boot disk: the image's
 // ASIF chain and auxiliary storage cloned into the instance, with an empty
 // writable overlay on top.
@@ -173,7 +181,7 @@ func (m *manager) createBootDisk(ctx context.Context, stored *StoredMetadata, im
 	if err != nil {
 		return err
 	}
-	aux := filepath.Join(filepath.Dir(chain[0]), "aux.img")
+	aux := filepath.Join(filepath.Dir(chain[0]), images.MacOSMachineAuxFile)
 	if err := createMacOSStorage(chain, aux, stored.DataDir); err != nil {
 		return err
 	}
@@ -212,15 +220,10 @@ func (m *manager) installMacOSAgentDisk(ctx context.Context, stored *StoredMetad
 	return os.Rename(staged, disk)
 }
 
-// macOSDiskLayer is the ith read-only layer of a macOS guest's boot disk chain.
-func macOSDiskLayer(dataDir string, i int) string {
-	return filepath.Join(dataDir, fmt.Sprintf("disk.%d.asif", i))
-}
-
 // macOSDisks returns a macOS guest's disks: its boot disk, then its read-only guest
 // agent disk. The boot disk must come first; VZ does not boot with it second.
 func macOSDisks(p *paths.Paths, stored *StoredMetadata) []hypervisor.DiskConfig {
-	disks := []hypervisor.DiskConfig{{Path: p.InstanceMacOSBootDisk(stored.Id), Parents: macOSDiskParents(stored)}}
+	disks := []hypervisor.DiskConfig{{Path: p.InstanceMacOSBootDisk(stored.Id), Format: hypervisor.DiskFormatASIF, Parents: macOSDiskParents(stored)}}
 	if stored.MacOSAgentDisk {
 		disks = append(disks, hypervisor.DiskConfig{Path: p.InstanceMacOSAgentDisk(stored.Id), Readonly: true})
 	}
@@ -231,7 +234,7 @@ func macOSDisks(p *paths.Paths, stored *StoredMetadata) []hypervisor.DiskConfig 
 func macOSDiskParents(stored *StoredMetadata) []string {
 	parents := make([]string, stored.MacOSDiskLayers)
 	for i := range parents {
-		parents[i] = macOSDiskLayer(stored.DataDir, i)
+		parents[i] = filepath.Join(stored.DataDir, images.MacOSDiskLayerFile(i))
 	}
 	return parents
 }

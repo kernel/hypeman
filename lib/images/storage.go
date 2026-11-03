@@ -158,7 +158,7 @@ func legacyLayout(p *paths.Paths, repository, digestHex string) imageLayout {
 
 // machineDiskFile is the base of a macOS machine image's ASIF boot disk chain,
 // whether imported locally or pulled. Rootfs images use erofs or ext4 instead.
-var machineDiskFile = macOSDiskLayerFile(0)
+const machineDiskFile = "disk.0.asif" // MacOSDiskLayerFile(0)
 
 // withMachineDisk points layout at a machine image's base disk when the directory
 // has one. Rootfs layouts never do, so a stat is enough to pick the file.

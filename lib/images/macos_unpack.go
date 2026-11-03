@@ -35,8 +35,8 @@ var maxMachineUnpackedBytes int64 = 1 << 40
 // the rootfs unpack, it writes files sparsely: zero chunks become holes, so a
 // mostly empty boot disk occupies only its data. Machine bundles hold only regular
 // files and directories; any other entry is rejected. Each layer is checked
-// against its config diff ID. A layer below the top whose disk a ready image
-// already has is cloned from that image instead of unpacked.
+// against its config diff ID. A layer below the top that a ready image already has,
+// on the same layers beneath it, is cloned from that image instead of unpacked.
 func (c *ociClient) unpackMachineLayers(ctx context.Context, layoutTag, targetDir string) error {
 	path, err := layout.FromPath(c.cacheDir)
 	if err != nil {
@@ -64,10 +64,18 @@ func (c *ociClient) unpackMachineLayers(ctx context.Context, layoutTag, targetDi
 	if err := os.MkdirAll(targetDir, 0700); err != nil {
 		return fmt.Errorf("create target dir: %w", err)
 	}
+	diffIDs := make([]string, len(configFile.RootFS.DiffIDs))
+	for i, diffID := range configFile.RootFS.DiffIDs {
+		diffIDs[i] = diffID.String()
+	}
+	reuse := make([]string, len(layers))
+	if c.reusableMachineLayers != nil {
+		reuse = c.reusableMachineLayers(diffIDs)
+	}
 	remaining := maxMachineUnpackedBytes
 	for i, l := range layers {
 		dir := filepath.Join(targetDir, strconv.Itoa(i))
-		if i < len(layers)-1 && c.reuseMachineLayer(configFile.RootFS.DiffIDs[i], dir, configFile.Config.Labels[MacOSMachineDiskLabel]) {
+		if reuse[i] != "" && cloneMachineLayer(reuse[i], dir, configFile.Config.Labels[MacOSMachineDiskLabel]) {
 			continue
 		}
 		if err := unpackMachineLayer(ctx, l, configFile.RootFS.DiffIDs[i], dir, &remaining); err != nil {
@@ -77,17 +85,10 @@ func (c *ociClient) unpackMachineLayers(ctx context.Context, layoutTag, targetDi
 	return nil
 }
 
-// reuseMachineLayer clones a ready image's disk with diffID into dir, where
-// unpacking the layer would put it, and reports whether it did. A failed clone, as
-// when that image is being deleted, leaves dir absent for an unpack.
-func (c *ociClient) reuseMachineLayer(diffID gcr.Hash, dir, diskName string) bool {
-	if c.readyMachineLayer == nil {
-		return false
-	}
-	source := c.readyMachineLayer(diffID.String())
-	if source == "" {
-		return false
-	}
+// cloneMachineLayer clones a ready image's disk into dir, where unpacking the layer
+// would put it, and reports whether it did. A failed clone, as when that image is
+// being deleted, leaves dir absent for an unpack.
+func cloneMachineLayer(source, dir, diskName string) bool {
 	target := filepath.Join(dir, diskName)
 	if err := os.MkdirAll(filepath.Dir(target), 0700); err == nil {
 		if err = forkvm.CopyRegularFile(source, target); err == nil {

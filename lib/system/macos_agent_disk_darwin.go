@@ -11,7 +11,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sync"
 
 	"github.com/kernel/hypeman/lib/paths"
 )
@@ -21,7 +20,8 @@ import (
 //go:embed guest_agent/guest-agent-darwin
 var DarwinGuestAgentBinary []byte
 
-var macOSAgentDiskMu sync.Mutex
+// macOSAgentDiskBuild serializes disk builds; waiting for one honors ctx.
+var macOSAgentDiskBuild = make(chan struct{}, 1)
 
 // MacOSAgentDisk returns the read-only guest agent disk for the embedded macOS
 // agent, building it on first use. Disks are named by the agent's hash, so a new
@@ -30,8 +30,12 @@ func MacOSAgentDisk(ctx context.Context, p *paths.Paths) (string, error) {
 	sum := sha256.Sum256(DarwinGuestAgentBinary)
 	version := hex.EncodeToString(sum[:6])
 	path := p.SystemMacOSAgentDisk(version)
-	macOSAgentDiskMu.Lock()
-	defer macOSAgentDiskMu.Unlock()
+	select {
+	case macOSAgentDiskBuild <- struct{}{}:
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+	defer func() { <-macOSAgentDiskBuild }()
 	if _, err := os.Stat(path); err == nil {
 		return path, nil
 	}

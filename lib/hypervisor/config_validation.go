@@ -42,6 +42,10 @@ func ValidateBootConfig(cfg VMConfig) error {
 	for i, disk := range cfg.Disks {
 		switch disk.EffectiveFormat() {
 		case DiskFormatRaw, DiskFormatQCOW2:
+		case DiskFormatASIF:
+			if cfg.EffectiveBootMode() != BootModeMacOS {
+				return fmt.Errorf("disk %d: ASIF disks are only for macOS boot", i)
+			}
 		default:
 			return fmt.Errorf("disk %d has unsupported format %q", i, disk.Format)
 		}

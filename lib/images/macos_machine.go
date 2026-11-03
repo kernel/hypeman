@@ -3,10 +3,10 @@ package images
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
-	"slices"
 	"time"
 
 	gcr "github.com/google/go-containerregistry/pkg/v1"
@@ -21,7 +21,30 @@ const (
 	MacOSMachineFormatLabel   = "io.hypeman.machine-image.disk-format"
 	MacOSMachineAuxLabel      = "io.hypeman.machine-image.aux-path"
 	MacOSMachinePlatformLabel = "io.hypeman.machine-image.platform-path"
+	// MacOSMachineDiskDigestsLabel lists the sha256 of each layer's disk file, base
+	// first, comma-separated. A publication over a base checks its layers against it.
+	MacOSMachineDiskDigestsLabel = "io.hypeman.machine-image.disk-digests"
 )
+
+// The fixed label values of a macOS machine image, and the file names a published
+// image uses in each layer.
+const (
+	MacOSMachineVersion      = "2"
+	MacOSMachineKind         = "macos-image"
+	MacOSMachineFormat       = "asif"
+	MacOSMachineDiskFile     = "disk.asif"
+	MacOSMachineAuxFile      = "aux.img"
+	MacOSMachinePlatformFile = "config.json"
+)
+
+// MacOSMachineLabels returns the labels of a macOS machine image that uses the
+// standard file names.
+func MacOSMachineLabels() map[string]string {
+	return map[string]string{
+		MacOSMachineVersionLabel: MacOSMachineVersion, MacOSMachineKindLabel: MacOSMachineKind, MacOSMachineFormatLabel: MacOSMachineFormat,
+		MacOSMachineDiskLabel: MacOSMachineDiskFile, MacOSMachineAuxLabel: MacOSMachineAuxFile, MacOSMachinePlatformLabel: MacOSMachinePlatformFile,
+	}
+}
 
 // stagedMacOS is the part of a staged macOS machine image beyond its base disk.
 type stagedMacOS struct {
@@ -52,13 +75,13 @@ func installMacOSMachine(layout imageLayout, staged stagedImageFiles, meta *imag
 	}
 	var installed []string
 	for i, layer := range staged.macos.layers {
-		path := filepath.Join(layout.dir, macOSDiskLayerFile(i+1))
+		path := filepath.Join(layout.dir, MacOSDiskLayerFile(i+1))
 		if err := os.Rename(layer, path); err != nil {
 			return installed, err
 		}
 		installed = append(installed, path)
 	}
-	auxPath := filepath.Join(layout.dir, "aux.img")
+	auxPath := filepath.Join(layout.dir, MacOSMachineAuxFile)
 	if err := os.Rename(staged.macos.aux, auxPath); err != nil {
 		return installed, err
 	}
@@ -97,26 +120,40 @@ func checkCachedMachinePlatform(p *paths.Paths, ref *ResolvedRef, requested Plat
 	return nil
 }
 
-// readyMacOSLayer returns the disk of a ready macOS image's chain layer that has
-// diffID, or "" if no ready image has one.
-func (m *manager) readyMacOSLayer(diffID string) string {
+// reusableMacOSLayers returns, for each lower layer of a chain with diffIDs, the
+// disk of a ready image whose chain has the same layers up to and including it, or
+// "". Matching the layers beneath keeps each reused overlay on the chain it was
+// built on. The top layer is never reused, since it carries the image's own files.
+func (m *manager) reusableMacOSLayers(diffIDs []string) []string {
+	reuse := make([]string, len(diffIDs))
 	metas, err := listAllMetadata(m.paths)
 	if err != nil {
-		return ""
+		slog.Warn("list images for macOS layer reuse", "error", err)
+		return reuse
 	}
 	for _, meta := range metas {
 		if meta.Status != StatusReady || meta.MacOS == nil || len(meta.MacOSDiskDiffIDs) != meta.MacOSDiskLayers {
 			continue
 		}
-		i := slices.Index(meta.MacOSDiskDiffIDs, diffID)
-		if i < 0 {
+		shared := 0
+		for shared < len(meta.MacOSDiskDiffIDs) && shared < len(diffIDs)-1 && meta.MacOSDiskDiffIDs[shared] == diffIDs[shared] {
+			shared++
+		}
+		if shared == 0 {
 			continue
 		}
-		if chain, err := MacOSDiskChain(m.paths, meta.Name, meta.Digest); err == nil {
-			return chain[i]
+		chain, err := MacOSDiskChain(m.paths, meta.Name, meta.Digest)
+		if err != nil {
+			slog.Warn("read macOS image chain for layer reuse", "image", meta.Name, "error", err)
+			continue
+		}
+		for i := range shared {
+			if reuse[i] == "" {
+				reuse[i] = chain[i]
+			}
 		}
 	}
-	return ""
+	return reuse
 }
 
 // stageMacOSOutputs stages a macOS machine image's boot disk chain and auxiliary
@@ -155,7 +192,7 @@ func stageMacOSMachine(staged *stagedImageFiles, root string, meta *containerMet
 	chain := []string{staged.disk}
 	for i, disk := range payload.Disks {
 		if i > 0 {
-			layer := filepath.Join(layoutDir, macOSDiskLayerFile(i)+".tmp-"+buildID)
+			layer := filepath.Join(layoutDir, MacOSDiskLayerFile(i)+".tmp-"+buildID)
 			staged.macos.layers = append(staged.macos.layers, layer)
 			chain = append(chain, layer)
 		}
@@ -230,9 +267,9 @@ func validateMacOSMachine(meta *containerMetadata) error {
 		return fmt.Errorf("macOS machine requires darwin/arm64, not %s", normalized)
 	}
 	labels := meta.Labels
-	for _, want := range [][2]string{{MacOSMachineVersionLabel, "2"}, {MacOSMachineKindLabel, "macos-image"}, {MacOSMachineFormatLabel, "asif"}} {
-		if label := want[0]; labels[label] != want[1] {
-			return fmt.Errorf("darwin artifact requires %s=%q, got %q; ordinary container images are not macOS machines", label, want[1], labels[label])
+	for label, want := range map[string]string{MacOSMachineVersionLabel: MacOSMachineVersion, MacOSMachineKindLabel: MacOSMachineKind, MacOSMachineFormatLabel: MacOSMachineFormat} {
+		if labels[label] != want {
+			return fmt.Errorf("darwin artifact requires %s=%q, got %q; ordinary container images are not macOS machines", label, want, labels[label])
 		}
 	}
 	pathLabels := []string{MacOSMachineDiskLabel, MacOSMachineAuxLabel, MacOSMachinePlatformLabel}

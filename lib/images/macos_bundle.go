@@ -50,9 +50,8 @@ func readMacOSMachineBundle(root, diskName, auxName, configName string) (*macOSM
 	if err != nil {
 		return nil, err
 	}
-	// Compare inodes: different hardlink names do not establish distinctness.
-	if sameFile(disk, aux) || sameFile(disk, config) || sameFile(aux, config) {
-		return nil, fmt.Errorf("machine bundle files must be distinct")
+	if err := CheckMachineFiles(disk, aux, config); err != nil {
+		return nil, err
 	}
 	platform, err := readMacOSPlatform(config)
 	if err != nil {
@@ -92,6 +91,9 @@ func readMacOSMachineLayers(root, diskName, auxName, configName string) (*macOSM
 	config, err := machineBundleFile(top, configName)
 	if err != nil {
 		return nil, fmt.Errorf("machine image top layer: %w", err)
+	}
+	if err := CheckMachineFiles(append([]string{aux, config}, payload.Disks...)...); err != nil {
+		return nil, err
 	}
 	platform, err := readMacOSPlatform(config)
 	if err != nil {
@@ -154,8 +156,25 @@ func machineBundleFile(root, relative string) (string, error) {
 	return path, nil
 }
 
-func sameFile(a, b string) bool {
-	ai, errA := os.Stat(a)
-	bi, errB := os.Stat(b)
-	return errA == nil && errB == nil && os.SameFile(ai, bi)
+// CheckMachineFiles requires each path to be a nonempty regular file, not a
+// symlink, and no two to be the same file. Inodes are compared: different hardlink
+// names do not establish distinctness.
+func CheckMachineFiles(paths ...string) error {
+	seen := make([]os.FileInfo, 0, len(paths))
+	for _, path := range paths {
+		info, err := os.Lstat(path)
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() || info.Size() == 0 {
+			return fmt.Errorf("machine storage must be nonempty regular files")
+		}
+		for _, other := range seen {
+			if os.SameFile(other, info) {
+				return fmt.Errorf("machine storage files must be distinct")
+			}
+		}
+		seen = append(seen, info)
+	}
+	return nil
 }

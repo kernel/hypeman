@@ -11,6 +11,7 @@ import (
 
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/hypervisor/vz/shimconfig"
+	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/instances/phasetracking"
 	"github.com/kernel/hypeman/lib/paths"
 	restartpolicy "github.com/kernel/hypeman/lib/restart-policy"
@@ -37,7 +38,7 @@ func macOSMemorySnapshotFixture(t *testing.T) (*manager, *metadata) {
 	meta.MacOSDiskLayers = 1
 	require.NoError(t, m.saveMetadata(meta))
 	require.NoError(t, os.Rename(m.paths.InstanceOverlay(id), m.paths.InstanceMacOSBootDisk(id)))
-	require.NoError(t, os.WriteFile(macOSDiskLayer(meta.DataDir, 0), []byte("image layer"), 0400))
+	require.NoError(t, os.WriteFile(filepath.Join(meta.DataDir, images.MacOSDiskLayerFile(0)), []byte("image layer"), 0400))
 	require.NoError(t, os.WriteFile(filepath.Join(meta.DataDir, macOSAuxStorageFile), []byte("aux-at-checkpoint"), 0600))
 	return m, meta
 }
