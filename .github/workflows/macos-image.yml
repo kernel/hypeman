@@ -58,9 +58,7 @@ jobs:
           echo "$bin" >> "$GITHUB_PATH"
 
       - name: Build import-tart
-        run: |
-          make build-embedded build-vz-shim
-          go build -o "$RUNNER_TEMP/bin/import-tart" ./cmd/import-tart
+        run: go build -o "$RUNNER_TEMP/bin/import-tart" ./cmd/import-tart
 
       - name: Clone the base stacked
         env:
@@ -79,6 +77,8 @@ jobs:
           packer build -var vm_base_name="$VM-base" -var vm_name="$VM" browser.pkr.hcl
 
       - name: Publish
+        # pipefail, so a failed publish is not hidden by tee.
+        shell: bash
         env:
           BASE: ${{ inputs.base }}
           NAME: ${{ inputs.name }}

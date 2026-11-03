@@ -1,4 +1,4 @@
-package builds_test
+package machineimage_test
 
 import (
 	"context"
@@ -12,11 +12,12 @@ import (
 	"time"
 
 	"github.com/Code-Hex/vz/v4/diskimagekit"
-	"github.com/kernel/hypeman/lib/builds"
 	"github.com/kernel/hypeman/lib/images"
+	"github.com/kernel/hypeman/lib/machineimage"
 	"github.com/kernel/hypeman/lib/middleware"
 	"github.com/kernel/hypeman/lib/paths"
 	"github.com/kernel/hypeman/lib/registry"
+	"github.com/kernel/hypeman/lib/registrytoken"
 	"github.com/stretchr/testify/require"
 )
 
@@ -30,16 +31,18 @@ func (m *machineImportStub) ImportLocalImage(_ context.Context, repo, reference,
 	return &images.Image{Status: images.StatusReady, Digest: digest}, nil
 }
 
+func testMachineIdentifier() ([]byte, error) { return []byte{9}, nil }
+
 func machinePublisherPlatform() images.MacOSImage {
 	return images.MacOSImage{HardwareModel: []byte{1}, MachineIdentifier: []byte{2}, MAC: "02:00:00:00:00:01", CPUs: 4, Memory: 8 << 30, GuestAgent: true}
 }
 
 // machinePublisherStorage writes a standalone ASIF disk and aux file, as a base
 // bundle has.
-func machinePublisherStorage(t *testing.T) builds.MachineStorage {
+func machinePublisherStorage(t *testing.T) machineimage.Storage {
 	t.Helper()
 	root := t.TempDir()
-	storage := builds.MachineStorage{Overlay: filepath.Join(root, "disk.asif"), Aux: filepath.Join(root, "aux.img"), Platform: machinePublisherPlatform()}
+	storage := machineimage.Storage{Overlay: filepath.Join(root, "disk.asif"), Aux: filepath.Join(root, "aux.img"), Platform: machinePublisherPlatform()}
 	img, e := diskimagekit.CreateASIF(storage.Overlay, (4<<20)/512)
 	require.NoError(t, e)
 	_, e = img.WriteAt([]byte("synthetic disk"), 0)
@@ -66,7 +69,7 @@ func TestStreamingMachinePublisherAuthenticatedRegistry(t *testing.T) {
 	}))
 	server := httptest.NewServer(handler)
 	defer server.Close()
-	publisher := &builds.StreamingMachinePublisher{RegistryURL: server.URL, Tokens: builds.NewRegistryTokenGenerator("synthetic registry secret")}
+	publisher := &machineimage.Publisher{RegistryURL: server.URL, Tokens: registrytoken.NewGenerator("synthetic registry secret"), NewMachineIdentifier: testMachineIdentifier}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	result, e := publisher.Publish(ctx, "qa-build", machinePublisherStorage(t), nil)
@@ -88,7 +91,7 @@ func TestStreamingMachinePublisherRejectsRedirectWithoutLeakingToken(t *testing.
 		http.Redirect(w, r, other.URL, http.StatusTemporaryRedirect)
 	}))
 	defer server.Close()
-	publisher := &builds.StreamingMachinePublisher{RegistryURL: server.URL, Tokens: builds.NewRegistryTokenGenerator("synthetic secret")}
+	publisher := &machineimage.Publisher{RegistryURL: server.URL, Tokens: registrytoken.NewGenerator("synthetic secret"), NewMachineIdentifier: testMachineIdentifier}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_, e := publisher.Publish(ctx, "qa-build", machinePublisherStorage(t), nil)
@@ -108,7 +111,7 @@ func TestStreamingMachinePublisherReusesBaseLayers(t *testing.T) {
 		reg.Handler().ServeHTTP(w, r)
 	})))
 	defer server.Close()
-	publisher := &builds.StreamingMachinePublisher{RegistryURL: server.URL, Tokens: builds.NewRegistryTokenGenerator("synthetic registry secret")}
+	publisher := &machineimage.Publisher{RegistryURL: server.URL, Tokens: registrytoken.NewGenerator("synthetic registry secret"), NewMachineIdentifier: testMachineIdentifier}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
@@ -120,7 +123,7 @@ func TestStreamingMachinePublisherReusesBaseLayers(t *testing.T) {
 	// A build stacks a writable overlay on the base disk.
 	img, e := diskimagekit.Open(baseStorage.Overlay)
 	require.NoError(t, e)
-	derived := builds.MachineStorage{Layers: []string{baseStorage.Overlay}, Overlay: filepath.Join(t.TempDir(), "boot.asif"), Aux: filepath.Join(t.TempDir(), "aux.img"), Platform: machinePublisherPlatform()}
+	derived := machineimage.Storage{Layers: []string{baseStorage.Overlay}, Overlay: filepath.Join(t.TempDir(), "boot.asif"), Aux: filepath.Join(t.TempDir(), "aux.img"), Platform: machinePublisherPlatform()}
 	require.NoError(t, img.CreateLayer(derived.Overlay, diskimagekit.Overlay))
 	_, e = img.WriteAt([]byte("build output"), 1<<20)
 	require.NoError(t, e)
@@ -129,7 +132,7 @@ func TestStreamingMachinePublisherReusesBaseLayers(t *testing.T) {
 	derived.Platform.MachineIdentifier = []byte{3}
 
 	uploads.Store(0)
-	machineBase := &builds.MachineBase{Repo: "builds/qa-base", Digest: base.Digest}
+	machineBase := &machineimage.Base{Repo: "builds/qa-base", Digest: base.Digest}
 	result, e := publisher.Publish(ctx, "qa-derived", derived, machineBase)
 	require.NoError(t, e)
 	require.Equal(t, int32(2), uploads.Load(), "only the config and the overlay layer are uploaded")
@@ -138,4 +141,14 @@ func TestStreamingMachinePublisherReusesBaseLayers(t *testing.T) {
 	derived.Layers = nil
 	_, e = publisher.Publish(ctx, "qa-derived", derived, machineBase)
 	require.ErrorContains(t, e, "machine base has 1 layers but the disk stacks on 0")
+
+	// The same number of layers, but stacked on a different base disk.
+	other := machinePublisherStorage(t)
+	img, e = diskimagekit.Open(other.Overlay)
+	require.NoError(t, e)
+	mismatched := machineimage.Storage{Layers: []string{other.Overlay}, Overlay: filepath.Join(t.TempDir(), "boot.asif"), Aux: derived.Aux, Platform: machinePublisherPlatform()}
+	require.NoError(t, img.CreateLayer(mismatched.Overlay, diskimagekit.Overlay))
+	require.NoError(t, img.Close())
+	_, e = publisher.Publish(ctx, "qa-mismatched", mismatched, machineBase)
+	require.ErrorContains(t, e, "not the layers the disk stacks on")
 }

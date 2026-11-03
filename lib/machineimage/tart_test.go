@@ -1,4 +1,4 @@
-package builds
+package machineimage
 
 import (
 	"crypto/sha256"
@@ -45,7 +45,7 @@ func TestReadTartVMStandalone(t *testing.T) {
 	require.Equal(t, []byte{2}, storage.Platform.MachineIdentifier)
 	require.Equal(t, uint(4), storage.Platform.CPUs)
 	require.True(t, storage.Platform.GuestAgent)
-	require.NoError(t, validateMachineStorage(storage))
+	require.NoError(t, storage.validate())
 
 	raw := tartTestVM(t, t.TempDir(), "raw", map[string]any{"diskFormat": "raw"})
 	_, err = ReadTartVM(raw, false)
@@ -97,7 +97,7 @@ func TestReadTartVMStacked(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{basePath, layerPath}, storage.Layers)
 	require.Equal(t, filepath.Join(dir, "overlay.asif"), storage.Overlay)
-	require.NoError(t, validateMachineStorage(storage))
+	require.NoError(t, storage.validate())
 
 	writeManifest(disk(tartOverlayMediaType, digest("layer")))
 	_, err = ReadTartVM(dir, false)
@@ -111,5 +111,5 @@ func TestReadTartVMStacked(t *testing.T) {
 	writeManifest(disk(tartDiskMediaType, digest("missing")))
 	storage, err = ReadTartVM(dir, false)
 	require.NoError(t, err)
-	require.Error(t, validateMachineStorage(storage))
+	require.Error(t, storage.validate())
 }

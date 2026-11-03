@@ -1,9 +1,14 @@
-package builds
+// Package machineimage publishes macOS machine images to hypeman's registry, from
+// stopped Tart VMs or other ASIF disk chains.
+package machineimage
 
 import (
 	"archive/tar"
 	"compress/gzip"
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,6 +16,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -23,127 +29,125 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/tarball"
 	"github.com/google/go-containerregistry/pkg/v1/types"
 	"github.com/kernel/hypeman/lib/images"
+	"github.com/kernel/hypeman/lib/registrytoken"
 )
 
-// MachineStorage is a closed macOS boot disk and platform to publish: the read-only
-// ASIF layers below its overlay, base first, the overlay, and its auxiliary storage.
-// A standalone base disk is an Overlay with no Layers.
-type MachineStorage struct {
-	Layers   []string
-	Overlay  string
-	Aux      string
-	Platform images.MacOSImage
+// Storage is a closed macOS boot disk and platform to publish: the read-only ASIF
+// layers below its overlay, base first, the overlay, and its auxiliary storage. A
+// standalone base disk is an Overlay with no Layers. LayerDigests, when known, are
+// the sha256 of each layer file; otherwise the publisher hashes them.
+type Storage struct {
+	Layers       []string
+	LayerDigests []string
+	Overlay      string
+	Aux          string
+	Platform     images.MacOSImage
 }
 
-// MachinePublication is a verified publication: a digest-pinned reference.
-type MachinePublication struct{ Reference, Digest string }
+// Publication is a verified publication: a digest-pinned reference.
+type Publication struct{ Reference, Digest string }
 
-// ValidMachineDigest reports whether s is a canonical sha256 digest.
-func ValidMachineDigest(s string) bool {
+// validDigest reports whether s is a canonical sha256 digest.
+func validDigest(s string) bool {
 	if !strings.HasPrefix(s, "sha256:") || len(s) != 71 {
 		return false
 	}
 	return strings.Trim(s[7:], "0123456789abcdef") == ""
 }
 
-// validateMachineStorage checks storage before publication: the platform is valid,
-// the files are distinct nonempty regular files, and the overlay stacks on its
-// layers as ASIF.
-func validateMachineStorage(storage MachineStorage) error {
-	if err := storage.Platform.Validate(); err != nil {
+// validate checks storage before publication: the platform is valid, the files
+// are distinct nonempty regular files, and the overlay stacks on its layers as ASIF.
+func (s Storage) validate() error {
+	if err := s.Platform.Validate(); err != nil {
 		return err
 	}
-	var seen []os.FileInfo
-	for _, path := range append([]string{storage.Overlay, storage.Aux}, storage.Layers...) {
-		info, err := os.Lstat(path)
-		if err != nil {
-			return err
-		}
-		if !info.Mode().IsRegular() || info.Size() == 0 {
-			return fmt.Errorf("machine storage must be nonempty regular files")
-		}
-		for _, other := range seen {
-			if os.SameFile(other, info) {
-				return fmt.Errorf("machine storage files must be distinct")
-			}
-		}
-		seen = append(seen, info)
+	if len(s.LayerDigests) != 0 && len(s.LayerDigests) != len(s.Layers) {
+		return fmt.Errorf("machine storage has %d layer digests for %d layers", len(s.LayerDigests), len(s.Layers))
 	}
-	disk, err := images.OpenMacOSDiskChain(append(append([]string(nil), storage.Layers...), storage.Overlay))
+	if err := images.CheckMachineFiles(append([]string{s.Overlay, s.Aux}, s.Layers...)...); err != nil {
+		return err
+	}
+	disk, err := images.OpenMacOSDiskChain(append(append([]string(nil), s.Layers...), s.Overlay))
 	if err != nil {
 		return fmt.Errorf("machine disk: %w", err)
 	}
 	return disk.Close()
 }
 
-// StreamingMachinePublisher targets only the configured internal registry and a
-// build-scoped repository. go-containerregistry hashes and compresses each layer
-// from a reopenable tar stream, so nothing is written to disk, skips blobs the
-// registry already holds, and commits the manifest last. The registry stores each
-// upload on disk and commits it only if it matches its digest.
+// Publisher targets only the configured internal registry and a build-scoped
+// repository. go-containerregistry hashes and compresses each layer from a
+// reopenable tar stream, so nothing is written to disk, skips blobs the registry
+// already holds, and commits the manifest last. The registry stores each upload on
+// disk and commits it only if it matches its digest.
 // No credentials, redirect destinations or arbitrary output repositories come from the source.
-type StreamingMachinePublisher struct {
+type Publisher struct {
 	RegistryURL string
-	Tokens      *RegistryTokenGenerator
+	Tokens      *registrytoken.Generator
+	// NewMachineIdentifier returns a fresh VZ machine identifier. Every published
+	// image gets its own identifier and MAC, so it never runs with its source's.
+	NewMachineIdentifier func() ([]byte, error)
 }
 
-// MachineBase is a pinned base image in the publisher's registry. A machine
-// published over it reuses its layers, so only the new overlay is uploaded.
-type MachineBase struct {
+// Base is a pinned base image in the publisher's registry. A machine published
+// over it reuses its layers, so only the new overlay is uploaded.
+type Base struct {
 	Repo   string // builds/{id} repository holding the base manifest and layers
 	Digest string // canonical sha256 digest of the base manifest
 }
 
-func (b MachineBase) validate() error {
+func (b Base) validate() error {
 	if !strings.HasPrefix(b.Repo, "builds/") || strings.Contains(b.Repo, "..") || len(b.Repo) > 256 {
 		return fmt.Errorf("machine base repository must be under builds/")
 	}
-	if !ValidMachineDigest(b.Digest) {
+	if !validDigest(b.Digest) {
 		return fmt.Errorf("machine base digest must be a canonical sha256 digest")
 	}
 	return nil
 }
 
-// machineLabels describe a published machine image: one ASIF disk per layer, with
-// the auxiliary storage and platform in the top layer.
-var machineLabels = map[string]string{
-	images.MacOSMachineVersionLabel: "2", images.MacOSMachineKindLabel: "macos-image", images.MacOSMachineFormatLabel: "asif",
-	images.MacOSMachineDiskLabel: "disk.asif", images.MacOSMachineAuxLabel: "aux.img", images.MacOSMachinePlatformLabel: "config.json",
-}
-
-// Publish commits storage as a machine image in builds/{id}. With a base, the
-// storage's layers must be the base's and the base's registry layers are reused;
+// Publish commits storage as a machine image in builds/{id}, with a fresh machine
+// identifier and MAC. With a base, the storage's layers must be the base's, by the
+// disk digests the base records, and the base's registry layers are reused;
 // without one, every layer is uploaded.
-func (p *StreamingMachinePublisher) Publish(ctx context.Context, id string, storage MachineStorage, base *MachineBase) (MachinePublication, error) {
+func (p *Publisher) Publish(ctx context.Context, id string, storage Storage, base *Base) (Publication, error) {
 	deadline, ok := ctx.Deadline()
 	if !ok || ctx.Err() != nil {
-		return MachinePublication{}, fmt.Errorf("bounded publication required")
+		return Publication{}, fmt.Errorf("bounded publication required")
 	}
-	if id == "" || len(id) > 128 || strings.Trim(id, "abcdefghijklmnopqrstuvwxyz0123456789-") != "" || p.Tokens == nil {
-		return MachinePublication{}, fmt.Errorf("scoped machine publisher required")
+	if id == "" || len(id) > 128 || strings.Trim(id, "abcdefghijklmnopqrstuvwxyz0123456789-") != "" || p.Tokens == nil || p.NewMachineIdentifier == nil {
+		return Publication{}, fmt.Errorf("scoped machine publisher required")
 	}
 	if base != nil {
 		if err := base.validate(); err != nil {
-			return MachinePublication{}, err
+			return Publication{}, err
 		}
 	}
-	registry, err := p.registry()
+	registry, err := parseRegistryURL(p.RegistryURL)
 	if err != nil {
-		return MachinePublication{}, err
+		return Publication{}, err
 	}
-	if err := validateMachineStorage(storage); err != nil {
-		return MachinePublication{}, err
+	if err := storage.validate(); err != nil {
+		return Publication{}, err
+	}
+	if storage.Platform.MachineIdentifier, err = p.NewMachineIdentifier(); err != nil {
+		return Publication{}, fmt.Errorf("new machine identifier: %w", err)
+	}
+	if storage.Platform.MAC, err = randomMAC(); err != nil {
+		return Publication{}, err
 	}
 	repo := "builds/" + id
-	access := []RepoPermission{{Repo: repo, Scope: "push"}}
+	access := []registrytoken.RepoPermission{{Repo: repo, Scope: "push"}}
 	if base != nil {
-		access = append(access, RepoPermission{Repo: base.Repo, Scope: "pull"})
+		access = append(access, registrytoken.RepoPermission{Repo: base.Repo, Scope: "pull"})
 	}
 	token, err := p.Tokens.GenerateToken(id, access, time.Until(deadline))
 	if err != nil {
-		return MachinePublication{}, err
+		return Publication{}, err
 	}
-	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport := &http.Transport{}
+	if defaults, ok := http.DefaultTransport.(*http.Transport); ok {
+		transport = defaults.Clone()
+	}
 	transport.Proxy = nil
 	defer transport.CloseIdleConnections()
 	options := []remote.Option{remote.WithContext(ctx), remote.WithAuth(&authn.Bearer{Token: token}), remote.WithTransport(refuseRedirects{transport})}
@@ -153,20 +157,30 @@ func (p *StreamingMachinePublisher) Publish(ctx context.Context, id string, stor
 	}
 	img, err := machineImage(ctx, registry.Host, storage, base, nameOptions, options)
 	if err != nil {
-		return MachinePublication{}, err
+		return Publication{}, err
 	}
 	target, err := name.NewTag(registry.Host+"/"+repo+":latest", nameOptions...)
 	if err != nil {
-		return MachinePublication{}, err
+		return Publication{}, err
 	}
 	if err = remote.Write(target, img, options...); err != nil {
-		return MachinePublication{}, fmt.Errorf("write machine image: %w", err)
+		return Publication{}, fmt.Errorf("write machine image: %w", err)
 	}
 	digest, err := img.Digest()
 	if err != nil {
-		return MachinePublication{}, err
+		return Publication{}, err
 	}
-	return MachinePublication{Reference: registry.Host + "/" + repo + "@" + digest.String(), Digest: digest.String()}, nil
+	return Publication{Reference: registry.Host + "/" + repo + "@" + digest.String(), Digest: digest.String()}, nil
+}
+
+// randomMAC returns a random locally administered unicast MAC address.
+func randomMAC() (string, error) {
+	mac := make([]byte, 6)
+	if _, err := rand.Read(mac); err != nil {
+		return "", err
+	}
+	mac[0] = mac[0]&^0x01 | 0x02
+	return net.HardwareAddr(mac).String(), nil
 }
 
 // refuseRedirects fails a redirected registry request rather than follow it, so
@@ -182,10 +196,10 @@ func (t refuseRedirects) RoundTrip(req *http.Request) (*http.Response, error) {
 	return response, err
 }
 
-// ParseMachineBase returns ref, a digest-pinned image in the registry at
-// registryURL, as a publication base.
-func ParseMachineBase(registryURL, ref string) (*MachineBase, error) {
-	registry, err := (&StreamingMachinePublisher{RegistryURL: registryURL}).registry()
+// ParseBase returns ref, a digest-pinned image in the registry at registryURL, as a
+// publication base.
+func ParseBase(registryURL, ref string) (*Base, error) {
+	registry, err := parseRegistryURL(registryURL)
 	if err != nil {
 		return nil, err
 	}
@@ -197,14 +211,13 @@ func ParseMachineBase(registryURL, ref string) (*MachineBase, error) {
 	if !ok {
 		return nil, fmt.Errorf("machine base %s is not in the registry %s", ref, registry.Host)
 	}
-	base := &MachineBase{Repo: repo, Digest: parsed.Digest()}
+	base := &Base{Repo: repo, Digest: parsed.Digest()}
 	return base, base.validate()
 }
 
-// registry parses the configured registry address, defaulting to HTTPS. Plaintext
-// is allowed only on loopback.
-func (p *StreamingMachinePublisher) registry() (*url.URL, error) {
-	address := p.RegistryURL
+// parseRegistryURL parses a registry address, defaulting to HTTPS. Plaintext is
+// allowed only on loopback.
+func parseRegistryURL(address string) (*url.URL, error) {
 	if !strings.Contains(address, "://") {
 		address = "https://" + address
 	}
@@ -220,8 +233,18 @@ func (p *StreamingMachinePublisher) registry() (*url.URL, error) {
 
 // machineImage returns the machine image for storage: the base's layers, from the
 // registry or the storage's own layer files, then a top layer with the overlay,
-// auxiliary storage and platform.
-func machineImage(ctx context.Context, host string, storage MachineStorage, base *MachineBase, nameOptions []name.Option, options []remote.Option) (v1.Image, error) {
+// auxiliary storage and platform. Its labels record every layer's disk digest.
+func machineImage(ctx context.Context, host string, storage Storage, base *Base, nameOptions []name.Option, options []remote.Option) (v1.Image, error) {
+	layerDigests := storage.LayerDigests
+	if len(layerDigests) == 0 {
+		for _, path := range storage.Layers {
+			digest, err := fileDigest(ctx, path)
+			if err != nil {
+				return nil, err
+			}
+			layerDigests = append(layerDigests, digest)
+		}
+	}
 	img := empty.Image
 	if base != nil {
 		ref, err := name.NewDigest(host+"/"+base.Repo+"@"+base.Digest, nameOptions...)
@@ -238,7 +261,7 @@ func machineImage(ctx context.Context, host string, storage MachineStorage, base
 		if config.OS != "darwin" || config.Architecture != "arm64" {
 			return nil, fmt.Errorf("base is not a darwin/arm64 machine image")
 		}
-		for label, want := range machineLabels {
+		for label, want := range images.MacOSMachineLabels() {
 			if config.Config.Labels[label] != want {
 				return nil, fmt.Errorf("base is not an ASIF machine image: %s=%q", label, config.Config.Labels[label])
 			}
@@ -246,9 +269,13 @@ func machineImage(ctx context.Context, host string, storage MachineStorage, base
 		if layers := len(config.RootFS.DiffIDs); layers != len(storage.Layers) {
 			return nil, fmt.Errorf("machine base has %d layers but the disk stacks on %d", layers, len(storage.Layers))
 		}
+		baseDigests := strings.Split(config.Config.Labels[images.MacOSMachineDiskDigestsLabel], ",")
+		if !slices.Equal(baseDigests, layerDigests) {
+			return nil, fmt.Errorf("machine base's disks are not the layers the disk stacks on: base records %q", config.Config.Labels[images.MacOSMachineDiskDigestsLabel])
+		}
 	} else {
 		for _, path := range storage.Layers {
-			layer, err := machineLayer(ctx, []machineTarEntry{{name: "disk.asif", path: path}})
+			layer, err := machineLayer(ctx, []machineTarEntry{{name: images.MacOSMachineDiskFile, path: path}})
 			if err != nil {
 				return nil, err
 			}
@@ -257,11 +284,15 @@ func machineImage(ctx context.Context, host string, storage MachineStorage, base
 			}
 		}
 	}
+	overlayDigest, err := fileDigest(ctx, storage.Overlay)
+	if err != nil {
+		return nil, err
+	}
 	platform, err := json.Marshal(storage.Platform)
 	if err != nil {
 		return nil, err
 	}
-	top, err := machineLayer(ctx, []machineTarEntry{{name: "disk.asif", path: storage.Overlay}, {name: "aux.img", path: storage.Aux}, {name: "config.json", data: platform}})
+	top, err := machineLayer(ctx, []machineTarEntry{{name: images.MacOSMachineDiskFile, path: storage.Overlay}, {name: images.MacOSMachineAuxFile, path: storage.Aux}, {name: images.MacOSMachinePlatformFile, data: platform}})
 	if err != nil {
 		return nil, err
 	}
@@ -272,11 +303,27 @@ func machineImage(ctx context.Context, host string, storage MachineStorage, base
 	if err != nil {
 		return nil, err
 	}
-	config.OS, config.Architecture, config.Config.Labels = "darwin", "arm64", machineLabels
+	labels := images.MacOSMachineLabels()
+	labels[images.MacOSMachineDiskDigestsLabel] = strings.Join(append(slices.Clone(layerDigests), overlayDigest), ",")
+	config.OS, config.Architecture, config.Config.Labels = "darwin", "arm64", labels
 	if img, err = mutate.ConfigFile(img, config); err != nil {
 		return nil, err
 	}
 	return mutate.ConfigMediaType(mutate.MediaType(img, types.OCIManifestSchema1), types.OCIConfigJSON), nil
+}
+
+// fileDigest returns the sha256 digest of a file.
+func fileDigest(ctx context.Context, path string) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+	hash := sha256.New()
+	if _, err := io.Copy(hash, contextReader{ctx, file}); err != nil {
+		return "", err
+	}
+	return "sha256:" + hex.EncodeToString(hash.Sum(nil)), nil
 }
 
 // machineTarEntry is one file in a machine layer, from a path or in memory.

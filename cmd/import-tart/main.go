@@ -16,9 +16,9 @@ import (
 	"time"
 
 	"github.com/Code-Hex/vz/v4"
-	"github.com/kernel/hypeman/lib/builds"
 	"github.com/kernel/hypeman/lib/images"
-	"github.com/kernel/hypeman/lib/network"
+	"github.com/kernel/hypeman/lib/machineimage"
+	"github.com/kernel/hypeman/lib/registrytoken"
 )
 
 func main() {
@@ -49,31 +49,30 @@ func main() {
 	}
 }
 
-func run(ctx context.Context, vm, registry, name, baseRef string, guestAgent bool, secret string) (builds.MachinePublication, error) {
-	storage, err := builds.ReadTartVM(vm, guestAgent)
+func run(ctx context.Context, vm, registry, name, baseRef string, guestAgent bool, secret string) (machineimage.Publication, error) {
+	storage, err := machineimage.ReadTartVM(vm, guestAgent)
 	if err != nil {
-		return builds.MachinePublication{}, err
+		return machineimage.Publication{}, err
 	}
 	for _, path := range append([]string{storage.Overlay, storage.Aux}, storage.Layers...) {
 		if err := images.RequireClosedFile(ctx, path); err != nil {
-			return builds.MachinePublication{}, fmt.Errorf("%s: %w", path, err)
+			return machineimage.Publication{}, fmt.Errorf("%s: %w", path, err)
 		}
 	}
-	var base *builds.MachineBase
+	var base *machineimage.Base
 	if baseRef != "" {
-		if base, err = builds.ParseMachineBase(registry, baseRef); err != nil {
-			return builds.MachinePublication{}, err
+		if base, err = machineimage.ParseBase(registry, baseRef); err != nil {
+			return machineimage.Publication{}, err
 		}
 	}
-	// Tart keeps its source's identity, so each image gets its own.
+	publisher := &machineimage.Publisher{RegistryURL: registry, Tokens: registrytoken.NewGenerator(secret), NewMachineIdentifier: newMachineIdentifier}
+	return publisher.Publish(ctx, name, storage, base)
+}
+
+func newMachineIdentifier() ([]byte, error) {
 	id, err := vz.NewMacMachineIdentifier()
 	if err != nil {
-		return builds.MachinePublication{}, err
+		return nil, err
 	}
-	storage.Platform.MachineIdentifier = id.DataRepresentation()
-	if storage.Platform.MAC, err = network.NewUniqueMAC(nil); err != nil {
-		return builds.MachinePublication{}, err
-	}
-	publisher := &builds.StreamingMachinePublisher{RegistryURL: registry, Tokens: builds.NewRegistryTokenGenerator(secret)}
-	return publisher.Publish(ctx, name, storage, base)
+	return id.DataRepresentation(), nil
 }
