@@ -167,4 +167,9 @@ func TestManifestByDigestSurvivesRestart(t *testing.T) {
 	got, err := pulled.Digest()
 	require.NoError(t, err)
 	require.Equal(t, digest, got)
+
+	otherRepo, err := name.NewDigest(strings.TrimPrefix(second.URL, "http://")+"/cache/other@"+digest.String(), name.Insecure)
+	require.NoError(t, err)
+	_, err = remote.Image(otherRepo)
+	require.Error(t, err, "a stored manifest is served only from the repository it was pushed to")
 }
