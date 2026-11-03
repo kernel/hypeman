@@ -1,4 +1,4 @@
-package builds
+package registrytoken
 
 import (
 	"testing"
@@ -9,7 +9,7 @@ import (
 )
 
 func TestRegistryTokenGenerator_GeneratePushToken(t *testing.T) {
-	generator := NewRegistryTokenGenerator("test-secret-key")
+	generator := NewGenerator("test-secret-key")
 
 	t.Run("valid token generation", func(t *testing.T) {
 		token, err := generator.GeneratePushToken("build-123", []string{"builds/build-123", "cache/tenant-x"}, 30*time.Minute)
@@ -40,7 +40,7 @@ func TestRegistryTokenGenerator_GeneratePushToken(t *testing.T) {
 }
 
 func TestRegistryTokenGenerator_ValidateToken(t *testing.T) {
-	generator := NewRegistryTokenGenerator("test-secret-key")
+	generator := NewGenerator("test-secret-key")
 
 	t.Run("valid token", func(t *testing.T) {
 		token, err := generator.GeneratePushToken("build-abc", []string{"builds/build-abc"}, time.Hour)
@@ -63,12 +63,12 @@ func TestRegistryTokenGenerator_ValidateToken(t *testing.T) {
 
 	t.Run("invalid signature", func(t *testing.T) {
 		// Generate with one secret
-		gen1 := NewRegistryTokenGenerator("secret-1")
+		gen1 := NewGenerator("secret-1")
 		token, err := gen1.GeneratePushToken("build-123", []string{"builds/build-123"}, time.Hour)
 		require.NoError(t, err)
 
 		// Validate with different secret
-		gen2 := NewRegistryTokenGenerator("secret-2")
+		gen2 := NewGenerator("secret-2")
 		_, err = gen2.ValidateToken(token)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "signature is invalid")
@@ -81,7 +81,7 @@ func TestRegistryTokenGenerator_ValidateToken(t *testing.T) {
 }
 
 func TestRegistryTokenClaims_IsRepositoryAllowed(t *testing.T) {
-	claims := &RegistryTokenClaims{
+	claims := &Claims{
 		Repositories: []string{"builds/abc123", "cache/tenant-x"},
 	}
 
@@ -98,20 +98,20 @@ func TestRegistryTokenClaims_IsRepositoryAllowed(t *testing.T) {
 
 func TestRegistryTokenClaims_IsPushAllowed(t *testing.T) {
 	t.Run("push scope", func(t *testing.T) {
-		claims := &RegistryTokenClaims{Scope: "push"}
+		claims := &Claims{Scope: "push"}
 		assert.True(t, claims.IsPushAllowed())
 		assert.True(t, claims.IsPullAllowed()) // push implies pull
 	})
 
 	t.Run("pull scope", func(t *testing.T) {
-		claims := &RegistryTokenClaims{Scope: "pull"}
+		claims := &Claims{Scope: "pull"}
 		assert.False(t, claims.IsPushAllowed())
 		assert.True(t, claims.IsPullAllowed())
 	})
 }
 
 func TestRegistryTokenGenerator_GenerateToken(t *testing.T) {
-	generator := NewRegistryTokenGenerator("test-secret-key")
+	generator := NewGenerator("test-secret-key")
 
 	t.Run("valid token with per-repo permissions", func(t *testing.T) {
 		repoAccess := []RepoPermission{
@@ -147,7 +147,7 @@ func TestRegistryTokenGenerator_GenerateToken(t *testing.T) {
 
 func TestRegistryTokenClaims_RepoAccess(t *testing.T) {
 	// Test claims with new per-repo access format
-	claims := &RegistryTokenClaims{
+	claims := &Claims{
 		RepoAccess: []RepoPermission{
 			{Repo: "builds/abc123", Scope: "push"},
 			{Repo: "cache/global/node", Scope: "pull"},
@@ -195,7 +195,7 @@ func TestRegistryTokenClaims_RepoAccess(t *testing.T) {
 
 func TestRegistryTokenClaims_RepoAccessPullOnly(t *testing.T) {
 	// Test claims with only pull access
-	claims := &RegistryTokenClaims{
+	claims := &Claims{
 		RepoAccess: []RepoPermission{
 			{Repo: "cache/global/node", Scope: "pull"},
 		},
@@ -212,7 +212,7 @@ func TestRegistryTokenClaims_RepoAccessPullOnly(t *testing.T) {
 
 func TestRegistryTokenClaims_LegacyFallback(t *testing.T) {
 	// Test that legacy format still works when RepoAccess is empty
-	claims := &RegistryTokenClaims{
+	claims := &Claims{
 		Repositories: []string{"builds/abc123", "cache/tenant-x"},
 		Scope:        "push",
 	}
