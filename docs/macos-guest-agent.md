@@ -37,8 +37,7 @@ builds a new disk.
 Each guest keeps its own copy (`agent.img`). Creating a guest and every cold start
 copy the host's current disk, so an updated agent takes effect at the next cold
 start. Standby, restore and snapshots keep the copy the guest was saved with, so
-saved state restores against the same disk. Guests created before this existed
-keep booting without the disk.
+saved state restores against the same disk.
 
 The image runs the agent from the disk with a small launcher, installed once in the
 base by `lib/system/guest_agent/macos/install-launcher.sh` (as root, for example

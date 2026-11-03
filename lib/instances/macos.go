@@ -186,21 +186,18 @@ func (m *manager) createBootDisk(ctx context.Context, stored *StoredMetadata, im
 		return err
 	}
 	stored.MacOSDiskLayers = len(chain)
-	if !stored.GuestAgentEnabled() {
-		return nil
-	}
-	stored.MacOSAgentDisk = true
 	return m.installMacOSAgentDisk(ctx, stored)
 }
 
 // macOSAgentDiskSource returns the host's current guest agent disk. Tests replace it.
 var macOSAgentDiskSource = system.MacOSAgentDisk
 
-// installMacOSAgentDisk gives a macOS guest a copy of the host's current guest agent
-// disk. Each guest keeps its own copy, so saved state restores with the disk it was
-// saved with; a cold start takes the host's current agent.
+// installMacOSAgentDisk gives a macOS guest that runs the guest agent a copy of the
+// host's current guest agent disk. Each guest keeps its own copy, so saved state
+// restores with the disk it was saved with; a cold start takes the host's current
+// agent.
 func (m *manager) installMacOSAgentDisk(ctx context.Context, stored *StoredMetadata) error {
-	if !stored.MacOSAgentDisk {
+	if stored.MacOS == nil || !stored.GuestAgentEnabled() {
 		return nil
 	}
 	source, err := macOSAgentDiskSource(ctx, m.paths)
@@ -220,11 +217,12 @@ func (m *manager) installMacOSAgentDisk(ctx context.Context, stored *StoredMetad
 	return os.Rename(staged, disk)
 }
 
-// macOSDisks returns a macOS guest's disks: its boot disk, then its read-only guest
-// agent disk. The boot disk must come first; VZ does not boot with it second.
+// macOSDisks returns a macOS guest's disks: its boot disk, then, when it runs the
+// guest agent, its read-only guest agent disk. The boot disk must come first; VZ
+// does not boot with it second.
 func macOSDisks(p *paths.Paths, stored *StoredMetadata) []hypervisor.DiskConfig {
 	disks := []hypervisor.DiskConfig{{Path: p.InstanceMacOSBootDisk(stored.Id), Format: hypervisor.DiskFormatASIF, Parents: macOSDiskParents(stored)}}
-	if stored.MacOSAgentDisk {
+	if stored.GuestAgentEnabled() {
 		disks = append(disks, hypervisor.DiskConfig{Path: p.InstanceMacOSAgentDisk(stored.Id), Readonly: true})
 	}
 	return disks

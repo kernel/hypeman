@@ -193,7 +193,7 @@ func (m *manager) validateMacOSMemorySnapshotPayload(guestDir string, stored *St
 	for i := range stored.MacOSDiskLayers {
 		payload = append(payload, filepath.Join(guestDir, images.MacOSDiskLayerFile(i)))
 	}
-	if stored.MacOSAgentDisk {
+	if stored.GuestAgentEnabled() {
 		payload = append(payload, filepath.Join(guestDir, paths.MacOSAgentDiskFile))
 	}
 	for _, path := range payload {

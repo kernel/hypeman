@@ -97,10 +97,6 @@ type StoredMetadata struct {
 	// MacOSDiskLayers is the number of read-only image layers below a macOS guest's
 	// boot overlay, cloned into its data directory.
 	MacOSDiskLayers int `json:"macos_disk_layers,omitempty"`
-	// MacOSAgentDisk marks a macOS guest that boots with its copy of the read-only
-	// guest agent disk. Guests created before the disk existed keep booting without
-	// it, so their saved state still restores.
-	MacOSAgentDisk bool `json:"macos_agent_disk,omitempty"`
 	// IdentityRekeyPending marks a macOS clone whose SSH host keys still come from its
 	// source. The next start rekeys them and clears the flag.
 	IdentityRekeyPending bool `json:"identity_rekey_pending,omitempty"`

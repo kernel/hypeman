@@ -29,9 +29,9 @@ func TestMacOSAgentDiskInstallAndRefresh(t *testing.T) {
 
 	useMacOSAgentDisk(t, "agent v1")
 	require.NoError(t, m.installMacOSAgentDisk(context.Background(), stored))
-	require.NoFileExists(t, m.paths.InstanceMacOSAgentDisk(stored.Id), "a guest without the flag gets no agent disk")
+	require.NoFileExists(t, m.paths.InstanceMacOSAgentDisk(stored.Id), "a guest without the agent gets no agent disk")
 
-	stored.MacOSAgentDisk = true
+	stored.MacOS.GuestAgent = true
 	require.NoError(t, m.installMacOSAgentDisk(context.Background(), stored))
 	data, err := os.ReadFile(m.paths.InstanceMacOSAgentDisk(stored.Id))
 	require.NoError(t, err)
@@ -49,9 +49,9 @@ func TestMacOSAgentDiskInstallAndRefresh(t *testing.T) {
 
 func TestMacOSDisksAttachAgentDiskSecond(t *testing.T) {
 	p := paths.New(t.TempDir())
-	stored := &StoredMetadata{Id: "mac", DataDir: p.InstanceDir("mac"), MacOSDiskLayers: 1}
+	stored := &StoredMetadata{Id: "mac", DataDir: p.InstanceDir("mac"), MacOSDiskLayers: 1, MacOS: &images.MacOSImage{}}
 	require.Equal(t, []hypervisor.DiskConfig{{Path: p.InstanceMacOSBootDisk("mac"), Format: hypervisor.DiskFormatASIF, Parents: []string{filepath.Join(stored.DataDir, images.MacOSDiskLayerFile(0))}}}, macOSDisks(p, stored))
-	stored.MacOSAgentDisk = true
+	stored.MacOS.GuestAgent = true
 	disks := macOSDisks(p, stored)
 	require.Len(t, disks, 2)
 	require.Equal(t, p.InstanceMacOSBootDisk("mac"), disks[0].Path, "the boot disk stays first")
@@ -60,7 +60,7 @@ func TestMacOSDisksAttachAgentDiskSecond(t *testing.T) {
 
 func TestMacOSMemorySnapshotRestoresAgentDiskItWasSavedWith(t *testing.T) {
 	m, meta := macOSMemorySnapshotFixture(t)
-	meta.MacOSAgentDisk = true
+	meta.MacOS.GuestAgent, meta.SkipGuestAgent = true, false
 	require.NoError(t, m.saveMetadata(meta))
 	agentDisk := m.paths.InstanceMacOSAgentDisk(meta.Id)
 	require.NoError(t, os.WriteFile(agentDisk, []byte("agent-at-checkpoint"), 0400))
@@ -80,7 +80,7 @@ func TestMacOSMemorySnapshotRestoresAgentDiskItWasSavedWith(t *testing.T) {
 
 func TestMacOSMemorySnapshotRequiresItsAgentDisk(t *testing.T) {
 	m, meta := macOSMemorySnapshotFixture(t)
-	meta.MacOSAgentDisk = true
+	meta.MacOS.GuestAgent, meta.SkipGuestAgent = true, false
 	require.NoError(t, m.saveMetadata(meta))
 	writeMacOSMemorySnapshotPayload(t, m, meta.DataDir, &meta.StoredMetadata)
 	_, err := m.CreateSnapshot(context.Background(), meta.Id, CreateSnapshotRequest{Kind: SnapshotKindStandby})
