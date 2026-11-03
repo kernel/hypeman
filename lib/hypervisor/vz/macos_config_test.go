@@ -40,6 +40,15 @@ func TestMacOSStarterConfig(t *testing.T) {
 	bad = cfg
 	bad.Disks = []hypervisor.DiskConfig{{Readonly: true}}
 	require.Error(t, NewStarter().ValidateConfig(bad))
+	agent := cfg
+	agent.Disks = []hypervisor.DiskConfig{{Path: "/vm/root.raw"}, {Path: "/vm/agent.img", Readonly: true}}
+	require.NoError(t, NewStarter().ValidateConfig(agent), "a read-only disk may follow the boot disk")
+	bad = cfg
+	bad.Disks = []hypervisor.DiskConfig{{Path: "/vm/agent.img", Readonly: true}, {Path: "/vm/root.raw"}}
+	require.Error(t, NewStarter().ValidateConfig(bad), "the boot disk comes first")
+	bad = cfg
+	bad.Disks = []hypervisor.DiskConfig{{Path: "/vm/root.raw"}, {Path: "/vm/data.img"}}
+	require.Error(t, NewStarter().ValidateConfig(bad), "later disks are read-only")
 	bad = cfg
 	bad.MacOS = nil
 	require.Error(t, NewStarter().ValidateConfig(bad))
