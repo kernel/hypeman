@@ -182,6 +182,25 @@ func (t refuseRedirects) RoundTrip(req *http.Request) (*http.Response, error) {
 	return response, err
 }
 
+// ParseMachineBase returns ref, a digest-pinned image in the registry at
+// registryURL, as a publication base.
+func ParseMachineBase(registryURL, ref string) (*MachineBase, error) {
+	registry, err := (&StreamingMachinePublisher{RegistryURL: registryURL}).registry()
+	if err != nil {
+		return nil, err
+	}
+	parsed, err := images.ParseNormalizedRef(ref)
+	if err != nil || !parsed.IsDigest() {
+		return nil, fmt.Errorf("machine base must be pinned by digest")
+	}
+	repo, ok := strings.CutPrefix(parsed.Repository(), registry.Host+"/")
+	if !ok {
+		return nil, fmt.Errorf("machine base %s is not in the registry %s", ref, registry.Host)
+	}
+	base := &MachineBase{Repo: repo, Digest: parsed.Digest()}
+	return base, base.validate()
+}
+
 // registry parses the configured registry address, defaulting to HTTPS. Plaintext
 // is allowed only on loopback.
 func (p *StreamingMachinePublisher) registry() (*url.URL, error) {
