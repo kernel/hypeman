@@ -8,6 +8,7 @@ import (
 	_ "embed"
 	"encoding/hex"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -25,7 +26,8 @@ var macOSAgentDiskBuild = make(chan struct{}, 1)
 
 // MacOSAgentDisk returns the read-only guest agent disk for the embedded macOS
 // agent, building it on first use. Disks are named by the agent's hash, so a new
-// agent gets a new disk.
+// agent gets a new disk; disks for other agents are removed, since every guest
+// has its own copy.
 func MacOSAgentDisk(ctx context.Context, p *paths.Paths) (string, error) {
 	sum := sha256.Sum256(DarwinGuestAgentBinary)
 	version := hex.EncodeToString(sum[:6])
@@ -36,10 +38,29 @@ func MacOSAgentDisk(ctx context.Context, p *paths.Paths) (string, error) {
 		return "", ctx.Err()
 	}
 	defer func() { <-macOSAgentDiskBuild }()
-	if _, err := os.Stat(path); err == nil {
-		return path, nil
+	if _, err := os.Stat(path); err != nil {
+		if err := buildMacOSAgentDisk(ctx, DarwinGuestAgentBinary, version, path); err != nil {
+			return "", err
+		}
 	}
-	return path, buildMacOSAgentDisk(ctx, DarwinGuestAgentBinary, version, path)
+	removeOtherMacOSAgentDisks(path)
+	return path, nil
+}
+
+// removeOtherMacOSAgentDisks deletes the disks and build directories beside path,
+// left by other agents or interrupted builds.
+func removeOtherMacOSAgentDisks(path string) {
+	entries, err := os.ReadDir(filepath.Dir(path))
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if entry.Name() != filepath.Base(path) {
+			if err := os.RemoveAll(filepath.Join(filepath.Dir(path), entry.Name())); err != nil {
+				slog.Warn("remove old macOS agent disk", "path", entry.Name(), "error", err)
+			}
+		}
+	}
 }
 
 // buildMacOSAgentDisk writes a raw APFS disk image at path holding the agent and a
