@@ -269,9 +269,12 @@ func machineImage(ctx context.Context, host string, storage Storage, base *Base,
 		if layers := len(config.RootFS.DiffIDs); layers != len(storage.Layers) {
 			return nil, fmt.Errorf("machine base has %d layers but the disk stacks on %d", layers, len(storage.Layers))
 		}
-		baseDigests := strings.Split(config.Config.Labels[images.MacOSMachineDiskDigestsLabel], ",")
-		if !slices.Equal(baseDigests, layerDigests) {
-			return nil, fmt.Errorf("machine base's disks are not the layers the disk stacks on: base records %q", config.Config.Labels[images.MacOSMachineDiskDigestsLabel])
+		recorded := config.Config.Labels[images.MacOSMachineDiskDigestsLabel]
+		if recorded == "" {
+			return nil, fmt.Errorf("machine base records no disk digests; publish it again without a base first")
+		}
+		if !slices.Equal(strings.Split(recorded, ","), layerDigests) {
+			return nil, fmt.Errorf("machine base's disks are not the layers the disk stacks on: base records %q", recorded)
 		}
 	} else {
 		for _, path := range storage.Layers {
