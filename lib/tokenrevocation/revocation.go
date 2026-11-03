@@ -7,6 +7,7 @@ package tokenrevocation
 
 import (
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"strings"
@@ -31,10 +32,33 @@ func New(hashes []string) (*List, error) {
 	return l, nil
 }
 
-// Hash returns the hex-encoded SHA-256 of a raw token string.
+// Hash returns the hex-encoded SHA-256 of a token string. For an issued token
+// this equals the SHA-256 of the raw string.
+//
+// The signature segment is canonicalized first. The JWT parser verifies the
+// decoded signature bytes, not the segment text, and its non-strict base64
+// decoding accepts other spellings of the same signature (unused trailing
+// bits, embedded CR/LF). Without canonicalization those spellings would verify
+// but hash differently, bypassing revocation.
 func Hash(token string) string {
-	sum := sha256.Sum256([]byte(token))
+	sum := sha256.Sum256([]byte(canonicalize(token)))
 	return hex.EncodeToString(sum[:])
+}
+
+// canonicalize re-encodes the signature segment, decoded the same way as
+// jwt.Parser.DecodeSegment with default options. The header and payload are
+// left alone: they form the signing input, so any change to them fails
+// signature verification.
+func canonicalize(token string) string {
+	i := strings.LastIndexByte(token, '.')
+	if i < 0 {
+		return token
+	}
+	sig, err := base64.RawURLEncoding.DecodeString(token[i+1:])
+	if err != nil {
+		return token
+	}
+	return token[:i+1] + base64.RawURLEncoding.EncodeToString(sig)
 }
 
 // IsRevoked reports whether the raw token string has been revoked.
