@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -62,11 +63,30 @@ func (c *ociClient) existsInLayout(layoutTag string) bool {
 
 	engine := casext.NewEngine(casEngine)
 	descriptorPaths, err := engine.ResolveReference(context.Background(), layoutTag)
-	if err != nil {
+	if err != nil || len(descriptorPaths) == 0 {
 		return false
 	}
 
-	return len(descriptorPaths) > 0
+	// An index entry alone is not a hit: a failed pull can leave it behind after
+	// its blobs are removed, and the next pull would then fail reading them.
+	path, err := layout.FromPath(c.cacheDir)
+	if err != nil {
+		return false
+	}
+	img, err := imageByAnnotation(path, layoutTag)
+	if err != nil {
+		return false
+	}
+	manifest, err := img.Manifest()
+	if err != nil {
+		return false
+	}
+	for _, desc := range append([]gcr.Descriptor{manifest.Config}, manifest.Layers...) {
+		if _, err := os.Stat(filepath.Join(c.cacheDir, "blobs", desc.Digest.Algorithm, desc.Digest.Hex)); err != nil {
+			return false
+		}
+	}
+	return true
 }
 
 // newOCIClient creates a new OCI client

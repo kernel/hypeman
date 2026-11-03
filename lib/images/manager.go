@@ -71,10 +71,14 @@ type inflightImagePull struct {
 }
 
 type manager struct {
-	paths                      *paths.Paths
-	ociClient                  *ociClient
-	queue                      *queue.Queue
-	createMu                   sync.Mutex
+	paths     *paths.Paths
+	ociClient *ociClient
+	queue     *queue.Queue
+	createMu  sync.Mutex
+	// persistFailures holds the error of a failed status whose metadata write did
+	// not land (for example, a full disk). It keeps the failure visible until a
+	// later write succeeds or the image is deleted.
+	persistFailures            sync.Map // digest hex -> error text
 	layers                     *layerStore
 	tagGenerations             map[string]uint64
 	requestedTags              map[string]string // newest pull's digest per requested tag
@@ -609,7 +613,21 @@ func (m *manager) updateStatusByDigest(ref *ResolvedRef, status string, err erro
 		meta.Error = &errorMsg
 	}
 
-	writeMetadataFile(layout.metadata, meta)
+	if writeErr := writeMetadataFile(layout.metadata, meta); writeErr != nil {
+		slog.Error("persist image status", "digest", ref.Digest(), "status", status, "error", writeErr)
+		if status == StatusFailed {
+			msg := "image failed to persist"
+			if err != nil {
+				msg = err.Error()
+			}
+			m.persistFailures.Store(ref.DigestHex(), msg)
+		}
+	} else {
+		m.persistFailures.Delete(ref.DigestHex())
+	}
+	if status == StatusFailed {
+		slog.Warn("image failed", "digest", ref.Digest(), "error", err)
+	}
 
 	// Notify while holding createMu so a delete/recreate cannot race the
 	// metadata write and receive a terminal event for the old build.
@@ -691,6 +709,11 @@ func (m *manager) GetImage(ctx context.Context, name string) (*Image, error) {
 	if meta.Status == StatusPending {
 		img.QueuePosition = m.queue.GetPosition(meta.Digest)
 	}
+	if msg, failed := m.persistFailures.Load(meta.digestHex()); failed && isPendingImageStatus(meta.Status) {
+		text := msg.(string)
+		img.Status = StatusFailed
+		img.Error = &text
+	}
 
 	return img, nil
 }
@@ -708,6 +731,27 @@ func (m *manager) DeleteImage(ctx context.Context, name string) error {
 		return m.deleteDigestImage(ref.Repository(), ref.DigestHex())
 	}
 	return m.deleteTaggedImage(ref.Repository(), ref.Tag())
+}
+
+// reconcileStalePending marks a pending digest failed when no queued job owns it.
+// Content whose record stays pending is never removed, so a pull whose failed
+// status could not be written would otherwise block its own deletion.
+func (m *manager) reconcileStalePending(digestHex string) error {
+	if m.queue.Tracked("sha256:" + digestHex) {
+		return nil
+	}
+	meta, err := readContentMetadata(m.paths, digestHex)
+	if err != nil || !isPendingImageStatus(meta.Status) {
+		return nil
+	}
+	msg := "pull did not complete"
+	meta.Status = StatusFailed
+	meta.Error = &msg
+	if err := writeMetadataFile(m.paths.ImageContentMetadata(digestHex), meta); err != nil {
+		return fmt.Errorf("mark stale pull failed: %w", err)
+	}
+	m.persistFailures.Delete(digestHex)
+	return nil
 }
 
 func (m *manager) deleteDigestImage(repository, digestHex string) error {
@@ -736,6 +780,9 @@ func (m *manager) deleteDigestImage(repository, digestHex string) error {
 	}
 	if err := m.cancelPendingTags(repository, tagsToClean); err != nil {
 		return fmt.Errorf("cancel pending image tags: %w", err)
+	}
+	if err := m.reconcileStalePending(digestHex); err != nil {
+		return err
 	}
 	if err := removeDigestIfUnreferenced(m.paths, repository, digestHex, false); err != nil {
 		return err
@@ -771,6 +818,9 @@ func (m *manager) deleteTaggedImage(repository, tag string) error {
 	}
 	if count > 0 {
 		return nil
+	}
+	if err := m.reconcileStalePending(digestHex); err != nil {
+		return fmt.Errorf("reconcile pending digest %s: %w", digestHex, err)
 	}
 	if err := removeDigestIfUnreferenced(m.paths, repository, digestHex, true); err != nil {
 		return fmt.Errorf("delete orphaned digest %s: %w", digestHex, err)
