@@ -4,12 +4,10 @@ package instances
 
 import (
 	"net"
-	"os"
 	"testing"
 
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/network"
-	"github.com/kernel/hypeman/lib/paths"
 	"github.com/stretchr/testify/require"
 )
 
