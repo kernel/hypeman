@@ -14,7 +14,7 @@ owns the behavior.
 | Stats | Partial | CPU and memory from the VM process. Network counters are 0 under NAT. | PR 1 |
 | Memory reclaim | Unsupported | Reported per guest as `unsupported`. No balloon change. | PR 1 |
 | Guest port forwarding | Agent-gated | HTTP and WebSocket to a guest loopback port at `/instances/{id}/ports/{port}/*`. The image starts its own services. See [macos-guest-ports.md](macos-guest-ports.md). | PR 5 |
-| Builds | Unsupported | Linux Dockerfile builds unsupported. | PR 6 |
+| Builds | Unsupported | Build with Packer and Tart, then publish with `import-tart`. See [macos-experimental.md](macos-experimental.md#building-images-with-packer-and-tart). Linux Dockerfile builds unsupported. | PR 6 |
 | Stopped snapshots, same-instance restore | Experimental | Graceful stop required. Stopped and Running targets; restored metadata and storage are staged together. | PR 4 |
 | Standby and restore (same instance) | Experimental | Saves memory, restores the same instance. Restore can fail (about 2% observed, cause unknown); a failed restore leaves the instance in Standby. Recover by deleting, as on Linux. Standby auto-policies rejected: no host-visible connection tracking on NAT. | PR 4 |
 | Same-instance memory snapshots | Experimental | Running/Standby capture, with exact VZ configuration validation and an uncompressed disk/aux/memory bundle. Same-instance restore only; new path needs native QA. | PR 4 |

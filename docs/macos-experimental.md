@@ -66,6 +66,48 @@ This schema is experimental pending reconciliation with other machine-image
 platforms. There is no identity rebinding on pull or concurrent-template guarantee. Ordinary OCI transport does not imply sparse
 distribution efficiency, boot portability, or container execution semantics.
 
+## Building images with Packer and Tart
+
+hypeman does not build macOS images itself. Build them with Packer's Tart builder
+on a macOS 27 host, as stacked Tart VMs, then publish the result with
+`import-tart`. A stacked VM shares a read-only base disk and writes only to its own
+`overlay.asif`, so a build on a base already in the registry uploads only that
+overlay.
+
+1. Publish the base once from a standalone Tart VM whose `disk.img` is ASIF
+   (`diskFormat: asif`). Every layer is uploaded.
+2. Get the base as a Tart image (`tart push` to any OCI registry) and create the
+   build VM with `tart clone --stacked`. The Packer Tart plugin cannot clone
+   stacked itself, so point its `vm_base_name` at that local clone.
+3. Build. The template must set `recovery_partition = "keep"` (the default deletes
+   the recovery partition and grows APFS), regenerate the guest's SSH host keys
+   (`rm -f /etc/ssh/ssh_host_* && ssh-keygen -A`), and end by shutting the guest
+   down from inside, with `skip_clean = true` on that step. `tart stop` is a hard
+   power-off.
+4. Publish the stopped VM over the base:
+
+```sh
+HYPEMAN_JWT_SECRET=... go run ./cmd/import-tart \
+  --vm ~/.tart/vms/my-build \
+  --registry https://hypeman.example \
+  --name my-build \
+  --base hypeman.example/builds/my-base@sha256:... \
+  --guest-agent
+```
+
+The image is published as `builds/<name>`. `import-tart` reads the VM's layers from
+Tart's content store in the order its `manifest.json` lists them, refuses a
+suspended or running VM, and checks that the overlay stacks on those layers. With
+`--base`, the VM's layers must be that image's layers, and only the config and
+overlay are uploaded. Each image gets a fresh machine identifier and MAC, since
+Tart keeps its source's; the SSH host keys are the template's job. The registry
+imports a pushed image on its host, as `builds/<name>@sha256:...`. Other hosts pull
+it by digest with registry credentials.
+
+Building on a build needs that build as a Tart image too: `tart clone --stacked`
+only stacks on images pulled from a registry, and a local clone copies the
+overlay instead of stacking on it.
+
 ## API
 
 Use the usual JWT-authenticated API with a VZ-capable, signed build:
