@@ -82,7 +82,10 @@ func (s Storage) validate() error {
 // No credentials, redirect destinations or arbitrary output repositories come from the source.
 type Publisher struct {
 	RegistryURL string
-	Tokens      *registrytoken.Generator
+	// Token is a registry token from MintToken. Without one, Tokens mints a token
+	// for each publication.
+	Token  string
+	Tokens *registrytoken.Generator
 	// NewMachineIdentifier returns a fresh VZ machine identifier. Every published
 	// image gets its own identifier and MAC, so it never runs with its source's.
 	NewMachineIdentifier func() ([]byte, error)
@@ -114,7 +117,7 @@ func (p *Publisher) Publish(ctx context.Context, id string, storage Storage, bas
 	if !ok || ctx.Err() != nil {
 		return Publication{}, fmt.Errorf("bounded publication required")
 	}
-	if id == "" || len(id) > 128 || strings.Trim(id, "abcdefghijklmnopqrstuvwxyz0123456789-") != "" || p.Tokens == nil || p.NewMachineIdentifier == nil {
+	if !validName(id) || (p.Token == "" && p.Tokens == nil) || p.NewMachineIdentifier == nil {
 		return Publication{}, fmt.Errorf("scoped machine publisher required")
 	}
 	if base != nil {
@@ -136,13 +139,11 @@ func (p *Publisher) Publish(ctx context.Context, id string, storage Storage, bas
 		return Publication{}, err
 	}
 	repo := "builds/" + id
-	access := []registrytoken.RepoPermission{{Repo: repo, Scope: "push"}}
-	if base != nil {
-		access = append(access, registrytoken.RepoPermission{Repo: base.Repo, Scope: "pull"})
-	}
-	token, err := p.Tokens.GenerateToken(id, access, time.Until(deadline))
-	if err != nil {
-		return Publication{}, err
+	token := p.Token
+	if token == "" {
+		if token, err = p.Tokens.GenerateToken(id, publishAccess(id, base), time.Until(deadline)); err != nil {
+			return Publication{}, err
+		}
 	}
 	transport := &http.Transport{}
 	if defaults, ok := http.DefaultTransport.(*http.Transport); ok {
@@ -171,6 +172,34 @@ func (p *Publisher) Publish(ctx context.Context, id string, storage Storage, bas
 		return Publication{}, err
 	}
 	return Publication{Reference: registry.Host + "/" + repo + "@" + digest.String(), Digest: digest.String()}, nil
+}
+
+// MintToken returns a registry token that can publish the image name, over base
+// when it is set, for ttl. A publisher given it needs no registry secret.
+func MintToken(tokens *registrytoken.Generator, name string, base *Base, ttl time.Duration) (string, error) {
+	if !validName(name) {
+		return "", fmt.Errorf("invalid machine image name %q", name)
+	}
+	if base != nil {
+		if err := base.validate(); err != nil {
+			return "", err
+		}
+	}
+	return tokens.GenerateToken(name, publishAccess(name, base), ttl)
+}
+
+// publishAccess is the registry access a publication needs: push on its own
+// builds/{name} repository and pull on its base's.
+func publishAccess(name string, base *Base) []registrytoken.RepoPermission {
+	access := []registrytoken.RepoPermission{{Repo: "builds/" + name, Scope: "push"}}
+	if base != nil {
+		access = append(access, registrytoken.RepoPermission{Repo: base.Repo, Scope: "pull"})
+	}
+	return access
+}
+
+func validName(name string) bool {
+	return name != "" && len(name) <= 128 && strings.Trim(name, "abcdefghijklmnopqrstuvwxyz0123456789-") == ""
 }
 
 // randomMAC returns a random locally administered unicast MAC address.

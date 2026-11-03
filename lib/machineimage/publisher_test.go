@@ -152,3 +152,21 @@ func TestStreamingMachinePublisherReusesBaseLayers(t *testing.T) {
 	_, e = publisher.Publish(ctx, "qa-mismatched", mismatched, machineBase)
 	require.ErrorContains(t, e, "not the layers the disk stacks on")
 }
+
+func TestMintedTokenPublishesOnlyItsImage(t *testing.T) {
+	imports := &machineImportStub{imported: make(chan string, 2)}
+	reg, e := registry.New(paths.New(t.TempDir()), imports)
+	require.NoError(t, e)
+	server := httptest.NewServer(middleware.JwtAuth("synthetic registry secret")(reg.Handler()))
+	defer server.Close()
+	token, e := machineimage.MintToken(registrytoken.NewGenerator("synthetic registry secret"), "qa-minted", nil, time.Hour)
+	require.NoError(t, e)
+	publisher := &machineimage.Publisher{RegistryURL: server.URL, Token: token, NewMachineIdentifier: testMachineIdentifier}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	_, e = publisher.Publish(ctx, "qa-minted", machinePublisherStorage(t), nil)
+	require.NoError(t, e)
+	_, e = publisher.Publish(ctx, "qa-other", machinePublisherStorage(t), nil)
+	require.Error(t, e, "the token cannot publish another image")
+}

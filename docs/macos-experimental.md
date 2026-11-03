@@ -99,7 +99,7 @@ overlay.
 4. Publish the stopped VM over the base:
 
 ```sh
-HYPEMAN_JWT_SECRET=... go run ./cmd/import-tart \
+HYPEMAN_REGISTRY_TOKEN=... go run ./cmd/import-tart \
   --vm ~/.tart/vms/my-build \
   --registry https://hypeman.example \
   --name my-build \
@@ -110,8 +110,21 @@ HYPEMAN_JWT_SECRET=... go run ./cmd/import-tart \
 The `macOS image` workflow (`.github/workflows/macos-image.yml`, run by hand) does
 steps 2 to 4 on a self-hosted macOS 27 runner labelled `tart`. It needs the
 `HYPEMAN_REGISTRY_URL` and `MACOS_IMAGE_SSH_USERNAME` variables and the
-`HYPEMAN_JWT_SECRET`, `MACOS_IMAGE_SSH_PASSWORD`, `TART_REGISTRY_USERNAME` and
+`HYPEMAN_REGISTRY_TOKEN`, `MACOS_IMAGE_SSH_PASSWORD`, `TART_REGISTRY_USERNAME` and
 `TART_REGISTRY_PASSWORD` secrets.
+
+`HYPEMAN_REGISTRY_TOKEN` can push only `builds/<name>` and pull only the base.
+Someone with the registry's JWT secret mints it once, and mints a new one when the
+name, the base or its expiry changes:
+
+```sh
+HYPEMAN_JWT_SECRET=... go run ./cmd/import-tart --mint-token \
+  --registry https://hypeman.example --name my-build \
+  --base hypeman.example/builds/my-base@sha256:... --token-ttl 720h
+```
+
+`import-tart` also accepts `HYPEMAN_JWT_SECRET` in place of a token, minting one for
+each publication.
 
 The image is published as `builds/<name>`. `import-tart` reads the VM's layers from
 Tart's content store (under `TART_HOME`, or `~/.tart`) in the order its

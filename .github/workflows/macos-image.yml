@@ -13,7 +13,7 @@ on:
         description: The same base in hypeman's registry, pinned by digest
         required: true
       name:
-        description: Image name; published as builds/NAME
+        description: Image name; published as builds/NAME. The registry token must be minted for it.
         required: true
 
 permissions:
@@ -83,7 +83,9 @@ jobs:
           BASE: ${{ inputs.base }}
           NAME: ${{ inputs.name }}
           REGISTRY: ${{ vars.HYPEMAN_REGISTRY_URL }}
-          HYPEMAN_JWT_SECRET: ${{ secrets.HYPEMAN_JWT_SECRET }}
+          # Minted by import-tart --mint-token for this name and base; it can publish
+          # nothing else.
+          HYPEMAN_REGISTRY_TOKEN: ${{ secrets.HYPEMAN_REGISTRY_TOKEN }}
         run: |
           import-tart --vm "$HOME/.tart/vms/$VM" --registry "$REGISTRY" --name "$NAME" --base "$BASE" --guest-agent | tee "$RUNNER_TEMP/publication.json"
           echo "Published \`$(jq -r .Reference "$RUNNER_TEMP/publication.json")\`" >> "$GITHUB_STEP_SUMMARY"
