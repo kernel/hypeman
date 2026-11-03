@@ -287,6 +287,10 @@ type Config struct {
 	Version       string `koanf:"version"`
 	MacOSOnly     bool   `koanf:"macos_only"` // Experimental: omit Linux boot downloads and reject Linux creates.
 
+	// RevokedTokenHashes lists hex SHA-256 digests of API tokens to reject
+	// even though they are signed with JwtSecret and not yet expired.
+	RevokedTokenHashes []string `koanf:"revoked_token_hashes"`
+
 	Network          NetworkConfig          `koanf:"network"`
 	Caddy            CaddyConfig            `koanf:"caddy"`
 	ACME             ACMEConfig             `koanf:"acme"`

@@ -64,7 +64,7 @@ func setupTestRouter(t *testing.T) http.Handler {
 	r := chi.NewRouter()
 	r.Use(nethttpmiddleware.OapiRequestValidatorWithOptions(spec, &nethttpmiddleware.Options{
 		Options: openapi3filter.Options{
-			AuthenticationFunc: mw.OapiAuthenticationFunc(testJWTSecret),
+			AuthenticationFunc: mw.OapiAuthenticationFunc(testJWTSecret, nil),
 		},
 		ErrorHandler: mw.OapiErrorHandler,
 	}))

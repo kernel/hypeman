@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -11,6 +12,7 @@ import (
 	"github.com/getkin/kin-openapi/openapi3filter"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/kernel/hypeman/lib/scopes"
+	"github.com/kernel/hypeman/lib/tokenrevocation"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -52,7 +54,7 @@ func TestJwtAuth_RejectsRegistryTokens(t *testing.T) {
 	})
 
 	// Wrap with JwtAuth middleware
-	handler := JwtAuth(testJWTSecret)(nextHandler)
+	handler := JwtAuth(testJWTSecret, nil)(nextHandler)
 
 	t.Run("valid user token is accepted", func(t *testing.T) {
 		userToken := generateUserToken(t, "user-123")
@@ -214,7 +216,7 @@ func TestJwtAuth_TokenEndpointBypass(t *testing.T) {
 		w.Write([]byte("token endpoint reached"))
 	})
 
-	handler := JwtAuth(testJWTSecret)(nextHandler)
+	handler := JwtAuth(testJWTSecret, nil)(nextHandler)
 
 	t.Run("token endpoint passes through without auth", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/v2/token?scope=repository:builds/abc:push", nil)
@@ -248,7 +250,7 @@ func TestJwtAuth_RegistryPathAcceptsUserTokens(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	handler := JwtAuth(testJWTSecret)(nextHandler)
+	handler := JwtAuth(testJWTSecret, nil)(nextHandler)
 
 	t.Run("regular user token is accepted for registry write path", func(t *testing.T) {
 		token := generateUserToken(t, "user-registry-write")
@@ -284,7 +286,7 @@ func TestJwtAuth_RegistryUnauthorizedResponse(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	handler := JwtAuth(testJWTSecret)(nextHandler)
+	handler := JwtAuth(testJWTSecret, nil)(nextHandler)
 
 	t.Run("registry 401 includes WWW-Authenticate header", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/v2/builds/abc123/manifests/latest", nil)
@@ -321,7 +323,7 @@ func TestJwtAuth_RequiresAuthorization(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	handler := JwtAuth(testJWTSecret)(nextHandler)
+	handler := JwtAuth(testJWTSecret, nil)(nextHandler)
 
 	t.Run("missing authorization header is rejected", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/instances", nil)
@@ -409,7 +411,7 @@ func TestJwtAuth_ScopedPermissions(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	handler := JwtAuth(testJWTSecret)(nextHandler)
+	handler := JwtAuth(testJWTSecret, nil)(nextHandler)
 
 	t.Run("legacy token without permissions has full access", func(t *testing.T) {
 		token := generateUserToken(t, "user-123")
@@ -496,7 +498,7 @@ func newBearerAuthInput(t *testing.T, token string) *openapi3filter.Authenticati
 }
 
 func TestOapiAuthenticationFunc_ScopedPermissions(t *testing.T) {
-	authFunc := OapiAuthenticationFunc(testJWTSecret)
+	authFunc := OapiAuthenticationFunc(testJWTSecret, nil)
 
 	t.Run("legacy token without permissions has full access", func(t *testing.T) {
 		token := generateUserToken(t, "user-100")
@@ -567,9 +569,51 @@ func TestValidateTokens_RejectEmptySecret(t *testing.T) {
 	}).SignedString([]byte(""))
 	require.NoError(t, err)
 
-	_, err = validateUserToken(forged, "")
+	_, err = validateUserToken(forged, "", nil)
 	assert.Error(t, err)
 
-	_, err = validateRegistryToken(forged, "", "/v2/", http.MethodGet)
+	_, err = validateRegistryToken(forged, "", nil, "/v2/", http.MethodGet)
 	assert.Error(t, err)
+}
+
+func TestRevokedTokensAreRejected(t *testing.T) {
+	revokedToken := generateUserToken(t, "revoked-user")
+	activeToken := generateUserToken(t, "active-user")
+	revokedRegistryToken := generateRegistryToken(t, "build-revoked")
+	revoked, err := tokenrevocation.New([]string{
+		tokenrevocation.Hash(revokedToken),
+		tokenrevocation.Hash(revokedRegistryToken),
+	})
+	require.NoError(t, err)
+
+	handler := JwtAuth(testJWTSecret, revoked)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	serve := func(path, authHeader string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.Header.Set("Authorization", authHeader)
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+		return rr
+	}
+
+	t.Run("JwtAuth rejects revoked user token", func(t *testing.T) {
+		assert.Equal(t, http.StatusUnauthorized, serve("/instances", "Bearer "+revokedToken).Code)
+		assert.Equal(t, http.StatusOK, serve("/instances", "Bearer "+activeToken).Code)
+	})
+
+	t.Run("JwtAuth rejects revoked tokens on registry paths", func(t *testing.T) {
+		basic := func(token string) string {
+			return "Basic " + base64.StdEncoding.EncodeToString([]byte(token+":"))
+		}
+		assert.Equal(t, http.StatusUnauthorized, serve("/v2/builds/build-revoked/manifests/latest", basic(revokedRegistryToken)).Code)
+		assert.Equal(t, http.StatusUnauthorized, serve("/v2/", "Bearer "+revokedToken).Code)
+		assert.Equal(t, http.StatusOK, serve("/v2/", "Bearer "+activeToken).Code)
+	})
+
+	t.Run("OapiAuthenticationFunc rejects revoked user token", func(t *testing.T) {
+		authFunc := OapiAuthenticationFunc(testJWTSecret, revoked)
+		assert.Error(t, authFunc(context.Background(), newBearerAuthInput(t, revokedToken)))
+		assert.NoError(t, authFunc(context.Background(), newBearerAuthInput(t, activeToken)))
+	})
 }

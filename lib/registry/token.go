@@ -12,6 +12,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/kernel/hypeman/lib/logger"
+	"github.com/kernel/hypeman/lib/tokenrevocation"
 )
 
 // TokenResponse is the response from the /v2/token endpoint per Docker Registry Token spec.
@@ -45,13 +46,15 @@ type TokenErrorResponse struct {
 // This endpoint is called by Docker/BuildKit clients after receiving a 401 with WWW-Authenticate.
 type TokenHandler struct {
 	jwtSecret string
+	revoked   *tokenrevocation.List
 }
 
 // NewTokenHandler creates a new token endpoint handler.
 // All clients must provide explicit credentials (Basic or Bearer auth with JWT).
-func NewTokenHandler(jwtSecret string) *TokenHandler {
+func NewTokenHandler(jwtSecret string, revoked *tokenrevocation.List) *TokenHandler {
 	return &TokenHandler{
 		jwtSecret: jwtSecret,
+		revoked:   revoked,
 	}
 }
 
@@ -73,6 +76,14 @@ func (h *TokenHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	token, authMethod := h.extractToken(r)
 
 	if token != "" {
+		if h.revoked.IsRevoked(token) {
+			log.WarnContext(r.Context(), "revoked token presented",
+				"path", r.URL.Path,
+				"remote_addr", r.RemoteAddr)
+			h.writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "invalid credentials")
+			return
+		}
+
 		// Validate the JWT
 		claims, err := h.validateJWT(token)
 		if err != nil {

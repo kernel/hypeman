@@ -361,6 +361,24 @@ func TestLoadUsesConfiguredLifecycleEventBufferSize(t *testing.T) {
 	}
 }
 
+func TestLoadReadsRevokedTokenHashes(t *testing.T) {
+	tmp := t.TempDir()
+	cfgPath := filepath.Join(tmp, "config.yaml")
+	hash := strings.Repeat("ab", 32)
+	if err := os.WriteFile(cfgPath, []byte("revoked_token_hashes:\n  - "+hash+"\n"), 0600); err != nil {
+		t.Fatalf("write temp config: %v", err)
+	}
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	if len(cfg.RevokedTokenHashes) != 1 || cfg.RevokedTokenHashes[0] != hash {
+		t.Fatalf("expected revoked_token_hashes from config file, got %v", cfg.RevokedTokenHashes)
+	}
+}
+
 func TestValidateRejectsInvalidLifecycleEventBufferSize(t *testing.T) {
 	cfg := defaultConfig()
 	cfg.Instances.LifecycleEventBufferSize = 0

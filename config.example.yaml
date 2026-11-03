@@ -14,6 +14,12 @@
 # e.g. `openssl rand -hex 32`. The API will not start with an empty value.
 jwt_secret: ""
 
+# Optional - revoke individual API tokens before they expire. Each entry is the
+# hex SHA-256 of the full token string, e.g. `printf '%s' "$TOKEN" | sha256sum`.
+# Changes take effect when hypeman restarts.
+# revoked_token_hashes:
+#   - 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+
 # Data directory (default: /var/lib/hypeman)
 data_dir: /var/lib/hypeman
 
