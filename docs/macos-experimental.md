@@ -79,14 +79,22 @@ overlay.
 2. Get the base as a Tart image (`tart push` to any OCI registry) and create the
    build VM with `tart clone --stacked`. The Packer Tart plugin cannot clone
    stacked itself, so point its `vm_base_name` at that local clone.
-3. Build. The template must set `recovery_partition = "keep"` (the default deletes
-   the recovery partition and grows APFS), regenerate the guest's SSH host keys
-   (`rm -f /etc/ssh/ssh_host_* && ssh-keygen -A`), and end by shutting the guest
-   down from inside, with `skip_clean = true` on that step. `tart stop` is a hard
-   power-off. For the guest agent, install the launcher once in the base with
-   `lib/system/guest_agent/macos/install-launcher.sh` and publish with
-   `--guest-agent`; hypeman supplies the agent on its own disk (see
-   [macos-guest-agent.md](macos-guest-agent.md#agent-disk)).
+3. Build with `images/macos/browser.pkr.hcl`. It installs Chrome (from Google's
+   stable DMG, checked by its code signature and Gatekeeper), runs any
+   `extra_scripts`, installs hypeman's agent launcher (hypeman supplies the agent
+   on its own disk; see [macos-guest-agent.md](macos-guest-agent.md#agent-disk)),
+   checks the image with `images/macos/smoke-test.sh` (launcher present, no baked
+   agent, headless Chrome answers CDP), regenerates the SSH host keys and shuts the
+   guest down from inside. It keeps the recovery partition; Packer's default
+   deletes it and rewrites the whole disk. The base must have an SSH user with sudo
+   for Packer.
+
+   ```sh
+   cd images/macos && packer init browser.pkr.hcl
+   packer build -var vm_base_name=base-clone -var vm_name=my-build \
+     -var ssh_username=admin -var ssh_password=... browser.pkr.hcl
+   ```
+
 4. Publish the stopped VM over the base:
 
 ```sh
@@ -97,6 +105,12 @@ HYPEMAN_JWT_SECRET=... go run ./cmd/import-tart \
   --base hypeman.example/builds/my-base@sha256:... \
   --guest-agent
 ```
+
+The `macOS image` workflow (`.github/workflows/macos-image.yml`, run by hand) does
+steps 2 to 4 on a self-hosted macOS 27 runner labelled `tart`. It needs the
+`HYPEMAN_REGISTRY_URL` and `MACOS_IMAGE_SSH_USERNAME` variables and the
+`HYPEMAN_JWT_SECRET`, `MACOS_IMAGE_SSH_PASSWORD`, `TART_REGISTRY_USERNAME` and
+`TART_REGISTRY_PASSWORD` secrets.
 
 The image is published as `builds/<name>`. `import-tart` reads the VM's layers from
 Tart's content store in the order its `manifest.json` lists them, refuses a
