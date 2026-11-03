@@ -101,7 +101,7 @@ func prepareMacOSCreate(req *CreateInstanceRequest, img *images.Image, caps hype
 		return fmt.Errorf("%w: macOS requires at least 4 GiB in whole MiB and 2 vCPUs", ErrInvalidRequest)
 	}
 	req.Size, req.Vcpus = size, vcpus
-	req.OverlaySize = *img.SizeBytes // Reserve the writable boot disk, not a Linux overlay.
+	req.OverlaySize = macOSBootDiskAllowance // Reserve room for the guest's writes, not the whole disk.
 	req.SkipGuestAgent = req.SkipGuestAgent || !img.MacOS.GuestAgent
 	req.SkipKernelHeaders = true
 	return nil

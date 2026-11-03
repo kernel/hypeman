@@ -214,7 +214,7 @@ func (m *manager) createInstance(
 	if overlaySize == 0 {
 		overlaySize = 10 * 1024 * 1024 * 1024 // 10GB default
 	}
-	// Validate overlay size against max. A macOS boot disk is sized by its image.
+	// Validate overlay size against max. A macOS guest reserves a fixed allowance instead.
 	if imageInfo.MacOS == nil && overlaySize > m.limits.MaxOverlaySize {
 		return nil, fmt.Errorf("overlay size %d exceeds maximum allowed size %d", overlaySize, m.limits.MaxOverlaySize)
 	}
