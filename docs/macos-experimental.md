@@ -43,6 +43,7 @@ labels describe a complete installed machine:
 | `io.hypeman.machine-image.disk-path` | Relative ASIF disk path, in every layer |
 | `io.hypeman.machine-image.aux-path` | Relative auxiliary storage path |
 | `io.hypeman.machine-image.platform-path` | Relative macOS platform configuration JSON path |
+| `io.hypeman.machine-image.disk-digests` | Optional: sha256 of each layer's disk file, base first, comma-separated |
 
 Each layer carries one ASIF disk, and each layer's disk is an overlay on the
 previous layer's, so the layers form the boot disk's chain, base first. The
@@ -113,10 +114,12 @@ steps 2 to 4 on a self-hosted macOS 27 runner labelled `tart`. It needs the
 `TART_REGISTRY_PASSWORD` secrets.
 
 The image is published as `builds/<name>`. `import-tart` reads the VM's layers from
-Tart's content store in the order its `manifest.json` lists them, refuses a
-suspended or running VM, and checks that the overlay stacks on those layers. With
-`--base`, the VM's layers must be that image's layers, and only the config and
-overlay are uploaded. Each image gets a fresh machine identifier and MAC, since
+Tart's content store (under `TART_HOME`, or `~/.tart`) in the order its
+`manifest.json` lists them, refuses a suspended or running VM, and checks that the
+overlay stacks on those layers. Each published image records its layers' disk
+digests. With `--base`, the VM's layer digests must equal the ones that image
+records, and only the config and overlay are uploaded; a base without them is
+refused. Each image gets a fresh machine identifier and MAC, since
 Tart keeps its source's; the SSH host keys are the template's job. The registry
 imports a pushed image on its host, as `builds/<name>@sha256:...`. Other hosts pull
 it by digest with registry credentials.

@@ -37,7 +37,10 @@ variable "extra_scripts" {
 }
 
 locals {
-  sudo = "echo '${var.ssh_password}' | sudo -S -p '' sh -eux '{{ .Path }}'"
+  # The sudo password is read from a file uploaded first, so it is never quoted
+  # into a command line. The build user's home is not readable by other users.
+  sudo_password = "/Users/${var.ssh_username}/.packer-sudo-password"
+  sudo          = "sudo -S -p '' sh -eux '{{ .Path }}' < ${local.sudo_password}"
 }
 
 source "tart-cli" "macos" {
@@ -54,6 +57,11 @@ source "tart-cli" "macos" {
 
 build {
   sources = ["source.tart-cli.macos"]
+
+  provisioner "file" {
+    content     = var.ssh_password
+    destination = local.sudo_password
+  }
 
   provisioner "shell" {
     execute_command = local.sudo
@@ -76,6 +84,7 @@ build {
   provisioner "shell" {
     execute_command = local.sudo
     inline = [
+      "rm -f ${local.sudo_password}",
       "rm -f /etc/ssh/ssh_host_*",
       "ssh-keygen -A",
       "shutdown -h now",

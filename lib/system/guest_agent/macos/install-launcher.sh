@@ -10,10 +10,21 @@ install -d -o root -g wheel -m 0755 /usr/local/libexec
 cat > /usr/local/libexec/hypeman-agent-launcher <<'SH'
 #!/bin/sh
 # Run hypeman's guest agent from its read-only agent disk, mounting it if macOS
-# has not yet.
+# has not yet. Only the disk hypeman attaches is trusted: a fixed internal device,
+# not a disk image a guest user attached under the same name.
+volume=/Volumes/HypemanAgent
 install -d -o root -g wheel -m 0755 /var/run/hypeman
 for i in $(seq 1 120); do
-  [ -x /Volumes/HypemanAgent/hypeman-guest-agent ] && exec /Volumes/HypemanAgent/hypeman-guest-agent
+  if [ -x "$volume/hypeman-guest-agent" ]; then
+    info=$(/usr/sbin/diskutil info "$volume" 2>/dev/null)
+    if echo "$info" | grep -Eq '^ *Device Location: +Internal$' &&
+      echo "$info" | grep -Eq '^ *Removable Media: +Fixed$' &&
+      ! echo "$info" | grep -Eq '^ *Protocol: +Disk Image$'; then
+      exec "$volume/hypeman-guest-agent"
+    fi
+    echo "refusing $volume: it is not hypeman's attached agent disk" >&2
+    exit 1
+  fi
   /usr/sbin/diskutil mount readOnly HypemanAgent >/dev/null 2>&1
   sleep 1
 done
