@@ -58,14 +58,19 @@ to ensure compatibility.
 ### 1. Build and Push
 
 ```bash
-# From repository root - use buildx with OCI mediatypes
+# From a clean repository checkout - use buildx with OCI mediatypes
+VERSION=$(git rev-parse HEAD)
 docker buildx build \
   --platform linux/amd64 \
   --output type=image,oci-mediatypes=true,push=true \
   --tag onkernel/builder-generic:latest \
+  --tag "onkernel/builder-generic:$VERSION" \
   -f lib/builds/images/generic/Dockerfile \
   .
 ```
+
+Keep the version tag for rollback when moving `latest` to a newer build. To roll back,
+set `BUILDER_IMAGE` to the retained version tag instead of `latest`.
 
 ### 2. Import into Hypeman
 
