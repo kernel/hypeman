@@ -3,6 +3,7 @@ package builds
 import (
 	"archive/tar"
 	"compress/gzip"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -195,6 +196,69 @@ func TestExtractDockerfileFromTarball_DotSlashPrefix(t *testing.T) {
 	}
 	if content != dockerfileContent {
 		t.Errorf("expected %q, got %q", dockerfileContent, content)
+	}
+}
+
+func TestWriteSourceWithDockerfile(t *testing.T) {
+	for _, originalName := range []string{"Dockerfile", "./Dockerfile", "other.txt"} {
+		t.Run(originalName, func(t *testing.T) {
+			dir := t.TempDir()
+			original := filepath.Join(dir, "source.tar.gz")
+			createTarball(t, original, map[string]string{originalName: "FROM old:latest", "app.txt": "application"})
+			source, err := os.Open(original)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer source.Close()
+			prepared, err := os.Create(filepath.Join(dir, "prepared.tar.gz"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer prepared.Close()
+			const replacement = "FROM mirror.example/runtime@sha256:abc\n"
+			if err := writeSourceWithDockerfile(source, prepared, replacement); err != nil {
+				t.Fatal(err)
+			}
+			got, err := ExtractDockerfileFromTarball(prepared.Name())
+			if err != nil || got != replacement {
+				t.Fatalf("replacement: %q, %v", got, err)
+			}
+			if originalName != "other.txt" {
+				got, err = ExtractDockerfileFromTarball(original)
+				if err != nil || got != "FROM old:latest" {
+					t.Fatalf("stored source changed: %q, %v", got, err)
+				}
+			}
+			if _, err := prepared.Seek(0, 0); err != nil {
+				t.Fatal(err)
+			}
+			gz, err := gzip.NewReader(prepared)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer gz.Close()
+			tr := tar.NewReader(gz)
+			foundApp := false
+			for {
+				h, err := tr.Next()
+				if err == io.EOF {
+					break
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				if h.Name == "app.txt" {
+					content, err := io.ReadAll(tr)
+					if err != nil || string(content) != "application" {
+						t.Fatalf("app content: %q, %v", content, err)
+					}
+					foundApp = true
+				}
+			}
+			if !foundApp {
+				t.Fatal("lost app file")
+			}
+		})
 	}
 }
 

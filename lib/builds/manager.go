@@ -6,6 +6,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"os"
@@ -556,8 +557,8 @@ func (m *manager) CreateBuild(ctx context.Context, req CreateBuildRequest, sourc
 		refs := ParseDockerfileFROMs(dockerfileContent)
 		seen := make(map[string]bool)
 		for _, ref := range refs {
-			repo := ref
-			if idx := strings.LastIndex(repo, ":"); idx > 0 {
+			repo := strings.SplitN(ref, "@", 2)[0]
+			if idx := strings.LastIndex(repo, ":"); idx > strings.LastIndex(repo, "/") {
 				repo = repo[:idx]
 			}
 			if !seen[repo] {
@@ -688,12 +689,11 @@ func (m *manager) runBuild(ctx context.Context, id string, req CreateBuildReques
 	// Mirror base images to the local registry before launching the VM.
 	// BuildKit is configured with our registry as a mirror for docker.io,
 	// so pre-cached images will be served locally without pulling from Docker Hub.
-	if err := m.mirrorBaseImagesForBuild(buildCtx, id, req); err != nil {
-		m.logger.Warn("failed to mirror base images", "id", id, "error", err)
+	var result *BuildResult
+	err := m.mirrorBaseImagesForBuild(buildCtx, id, req)
+	if err == nil {
+		result, err = m.executeBuild(buildCtx, id, req, policy)
 	}
-
-	// Run the build in a builder VM
-	result, err := m.executeBuild(buildCtx, id, req, policy)
 
 	// executeBuild's defers release the builder acquisition when it returns,
 	// so same-builder builds may start while this build waits for image
@@ -812,6 +812,26 @@ func (m *manager) executeBuild(ctx context.Context, id string, req CreateBuildRe
 		return nil, fmt.Errorf("open source: %w", err)
 	}
 	defer sourceFile.Close()
+
+	config, err := readBuildConfig(m.paths, id)
+	if err != nil {
+		return nil, err
+	}
+	if config.Dockerfile != "" && config.Dockerfile != req.Dockerfile {
+		prepared, err := os.CreateTemp(m.paths.BuildSourceDir(id), "mirrored-*.tar.gz")
+		if err != nil {
+			return nil, err
+		}
+		defer os.Remove(prepared.Name())
+		defer prepared.Close()
+		if err := writeSourceWithDockerfile(sourceFile, prepared, config.Dockerfile); err != nil {
+			return nil, fmt.Errorf("prepare mirrored Dockerfile: %w", err)
+		}
+		if _, err := prepared.Seek(0, io.SeekStart); err != nil {
+			return nil, err
+		}
+		sourceFile = prepared
+	}
 
 	// Create volume with source (using the volume manager's archive import)
 	_, err = m.volumeManager.CreateVolumeFromArchive(ctx, volumes.CreateVolumeFromArchiveRequest{
@@ -1558,8 +1578,8 @@ func (m *manager) refreshBuildToken(buildID string, req *CreateBuildRequest) err
 		refs := ParseDockerfileFROMs(dockerfileContent)
 		seen := make(map[string]bool)
 		for _, ref := range refs {
-			repo := ref
-			if idx := strings.LastIndex(repo, ":"); idx > 0 {
+			repo := strings.SplitN(ref, "@", 2)[0]
+			if idx := strings.LastIndex(repo, ":"); idx > strings.LastIndex(repo, "/") {
 				repo = repo[:idx]
 			}
 			if !seen[repo] {

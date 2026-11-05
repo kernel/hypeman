@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/go-containerregistry/pkg/authn"
+	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/kernel/hypeman/lib/images"
 )
 
@@ -72,18 +73,37 @@ func (m *manager) mirrorBaseImagesForBuild(ctx context.Context, id string, req C
 	// our token handler extracts the JWT from the username field only.
 	authConfig := &authn.AuthConfig{Username: registryToken, Password: "x"}
 
+	replacements := make(map[string]string)
 	for _, ref := range refs {
+		parsed, err := name.ParseReference(ref)
+		if err != nil {
+			m.logger.Warn("failed to mirror base image", "id", id, "image", ref, "error", err)
+			continue
+		}
+		useLocalRegistry := parsed.Context().RegistryStr() != "index.docker.io"
 		result, err := images.MirrorBaseImage(ctx, m.config.RegistryURL, images.MirrorRequest{
-			SourceImage: ref,
+			SourceImage:   ref,
+			PreserveIndex: useLocalRegistry,
 		}, authConfig)
 		if err != nil {
 			m.logger.Warn("failed to mirror base image",
 				"id", id, "image", ref, "error", err)
 			continue
 		}
+		if useLocalRegistry {
+			replacements[ref] = stripRegistryScheme(m.config.RegistryURL) + "/" + parsed.Context().Name() + "@" + result.Digest
+		}
 		m.logger.Info("mirrored base image",
 			"id", id, "image", ref, "local_ref", result.LocalRef, "digest", result.Digest)
 	}
 
+	if len(replacements) > 0 {
+		config, err := readBuildConfig(m.paths, id)
+		if err != nil {
+			return err
+		}
+		config.Dockerfile = rewriteMirroredFROMs(dockerfileContent, replacements)
+		return writeBuildConfig(m.paths, id, config)
+	}
 	return nil
 }

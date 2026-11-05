@@ -7,10 +7,30 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/google/go-containerregistry/pkg/name"
 )
+
+var fromImagePattern = regexp.MustCompile(`(?i)^(\s*FROM\s+(?:--\S+\s+)*)(\S+)`)
+
+// rewriteMirroredFROMs routes cached non-Docker-Hub bases through the host's
+// registry so the guest only needs its scoped local-registry token.
+func rewriteMirroredFROMs(content string, replacements map[string]string) string {
+	lines := strings.Split(content, "\n")
+	for i, line := range lines {
+		match := fromImagePattern.FindStringSubmatchIndex(line)
+		if match == nil {
+			continue
+		}
+		start, end := match[4], match[5]
+		if replacement, ok := replacements[normalizeImageRef(line[start:end])]; ok {
+			lines[i] = line[:start] + replacement + line[end:]
+		}
+	}
+	return strings.Join(lines, "\n")
+}
 
 // ParseDockerfileFROMs extracts and deduplicates base image references from
 // Dockerfile content. It reuses the same parsing logic as the builder agent's
@@ -123,6 +143,48 @@ func normalizeImageRef(ref string) string {
 	}
 
 	return repo + suffix
+}
+
+// writeSourceWithDockerfile prepares a build input without modifying the stored
+// source archive. Older builder images prefer the archive's Dockerfile to config.
+func writeSourceWithDockerfile(source io.Reader, destination io.Writer, dockerfile string) error {
+	reader, err := gzip.NewReader(source)
+	if err != nil {
+		return err
+	}
+	defer reader.Close()
+	compressed := gzip.NewWriter(destination)
+	defer compressed.Close()
+	writer := tar.NewWriter(compressed)
+	archive := tar.NewReader(reader)
+	for {
+		header, err := archive.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		if header.Name == "Dockerfile" || header.Name == "./Dockerfile" {
+			continue
+		}
+		if err := writer.WriteHeader(header); err != nil {
+			return err
+		}
+		if _, err := io.Copy(writer, archive); err != nil {
+			return err
+		}
+	}
+	if err := writer.WriteHeader(&tar.Header{Name: "Dockerfile", Mode: 0644, Size: int64(len(dockerfile))}); err != nil {
+		return err
+	}
+	if _, err := io.WriteString(writer, dockerfile); err != nil {
+		return err
+	}
+	if err := writer.Close(); err != nil {
+		return err
+	}
+	return compressed.Close()
 }
 
 // ExtractDockerfileFromTarball reads just the Dockerfile entry from a .tar.gz

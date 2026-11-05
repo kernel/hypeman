@@ -18,6 +18,8 @@ type MirrorRequest struct {
 	// Platform selects which platform variant to mirror as os/arch[/variant]
 	// (e.g., linux/amd64). Empty means the host platform.
 	Platform string
+	// PreserveIndex mirrors all platforms when a tag names an index.
+	PreserveIndex bool
 }
 
 // MirrorResult contains the result of a mirror operation
@@ -55,8 +57,7 @@ func MirrorBaseImage(ctx context.Context, registryURL string, req MirrorRequest,
 	// verification at the destination ("digest mismatch"), which is exactly
 	// what any Dockerfile with a digest-pinned FROM produces. An index named
 	// by digest is therefore mirrored as the index itself, byte for byte.
-	// Tag references keep the existing behavior of mirroring only the
-	// requested platform, which is what saves storage.
+	// Tag references mirror only the requested platform unless PreserveIndex is set.
 	desc, err := remote.Get(srcRef,
 		remote.WithContext(ctx),
 		remote.WithAuthFromKeychain(authn.DefaultKeychain),
@@ -92,7 +93,7 @@ func MirrorBaseImage(ctx context.Context, registryURL string, req MirrorRequest,
 		opts = append(opts, remote.WithAuth(authn.FromConfig(*authConfig)))
 	}
 
-	digest, err := pushMirrored(desc, isDigestRef, dstRef, opts...)
+	digest, err := pushMirrored(desc, isDigestRef || req.PreserveIndex, dstRef, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -111,8 +112,8 @@ func MirrorBaseImage(ctx context.Context, registryURL string, req MirrorRequest,
 // then the index manifest — so the destination stores content whose digest is
 // exactly the one the caller pinned. Everything else keeps the original
 // behavior: the (platform-resolved) image is written, under its own digest.
-func pushMirrored(desc *remote.Descriptor, isDigestRef bool, dstRef name.Reference, opts ...remote.Option) (v1.Hash, error) {
-	if isDigestRef && desc.MediaType.IsIndex() {
+func pushMirrored(desc *remote.Descriptor, preserveIndex bool, dstRef name.Reference, opts ...remote.Option) (v1.Hash, error) {
+	if preserveIndex && desc.MediaType.IsIndex() {
 		idx, err := desc.ImageIndex()
 		if err != nil {
 			return v1.Hash{}, fmt.Errorf("load source index: %w", err)
