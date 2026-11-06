@@ -2,6 +2,7 @@ package qemu
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
@@ -80,6 +81,51 @@ func TestBuildArgs_Disks(t *testing.T) {
 	// Check virtio-blk devices
 	assert.Contains(t, args, "virtio-blk-pci,drive=drive0")
 	assert.Contains(t, args, "virtio-blk-pci,drive=drive1")
+}
+
+func TestBuildArgs_VGPURootDiskBurst(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		gpu      bool
+		readonly bool
+		rate     int64
+		burst    int64
+		want     bool
+	}{
+		{"vgpu root", true, true, 100, 400, true},
+		{"cpu root", false, true, 100, 400, false},
+		{"writable root", true, false, 100, 400, false},
+		{"unlimited", true, true, 0, 400, false},
+		{"no burst", true, true, 100, 0, false},
+		{"equal rates", true, true, 100, 100, false},
+		{"lower burst", true, true, 100, 50, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := hypervisor.VMConfig{
+				Disks: []hypervisor.DiskConfig{
+					{Path: "/rootfs", Readonly: tt.readonly, IOBps: tt.rate, IOBurstBps: tt.burst},
+					{Path: "/overlay", IOBps: 100, IOBurstBps: 400},
+					{Path: "/config", Readonly: true, IOBps: 100, IOBurstBps: 400},
+				},
+			}
+			if tt.gpu {
+				cfg.VGPUDevicePath = "/sys/bus/pci/devices/0000:01:00.1"
+			}
+			args := BuildArgs(cfg)
+			var drives []string
+			for i, arg := range args {
+				if arg == "-drive" {
+					drives = append(drives, args[i+1])
+				}
+			}
+			assert.Equal(t, tt.want, strings.Contains(drives[0], "throttling.bps-total-max-length=5"))
+			if tt.rate > 0 {
+				assert.Contains(t, drives[0], "throttling.bps-total=100")
+			}
+			assert.Equal(t, "file=/overlay,format=raw,if=none,id=drive1,throttling.bps-total=100,throttling.bps-total-max=400", drives[1])
+			assert.Equal(t, "file=/config,format=raw,if=none,id=drive2,readonly=on,file.locking=off,throttling.bps-total=100,throttling.bps-total-max=400", drives[2])
+		})
+	}
 }
 
 func TestBuildArgs_UEFISecureBootTPMAndQCOW2(t *testing.T) {
