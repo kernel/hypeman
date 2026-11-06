@@ -136,6 +136,7 @@ build:
   docker_socket: /var/run/docker.sock
   max_concurrent_source_builds: 2
   timeout: 600
+  # retention: 2h  # keep finished builds this long; sources are deleted when a build finishes
 
 # =============================================================================
 # Resource Limits (same as Linux)

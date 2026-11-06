@@ -151,11 +151,13 @@ type ImagesConfig struct {
 
 // BuildConfig holds source-to-image build system settings.
 type BuildConfig struct {
-	MaxConcurrentSourceBuilds int    `koanf:"max_concurrent_source_builds"`
-	BuilderImage              string `koanf:"builder_image"`
-	Timeout                   int    `koanf:"timeout"`
-	SecretsDir                string `koanf:"secrets_dir"`
-	DockerSocket              string `koanf:"docker_socket"`
+	MaxConcurrentSourceBuilds int           `koanf:"max_concurrent_source_builds"`
+	BuilderImage              string        `koanf:"builder_image"`
+	Timeout                   int           `koanf:"timeout"`
+	SecretsDir                string        `koanf:"secrets_dir"`
+	DockerSocket              string        `koanf:"docker_socket"`
+	Retention                 string        `koanf:"retention"` // how long finished builds are kept
+	RetentionDuration         time.Duration `koanf:"-"`         // parsed by Validate
 }
 
 // BuildersConfig holds builder resource settings.
@@ -405,6 +407,7 @@ func defaultConfig() *Config {
 			Timeout:                   600,
 			SecretsDir:                "",
 			DockerSocket:              "/var/run/docker.sock",
+			Retention:                 "2h",
 		},
 
 		Builders: BuildersConfig{
@@ -681,6 +684,14 @@ func (c *Config) Validate() error {
 	if c.Build.Timeout <= 0 {
 		return fmt.Errorf("build.timeout must be positive, got %d", c.Build.Timeout)
 	}
+	retention, err := time.ParseDuration(c.Build.Retention)
+	if err != nil {
+		return fmt.Errorf("build.retention must be a valid duration, got %q: %w", c.Build.Retention, err)
+	}
+	if retention <= 0 {
+		return fmt.Errorf("build.retention must be positive, got %q", c.Build.Retention)
+	}
+	c.Build.RetentionDuration = retention
 	if c.Builders.MaxCount < 0 {
 		return fmt.Errorf("builders.max_count must be >= 0, got %d", c.Builders.MaxCount)
 	}
