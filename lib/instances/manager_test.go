@@ -228,8 +228,8 @@ func collectLogs(ctx context.Context, mgr *manager, instanceID string, n int) (s
 	return strings.Join(lines, "\n"), nil
 }
 
-// cleanupOrphanedProcesses kills any hypervisor (and UFFD pager) processes left
-// behind by a test, so a flaky run can never leak a guest onto the runner.
+// cleanupOrphanedProcesses kills any hypervisor processes left behind by a
+// test, so a flaky run can never leak a guest onto the runner.
 //
 // It uses two complementary strategies:
 //
@@ -239,11 +239,9 @@ func collectLogs(ctx context.Context, mgr *manager, instanceID string, n int) (s
 //     leaves no recorded PID to reap.
 //
 //  2. Scan the process table for any firecracker / cloud-hypervisor /
-//     qemu-system* / hypeman-uffd-pager process whose command line references a
-//     path under this test's temp data dir, and kill those too. This catches
-//     guests leaked during the PID-nil window. An orphaned UFFD guest whose
-//     pager has gone away spins its vCPU at 100% forever, so reaping it here is
-//     what keeps a flake from permanently burning a core on a shared runner.
+//     qemu-system* process whose command line references a path under this
+//     test's temp data dir, and kill those too. This catches guests leaked
+//     during the PID-nil window.
 //
 // Matching is scoped strictly to this test's own data dir prefix so it can never
 // touch a sibling parallel test's guests.
@@ -268,7 +266,7 @@ func cleanupOrphanedProcesses(t *testing.T, mgr *manager) {
 		}
 	}
 
-	// Strategy 2: scan the process table for guests/pagers under this test's
+	// Strategy 2: scan the process table for guests under this test's
 	// data dir. The data dir is the t.TempDir() root passed to the manager.
 	dataDir := strings.TrimSpace(mgr.paths.DataDir())
 	if dataDir == "" {
@@ -277,10 +275,8 @@ func cleanupOrphanedProcesses(t *testing.T, mgr *manager) {
 	killOrphanedProcessesUnderDir(t, dataDir)
 }
 
-// killOrphanedProcessesUnderDir reaps any guest or UFFD-pager process whose
-// command line references dataDir. Guests are killed before pagers: an orphaned
-// UFFD guest spins its vCPU if its pager dies first, so the pager must be the
-// last thing standing during teardown.
+// killOrphanedProcessesUnderDir reaps any guest process whose command line
+// references dataDir.
 func killOrphanedProcessesUnderDir(t *testing.T, dataDir string) {
 	// Normalize to a clean prefix so we only ever match this test's own tree and
 	// never a sibling test whose temp dir merely shares a textual fragment.
@@ -291,7 +287,7 @@ func killOrphanedProcessesUnderDir(t *testing.T, dataDir string) {
 		exe  string
 		args string
 	}
-	var guests, pagers []orphan
+	var guests []orphan
 
 	procEntries, err := os.ReadDir("/proc")
 	if err != nil {
@@ -324,10 +320,7 @@ func killOrphanedProcessesUnderDir(t *testing.T, dataDir string) {
 			continue
 		}
 
-		switch {
-		case isPagerProcess(exe):
-			pagers = append(pagers, orphan{pid: pid, exe: exe, args: joined})
-		case isGuestProcess(exe):
+		if isGuestProcess(exe) {
 			guests = append(guests, orphan{pid: pid, exe: exe, args: joined})
 		}
 	}
@@ -341,12 +334,8 @@ func killOrphanedProcessesUnderDir(t *testing.T, dataDir string) {
 		WaitForProcessExit(o.pid, 2*time.Second)
 	}
 
-	// Guests first, then pagers (LIFO safety: never strand a guest without a pager).
 	for _, g := range guests {
 		kill(g, "guest")
-	}
-	for _, p := range pagers {
-		kill(p, "uffd pager")
 	}
 }
 
@@ -380,10 +369,6 @@ func isGuestProcess(exe string) bool {
 	default:
 		return false
 	}
-}
-
-func isPagerProcess(exe string) bool {
-	return exe == "hypeman-uffd-pager" || strings.Contains(exe, "uffd-pager")
 }
 
 func TestBasicEndToEnd(t *testing.T) {

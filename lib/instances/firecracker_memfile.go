@@ -13,10 +13,16 @@ import (
 	"github.com/kernel/hypeman/lib/logger"
 )
 
+const firecrackerSnapshotMemoryRelPath = "snapshots/snapshot-latest/memory"
+
+func firecrackerSnapshotMemoryPathInGuestDir(guestDir string) string {
+	return filepath.Join(guestDir, firecrackerSnapshotMemoryRelPath)
+}
+
 // linkForkFirecrackerMemFile hardlinks the source's snapshot mem-file into the
 // fork's guest dir so all forks of a snapshot share one inode: fanout costs no
-// copy I/O, and the pager's backing reads hit the kernel page cache warmed by
-// sibling forks. Falls back to a reflink/sparse copy when linking fails.
+// copy I/O, and reads hit the kernel page cache warmed by sibling forks. Falls
+// back to a reflink/sparse copy when linking fails.
 // Sharing an inode is safe because Firecracker mmaps the mem-file MAP_PRIVATE
 // and the only file writer, the standby diff snapshot, unshares first via
 // ensureExclusiveSnapshotMemoryOwnership.

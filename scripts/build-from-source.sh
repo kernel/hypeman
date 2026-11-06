@@ -13,7 +13,6 @@ set -euo pipefail
 
 # Default values
 BINARY_NAME="hypeman-api"
-UFFD_PAGER_BINARY_NAME="hypeman-uffd-pager"
 
 # Colors for output (true color)
 RED='\033[38;2;255;110;110m'
@@ -71,11 +70,6 @@ if ! make build >> "$BUILD_LOG" 2>&1; then
     error "Build failed"
 fi
 cp "bin/hypeman" "${OUTPUT_DIR}/${BINARY_NAME}"
-
-OS=$(uname -s | tr '[:upper:]' '[:lower:]')
-if [ "$OS" = "linux" ]; then
-    cp "bin/${UFFD_PAGER_BINARY_NAME}" "${OUTPUT_DIR}/${UFFD_PAGER_BINARY_NAME}"
-fi
 
 # Build hypeman-token (not included in make build)
 if ! go build -o "${OUTPUT_DIR}/hypeman-token" ./cmd/gen-jwt >> "$BUILD_LOG" 2>&1; then

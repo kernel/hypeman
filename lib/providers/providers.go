@@ -141,25 +141,19 @@ func ProvideInstanceManager(p *paths.Paths, cfg *config.Config, imageManager ima
 		ReclaimEnabled:     cfg.Hypervisor.Memory.ReclaimEnabled,
 		VZBalloonRequired:  cfg.Hypervisor.Memory.VZBalloonRequired,
 	}
-	var firecrackerUFFDCacheMaxBytes datasize.ByteSize
-	if err := firecrackerUFFDCacheMaxBytes.UnmarshalText([]byte(cfg.Hypervisor.FirecrackerUFFDCacheMaxBytes)); err != nil {
-		return nil, fmt.Errorf("failed to parse hypervisor.firecracker_uffd_cache_max_bytes %q: %w", cfg.Hypervisor.FirecrackerUFFDCacheMaxBytes, err)
-	}
 	macOSGuestSubnet, err := netip.ParsePrefix(cfg.Network.MacOSSubnetCIDR)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse network.macos_subnet_cidr %q: %w", cfg.Network.MacOSSubnetCIDR, err)
 	}
 	managerConfig := instances.ManagerConfig{
-		MacOSOnly:                        cfg.MacOSOnly,
-		MacOSGuestSubnet:                 macOSGuestSubnet,
-		LifecycleEventBufferSize:         cfg.Instances.LifecycleEventBufferSize,
-		FirecrackerSnapshotMemoryBackend: cfg.Hypervisor.FirecrackerSnapshotMemoryBackend,
-		FirecrackerUFFDCacheMaxBytes:     int64(firecrackerUFFDCacheMaxBytes),
+		MacOSOnly:                cfg.MacOSOnly,
+		MacOSGuestSubnet:         macOSGuestSubnet,
+		LifecycleEventBufferSize: cfg.Instances.LifecycleEventBufferSize,
 		MaxConcurrentRestoresByHypervisor: map[hypervisor.Type]int{
 			hypervisor.TypeFirecracker: cfg.Hypervisor.FirecrackerMaxConcurrentRestores,
 		},
 	}
-	return instances.NewManagerWithConfigE(p, imageManager, systemManager, networkManager, deviceManager, volumeManager, limits, defaultHypervisor, snapshotDefaults, managerConfig, meter, tracer, memoryPolicy)
+	return instances.NewManagerWithConfig(p, imageManager, systemManager, networkManager, deviceManager, volumeManager, limits, defaultHypervisor, snapshotDefaults, managerConfig, meter, tracer, memoryPolicy), nil
 }
 
 func snapshotDefaultsFromConfig(cfg *config.Config) instances.SnapshotPolicy {

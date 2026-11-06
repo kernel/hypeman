@@ -351,10 +351,6 @@ func (m *manager) restoreSnapshot(ctx context.Context, id string, snapshotID str
 	restored.HypervisorVersion = targetHypervisorVersion
 	restored.SocketPath = m.paths.InstanceSocket(id, starter.SocketName())
 	restored.VsockSocket = m.paths.InstanceSocket(id, hypervisor.VsockSocketNameForType(targetHypervisor))
-	clearFirecrackerUFFDRestoreState(&restored)
-	if targetState == StateStopped {
-		restored.FirecrackerSnapshotCacheKey = ""
-	}
 	if rec.Snapshot.Kind == SnapshotKindStopped {
 		restored.VsockCID = generateVsockCID(id)
 	}
@@ -522,12 +518,6 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 	forkMeta.ExitMessage = ""
 	forkMeta.RestartStatus = restartpolicy.Status{}
 	clearStoredVGPUDevice(&forkMeta)
-	forkMeta.FirecrackerUFFDSessionID = ""
-	forkMeta.FirecrackerUFFDPagerVersion = ""
-	forkMeta.FirecrackerUseUFFDOnNextRestore = useFirecrackerUFFDOnNextRestore(targetHypervisor, rec.Snapshot.Kind == SnapshotKindStandby, targetState)
-	if rec.Snapshot.Kind != SnapshotKindStandby {
-		forkMeta.FirecrackerSnapshotCacheKey = ""
-	}
 	if rec.Snapshot.Kind == SnapshotKindStandby {
 		forkMeta.VsockCID = rec.StoredMetadata.VsockCID
 	} else {

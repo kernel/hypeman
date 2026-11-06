@@ -58,17 +58,16 @@ func capabilities() hypervisor.Capabilities {
 	return hypervisor.Capabilities{
 		SupportsSnapshot: true,
 		// PrepareFork persists restore metadata overrides for forks (fork.go).
-		SupportsFork:                      true,
-		SupportsHotplugMemory:             false,
-		SupportsBalloonControl:            true,
-		SupportsPause:                     true,
-		SupportsVsock:                     true,
-		SupportsGPUPassthrough:            false,
-		SupportsDiskIOLimit:               true,
-		SupportsGracefulVMMShutdown:       false,
-		SupportsSnapshotBaseReuse:         true,
-		SupportsConcurrentForkPrepare:     true,
-		UsesDetachableSnapshotMemoryPager: true,
+		SupportsFork:                  true,
+		SupportsHotplugMemory:         false,
+		SupportsBalloonControl:        true,
+		SupportsPause:                 true,
+		SupportsVsock:                 true,
+		SupportsGPUPassthrough:        false,
+		SupportsDiskIOLimit:           true,
+		SupportsGracefulVMMShutdown:   false,
+		SupportsSnapshotBaseReuse:     true,
+		SupportsConcurrentForkPrepare: true,
 	}
 }
 

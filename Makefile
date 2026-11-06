@@ -4,7 +4,6 @@ SHELL := /bin/bash
 # Directory where local binaries will be installed
 BIN_DIR ?= $(CURDIR)/bin
 GO_TEST_TIMEOUT ?= 300s
-UFFD_PAGER_BINARY ?= $(BIN_DIR)/hypeman-uffd-pager
 
 $(BIN_DIR):
 	mkdir -p $(BIN_DIR)
@@ -266,10 +265,6 @@ endif
 
 build-linux: ensure-ch-binaries ensure-firecracker-binaries ensure-caddy-binaries build-embedded | $(BIN_DIR)
 	go build -tags containers_image_openpgp -o $(BIN_DIR)/hypeman ./cmd/api
-	go build -o $(BIN_DIR)/hypeman-uffd-pager ./cmd/uffd-pager
-
-$(BIN_DIR)/hypeman-uffd-pager: | $(BIN_DIR)
-	go build -o $@ ./cmd/uffd-pager
 
 # Build all binaries
 build-all: build
@@ -299,7 +294,7 @@ else
 endif
 
 # Linux tests (as root for network capabilities)
-test-linux: ensure-ch-binaries ensure-firecracker-binaries ensure-caddy-binaries build-embedded $(BIN_DIR)/hypeman-uffd-pager
+test-linux: ensure-ch-binaries ensure-firecracker-binaries ensure-caddy-binaries build-embedded
 	@VERBOSE_FLAG=""; \
 	TEST_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$$PATH"; \
 	if [ -n "$(VERBOSE)" ]; then VERBOSE_FLAG="-v"; fi; \
@@ -308,8 +303,6 @@ test-linux: ensure-ch-binaries ensure-firecracker-binaries ensure-caddy-binaries
 		sudo env "PATH=$$TEST_PATH" "DOCKER_CONFIG=$${DOCKER_CONFIG:-$$HOME/.docker}" "CI=$${CI:-}" \
 			"GITHUB_TOKEN=$${GITHUB_TOKEN:-}" \
 			"TMPDIR=$${TMPDIR:-/tmp}" \
-			"HYPEMAN_UFFD_PAGER_BINARY=$${HYPEMAN_UFFD_PAGER_BINARY:-$(UFFD_PAGER_BINARY)}" \
-			"HYPEMAN_UFFD_SYSTEMD_INSTANCE_PREFIX=$${HYPEMAN_UFFD_SYSTEMD_INSTANCE_PREFIX:-}" \
 			"HYPEMAN_TEST_PREWARM_DIR=$${HYPEMAN_TEST_PREWARM_DIR:-}" \
 			"HYPEMAN_TEST_PREWARM_STRICT=$${HYPEMAN_TEST_PREWARM_STRICT:-}" \
 			"HYPEMAN_TEST_REGISTRY=$${HYPEMAN_TEST_REGISTRY:-}" \
@@ -321,8 +314,6 @@ test-linux: ensure-ch-binaries ensure-firecracker-binaries ensure-caddy-binaries
 		sudo env "PATH=$$TEST_PATH" "DOCKER_CONFIG=$${DOCKER_CONFIG:-$$HOME/.docker}" "CI=$${CI:-}" \
 			"GITHUB_TOKEN=$${GITHUB_TOKEN:-}" \
 			"TMPDIR=$${TMPDIR:-/tmp}" \
-			"HYPEMAN_UFFD_PAGER_BINARY=$${HYPEMAN_UFFD_PAGER_BINARY:-$(UFFD_PAGER_BINARY)}" \
-			"HYPEMAN_UFFD_SYSTEMD_INSTANCE_PREFIX=$${HYPEMAN_UFFD_SYSTEMD_INSTANCE_PREFIX:-}" \
 			"HYPEMAN_TEST_PREWARM_DIR=$${HYPEMAN_TEST_PREWARM_DIR:-}" \
 			"HYPEMAN_TEST_PREWARM_STRICT=$${HYPEMAN_TEST_PREWARM_STRICT:-}" \
 			"HYPEMAN_TEST_REGISTRY=$${HYPEMAN_TEST_REGISTRY:-}" \
