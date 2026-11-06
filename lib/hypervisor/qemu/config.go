@@ -99,6 +99,11 @@ func buildArgs(cfg hypervisor.VMConfig, machine MachineType) []string {
 			driveOpts += fmt.Sprintf(",throttling.bps-total=%d", disk.IOBps)
 			if disk.IOBurstBps > 0 && disk.IOBurstBps > disk.IOBps {
 				driveOpts += fmt.Sprintf(",throttling.bps-total-max=%d", disk.IOBurstBps)
+				if cfg.VGPUDevicePath != "" && i == 0 && disk.Readonly {
+					// GPU driver and browser startup exceed the default one-second
+					// burst bucket. Keep the sustained rate and writable disks unchanged.
+					driveOpts += ",throttling.bps-total-max-length=5"
+				}
 			}
 		}
 		args = append(args, "-drive", driveOpts)
