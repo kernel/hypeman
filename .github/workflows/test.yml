@@ -337,6 +337,8 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - name: Show macOS and SDK versions
+        run: sw_vers && xcrun --sdk macosx --show-sdk-version
       - name: Ensure Docker is running
         run: |
           if docker info >/dev/null 2>&1; then

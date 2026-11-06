@@ -1,0 +1,97 @@
+name: macOS image
+
+# Builds a macOS browser image with Packer and Tart on a stacked clone of a base,
+# checks it, and publishes it to hypeman's registry over that base. See
+# docs/macos-experimental.md.
+on:
+  workflow_dispatch:
+    inputs:
+      tart_base:
+        description: The base as a Tart image (OCI reference) to clone stacked
+        required: true
+      base:
+        description: The same base in hypeman's registry, pinned by digest
+        required: true
+      name:
+        description: Image name; published as builds/NAME. The registry token must be minted for it.
+        required: true
+
+permissions:
+  contents: read
+
+# A Mac runs at most two VMs; builds on one runner go one at a time.
+concurrency:
+  group: macos-image-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    # Stacked Tart VMs and the Swift vz-shim need macOS 27 and the macOS 27 SDK.
+    runs-on: [self-hosted, macos, arm64, tart]
+    timeout-minutes: 90
+    env:
+      VM: hypeman-image-${{ github.run_id }}
+      TART_VERSION: 2.41.1
+      TART_SHA256: e680a734febccfce7d4e910c1f7f13fc3b00f19a181c945e2d746de3214c32c2
+      PACKER_VERSION: 1.16.2
+      PACKER_SHA256: 3d7e4df8e7e8c21bdf495c4f63ad9189e22540dc8126dee6db791aa8519e8b3a
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Install Tart and Packer
+        run: |
+          bin="$RUNNER_TEMP/bin"
+          mkdir -p "$bin"
+          curl -fsSL -o "$RUNNER_TEMP/tart.tar.gz" "https://github.com/cirruslabs/tart/releases/download/$TART_VERSION/tart.tar.gz"
+          echo "$TART_SHA256  $RUNNER_TEMP/tart.tar.gz" | shasum -a 256 -c
+          tar -xzf "$RUNNER_TEMP/tart.tar.gz" -C "$RUNNER_TEMP"
+          ln -sf "$RUNNER_TEMP/tart.app/Contents/MacOS/tart" "$bin/tart"
+          curl -fsSL -o "$RUNNER_TEMP/packer.zip" "https://releases.hashicorp.com/packer/$PACKER_VERSION/packer_${PACKER_VERSION}_darwin_arm64.zip"
+          echo "$PACKER_SHA256  $RUNNER_TEMP/packer.zip" | shasum -a 256 -c
+          unzip -oq "$RUNNER_TEMP/packer.zip" -d "$bin"
+          echo "$bin" >> "$GITHUB_PATH"
+
+      - name: Build import-tart
+        run: go build -o "$RUNNER_TEMP/bin/import-tart" ./cmd/import-tart
+
+      - name: Clone the base stacked
+        env:
+          TART_BASE: ${{ inputs.tart_base }}
+          TART_REGISTRY_USERNAME: ${{ secrets.TART_REGISTRY_USERNAME }}
+          TART_REGISTRY_PASSWORD: ${{ secrets.TART_REGISTRY_PASSWORD }}
+        run: tart clone --stacked "$TART_BASE" "$VM-base"
+
+      - name: Build and check the image
+        working-directory: images/macos
+        env:
+          PKR_VAR_ssh_username: ${{ vars.MACOS_IMAGE_SSH_USERNAME }}
+          PKR_VAR_ssh_password: ${{ secrets.MACOS_IMAGE_SSH_PASSWORD }}
+        run: |
+          packer init browser.pkr.hcl
+          packer build -var vm_base_name="$VM-base" -var vm_name="$VM" browser.pkr.hcl
+
+      - name: Publish
+        # pipefail, so a failed publish is not hidden by tee.
+        shell: bash
+        env:
+          BASE: ${{ inputs.base }}
+          NAME: ${{ inputs.name }}
+          REGISTRY: ${{ vars.HYPEMAN_REGISTRY_URL }}
+          # Minted by import-tart --mint-token for this name and base; it can publish
+          # nothing else.
+          HYPEMAN_REGISTRY_TOKEN: ${{ secrets.HYPEMAN_REGISTRY_TOKEN }}
+        run: |
+          import-tart --vm "$HOME/.tart/vms/$VM" --registry "$REGISTRY" --name "$NAME" --base "$BASE" --guest-agent | tee "$RUNNER_TEMP/publication.json"
+          echo "Published \`$(jq -r .Reference "$RUNNER_TEMP/publication.json")\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Delete the build VMs
+        if: always()
+        run: |
+          tart delete "$VM" || true
+          tart delete "$VM-base" || true

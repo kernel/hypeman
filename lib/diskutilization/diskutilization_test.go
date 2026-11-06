@@ -22,7 +22,7 @@ func TestCollect_UsesAllocatedBytesAndClassifiesSnapshots(t *testing.T) {
 	require.NoError(t, createSparseTestFile(imagePath, 32*1024*1024, []sparseWrite{
 		{offset: 0, data: bytes.Repeat([]byte("i"), 4096)},
 	}))
-	machineImagePath := filepath.Join(p.ImagesDir(), "content", "def", "rootfs.raw")
+	machineImagePath := filepath.Join(p.ImagesDir(), "content", "def", "disk.0.asif")
 	require.NoError(t, createSparseTestFile(machineImagePath, 32*1024*1024, []sparseWrite{
 		{offset: 0, data: bytes.Repeat([]byte("m"), 4096)},
 	}))

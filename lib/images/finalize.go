@@ -21,6 +21,9 @@ type stagedImageFiles struct {
 func (s stagedImageFiles) remove() {
 	os.Remove(s.disk)
 	if s.macos != nil {
+		for _, layer := range s.macos.layers {
+			os.Remove(layer)
+		}
 		os.Remove(s.macos.aux)
 	}
 }

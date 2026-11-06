@@ -6,11 +6,12 @@ Linux guests retain the existing defaults and boot path.
 
 ## Import
 
-Use a stopped macOS bundle (`config.json`, `disk.img`, `aux.img`) on
-Darwin/arm64. Configure its user, SSH, FileVault and desktop before import.
-The importer verifies that storage is not open, clones disk and auxiliary
-storage, hashes their contents and identity/configuration into a digest, and
-publishes a local ready image. Import is an administrator CLI operation, not
+Use a stopped macOS bundle (`config.json`, `aux.img`, and `disk.asif` or a raw
+`disk.img`) on Darwin/arm64. Configure its user, SSH, FileVault and desktop before
+import. The importer verifies that storage is not open, clones an ASIF disk or
+converts a raw one to ASIF (all-zero 1 MiB chunks stay unallocated; a 100 GB disk
+took about 10 minutes on the QA host), clones auxiliary storage, hashes their
+contents and identity/configuration into a digest, and publishes a local ready image. Import is an administrator CLI operation, not
 an HTTP endpoint accepting arbitrary host paths.
 
 ```sh
@@ -20,7 +21,8 @@ go run -tags containers_image_openpgp ./cmd/import-macos \
   --name localhost/macos:spike
 ```
 
-The local importer needs APFS clonefile support. The data directory path must be
+The local importer needs APFS clonefile support, and ASIF disks need macOS 26 or
+later; the VZ shim needs macOS 27. The data directory path must be
 short enough that each guest's sockets fit the 103-byte macOS limit; a boot that
 would exceed it is refused. Images are `darwin/arm64` machine images, not OCI
 macOS containers. Registry pulls also support experimental complete-machine
@@ -35,29 +37,109 @@ labels describe a complete installed machine:
 
 | Label | Value |
 |---|---|
-| `io.hypeman.machine-image.version` | `1` |
+| `io.hypeman.machine-image.version` | `2` |
 | `io.hypeman.machine-image.kind` | `macos-image` |
-| `io.hypeman.machine-image.disk-format` | `raw` |
-| `io.hypeman.machine-image.disk-path` | Relative installed boot disk path |
+| `io.hypeman.machine-image.disk-format` | `asif` |
+| `io.hypeman.machine-image.disk-path` | Relative ASIF disk path, in every layer |
 | `io.hypeman.machine-image.aux-path` | Relative auxiliary storage path |
 | `io.hypeman.machine-image.platform-path` | Relative macOS platform configuration JSON path |
+| `io.hypeman.machine-image.disk-digests` | Optional: sha256 of each layer's disk file, base first, comma-separated |
 
-All three files must be distinct, nonempty regular files inside the unpacked
+Each layer carries one ASIF disk, and each layer's disk is an overlay on the
+previous layer's, so the layers form the boot disk's chain, base first. The
+auxiliary storage and platform come from the top layer; lower layers' copies are
+ignored. A base image is one layer; an image built on it adds one layer holding
+only the build's writes. A pull clones any lower layer whose diff ID a ready image
+on the host already has instead of unpacking it, so images built on one base share
+its disk. All files must be distinct, nonempty regular files inside the unpacked
 image. Platform configuration uses the local bundle's `MacOSImage` schema and
 is limited to 64 KiB. Absolute paths, traversal and symlink escapes are rejected.
 The installed disk is materialized directly rather than converted to a Linux
 root filesystem. Machine layers are unpacked sparsely (zero chunks become holes),
 accept only regular files (not GNU sparse tar entries) and directories, and are
-checked against their diff IDs, so a mostly empty boot disk occupies only its
-data. A bundle's layers may decompress to at most 1 TiB in total. The boot disk
-is stored as `rootfs.raw`, as for a local import; machine images pulled before
-that naming must be deleted and pulled again. The matching auxiliary storage and platform
-identity are retained. Do not package live mutable guest storage.
+checked against their diff IDs. A bundle's layers may decompress to at most 1
+TiB in total. The chain is stored as `disk.{n}.asif`, as for a local import, and
+must open as an ASIF stack. Machine images from before ASIF (version `1`, `raw`)
+are refused and must be rebuilt or reimported. The matching auxiliary storage and
+platform identity are retained. Do not package live mutable guest storage.
 
 This schema is experimental pending reconciliation with other machine-image
-platforms. Complete bundles only: no base/delta chain, identity rebinding, or
-concurrent-template guarantee. Ordinary OCI transport does not imply sparse
+platforms. There is no identity rebinding on pull or concurrent-template guarantee. Ordinary OCI transport does not imply sparse
 distribution efficiency, boot portability, or container execution semantics.
+
+## Building images with Packer and Tart
+
+hypeman does not build macOS images itself. Build them with Packer's Tart builder
+on a macOS 27 host, as stacked Tart VMs, then publish the result with
+`import-tart`. A stacked VM shares a read-only base disk and writes only to its own
+`overlay.asif`, so a build on a base already in the registry uploads only that
+overlay.
+
+1. Publish the base once from a standalone Tart VM whose `disk.img` is ASIF
+   (`diskFormat: asif`). Every layer is uploaded.
+2. Get the base as a Tart image (`tart push` to any OCI registry) and create the
+   build VM with `tart clone --stacked`. The Packer Tart plugin cannot clone
+   stacked itself, so point its `vm_base_name` at that local clone.
+3. Build with `images/macos/browser.pkr.hcl`. It installs Chrome (from Google's
+   stable DMG, checked by its code signature and Gatekeeper), runs any
+   `extra_scripts`, installs hypeman's agent launcher (hypeman supplies the agent
+   on its own disk; see [macos-guest-agent.md](macos-guest-agent.md#agent-disk)),
+   checks the image with `images/macos/smoke-test.sh` (launcher present, no baked
+   agent, headless Chrome answers CDP), regenerates the SSH host keys and shuts the
+   guest down from inside. It keeps the recovery partition; Packer's default
+   deletes it and rewrites the whole disk. The base must have an SSH user with sudo
+   for Packer.
+
+   ```sh
+   cd images/macos && packer init browser.pkr.hcl
+   packer build -var vm_base_name=base-clone -var vm_name=my-build \
+     -var ssh_username=admin -var ssh_password=... browser.pkr.hcl
+   ```
+
+4. Publish the stopped VM over the base:
+
+```sh
+HYPEMAN_REGISTRY_TOKEN=... go run ./cmd/import-tart \
+  --vm ~/.tart/vms/my-build \
+  --registry https://hypeman.example \
+  --name my-build \
+  --base hypeman.example/builds/my-base@sha256:... \
+  --guest-agent
+```
+
+The `macOS image` workflow (`.github/workflows/macos-image.yml`, run by hand) does
+steps 2 to 4 on a self-hosted macOS 27 runner labelled `tart`. It needs the
+`HYPEMAN_REGISTRY_URL` and `MACOS_IMAGE_SSH_USERNAME` variables and the
+`HYPEMAN_REGISTRY_TOKEN`, `MACOS_IMAGE_SSH_PASSWORD`, `TART_REGISTRY_USERNAME` and
+`TART_REGISTRY_PASSWORD` secrets.
+
+`HYPEMAN_REGISTRY_TOKEN` can push only `builds/<name>` and pull only the base.
+Someone with the registry's JWT secret mints it once, and mints a new one when the
+name, the base or its expiry changes:
+
+```sh
+HYPEMAN_JWT_SECRET=... go run ./cmd/import-tart --mint-token \
+  --registry https://hypeman.example --name my-build \
+  --base hypeman.example/builds/my-base@sha256:... --token-ttl 720h
+```
+
+`import-tart` also accepts `HYPEMAN_JWT_SECRET` in place of a token, minting one for
+each publication.
+
+The image is published as `builds/<name>`. `import-tart` reads the VM's layers from
+Tart's content store (under `TART_HOME`, or `~/.tart`) in the order its
+`manifest.json` lists them, refuses a suspended or running VM, and checks that the
+overlay stacks on those layers. Each published image records its layers' disk
+digests. With `--base`, the VM's layer digests must equal the ones that image
+records, and only the config and overlay are uploaded; a base without them is
+refused. Each image gets a fresh machine identifier and MAC, since
+Tart keeps its source's; the SSH host keys are the template's job. The registry
+imports a pushed image on its host, as `builds/<name>@sha256:...`. Other hosts pull
+it by digest with registry credentials.
+
+Building on a build needs that build as a Tart image too: `tart clone --stacked`
+only stacks on images pulled from a registry, and a local clone copies the
+overlay instead of stacking on it.
 
 ## API
 
@@ -73,8 +155,10 @@ Use the usual JWT-authenticated API with a VZ-capable, signed build:
 ```
 
 CPU and memory default to the imported template (minimum 2 CPUs and 4GB).
-Each instance gets its own writable complete boot disk (`boot.raw`) and auxiliary
-storage; instances created before that naming must be deleted and recreated. No
+Each instance gets clones of the image's ASIF layers (`disk.{n}.asif`), its own
+auxiliary storage, and an empty writable ASIF overlay (`boot.asif`) above the
+layers; the guest's writes only grow the overlay. Instances created before ASIF
+must be deleted and recreated. No
 Linux kernel, initrd, configuration disk, overlay filesystem or balloon is
 attached. A networked guest gets its own vmnet network (macOS 26 and later):
 hypeman assigns it a /29 from `network.macos_subnet_cidr` (default
