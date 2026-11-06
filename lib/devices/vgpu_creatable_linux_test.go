@@ -52,6 +52,24 @@ func (s *testVendorVFIOSysfs) useCreatablePlacements(t *testing.T) {
 	}
 }
 
+// The supported-profile query asks NVML about each parent GPU once.
+func TestSupportedProfileNamesAsksEachGPUOnce(t *testing.T) {
+	var asked []string
+	sysfs := vendorVFIOSysfs{supportedFunc: func(gpus []string) (map[string]struct{}, error) {
+		asked = gpus
+		return map[string]struct{}{"NVIDIA L40S-4Q": {}}, nil
+	}}
+
+	names, err := sysfs.supportedProfileNames([]VirtualFunction{
+		{PCIAddress: "0000:e3:00.4", ParentGPU: "0000:e3:00.0"},
+		{PCIAddress: "0000:82:00.4", ParentGPU: "0000:82:00.0"},
+		{PCIAddress: "0000:82:00.5", ParentGPU: "0000:82:00.0"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"0000:82:00.0", "0000:e3:00.0"}, asked)
+	assert.Equal(t, map[string]struct{}{"NVIDIA L40S-4Q": {}}, names)
+}
+
 func setNVMLTimeout(t *testing.T, timeout time.Duration) {
 	t.Helper()
 	previous := nvmlTimeout

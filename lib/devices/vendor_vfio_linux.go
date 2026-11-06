@@ -28,6 +28,7 @@ type vendorVFIOSysfs struct {
 	vfioDevicesPath   string
 	openVFIOPathsFunc func() (map[string]struct{}, error)
 	creatableFunc     func(gpus []string) (map[string][]creatableProfile, error)
+	supportedFunc     func(gpus []string) (map[string]struct{}, error)
 }
 
 var hostVendorVFIO = vendorVFIOSysfs{
