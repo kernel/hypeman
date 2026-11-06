@@ -50,11 +50,10 @@ func TestFeatureIDs(t *testing.T) {
 	t.Run("internal lifecycle hints have no feature IDs", func(t *testing.T) {
 		t.Parallel()
 		ids := Capabilities{
-			SupportsGracefulVMMShutdown:       true,
-			SupportsSnapshotBaseReuse:         true,
-			RequiresHostSnapshotVersion:       true,
-			SupportsConcurrentForkPrepare:     true,
-			UsesDetachableSnapshotMemoryPager: true,
+			SupportsGracefulVMMShutdown:   true,
+			SupportsSnapshotBaseReuse:     true,
+			RequiresHostSnapshotVersion:   true,
+			SupportsConcurrentForkPrepare: true,
 		}.FeatureIDs()
 		require.Empty(t, ids)
 	})

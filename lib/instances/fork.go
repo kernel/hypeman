@@ -232,8 +232,7 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 			return nil, false, err
 		}
 	}
-	targetState, err := resolveForkTargetState(req.TargetState, source.State)
-	if err != nil {
+	if _, err := resolveForkTargetState(req.TargetState, source.State); err != nil {
 		return nil, false, err
 	}
 	if err := validateForkVolumeSafety(stored.Volumes); err != nil {
@@ -295,12 +294,6 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 	forkMeta.ExitCode = nil
 	forkMeta.ExitMessage = ""
 	forkMeta.RestartStatus = restartpolicy.Status{}
-	forkMeta.FirecrackerUFFDSessionID = ""
-	forkMeta.FirecrackerUFFDPagerVersion = ""
-	forkMeta.FirecrackerUseUFFDOnNextRestore = useFirecrackerUFFDOnNextRestore(forkMeta.HypervisorType, source.State == StateStandby, targetState)
-	if source.State != StateStandby {
-		forkMeta.FirecrackerSnapshotCacheKey = ""
-	}
 	// Forks are new instances; phase accounting must not inherit the source's
 	// cumulative durations. The first transition into the fork's runtime
 	// phase (Standby for snapshot forks, Stopped for stopped forks) will be
@@ -537,8 +530,6 @@ func (m *manager) applyForkTargetState(ctx context.Context, forkID string, targe
 				return nil, fmt.Errorf("load stopped fork metadata: %w", err)
 			}
 			meta.StoredMetadata.VsockCID = generateVsockCID(forkID)
-			meta.StoredMetadata.FirecrackerSnapshotCacheKey = ""
-			clearFirecrackerUFFDRestoreState(&meta.StoredMetadata)
 			if err := m.saveMetadata(meta); err != nil {
 				return nil, fmt.Errorf("save stopped fork metadata: %w", err)
 			}

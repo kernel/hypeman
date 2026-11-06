@@ -44,8 +44,8 @@ func (c Capabilities) SupportsStandby() bool {
 
 // FeatureIDs returns the stable feature IDs implied by this capability set,
 // in a fixed deterministic order. Only client-visible features are included;
-// internal lifecycle hints (snapshot base reuse, pager detachability, host
-// snapshot version pinning, graceful VMM shutdown) are implementation details
+// internal lifecycle hints (snapshot base reuse, host snapshot version pinning,
+// graceful VMM shutdown) are implementation details
 // and deliberately have no IDs. The result is always non-nil so it serializes
 // as an empty JSON array rather than null.
 func (c Capabilities) FeatureIDs() []string {

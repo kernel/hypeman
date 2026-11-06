@@ -318,7 +318,7 @@ func (s *tracingVMStarter) StartVM(ctx context.Context, p *paths.Paths, version 
 	return pid, hv, err
 }
 
-func (s *tracingVMStarter) RestoreVM(ctx context.Context, p *paths.Paths, version string, socketPath string, snapshotPath string, opts RestoreOptions) (pid int, hv Hypervisor, err error) {
+func (s *tracingVMStarter) RestoreVM(ctx context.Context, p *paths.Paths, version string, socketPath string, snapshotPath string) (pid int, hv Hypervisor, err error) {
 	ctx, span := startTraceSpan(ctx, s.tracer, "hypervisor.restore_vm",
 		attribute.String("hypervisor", string(s.hvType)),
 		attribute.String("operation", "restore_vm"),
@@ -329,7 +329,7 @@ func (s *tracingVMStarter) RestoreVM(ctx context.Context, p *paths.Paths, versio
 		}
 		finishTraceSpan(span, err)
 	}()
-	pid, hv, err = s.next.RestoreVM(ctx, p, version, socketPath, snapshotPath, opts)
+	pid, hv, err = s.next.RestoreVM(ctx, p, version, socketPath, snapshotPath)
 	return pid, hv, err
 }
 

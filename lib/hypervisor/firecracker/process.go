@@ -13,7 +13,6 @@ import (
 
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/paths"
-	"github.com/kernel/hypeman/lib/uffdpager"
 	"gvisor.dev/gvisor/pkg/cleanup"
 )
 
@@ -30,30 +29,11 @@ func init() {
 	})
 }
 
-type UFFDClient interface {
-	CreateSession(ctx context.Context, req uffdpager.CreateSessionRequest) (*uffdpager.CreateSessionResponse, error)
-	CloseSession(ctx context.Context, sessionID string) error
-}
-
-type StarterOption func(*Starter)
-
 // Starter implements hypervisor.VMStarter for Firecracker.
-type Starter struct {
-	uffd UFFDClient
-}
+type Starter struct{}
 
-func NewStarter(opts ...StarterOption) *Starter {
-	s := &Starter{}
-	for _, opt := range opts {
-		opt(s)
-	}
-	return s
-}
-
-func WithUFFDClient(client UFFDClient) StarterOption {
-	return func(s *Starter) {
-		s.uffd = client
-	}
+func NewStarter() *Starter {
+	return &Starter{}
 }
 
 var _ hypervisor.VMStarter = (*Starter)(nil)
@@ -126,7 +106,7 @@ func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, s
 	return pid, hv, nil
 }
 
-func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string, socketPath string, snapshotPath string, opts hypervisor.RestoreOptions) (int, hypervisor.Hypervisor, error) {
+func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string, socketPath string, snapshotPath string) (int, hypervisor.Hypervisor, error) {
 	processCtx, processSpan := hypervisor.StartProcessSpan(ctx, hypervisor.TypeFirecracker)
 	pid, err := s.startProcess(processCtx, p, version, socketPath)
 	hypervisor.FinishTraceSpan(processSpan, err)
@@ -149,31 +129,6 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 		return 0, nil, fmt.Errorf("load firecracker restore metadata: %w", err)
 	}
 	backend := fileSnapshotMemBackend(snapshotPath)
-	createdUFFDSession := ""
-	if opts.SnapshotMemoryBackend == hypervisor.SnapshotMemoryBackendUFFD {
-		if s.uffd == nil {
-			return 0, nil, fmt.Errorf("uffd snapshot restore requested but no uffd pager is configured")
-		}
-		sessionID := strings.TrimSpace(opts.SnapshotMemorySessionID)
-		if sessionID == "" {
-			sessionID = filepath.Base(filepath.Dir(socketPath))
-		}
-		backingMemoryPath := strings.TrimSpace(opts.SnapshotMemoryBackingPath)
-		if backingMemoryPath == "" {
-			backingMemoryPath = snapshotMemoryPath(snapshotPath)
-		}
-		resp, err := s.uffd.CreateSession(ctx, uffdpager.CreateSessionRequest{
-			SessionID:         sessionID,
-			InstanceID:        sessionID,
-			BackingMemoryPath: backingMemoryPath,
-			CacheKey:          opts.SnapshotMemoryCacheKey,
-		})
-		if err != nil {
-			return 0, nil, fmt.Errorf("create uffd pager session: %w", err)
-		}
-		createdUFFDSession = resp.SessionID
-		backend = snapshotMemBackend{BackendType: "Uffd", BackendPath: resp.UFFDSocketPath}
-	}
 	targetDataDir := filepath.Dir(socketPath)
 	loadSnapshot := func() error {
 		return hv.loadSnapshot(ctx, snapshotPath, meta.NetworkOverrides, backend)
@@ -188,9 +143,6 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 		err = loadSnapshot()
 	}
 	if err != nil {
-		if createdUFFDSession != "" {
-			_ = s.uffd.CloseSession(context.Background(), createdUFFDSession)
-		}
 		return 0, nil, fmt.Errorf("load firecracker snapshot: %w", err)
 	}
 	if meta.SnapshotSourceDataDir != "" && !meta.RetainSnapshotSourceDataDirAlias {

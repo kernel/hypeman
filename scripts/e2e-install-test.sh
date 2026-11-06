@@ -97,7 +97,6 @@ if [ "$OS" = "darwin" ]; then
     fi
 else
     [ -x /opt/hypeman/bin/hypeman-api ] || fail "hypeman-api binary not found"
-    [ -x /opt/hypeman/bin/hypeman-uffd-pager ] || fail "hypeman-uffd-pager binary not found"
     pass "Binaries installed correctly"
 
     # Check systemd service
@@ -297,7 +296,6 @@ if [ "$OS" = "darwin" ]; then
     fi
 else
     [ ! -f /opt/hypeman/bin/hypeman-api ] || fail "hypeman-api binary still exists after uninstall"
-    [ ! -f /opt/hypeman/bin/hypeman-uffd-pager ] || fail "hypeman-uffd-pager binary still exists after uninstall"
     if systemctl is-active --quiet hypeman 2>/dev/null; then
         fail "systemd service still running after uninstall"
     fi

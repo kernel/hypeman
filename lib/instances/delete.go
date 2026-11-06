@@ -142,7 +142,6 @@ func (m *manager) deleteInstanceWithOptions(
 			return fmt.Errorf("kill hypervisor: %w", err)
 		}
 	}
-	m.closeFirecrackerUFFDSession(ctx, stored)
 
 	// Release before deleting metadata so a failed release can be retried safely.
 	if storedVGPUDevicePath(stored) != "" {
