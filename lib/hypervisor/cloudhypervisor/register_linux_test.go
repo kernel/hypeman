@@ -51,3 +51,13 @@ func TestCapabilitiesAdvertiseForkOnEveryVersion(t *testing.T) {
 		require.True(t, CapabilitiesForVersion(v).SupportsFork, "version %s", v)
 	}
 }
+
+// TestCapabilitiesAdvertiseDiskResizeOnV51 pins live disk resize for every
+// v51 release, including the v51.2 default used for new instances.
+func TestCapabilitiesAdvertiseDiskResizeOnV51(t *testing.T) {
+	t.Parallel()
+	require.Equal(t, vmm.V51_2, vmm.DefaultVersion)
+	for _, v := range []vmm.CHVersion{vmm.V51_1, vmm.V51_2} {
+		require.True(t, CapabilitiesForVersion(v).SupportsDiskResize, "version %s", v)
+	}
+}
