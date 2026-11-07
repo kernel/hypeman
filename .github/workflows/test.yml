@@ -171,7 +171,7 @@ jobs:
       # for images that are not covered by the prewarm cache.
       - name: Read Docker Hub credentials from SSM
         id: dockerhub
-        uses: kernel/kernel-images/.github/actions/dockerhub-credentials@9bda8b5f248d2e020cec3503c3bcc78a188ea2b3
+        uses: kernel/kernel-images/.github/actions/dockerhub-credentials@00132e625d389a25deaa4973abd1ba179f70219f
         with:
           role-arn: arn:aws:iam::613957054632:role/github-actions-kernel-images
 
@@ -376,7 +376,7 @@ jobs:
 
       - name: Read Docker Hub credentials from SSM
         id: dockerhub
-        uses: kernel/kernel-images/.github/actions/dockerhub-credentials@9bda8b5f248d2e020cec3503c3bcc78a188ea2b3
+        uses: kernel/kernel-images/.github/actions/dockerhub-credentials@00132e625d389a25deaa4973abd1ba179f70219f
         with:
           role-arn: arn:aws:iam::613957054632:role/github-actions-kernel-images
 
@@ -490,7 +490,7 @@ jobs:
 
       - name: Read Docker Hub credentials from SSM
         id: dockerhub
-        uses: kernel/kernel-images/.github/actions/dockerhub-credentials@9bda8b5f248d2e020cec3503c3bcc78a188ea2b3
+        uses: kernel/kernel-images/.github/actions/dockerhub-credentials@00132e625d389a25deaa4973abd1ba179f70219f
         with:
           role-arn: arn:aws:iam::613957054632:role/github-actions-kernel-images
 
