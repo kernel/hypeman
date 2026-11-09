@@ -10,6 +10,8 @@ on:
 permissions:
   contents: read
   pull-requests: read
+  # pr-risk.yml exchanges the job's OIDC token for short-lived model credentials.
+  id-token: write
 
 jobs:
   classify:
