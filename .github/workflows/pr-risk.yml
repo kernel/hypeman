@@ -27,5 +27,3 @@ jobs:
     secrets:
       ADMIN_APP_ID: ${{ secrets.ADMIN_APP_ID }}
       ADMIN_APP_PRIVATE_KEY: ${{ secrets.ADMIN_APP_PRIVATE_KEY }}
-      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
