@@ -81,7 +81,7 @@ builds/
         └── build.log
 ```
 
-The source can carry build secrets, so it is readable only by hypeman and is deleted as soon as the build finishes. A background GC also deletes finished builds' sources, and removes the whole build directory once the build has been finished for `build.retention` (default `2h`). Queued and running builds are never collected, so startup recovery can re-run them.
+The source can carry build secrets, so it is readable only by hypeman and is deleted as soon as the build finishes. A background GC also deletes finished builds' sources, and removes the whole build directory once the build has been finished for `build.retention` (default `2h`; collection may lag by up to 10 minutes). Retention uses the completion timestamp, falling back to metadata file modification time for older records without one. Queued and running builds are never collected, so startup recovery can re-run them.
 
 ### Build Manager (`manager.go`)
 

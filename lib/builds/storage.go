@@ -256,7 +256,7 @@ func writeBuildConfig(p *paths.Paths, id string, config *BuildConfig) error {
 	}
 
 	configPath := p.BuildConfig(id)
-	if err := os.WriteFile(configPath, data, 0644); err != nil {
+	if err := os.WriteFile(configPath, data, 0600); err != nil {
 		return fmt.Errorf("write build config: %w", err)
 	}
 

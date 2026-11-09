@@ -705,7 +705,7 @@ func (m *manager) runBuildGC(ctx context.Context) {
 }
 
 // gcFinishedBuilds deletes the source of every finished build, and the whole
-// build directory once its metadata has not changed for the retention window.
+// build directory once the retention window since completion has elapsed.
 // Queued and running builds are left alone so startup recovery can re-run them.
 func (m *manager) gcFinishedBuilds() {
 	all, err := listAllBuilds(m.paths)
@@ -717,11 +717,17 @@ func (m *manager) gcFinishedBuilds() {
 		if meta.Status != StatusReady && meta.Status != StatusFailed && meta.Status != StatusCancelled {
 			continue
 		}
-		info, err := os.Stat(m.paths.BuildMetadata(meta.ID))
-		if err != nil {
-			continue
+		completedAt := meta.CompletedAt
+		if completedAt == nil {
+			// Older cancelled builds did not record CompletedAt.
+			info, err := os.Stat(m.paths.BuildMetadata(meta.ID))
+			if err != nil {
+				continue
+			}
+			mtime := info.ModTime()
+			completedAt = &mtime
 		}
-		if time.Since(info.ModTime()) < m.config.Retention {
+		if time.Since(*completedAt) < m.config.Retention {
 			m.removeSource(meta.ID)
 			continue
 		}
@@ -1137,14 +1143,18 @@ func (m *manager) waitForResult(ctx context.Context, buildID string, inst *insta
 }
 
 // updateStatus updates the build status
-func (m *manager) updateStatus(id string, status string, err error) {
+func (m *manager) updateStatus(id string, status string, err error) error {
 	meta, readErr := readMetadata(m.paths, id)
 	if readErr != nil {
 		m.logger.Error("read metadata for status update", "id", id, "error", readErr)
-		return
+		return readErr
 	}
 
 	meta.Status = status
+	if status == StatusCancelled {
+		now := time.Now()
+		meta.CompletedAt = &now
+	}
 	if status == StatusBuilding && meta.StartedAt == nil {
 		now := time.Now()
 		meta.StartedAt = &now
@@ -1156,16 +1166,19 @@ func (m *manager) updateStatus(id string, status string, err error) {
 
 	if writeErr := writeMetadata(m.paths, meta); writeErr != nil {
 		m.logger.Error("write metadata for status update", "id", id, "error", writeErr)
+		return writeErr
+	}
+	if status == StatusCancelled {
+		m.removeSource(id)
 	}
 
 	// Notify subscribers of status change
 	m.notifyStatusChange(id, status)
+	return nil
 }
 
 // updateBuildComplete updates the build with final results
 func (m *manager) updateBuildComplete(id string, status string, digest *string, errMsg *string, provenance *BuildProvenance, durationMS *int64) {
-	defer m.removeSource(id)
-
 	meta, readErr := readMetadata(m.paths, id)
 	if readErr != nil {
 		m.logger.Error("read metadata for completion", "id", id, "error", readErr)
@@ -1191,7 +1204,9 @@ func (m *manager) updateBuildComplete(id string, status string, digest *string, 
 
 	if writeErr := writeMetadata(m.paths, meta); writeErr != nil {
 		m.logger.Error("write metadata for completion", "id", id, "error", writeErr)
+		return
 	}
+	m.removeSource(id)
 
 	// Notify subscribers of status change
 	m.notifyStatusChange(id, status)
@@ -1306,9 +1321,7 @@ func (m *manager) CancelBuild(ctx context.Context, id string) error {
 	case StatusQueued:
 		// Remove from queue
 		if m.queue.Cancel(id) {
-			m.updateStatus(id, StatusCancelled, nil)
-			m.removeSource(id)
-			return nil
+			return m.updateStatus(id, StatusCancelled, nil)
 		}
 		return ErrBuildInProgress // Was already picked up
 
@@ -1318,9 +1331,7 @@ func (m *manager) CancelBuild(ctx context.Context, id string) error {
 		if meta.BuilderInstance != nil {
 			m.instanceManager.DeleteInstance(ctx, *meta.BuilderInstance)
 		}
-		m.updateStatus(id, StatusCancelled, nil)
-		m.removeSource(id)
-		return nil
+		return m.updateStatus(id, StatusCancelled, nil)
 
 	case StatusReady, StatusFailed, StatusCancelled:
 		return fmt.Errorf("build already completed with status: %s", meta.Status)
