@@ -708,7 +708,8 @@ func TestCancelBuild_QueuedBuild(t *testing.T) {
 	assert.Equal(t, 1, queue.PendingCount())
 
 	// Cancel the queued build
-	cancelled := queue.Cancel("build-2")
+	cancelled, err := queue.Cancel("build-2", nil)
+	require.NoError(t, err)
 	assert.True(t, cancelled)
 
 	// Verify it's removed from pending

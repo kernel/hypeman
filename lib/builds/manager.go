@@ -1319,11 +1319,16 @@ func (m *manager) CancelBuild(ctx context.Context, id string) error {
 
 	switch meta.Status {
 	case StatusQueued:
-		// Remove from queue
-		if m.queue.Cancel(id) {
+		cancelled, err := m.queue.Cancel(id, func() error {
 			return m.updateStatus(id, StatusCancelled, nil)
+		})
+		if err != nil {
+			return err
 		}
-		return ErrBuildInProgress // Was already picked up
+		if !cancelled {
+			return ErrBuildInProgress // Was already picked up
+		}
+		return nil
 
 	case StatusBuilding, StatusPushing:
 		// Can't cancel a running build easily

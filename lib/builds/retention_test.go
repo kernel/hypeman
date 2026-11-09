@@ -58,6 +58,16 @@ func TestSourceCleanupRequiresPersistedCompletion(t *testing.T) {
 					data, err := os.ReadFile(filepath.Join(mgr.paths.BuildSourceDir("build"), "source.tar.gz"))
 					require.NoError(t, err)
 					assert.Equal(t, "API_KEY='synthetic-secret'", string(data))
+					if outcome == "cancel-queued" {
+						assert.Equal(t, 1, mgr.queue.PendingCount())
+						require.NoError(t, os.Remove(mgr.paths.BuildMetadata("build")+".tmp"))
+						require.NoError(t, mgr.CancelBuild(context.Background(), "build"))
+						assert.Zero(t, mgr.queue.PendingCount())
+						meta, err = readMetadata(mgr.paths, "build")
+						require.NoError(t, err)
+						assert.Equal(t, StatusCancelled, meta.Status)
+						assert.NoDirExists(t, mgr.paths.BuildSourceDir("build"))
+					}
 				} else {
 					assert.NotNil(t, meta.CompletedAt)
 					assert.NoDirExists(t, mgr.paths.BuildSourceDir("build"))
