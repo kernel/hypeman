@@ -576,16 +576,23 @@ func TestCreateBuild_Success(t *testing.T) {
 	assert.Equal(t, StatusQueued, build.Status)
 	assert.NotNil(t, build.CreatedAt)
 
-	// Verify source was stored
+	// Verify source was stored readable only by hypeman
 	sourcePath := filepath.Join(tempDir, "builds", build.ID, "source", "source.tar.gz")
 	data, err := os.ReadFile(sourcePath)
 	require.NoError(t, err)
 	assert.Equal(t, sourceData, data)
+	info, err := os.Stat(sourcePath)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0600), info.Mode().Perm())
+	info, err = os.Stat(filepath.Dir(sourcePath))
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0700), info.Mode().Perm())
 
 	// Verify config was written
 	configPath := filepath.Join(tempDir, "builds", build.ID, "config.json")
-	_, err = os.Stat(configPath)
-	assert.NoError(t, err)
+	info, err = os.Stat(configPath)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0600), info.Mode().Perm())
 
 	// Verify metadata was written
 	metaPath := filepath.Join(tempDir, "builds", build.ID, "metadata.json")
@@ -701,7 +708,8 @@ func TestCancelBuild_QueuedBuild(t *testing.T) {
 	assert.Equal(t, 1, queue.PendingCount())
 
 	// Cancel the queued build
-	cancelled := queue.Cancel("build-2")
+	cancelled, err := queue.Cancel("build-2", nil)
+	require.NoError(t, err)
 	assert.True(t, cancelled)
 
 	// Verify it's removed from pending
@@ -755,6 +763,44 @@ func TestCancelBuild_AlreadyCompleted(t *testing.T) {
 
 	require.Error(t, err, "expected error when cancelling completed build")
 	assert.Contains(t, err.Error(), "already completed")
+}
+
+// writeTestBuild persists a build with a source holding a synthetic secret.
+func writeTestBuild(t *testing.T, mgr *manager, id, status string) {
+	t.Helper()
+	require.NoError(t, writeMetadata(mgr.paths, &buildMetadata{ID: id, Status: status, CreatedAt: time.Now()}))
+	require.NoError(t, mgr.storeSource(id, []byte("API_KEY='synthetic-secret'")))
+}
+
+func TestGCFinishedBuilds(t *testing.T) {
+	mgr, _, _, tempDir := setupTestManager(t)
+	defer os.RemoveAll(tempDir)
+	mgr.config.Retention = time.Hour
+	expired := time.Now().Add(-2 * time.Hour)
+
+	for _, status := range []string{StatusQueued, StatusBuilding, StatusPushing} {
+		writeTestBuild(t, mgr, status, status)
+		require.NoError(t, os.Chtimes(mgr.paths.BuildMetadata(status), expired, expired))
+	}
+	writeTestBuild(t, mgr, "recent", StatusReady)
+	writeTestBuild(t, mgr, "expired", StatusFailed)
+	meta, err := readMetadata(mgr.paths, "expired")
+	require.NoError(t, err)
+	meta.CompletedAt = &expired
+	require.NoError(t, writeMetadata(mgr.paths, meta)) // Fresh mtime must not extend retention.
+	writeTestBuild(t, mgr, "legacy-cancelled", StatusCancelled)
+	require.NoError(t, os.Chtimes(mgr.paths.BuildMetadata("legacy-cancelled"), expired, expired))
+
+	mgr.gcFinishedBuilds()
+
+	// Pending builds keep their source so recovery can re-run them.
+	for _, status := range []string{StatusQueued, StatusBuilding, StatusPushing} {
+		assert.FileExists(t, filepath.Join(mgr.paths.BuildSourceDir(status), "source.tar.gz"))
+	}
+	assert.NoDirExists(t, mgr.paths.BuildSourceDir("recent"))
+	assert.FileExists(t, mgr.paths.BuildMetadata("recent"))
+	assert.NoDirExists(t, mgr.paths.BuildDir("expired"))
+	assert.NoDirExists(t, mgr.paths.BuildDir("legacy-cancelled"))
 }
 
 func TestGetBuildLogs_Empty(t *testing.T) {
