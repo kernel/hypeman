@@ -148,6 +148,18 @@ func TestRemoveSnapshotMemoryLeavesForkLinksIntact(t *testing.T) {
 	require.NoError(t, removeSnapshotMemory(memory), "a missing file is not an error")
 }
 
+func TestVGPUMigrationNeverSelfAnnounces(t *testing.T) {
+	// An announce round arriving while the guest agent takes the restored
+	// interface down deadlocks the guest's network stack.
+	var parameters map[string]any
+	for _, command := range vgpuMigrationCommands() {
+		if command.Execute == "migrate-set-parameters" {
+			parameters = command.Args.(map[string]any)
+		}
+	}
+	require.Equal(t, 0, parameters["announce-rounds"])
+}
+
 func TestVGPUArgumentsAreOptIn(t *testing.T) {
 	cfg := hypervisor.VMConfig{VGPUSnapshot: true, InstanceID: "child", VGPUDevicePath: "/sys/bus/pci/devices/0000:01:00.1", MemoryBytes: 6 << 30, VCPUs: 4}
 	args := strings.Join(buildArgs(cfg, vgpuMachineType), " ")

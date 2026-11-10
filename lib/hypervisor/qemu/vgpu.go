@@ -318,11 +318,30 @@ func vgpuInstanceUUID(instanceID string) string {
 	return uuid.NewSHA1(uuid.NameSpaceOID, []byte(instanceID)).String()
 }
 
+// vgpuMigrationCommands configures either side of a vGPU snapshot stream.
+//
+// Self-announcement is disabled: a restored guest is given a new MAC and
+// address straight away, and each announce round raises a virtio-net config
+// interrupt whose handler takes rtnl in the guest. Linux's virtio-net waits
+// for that handler while closing the interface with rtnl held, so an announce
+// landing during the guest agent's link-down deadlocks the guest's networking.
+func vgpuMigrationCommands() []qmp.Command {
+	return []qmp.Command{
+		{Execute: "migrate-set-capabilities", Args: map[string]any{"capabilities": []map[string]any{
+			{"capability": "mapped-ram", "state": true},
+			{"capability": "multifd", "state": true},
+		}}},
+		{Execute: "migrate-set-parameters", Args: map[string]any{
+			"multifd-channels": 4,
+			"max-bandwidth":    int64(1 << 30),
+			"downtime-limit":   10000,
+			"announce-rounds":  0,
+		}},
+	}
+}
+
 func (c *Client) configureVGPUMigration() error {
-	for _, command := range []qmp.Command{
-		{Execute: "migrate-set-capabilities", Args: map[string]any{"capabilities": []map[string]any{{"capability": "mapped-ram", "state": true}, {"capability": "multifd", "state": true}}}},
-		{Execute: "migrate-set-parameters", Args: map[string]any{"multifd-channels": 4, "max-bandwidth": int64(1 << 30), "downtime-limit": 10000}},
-	} {
+	for _, command := range vgpuMigrationCommands() {
 		if _, err := c.Run(command); err != nil {
 			return fmt.Errorf("configure GPU migration: %w", err)
 		}
