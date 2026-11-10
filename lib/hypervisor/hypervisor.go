@@ -272,8 +272,10 @@ type ForkPrepareRequest struct {
 	VsockCID    int64
 	VsockSocket string
 
-	SerialLogPath string
-	Network       *ForkNetworkConfig
+	SerialLogPath  string
+	Network        *ForkNetworkConfig
+	InstanceID     string
+	VGPUDevicePath string
 }
 
 // ForkPrepareResult describes which optional fork rewrites were actually applied.

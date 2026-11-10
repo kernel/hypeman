@@ -133,10 +133,29 @@ func (q *QEMU) Resume(ctx context.Context) error {
 // The VM state is saved to destPath/memory file.
 // The VM config is copied to destPath for restore (QEMU requires exact arg match).
 func (q *QEMU) Snapshot(ctx context.Context, destPath string) error {
-	// QEMU uses migrate to file for snapshots
-	// The "file:" protocol is deprecated in QEMU 7.2+, use "exec:cat > path" instead
-	memoryFile := destPath + "/memory"
+	instanceDir := filepath.Dir(q.socketPath)
+	saved, err := loadVMConfig(instanceDir)
+	if err != nil {
+		return fmt.Errorf("load snapshot configuration: %w", err)
+	}
+	memoryFile := filepath.Join(destPath, "memory")
 	uri := "exec:cat > " + memoryFile
+	if saved.VGPUSnapshot {
+		if saved.VGPU == nil || saved.QEMUVersion != VGPUSnapshotVersion {
+			return fmt.Errorf("missing vGPU snapshot compatibility contract")
+		}
+		state, err := q.client.Status()
+		if err != nil {
+			return err
+		}
+		if state != qemu.StatusRunning {
+			return fmt.Errorf("vGPU snapshot requires a running guest")
+		}
+		if err := q.client.configureVGPUMigration(); err != nil {
+			return err
+		}
+		uri = "file:" + memoryFile
+	}
 	if err := q.client.Migrate(uri); err != nil {
 		removeClient(q)
 		return fmt.Errorf("migrate: %w", err)
@@ -144,13 +163,17 @@ func (q *QEMU) Snapshot(ctx context.Context, destPath string) error {
 
 	// Wait for migration to complete
 	if err := q.client.WaitMigration(ctx, migrationTimeout); err != nil {
+		if saved.VGPUSnapshot {
+			if cancelErr := q.client.cancelMigration(); cancelErr != nil {
+				return fmt.Errorf("snapshot failed: %w; cancel migration: %v", err, cancelErr)
+			}
+		}
 		removeClient(q)
 		return fmt.Errorf("wait migration: %w", err)
 	}
 
 	// Copy VM config from instance dir to snapshot dir
 	// QEMU restore requires exact same command-line args as when snapshot was taken
-	instanceDir := filepath.Dir(q.socketPath)
 	srcConfig := filepath.Join(instanceDir, vmConfigFile)
 	dstConfig := filepath.Join(destPath, vmConfigFile)
 

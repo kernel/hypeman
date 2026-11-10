@@ -1,0 +1,68 @@
+name: Build QEMU vGPU runtime
+
+on:
+  pull_request:
+    paths:
+      - scripts/qemu-vgpu/**
+      - lib/hypervisor/qemu/vgpu.go
+      - .github/workflows/qemu-vgpu-runtime.yml
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the immutable runtime release from main
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    outputs:
+      version: ${{ steps.package.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Build and test pinned runtime
+        run: docker build --output type=local,dest=runtime -f scripts/qemu-vgpu/Dockerfile .
+      - name: Package runtime and corresponding source
+        id: package
+        run: |
+          VERSION=$(python3 -c 'import json,re;v=json.load(open("runtime/manifest.json"))["version"];assert re.fullmatch(r"[0-9][a-z0-9.-]+",v);print(v)')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          mkdir artifacts
+          mv runtime/source.tar.gz "artifacts/qemu-vgpu-${VERSION}-source.tar.gz"
+          tar -czf "artifacts/qemu-vgpu-${VERSION}-linux-amd64.tar.gz" -C runtime .
+          cd artifacts
+          sha256sum *.tar.gz > SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qemu-vgpu-runtime
+          path: artifacts/
+          retention-days: 30
+
+  publish:
+    if: github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: qemu-vgpu-runtime
+          path: artifacts
+      - name: Publish a new runtime version without replacing existing assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.build.outputs.version }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          gh release create "qemu-vgpu-${VERSION}" artifacts/* \
+            --target "$COMMIT" \
+            --title "QEMU vGPU runtime ${VERSION}" \
+            --notes "Opt-in QEMU runtime. Includes checksums and corresponding patched source. Does not replace the system QEMU or enable GPU snapshot provisioning."

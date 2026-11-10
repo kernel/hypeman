@@ -53,6 +53,10 @@ func (m *manager) restoreInstance(
 
 	inst := m.toInstance(ctx, meta)
 	stored := &meta.StoredMetadata
+	var gpuRollback StoredMetadata
+	if usesVGPUSnapshot(stored) {
+		gpuRollback = cloneStoredMetadataWithoutPendingStandbyCompression(*stored)
+	}
 	ctx = enrichInstancesTrace(ctx, attribute.String("hypervisor", string(stored.HypervisorType)))
 	log.DebugContext(ctx, "loaded instance", "instance_id", id, "state", inst.State, "has_snapshot", inst.HasSnapshot)
 
@@ -282,7 +286,7 @@ func (m *manager) restoreInstance(
 		attribute.String("hypervisor", string(stored.HypervisorType)),
 		attribute.String("operation", "restore_capacity_wait"),
 	)
-	releaseRestoreSlot, err := m.acquireRestoreSlot(restoreSlotCtx, stored.HypervisorType)
+	releaseRestoreSlot, err := m.acquireInstanceRestoreSlot(restoreSlotCtx, stored)
 	restoreSlotSpanEnd(err)
 	if err != nil {
 		releaseNetwork()
@@ -296,6 +300,17 @@ func (m *manager) restoreInstance(
 		}
 	}
 	defer releaseRestoreSlotOnce()
+
+	cleanupGPU, err := m.prepareVGPUSnapshotRestore(ctx, meta, gpuRollback)
+	if err != nil {
+		releaseNetwork()
+		return nil, err
+	}
+	defer func() {
+		if retErr != nil {
+			cleanupGPU()
+		}
+	}()
 
 	// 5. Transition: Standby → Paused (start hypervisor + restore)
 	restoreCtx, restoreSpanEnd := m.startLifecycleStep(ctx, "restore_from_snapshot",
@@ -312,6 +327,13 @@ func (m *manager) restoreInstance(
 		// Cleanup network on failure
 		releaseNetwork()
 		return nil, err
+	}
+	if usesVGPUSnapshot(stored) {
+		if err := m.saveMetadata(meta); err != nil {
+			_ = m.shutdownFailedRestore(ctx, stored, hv)
+			releaseNetwork()
+			return nil, fmt.Errorf("record restored vGPU process: %w", err)
+		}
 	}
 	// A macOS guest allocates no host network here, so there is none to release.
 	if stored.MacOS != nil {
@@ -332,7 +354,7 @@ func (m *manager) restoreInstance(
 		resumeSpanEnd(err)
 		log.ErrorContext(ctx, "failed to resume VM", "instance_id", id, "error", err)
 		// Cleanup on failure
-		hv.Shutdown(ctx)
+		_ = m.shutdownFailedRestore(ctx, stored, hv)
 		releaseNetwork()
 		return nil, fmt.Errorf("resume vm failed: %w", err)
 	}
@@ -359,7 +381,7 @@ func (m *manager) restoreInstance(
 		if err := reconfigureGuestNetwork(reconfigureCtx, stored, allocatedNet); err != nil {
 			reconfigureSpanEnd(err)
 			log.ErrorContext(ctx, "failed to configure guest network after restore", "instance_id", id, "error", err)
-			_ = hv.Shutdown(ctx)
+			_ = m.shutdownFailedRestore(ctx, stored, hv)
 			m.rollbackAdmissionAllocationActive(stored)
 			releaseNetwork()
 			return nil, fmt.Errorf("configure guest network after restore: %w", err)

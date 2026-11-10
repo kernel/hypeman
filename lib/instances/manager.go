@@ -90,6 +90,7 @@ type ManagerConfig struct {
 	MacOSGuestSubnet                  netip.Prefix // pool for macOS guest networks; zero uses DefaultMacOSGuestSubnet
 	LifecycleEventBufferSize          int
 	MaxConcurrentRestoresByHypervisor map[hypervisor.Type]int
+	MaxConcurrentVGPURestores         int
 }
 
 const defaultManagerMaxConcurrentRestores = 4
@@ -97,12 +98,16 @@ const defaultManagerMaxConcurrentRestores = 4
 type restoreSlotPoolKey struct {
 	hypervisorType hypervisor.Type
 	limit          int
+	gpuOnly        bool
 }
 
 var restoreSlotPools sync.Map // map[restoreSlotPoolKey]chan struct{}
 
 // Normalize applies defaults to manager config values.
 func (c ManagerConfig) Normalize() ManagerConfig {
+	if c.MaxConcurrentVGPURestores <= 0 {
+		c.MaxConcurrentVGPURestores = 2
+	}
 	if c.LifecycleEventBufferSize <= 0 {
 		c.LifecycleEventBufferSize = defaultLifecycleEventBufferSize
 	}
@@ -234,6 +239,7 @@ type manager struct {
 	defaultHypervisor        hypervisor.Type // Default hypervisor type when not specified in request
 	guestMemoryPolicy        guestmemory.Policy
 	restoreSlotsByHypervisor map[hypervisor.Type]chan struct{}
+	vgpuRestoreSlots         chan struct{}
 }
 
 // platformStarters is populated by platform-specific init functions.
@@ -287,6 +293,7 @@ func NewManagerWithConfig(p *paths.Paths, imageManager images.Manager, systemMan
 		tracer:                   tracer,
 		guestMemoryPolicy:        policy,
 		restoreSlotsByHypervisor: sharedRestoreSlotsByHypervisor(managerConfig.MaxConcurrentRestoresByHypervisor),
+		vgpuRestoreSlots:         sharedVGPURestoreSlots(managerConfig.MaxConcurrentVGPURestores),
 		snapshotDefaults:         snapshotDefaults,
 		compressionJobs:          make(map[string]*compressionJob),
 		nativeCodecPaths:         make(map[string]string),

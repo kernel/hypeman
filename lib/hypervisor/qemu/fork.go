@@ -32,6 +32,18 @@ func (s *Starter) PrepareFork(ctx context.Context, req hypervisor.ForkPrepareReq
 		return hypervisor.ForkPrepareResult{}, fmt.Errorf("select qemu fork machine type: %w", err)
 	}
 	cfg := saved.VMConfig
+	if cfg.VGPUSnapshot {
+		if req.InstanceID != "" {
+			cfg.InstanceID = req.InstanceID
+		}
+		if req.VGPUDevicePath != "" {
+			cfg.VGPUDevicePath = req.VGPUDevicePath
+		}
+		if req.SourceDataDir != req.TargetDataDir && req.TargetDataDir != "" {
+			// A child must claim a new VF before restore can launch it.
+			cfg.VGPUDevicePath = ""
+		}
+	}
 
 	if req.SourceDataDir != "" && req.TargetDataDir != "" && req.SourceDataDir != req.TargetDataDir {
 		cfg = rewriteQEMUConfigPaths(cfg, req.SourceDataDir, req.TargetDataDir)

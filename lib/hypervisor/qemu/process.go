@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/digitalocean/go-qemu/qmp"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/logger"
 	"github.com/kernel/hypeman/lib/paths"
@@ -90,8 +91,12 @@ func (s *Starter) SocketName() string {
 }
 
 // GetBinaryPath returns the path to the QEMU binary.
-// QEMU is expected to be installed on the system.
+// Unversioned/default requests use the system binary; vGPU snapshots opt in to a managed runtime.
 func (s *Starter) GetBinaryPath(p *paths.Paths, version string) (string, error) {
+	if version == VGPUSnapshotVersion {
+		binary, _, err := loadVGPURuntime(p)
+		return binary, err
+	}
 	binaryName, err := qemuBinaryName()
 	if err != nil {
 		return "", err
@@ -120,8 +125,11 @@ func (s *Starter) GetVersion(p *paths.Paths) (string, error) {
 	return s.detectVersion(p)
 }
 
-// ResolveVersion binds QEMU metadata to the one host-installed binary.
+// ResolveVersion pins either the system QEMU version or the explicitly selected managed runtime.
 func (s *Starter) ResolveVersion(p *paths.Paths, requested string) (string, error) {
+	if requested == VGPUSnapshotVersion {
+		return s.resolveVGPURuntime(p)
+	}
 	installed, err := s.GetVersion(p)
 	if err != nil {
 		return "", err
@@ -451,6 +459,9 @@ func (s *Starter) validateSnapshotMachineType(stored MachineType) (MachineType, 
 	if s.profile.requiresStoredMachineType() && stored == "" {
 		return "", fmt.Errorf("%s snapshot is missing its machine type", s.profile.hypervisorType())
 	}
+	if stored == vgpuMachineType && s.profile.hypervisorType() == hypervisor.TypeQEMU {
+		return stored, nil
+	}
 	if stored != "" && stored != expected {
 		return "", fmt.Errorf("hypervisor %s cannot use QEMU machine type %q", s.profile.hypervisorType(), stored)
 	}
@@ -495,6 +506,23 @@ func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, s
 		}
 	}
 
+	var gpuContract *vgpuSnapshotContract
+	var runtimeArgs []string
+	if config.VGPUSnapshot || qemuVersion == VGPUSnapshotVersion {
+		if !config.VGPUSnapshot || qemuVersion != VGPUSnapshotVersion || s.profile.hypervisorType() != hypervisor.TypeQEMU {
+			return 0, nil, fmt.Errorf("vGPU snapshots require the managed QEMU runtime and an eligible GPU configuration")
+		}
+		gpuContract, err = newVGPUSnapshotContract(p, config)
+		if err != nil {
+			return 0, nil, err
+		}
+		runtimeArgs, err = vgpuRuntimeArgs(p)
+		if err != nil {
+			return 0, nil, err
+		}
+		machineType = vgpuMachineType
+	}
+
 	// Some distro QEMU builds may not support newer balloon sub-options.
 	// Retry with progressively more conservative balloon args before failing.
 	attempts := []hypervisor.VMConfig{config}
@@ -525,6 +553,7 @@ func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, s
 			// Build command arguments: QMP socket + VM configuration
 			args := buildQMPArgs(socketPath)
 			args = append(args, buildArgs(attempt, machineType)...)
+			args = append(args, runtimeArgs...)
 			pid, hv, cu, err = s.startConfiguredProcess(ctx, p, version, socketPath, attempt, args)
 			if err == nil {
 				booted = attempt
@@ -558,9 +587,9 @@ func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, s
 	// compatible across QEMU versions, so stamp the selected binary's version
 	// alongside the device model.
 	instanceDir := filepath.Dir(socketPath)
-	if err := saveVMConfig(instanceDir, savedVMConfig{VMConfig: booted, MachineType: machineType, QEMUVersion: qemuVersion}); err != nil {
-		if machineType == MachineTypeMicroVM {
-			return 0, nil, fmt.Errorf("save qemu-microvm restore contract: %w", err)
+	if err := saveVMConfig(instanceDir, savedVMConfig{VMConfig: booted, MachineType: machineType, QEMUVersion: qemuVersion, VGPU: gpuContract}); err != nil {
+		if machineType == MachineTypeMicroVM || config.VGPUSnapshot {
+			return 0, nil, fmt.Errorf("save QEMU restore contract: %w", err)
 		}
 		// Standard QEMU can continue, but standby restore will be unavailable.
 		log.WarnContext(ctx, "failed to save VM config for restore", "error", err)
@@ -654,17 +683,45 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 	args := buildQMPArgs(socketPath)
 	args = append(args, buildArgs(config, machineType)...)
 
-	// Add incoming migration flag to restore from snapshot
-	// The "file:" protocol is deprecated in QEMU 7.2+, use "exec:cat < path" instead
 	memoryFile := filepath.Join(snapshotPath, "memory")
-	incomingURI := "exec:cat < " + memoryFile
-	args = append(args, "-incoming", incomingURI)
+	if config.VGPUSnapshot {
+		if saved.QEMUVersion != VGPUSnapshotVersion || version != VGPUSnapshotVersion || machineType != vgpuMachineType {
+			return 0, nil, fmt.Errorf("invalid vGPU snapshot runtime contract")
+		}
+		current, err := newVGPUSnapshotContract(p, config)
+		if err != nil {
+			return 0, nil, err
+		}
+		if err := validateVGPUSnapshotContract(saved.VGPU, current); err != nil {
+			return 0, nil, err
+		}
+		runtimeArgs, err := vgpuRuntimeArgs(p)
+		if err != nil {
+			return 0, nil, err
+		}
+		args = append(args, runtimeArgs...)
+		args = append(args, "-incoming", "defer", "-S")
+	} else {
+		if saved.VGPU != nil || saved.QEMUVersion == VGPUSnapshotVersion {
+			return 0, nil, fmt.Errorf("vGPU snapshot is missing its device configuration")
+		}
+		args = append(args, "-incoming", "exec:cat < "+memoryFile)
+	}
 
 	pid, hv, cu, err := s.startConfiguredProcess(ctx, p, version, socketPath, config, args)
 	if err != nil {
 		return 0, nil, err
 	}
 	defer cu.Clean()
+
+	if config.VGPUSnapshot {
+		if err := hv.client.configureVGPUMigration(); err != nil {
+			return 0, nil, err
+		}
+		if _, err := hv.client.Run(qmp.Command{Execute: "migrate-incoming", Args: map[string]string{"uri": "file:" + memoryFile}}); err != nil {
+			return 0, nil, fmt.Errorf("load vGPU snapshot: %w", err)
+		}
+	}
 
 	// Wait for VM to be ready after loading migration data
 	// QEMU transitions from "inmigrate" to "paused" when loading completes
@@ -674,7 +731,7 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 	}
 	log.DebugContext(ctx, "VM ready", "duration_ms", time.Since(migrationWaitStart).Milliseconds())
 
-	if err := saveVMConfig(filepath.Dir(socketPath), savedVMConfig{VMConfig: config, MachineType: machineType, QEMUVersion: qemuVersion}); err != nil {
+	if err := saveVMConfig(filepath.Dir(socketPath), savedVMConfig{VMConfig: config, MachineType: machineType, QEMUVersion: qemuVersion, VGPU: saved.VGPU}); err != nil {
 		return 0, nil, fmt.Errorf("save restored vm config: %w", err)
 	}
 
@@ -684,6 +741,9 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 }
 
 func (s *Starter) validateRestoreVersion(p *paths.Paths, storedVersion string) (string, error) {
+	if storedVersion == VGPUSnapshotVersion {
+		return s.resolveVGPURuntime(p)
+	}
 	currentVersion, err := s.GetVersion(p)
 	if err != nil {
 		return "", fmt.Errorf("get QEMU version for restore: %w", err)
@@ -711,6 +771,7 @@ type savedVMConfig struct {
 	hypervisor.VMConfig
 	MachineType MachineType
 	QEMUVersion string
+	VGPU        *vgpuSnapshotContract `json:",omitempty"`
 }
 
 // saveVMConfig saves QEMU's restore contract to the instance directory.

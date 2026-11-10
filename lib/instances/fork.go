@@ -311,11 +311,9 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 		forkMeta.Phases.Record(phasetracking.PhaseStopped, now)
 	}
 
-	// Keep the original CID for snapshot-based forks. Rewriting CID in restored
-	// memory snapshots is not reliable across hypervisors. Concurrent standby
-	// fork prepare is currently enabled only for Firecracker, whose host vsock
-	// dialer routes through the per-VM UDS path rather than this metadata CID.
-	if source.State == StateStandby {
+	// Preserve existing backends' CID behavior. Managed QEMU GPU forks use a
+	// transport reset and the guest agent's CID-independent listening socket.
+	if source.State == StateStandby && !usesVGPUSnapshot(&forkMeta) {
 		forkMeta.VsockCID = stored.VsockCID
 	} else {
 		forkMeta.VsockCID = generateVsockCID(forkID)
@@ -342,6 +340,7 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 			SnapshotConfigPath: snapshotConfigPath,
 			SourceDataDir:      stored.DataDir,
 			TargetDataDir:      forkMeta.DataDir,
+			InstanceID:         forkMeta.Id,
 			VsockCID:           forkMeta.VsockCID,
 			VsockSocket:        forkMeta.VsockSocket,
 			SerialLogPath:      m.paths.InstanceAppLog(forkID),

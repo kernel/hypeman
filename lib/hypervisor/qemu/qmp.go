@@ -131,6 +131,27 @@ func (c *Client) QueryMigration() (raw.MigrationInfo, error) {
 	return c.raw.QueryMigrate()
 }
 
+func (c *Client) cancelMigration() error {
+	if _, err := c.Run(qmp.Command{Execute: "migrate_cancel"}); err != nil {
+		return err
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		info, err := c.QueryMigration()
+		if err != nil {
+			return err
+		}
+		if info.Status != nil {
+			switch *info.Status {
+			case raw.MigrationStatusCancelled, raw.MigrationStatusCompleted, raw.MigrationStatusFailed, raw.MigrationStatusNone:
+				return nil
+			}
+		}
+		time.Sleep(qmpPollInterval)
+	}
+	return fmt.Errorf("migration did not stop after cancellation")
+}
+
 // WaitMigration polls until an outgoing migration completes or times out.
 // Used for snapshot/standby operations where we initiate the migration.
 // Returns nil if migration completed successfully, error otherwise.

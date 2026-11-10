@@ -222,6 +222,7 @@ type HypervisorConfig struct {
 	CloudHypervisorDefaultVersion    string                 `koanf:"cloud_hypervisor_default_version"`
 	FirecrackerBinaryPath            string                 `koanf:"firecracker_binary_path"`
 	FirecrackerMaxConcurrentRestores int                    `koanf:"firecracker_max_concurrent_restores"`
+	VGPUMaxConcurrentRestores        int                    `koanf:"vgpu_max_concurrent_restores"`
 	Memory                           HypervisorMemoryConfig `koanf:"memory"`
 }
 
@@ -461,6 +462,7 @@ func defaultConfig() *Config {
 			CloudHypervisorDefaultVersion:    "",
 			FirecrackerBinaryPath:            "",
 			FirecrackerMaxConcurrentRestores: 32,
+			VGPUMaxConcurrentRestores:        2,
 			Memory: HypervisorMemoryConfig{
 				Enabled:            false,
 				KernelPageInitMode: "hardened",
@@ -714,6 +716,9 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("builders.idle_ttl must be >= 0, got %s", c.Builders.IdleTTL)
 		}
 		c.Builders.IdleTTLDuration = ttl
+	}
+	if c.Hypervisor.VGPUMaxConcurrentRestores < 0 {
+		return fmt.Errorf("hypervisor.vgpu_max_concurrent_restores must be >= 0")
 	}
 	if c.Hypervisor.FirecrackerMaxConcurrentRestores < 0 {
 		return fmt.Errorf("hypervisor.firecracker_max_concurrent_restores must be >= 0, got %d", c.Hypervisor.FirecrackerMaxConcurrentRestores)

@@ -354,6 +354,7 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 		Devices:                  deviceRefs,
 		Volumes:                  volumes,
 		Hypervisor:               hvType,
+		HypervisorVersion:        lo.FromPtr(request.Body.HypervisorVersion),
 		GPU:                      gpuConfig,
 		Entrypoint:               entrypoint,
 		Cmd:                      cmd,
@@ -1248,6 +1249,9 @@ func instanceToOAPI(inst instances.Instance) oapi.Instance {
 		_ = json.Unmarshal(b, &oapiInst.Network)
 	}
 
+	if inst.HypervisorVersion != "" && inst.HypervisorVersion != "unknown" {
+		oapiInst.HypervisorVersion = lo.ToPtr(inst.HypervisorVersion)
+	}
 	if inst.Platform != "" {
 		oapiInst.Platform = lo.ToPtr(inst.Platform)
 	}

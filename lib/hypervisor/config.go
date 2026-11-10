@@ -26,6 +26,8 @@ type VMConfig struct {
 	// PCI device passthrough (GPU, etc.)
 	PCIDevices     []string
 	VGPUDevicePath string
+	VGPUSnapshot   bool
+	InstanceID     string
 
 	// Boot configuration. Empty BootMode preserves the existing direct-kernel
 	// behavior for Linux callers.

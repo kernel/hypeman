@@ -146,9 +146,10 @@ func ProvideInstanceManager(p *paths.Paths, cfg *config.Config, imageManager ima
 		return nil, fmt.Errorf("failed to parse network.macos_subnet_cidr %q: %w", cfg.Network.MacOSSubnetCIDR, err)
 	}
 	managerConfig := instances.ManagerConfig{
-		MacOSOnly:                cfg.MacOSOnly,
-		MacOSGuestSubnet:         macOSGuestSubnet,
-		LifecycleEventBufferSize: cfg.Instances.LifecycleEventBufferSize,
+		MacOSOnly:                 cfg.MacOSOnly,
+		MacOSGuestSubnet:          macOSGuestSubnet,
+		LifecycleEventBufferSize:  cfg.Instances.LifecycleEventBufferSize,
+		MaxConcurrentVGPURestores: cfg.Hypervisor.VGPUMaxConcurrentRestores,
 		MaxConcurrentRestoresByHypervisor: map[hypervisor.Type]int{
 			hypervisor.TypeFirecracker: cfg.Hypervisor.FirecrackerMaxConcurrentRestores,
 		},

@@ -1,0 +1,45 @@
+diff --git a/hw/vfio/migration.c b/hw/vfio/migration.c
+index 73c49d8..5302b41 100644
+--- a/hw/vfio/migration.c
++++ b/hw/vfio/migration.c
+@@ -252,7 +252,39 @@ static int vfio_load_buffer(QEMUFile *f, VFIODevice *vbasedev,
+     VFIOMigration *migration = vbasedev->migration;
+     int ret;
+ 
+-    ret = qemu_file_get_to_fd(f, migration->data_fd, data_size);
++    g_autofree uint8_t *buffer = g_malloc(MIN(data_size,
++                                            VFIO_MIG_DEFAULT_DATA_BUFFER_SIZE));
++    uint64_t remaining = data_size;
++
++    ret = 0;
++    while (remaining) {
++        size_t chunk = MIN(remaining, VFIO_MIG_DEFAULT_DATA_BUFFER_SIZE);
++        size_t offset = 0;
++
++        if (qemu_get_buffer(f, buffer, chunk) != chunk) {
++            ret = qemu_file_get_error(f);
++            if (!ret) {
++                ret = -EIO;
++            }
++            break;
++        }
++        while (offset < chunk) {
++            ssize_t written = write(migration->data_fd, buffer + offset,
++                                    chunk - offset);
++            if (written < 0 && errno == EINTR) {
++                continue;
++            }
++            if (written <= 0) {
++                ret = written < 0 ? -errno : -EIO;
++                break;
++            }
++            offset += written;
++        }
++        if (ret) {
++            break;
++        }
++        remaining -= chunk;
++    }
+     trace_vfio_load_state_device_data(vbasedev->name, data_size, ret);
+ 
+     return ret;

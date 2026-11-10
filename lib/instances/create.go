@@ -272,6 +272,10 @@ func (m *manager) createInstance(
 		return nil, err
 	}
 
+	if err := validateVGPUSnapshotRequest(req, hvType, hvVersion); err != nil {
+		return nil, err
+	}
+
 	// 10. Validate, resolve, and auto-bind devices (GPU passthrough)
 	// Track devices we've marked as attached for cleanup on error.
 	// The cleanup closure captures this slice by reference, so it will see
@@ -830,7 +834,11 @@ func (m *manager) startAndBootVM(
 	// Version-locked snapshot backends must refresh metadata on every cold
 	// start so host upgrades do not leave the reported version stale.
 	if refreshHostVersion && requiresHostSnapshotVersion(stored.HypervisorType) {
-		resolvedVersion, err := starter.ResolveVersion(m.paths, "")
+		requested := ""
+		if usesVGPUSnapshot(stored) {
+			requested = stored.HypervisorVersion
+		}
+		resolvedVersion, err := starter.ResolveVersion(m.paths, requested)
 		if err != nil {
 			return fmt.Errorf("resolve version for hypervisor %s start: %w", stored.HypervisorType, err)
 		}
@@ -1026,6 +1034,8 @@ func (m *manager) buildHypervisorConfig(ctx context.Context, inst *Instance, ima
 		VsockSocket:    inst.VsockSocket,
 		PCIDevices:     pciDevices,
 		VGPUDevicePath: storedVGPUDevicePath(&inst.StoredMetadata),
+		VGPUSnapshot:   usesVGPUSnapshot(&inst.StoredMetadata),
+		InstanceID:     inst.Id,
 		KernelPath:     kernelPath,
 		InitrdPath:     initrdPath,
 		KernelArgs:     m.kernelArgs(inst.HypervisorType),
