@@ -151,13 +151,13 @@ func TestRemoveSnapshotMemoryLeavesForkLinksIntact(t *testing.T) {
 func TestVGPUArgumentsAreOptIn(t *testing.T) {
 	cfg := hypervisor.VMConfig{VGPUSnapshot: true, InstanceID: "child", VGPUDevicePath: "/sys/bus/pci/devices/0000:01:00.1", MemoryBytes: 6 << 30, VCPUs: 4}
 	args := strings.Join(buildArgs(cfg, vgpuMachineType), " ")
-	require.Contains(t, args, "pc-q35-8.2,accel=kvm,smbios-entry-point-type=32")
-	require.Contains(t, args, "-mem-prealloc")
+	require.Contains(t, args, "pc-q35-8.2,accel=kvm,smbios-entry-point-type=32,memory-backend=pc.ram")
+	require.Contains(t, args, "-object memory-backend-ram,id=pc.ram,size=6144M,prealloc=on,prealloc-threads=16,x-use-canonical-path-for-ramblock-id=off")
 	require.Contains(t, args, "vmgenid,guid=auto")
 	require.Contains(t, args, "enable-migration=on")
 	cfg.VGPUSnapshot = false
 	args = strings.Join(buildArgs(cfg, MachineTypeQ35), " ")
 	require.NotContains(t, args, "enable-migration")
-	require.NotContains(t, args, "-mem-prealloc")
+	require.NotContains(t, args, "memory-backend")
 	require.NotContains(t, args, "vmgenid")
 }

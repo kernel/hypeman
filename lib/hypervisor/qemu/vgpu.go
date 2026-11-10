@@ -28,6 +28,12 @@ const (
 	vgpuSourceCommit                = "005c61c0ef6f6ae615283440b4bb7be51b2c6ddd"
 	vgpuMachineType     MachineType = "pc-q35-8.2"
 
+	// vgpuRAMBackendID is q35's default RAM block id, so the explicit backend
+	// keeps the name an implicit one would give guest RAM in the stream.
+	vgpuRAMBackendID = "pc.ram"
+	// vgpuPreallocThreads matches QEMU's own upper bound for populating RAM.
+	vgpuPreallocThreads = 16
+
 	vgpuRuntimeBinaryName   = "qemu-system-x86_64"
 	vgpuRuntimeFirmwareDir  = "firmware"
 	vgpuRuntimeManifestName = "manifest.json"
