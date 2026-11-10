@@ -4,11 +4,16 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"strconv"
+	"sync"
 
+	"github.com/opencontainers/umoci/oci/layer"
 	"github.com/u-root/u-root/pkg/cpio"
 )
 
@@ -256,7 +261,58 @@ func convertToErofs(ctx context.Context, rootfsDir, diskPath string) (int64, err
 	if err != nil {
 		return 0, fmt.Errorf("mkfs.erofs failed: %w, output: %s", err, output)
 	}
+	return alignErofsDisk(diskPath)
+}
 
+// exportImageRootfs exports a rootfs unpacked by unpackLayers. As root the
+// directory carries the image's file owners and is exported as is. Otherwise
+// the owners are only in xattrs (see rootfsOnDiskFormat), so erofs is built
+// from a tar stream of the directory that restores them. That needs
+// mkfs.erofs 1.8 or newer: 1.7 leaves the nanoseconds of every mtime
+// uninitialized when reading a tar. Without it, and for formats other than
+// erofs, every file is owned by the current user in the image.
+func exportImageRootfs(ctx context.Context, rootfsDir, diskPath string, format ExportFormat) (int64, error) {
+	if os.Geteuid() == 0 || format != FormatErofs || !mkfsErofsReadsTarMtimes() {
+		if os.Geteuid() != 0 {
+			slog.WarnContext(ctx, "image file owners are not preserved; every file will be owned by the current user", "format", format)
+		}
+		return ExportRootfsWithContext(ctx, rootfsDir, diskPath, format)
+	}
+	if err := os.MkdirAll(filepath.Dir(diskPath), 0755); err != nil {
+		return 0, fmt.Errorf("create disk parent dir: %w", err)
+	}
+
+	rootfsTar := layer.GenerateInsertLayer(rootfsDir, ".", false, &layer.RepackOptions{OnDiskFormat: rootfsOnDiskFormat()})
+	defer rootfsTar.Close()
+
+	cmd := exec.CommandContext(ctx, "mkfs.erofs", "-zlz4", "--tar=f", diskPath)
+	cmd.Stdin = rootfsTar
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return 0, fmt.Errorf("mkfs.erofs failed: %w, output: %s", err, output)
+	}
+	return alignErofsDisk(diskPath)
+}
+
+var erofsVersionPattern = regexp.MustCompile(`\(erofs-utils\) (\d+)\.(\d+)`)
+
+// mkfsErofsReadsTarMtimes reports whether mkfs.erofs is 1.8 or newer.
+// --version was added in 1.8, so older releases fail the command.
+var mkfsErofsReadsTarMtimes = sync.OnceValue(func() bool {
+	output, err := exec.Command("mkfs.erofs", "--version").Output()
+	if err != nil {
+		return false
+	}
+	match := erofsVersionPattern.FindSubmatch(output)
+	if match == nil {
+		return false
+	}
+	major, _ := strconv.Atoi(string(match[1]))
+	minor, _ := strconv.Atoi(string(match[2]))
+	return major > 1 || (major == 1 && minor >= 8)
+})
+
+func alignErofsDisk(diskPath string) (int64, error) {
 	// Get actual disk size
 	stat, err := os.Stat(diskPath)
 	if err != nil {
