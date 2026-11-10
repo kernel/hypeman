@@ -378,7 +378,10 @@ func (m *manager) restoreInstance(
 			attribute.String("hypervisor", string(stored.HypervisorType)),
 			attribute.String("operation", "reconfigure_guest_network"),
 		)
-		if err := reconfigureGuestNetwork(reconfigureCtx, stored, allocatedNet); err != nil {
+		reconfigureCtx, cancelReconfigure := guestReconfigureContext(reconfigureCtx, stored)
+		err := reconfigureGuestNetwork(reconfigureCtx, stored, allocatedNet)
+		cancelReconfigure()
+		if err != nil {
 			reconfigureSpanEnd(err)
 			log.ErrorContext(ctx, "failed to configure guest network after restore", "instance_id", id, "error", err)
 			_ = m.shutdownFailedRestore(ctx, stored, hv)

@@ -31,3 +31,17 @@ func TestVGPURestoreSlotsDoNotThrottleCPUQEMU(t *testing.T) {
 func TestVGPURestoreSlotsDoNotReuseTheGenericQEMUPool(t *testing.T) {
 	require.NotEqual(t, sharedRestoreSlots(hypervisor.TypeQEMU, 2), sharedVGPURestoreSlots(2))
 }
+
+func TestGuestReconfigureIsBoundedOnlyForVGPURestores(t *testing.T) {
+	gpu := &StoredMetadata{HypervisorType: hypervisor.TypeQEMU, HypervisorVersion: qemu.VGPUSnapshotVersion, GPUProfile: "NVIDIA L40S-3Q"}
+	ctx, cancel := guestReconfigureContext(t.Context(), gpu)
+	defer cancel()
+	deadline, ok := ctx.Deadline()
+	require.True(t, ok)
+	require.WithinDuration(t, time.Now().Add(vgpuRestoreAgentTimeout), deadline, time.Second)
+
+	ctx, cancel = guestReconfigureContext(t.Context(), &StoredMetadata{HypervisorType: hypervisor.TypeFirecracker})
+	defer cancel()
+	_, ok = ctx.Deadline()
+	require.False(t, ok)
+}

@@ -42,6 +42,19 @@ func (m *manager) shutdownFailedRestore(ctx context.Context, stored *StoredMetad
 	return m.shutdownHypervisor(cleanupCtx, &Instance{StoredMetadata: *stored})
 }
 
+// vgpuRestoreAgentTimeout bounds how long a restored vGPU guest's agent may
+// take to apply its new network identity. The agent was already running when
+// the snapshot was taken, so it answers in milliseconds or not at all; failing
+// here leaves the caller time to boot a fresh guest instead.
+const vgpuRestoreAgentTimeout = 10 * time.Second
+
+func guestReconfigureContext(ctx context.Context, stored *StoredMetadata) (context.Context, context.CancelFunc) {
+	if !usesVGPUSnapshot(stored) {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, vgpuRestoreAgentTimeout)
+}
+
 // vgpuSnapshotProfile is the only vGPU profile whose device state has been
 // qualified for capture and restore.
 const vgpuSnapshotProfile = "NVIDIA L40S-3Q"
