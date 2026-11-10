@@ -58,6 +58,11 @@ func (m *manager) tapDeviceExists(tapName string) bool {
 	return true
 }
 
+// forgetNeighbor is a no-op on macOS: vmnet owns the host side of the network.
+func (m *manager) forgetNeighbor(bridgeName, ip string) error {
+	return nil
+}
+
 // queryNetworkState returns the default vmnet shared-NAT network targeted by
 // Hypeman. Host-level Shared_Net_Address overrides are not currently supported.
 func (m *manager) queryNetworkState(bridgeName string) (*Network, error) {
