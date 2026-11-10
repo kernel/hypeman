@@ -23,7 +23,7 @@ jobs:
     outputs:
       version: ${{ steps.package.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
       - name: Build and test pinned runtime
@@ -38,7 +38,7 @@ jobs:
           tar -czf "artifacts/qemu-vgpu-${VERSION}-linux-amd64.tar.gz" -C runtime .
           cd artifacts
           sha256sum *.tar.gz > SHA256SUMS
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: qemu-vgpu-runtime
           path: artifacts/
@@ -51,7 +51,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: qemu-vgpu-runtime
           path: artifacts
