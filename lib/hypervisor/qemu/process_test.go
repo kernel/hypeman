@@ -394,6 +394,20 @@ func TestStartManagedProcessCleanupRemovesSocketAndReapsExitedProcess(t *testing
 	assert.True(t, cmd.ProcessState.Exited())
 }
 
+func TestStartManagedProcessClosesExitedOnceProcessIsReaped(t *testing.T) {
+	cmd := exec.Command("sh", "-c", "exit 0")
+	proc, err := startManagedProcess(cmd, filepath.Join(t.TempDir(), "qemu.sock"))
+	require.NoError(t, err)
+
+	select {
+	case <-proc.exited:
+	case <-time.After(5 * time.Second):
+		t.Fatal("exited was not closed after the process ended")
+	}
+	_, exited := proc.checkExited()
+	assert.True(t, exited)
+}
+
 func TestWaitForSocketOrExitReturnsEarlyWhenProcessDies(t *testing.T) {
 	socketPath := filepath.Join(t.TempDir(), "qemu.sock")
 

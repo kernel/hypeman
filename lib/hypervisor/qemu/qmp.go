@@ -2,6 +2,7 @@ package qemu
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -199,21 +200,33 @@ func (c *Client) WaitMigration(ctx context.Context, timeout time.Duration) error
 	return fmt.Errorf("migration timeout after %v", timeout)
 }
 
+// errVMMExited reports that QEMU exited before it finished loading migration data.
+var errVMMExited = errors.New("qemu exited while loading migration data")
+
 // WaitVMReady polls until the VM is ready after an incoming migration.
 // Used for restore operations where QEMU was started with -incoming.
 // The VM transitions from "inmigrate" to "paused" when migration data is loaded.
 // Returns nil when VM is ready for resume, error on timeout or failure.
-func (c *Client) WaitVMReady(ctx context.Context, timeout time.Duration) error {
+// exited, when not nil, is closed if the QEMU process exits: the monitor of a
+// dead process only ever returns errors, which would otherwise be polled as
+// transient until the timeout.
+func (c *Client) WaitVMReady(ctx context.Context, timeout time.Duration, exited <-chan struct{}) error {
+	return waitVMReady(ctx, timeout, exited, c.Status)
+}
+
+func waitVMReady(ctx context.Context, timeout time.Duration, exited <-chan struct{}, queryStatus func() (qemu.Status, error)) error {
 	deadline := time.Now().Add(timeout)
 
 	for time.Now().Before(deadline) {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case <-exited:
+			return errVMMExited
 		default:
 		}
 
-		status, err := c.Status()
+		status, err := queryStatus()
 		if err != nil {
 			// Ignore transient errors, keep polling
 			time.Sleep(qmpPollInterval)

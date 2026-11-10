@@ -240,6 +240,9 @@ type startedProcess struct {
 	waitDone     chan error
 	waitConsumed bool
 	waitErr      error
+	// exited is closed once the process has been reaped. Unlike waitDone, any
+	// number of goroutines can watch it.
+	exited chan struct{}
 }
 
 func startManagedProcess(cmd *exec.Cmd, socketPath string) (*startedProcess, error) {
@@ -251,11 +254,13 @@ func startManagedProcess(cmd *exec.Cmd, socketPath string) (*startedProcess, err
 		pid:        cmd.Process.Pid,
 		socketPath: socketPath,
 		waitDone:   make(chan error, 1),
+		exited:     make(chan struct{}),
 	}
 	go func() {
 		err := cmd.Wait()
 		_ = os.Remove(socketPath)
 		proc.waitDone <- err
+		close(proc.exited)
 	}()
 
 	return proc, nil
@@ -325,9 +330,9 @@ func vfioTermGraceFor(cfg hypervisor.VMConfig) time.Duration {
 }
 
 // startQEMUProcess handles the common QEMU process startup logic.
-// Returns the PID, hypervisor client, and a cleanup function.
+// Returns the started process, hypervisor client, and a cleanup function.
 // The cleanup function must be called on error; call cleanup.Release() on success.
-func (s *Starter) startQEMUProcess(ctx context.Context, p *paths.Paths, version string, socketPath string, args []string, termGrace time.Duration) (int, *QEMU, *cleanup.Cleanup, error) {
+func (s *Starter) startQEMUProcess(ctx context.Context, p *paths.Paths, version string, socketPath string, args []string, termGrace time.Duration) (*startedProcess, *QEMU, *cleanup.Cleanup, error) {
 	log := logger.FromContext(ctx)
 	processAttrs := hypervisor.TraceAttributesFromContext(ctx)
 	processAttrs = append(processAttrs,
@@ -342,13 +347,13 @@ func (s *Starter) startQEMUProcess(ctx context.Context, p *paths.Paths, version 
 	if err != nil {
 		processSpan.RecordError(err)
 		processSpan.SetStatus(codes.Error, err.Error())
-		return 0, nil, nil, fmt.Errorf("get binary: %w", err)
+		return nil, nil, nil, fmt.Errorf("get binary: %w", err)
 	}
 
 	// Check if socket is already in use
 	if isSocketInUse(socketPath) {
 		processSpan.SetStatus(codes.Error, "socket already in use")
-		return 0, nil, nil, fmt.Errorf("socket already in use, QEMU may be running at %s", socketPath)
+		return nil, nil, nil, fmt.Errorf("socket already in use, QEMU may be running at %s", socketPath)
 	}
 
 	// A graceful guest shutdown can leave the old QMP client pooled even though
@@ -370,7 +375,7 @@ func (s *Starter) startQEMUProcess(ctx context.Context, p *paths.Paths, version 
 	if err := os.MkdirAll(logsDir, 0755); err != nil {
 		processSpan.RecordError(err)
 		processSpan.SetStatus(codes.Error, err.Error())
-		return 0, nil, nil, fmt.Errorf("create logs directory: %w", err)
+		return nil, nil, nil, fmt.Errorf("create logs directory: %w", err)
 	}
 
 	vmmLogFile, err := os.OpenFile(
@@ -381,7 +386,7 @@ func (s *Starter) startQEMUProcess(ctx context.Context, p *paths.Paths, version 
 	if err != nil {
 		processSpan.RecordError(err)
 		processSpan.SetStatus(codes.Error, err.Error())
-		return 0, nil, nil, fmt.Errorf("create vmm log: %w", err)
+		return nil, nil, nil, fmt.Errorf("create vmm log: %w", err)
 	}
 	defer vmmLogFile.Close()
 
@@ -393,7 +398,7 @@ func (s *Starter) startQEMUProcess(ctx context.Context, p *paths.Paths, version 
 	if err != nil {
 		processSpan.RecordError(err)
 		processSpan.SetStatus(codes.Error, err.Error())
-		return 0, nil, nil, fmt.Errorf("start qemu: %w", err)
+		return nil, nil, nil, fmt.Errorf("start qemu: %w", err)
 	}
 
 	pid := proc.pid
@@ -413,7 +418,7 @@ func (s *Starter) startQEMUProcess(ctx context.Context, p *paths.Paths, version 
 		// Diagnostic (log-only): if this was a vsock guest-CID collision, capture
 		// the colliding CID and which host process is holding it.
 		logVsockCIDConflict(processCtx, guestCIDFromArgs(args), wrapped.Error())
-		return 0, nil, nil, wrapped
+		return nil, nil, nil, wrapped
 	}
 	log.DebugContext(processCtx, "QMP socket ready", "duration_ms", time.Since(socketWaitStart).Milliseconds())
 
@@ -431,7 +436,7 @@ func (s *Starter) startQEMUProcess(ctx context.Context, p *paths.Paths, version 
 			// Diagnostic (log-only): if this was a vsock guest-CID collision,
 			// capture the colliding CID and which host process is holding it.
 			logVsockCIDConflict(processCtx, guestCIDFromArgs(args), wrapped.Error())
-			return 0, nil, nil, wrapped
+			return nil, nil, nil, wrapped
 		}
 
 		hv, err = NewForType(socketPath, s.profile.hypervisorType())
@@ -442,13 +447,13 @@ func (s *Starter) startQEMUProcess(ctx context.Context, p *paths.Paths, version 
 			processSpan.RecordError(err)
 			processSpan.SetStatus(codes.Error, err.Error())
 			cu.Clean()
-			return 0, nil, nil, appendVMMLog(fmt.Errorf("create client: %w", err), logsDir)
+			return nil, nil, nil, appendVMMLog(fmt.Errorf("create client: %w", err), logsDir)
 		}
 		time.Sleep(socketPollInterval)
 	}
 
 	processSpan.SetStatus(codes.Ok, "")
-	return pid, hv, &cu, nil
+	return proc, hv, &cu, nil
 }
 
 func (s *Starter) validateSnapshotMachineType(stored MachineType) (MachineType, error) {
@@ -468,23 +473,23 @@ func (s *Starter) validateSnapshotMachineType(stored MachineType) (MachineType, 
 	return expected, nil
 }
 
-func (s *Starter) startConfiguredProcess(ctx context.Context, p *paths.Paths, version, socketPath string, config hypervisor.VMConfig, args []string) (int, *QEMU, *cleanup.Cleanup, error) {
+func (s *Starter) startConfiguredProcess(ctx context.Context, p *paths.Paths, version, socketPath string, config hypervisor.VMConfig, args []string) (*startedProcess, *QEMU, *cleanup.Cleanup, error) {
 	cu := cleanup.Make(func() {})
 	tpmProcess, err := startSWTPM(config.TPM, filepath.Dir(socketPath))
 	if err != nil {
-		return 0, nil, nil, err
+		return nil, nil, nil, err
 	}
 	if tpmProcess != nil {
 		cu.Add(tpmProcess.cleanup)
 	}
 
-	pid, hv, qemuCleanup, err := s.startQEMUProcess(ctx, p, version, socketPath, args, vfioTermGraceFor(config))
+	proc, hv, qemuCleanup, err := s.startQEMUProcess(ctx, p, version, socketPath, args, vfioTermGraceFor(config))
 	if err != nil {
 		cu.Clean()
-		return 0, nil, nil, err
+		return nil, nil, nil, err
 	}
 	cu.Add(qemuCleanup.Clean)
-	return pid, hv, &cu, nil
+	return proc, hv, &cu, nil
 }
 
 // StartVM launches QEMU with the VM configuration and returns a Hypervisor client.
@@ -541,7 +546,7 @@ func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, s
 	}
 
 	var (
-		pid     int
+		proc    *startedProcess
 		hv      *QEMU
 		cu      *cleanup.Cleanup
 		booted  hypervisor.VMConfig
@@ -554,7 +559,7 @@ func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, s
 			args := buildQMPArgs(socketPath)
 			args = append(args, buildArgs(attempt, machineType)...)
 			args = append(args, runtimeArgs...)
-			pid, hv, cu, err = s.startConfiguredProcess(ctx, p, version, socketPath, attempt, args)
+			proc, hv, cu, err = s.startConfiguredProcess(ctx, p, version, socketPath, attempt, args)
 			if err == nil {
 				booted = attempt
 				started = true
@@ -596,7 +601,7 @@ func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, s
 	}
 
 	cu.Release()
-	return pid, hv, nil
+	return proc.pid, hv, nil
 }
 
 func appendVMMLog(err error, logsDir string) error {
@@ -710,7 +715,7 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 		args = append(args, "-incoming", "exec:cat < "+memoryFile)
 	}
 
-	pid, hv, cu, err := s.startConfiguredProcess(ctx, p, version, socketPath, config, args)
+	proc, hv, cu, err := s.startConfiguredProcess(ctx, p, version, socketPath, config, args)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -728,8 +733,12 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 	// Wait for VM to be ready after loading migration data
 	// QEMU transitions from "inmigrate" to "paused" when loading completes
 	migrationWaitStart := time.Now()
-	if err := hv.client.WaitVMReady(ctx, migrationTimeout); err != nil {
-		return 0, nil, fmt.Errorf("wait for vm ready: %w", err)
+	if err := hv.client.WaitVMReady(ctx, migrationTimeout, proc.exited); err != nil {
+		err = fmt.Errorf("wait for vm ready: %w", err)
+		if errors.Is(err, errVMMExited) {
+			err = appendVMMLog(err, filepath.Join(filepath.Dir(socketPath), "logs"))
+		}
+		return 0, nil, err
 	}
 	log.DebugContext(ctx, "VM ready", "duration_ms", time.Since(migrationWaitStart).Milliseconds())
 
@@ -738,8 +747,8 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 	}
 
 	cu.Release()
-	log.DebugContext(ctx, "QEMU restore complete", "pid", pid, "total_duration_ms", time.Since(startTime).Milliseconds())
-	return pid, hv, nil
+	log.DebugContext(ctx, "QEMU restore complete", "pid", proc.pid, "total_duration_ms", time.Since(startTime).Milliseconds())
+	return proc.pid, hv, nil
 }
 
 func (s *Starter) validateRestoreVersion(p *paths.Paths, storedVersion string) (string, error) {

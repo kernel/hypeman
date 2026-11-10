@@ -1,12 +1,59 @@
 package qemu
 
 import (
+	"context"
+	"errors"
 	"testing"
+	"time"
 
 	"github.com/digitalocean/go-qemu/qemu"
 	"github.com/digitalocean/go-qemu/qmp/raw"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+func TestWaitVMReadyStopsWhenVMMExits(t *testing.T) {
+	exited := make(chan struct{})
+	polls := 0
+	queryStatus := func() (qemu.Status, error) {
+		polls++
+		if polls == 2 {
+			close(exited)
+		}
+		if polls >= 2 {
+			return 0, errors.New("monitor closed")
+		}
+		return qemu.StatusInMigrate, nil
+	}
+
+	start := time.Now()
+	err := waitVMReady(context.Background(), 30*time.Second, exited, queryStatus)
+
+	require.ErrorIs(t, err, errVMMExited)
+	assert.Equal(t, 2, polls)
+	assert.Less(t, time.Since(start), 5*time.Second)
+}
+
+func TestWaitVMReadyPollsThroughMonitorErrorsWhileVMMRuns(t *testing.T) {
+	polls := 0
+	queryStatus := func() (qemu.Status, error) {
+		polls++
+		switch polls {
+		case 1:
+			return 0, errors.New("monitor busy")
+		case 2:
+			return qemu.StatusInMigrate, nil
+		}
+		return qemu.StatusPaused, nil
+	}
+
+	require.NoError(t, waitVMReady(context.Background(), 30*time.Second, make(chan struct{}), queryStatus))
+	assert.Equal(t, 3, polls)
+
+	require.ErrorContains(t, waitVMReady(context.Background(), 30*time.Second, nil, func() (qemu.Status, error) {
+		return qemu.StatusShutdown, nil
+	}), "shut down during migration")
+}
 
 func TestStatusMapping(t *testing.T) {
 	// Test that qemu.Status values are properly defined
