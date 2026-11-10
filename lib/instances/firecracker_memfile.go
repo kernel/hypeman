@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/forkvm"
+	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/logger"
 )
 
@@ -19,13 +20,20 @@ func firecrackerSnapshotMemoryPathInGuestDir(guestDir string) string {
 	return filepath.Join(guestDir, firecrackerSnapshotMemoryRelPath)
 }
 
+// forkSharesSnapshotMemory reports whether forks of a standby snapshot
+// hardlink its mem-file instead of copying it.
+func forkSharesSnapshotMemory(stored *StoredMetadata) bool {
+	return stored.HypervisorType == hypervisor.TypeFirecracker || usesVGPUSnapshot(stored)
+}
+
 // linkForkFirecrackerMemFile hardlinks the source's snapshot mem-file into the
 // fork's guest dir so all forks of a snapshot share one inode: fanout costs no
 // copy I/O, and reads hit the kernel page cache warmed by sibling forks. Falls
 // back to a reflink/sparse copy when linking fails.
 // Sharing an inode is safe because Firecracker mmaps the mem-file MAP_PRIVATE
 // and the only file writer, the standby diff snapshot, unshares first via
-// ensureExclusiveSnapshotMemoryOwnership.
+// ensureExclusiveSnapshotMemoryOwnership. Managed QEMU vGPU restores open the
+// file read-only, and their snapshots always write a newly created file.
 func (m *manager) linkForkFirecrackerMemFile(ctx context.Context, srcGuestDir, dstGuestDir string) error {
 	srcMem := firecrackerSnapshotMemoryPathInGuestDir(srcGuestDir)
 	dstMem := firecrackerSnapshotMemoryPathInGuestDir(dstGuestDir)

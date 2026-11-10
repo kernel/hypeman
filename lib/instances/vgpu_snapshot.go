@@ -42,6 +42,10 @@ func (m *manager) shutdownFailedRestore(ctx context.Context, stored *StoredMetad
 	return m.shutdownHypervisor(cleanupCtx, &Instance{StoredMetadata: *stored})
 }
 
+// vgpuSnapshotProfile is the only vGPU profile whose device state has been
+// qualified for capture and restore.
+const vgpuSnapshotProfile = "NVIDIA L40S-3Q"
+
 func usesVGPUSnapshot(stored *StoredMetadata) bool {
 	return stored.HypervisorType == hypervisor.TypeQEMU && stored.HypervisorVersion == qemu.VGPUSnapshotVersion && stored.GPUProfile != ""
 }
@@ -50,15 +54,15 @@ func validateVGPUSnapshotRequest(req CreateInstanceRequest, hvType hypervisor.Ty
 	if version != qemu.VGPUSnapshotVersion {
 		return nil
 	}
-	if hvType != hypervisor.TypeQEMU || req.GPU == nil || req.GPU.Profile != "NVIDIA L40S-3Q" || req.SkipGuestAgent || len(req.Devices) != 0 {
-		return fmt.Errorf("%w: the managed vGPU snapshot runtime requires an L40S-3Q guest with its guest agent and no additional PCI devices", ErrInvalidRequest)
+	if hvType != hypervisor.TypeQEMU || req.GPU == nil || req.GPU.Profile != vgpuSnapshotProfile || req.SkipGuestAgent || len(req.Devices) != 0 {
+		return fmt.Errorf("%w: the managed vGPU snapshot runtime requires a %s guest with its guest agent and no additional PCI devices", ErrInvalidRequest, vgpuSnapshotProfile)
 	}
 	return nil
 }
 
 func validateVGPUSnapshotCapture(stored *StoredMetadata) error {
-	if !usesVGPUSnapshot(stored) || stored.GPUFramework != devices.VGPUFrameworkVendorVFIO || stored.GPUMdevUUID != "" || stored.GPUProfile != "NVIDIA L40S-3Q" || stored.SkipGuestAgent {
-		return fmt.Errorf("%w: vGPU snapshots require the opt-in managed QEMU runtime and vendor VFIO L40S-3Q", ErrInvalidState)
+	if !usesVGPUSnapshot(stored) || stored.GPUFramework != devices.VGPUFrameworkVendorVFIO || stored.GPUMdevUUID != "" || stored.GPUProfile != vgpuSnapshotProfile || stored.SkipGuestAgent {
+		return fmt.Errorf("%w: vGPU snapshots require the opt-in managed QEMU runtime and a vendor VFIO %s", ErrInvalidState, vgpuSnapshotProfile)
 	}
 	return nil
 }

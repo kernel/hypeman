@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/paths"
@@ -49,6 +50,42 @@ func TestManagedVGPURuntimeIsExplicitAndChecksumPinned(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "firmware", "bios-256k.bin"), []byte("different firmware"), 0o644))
 	_, err = starter.ResolveVersion(p, version)
 	require.ErrorContains(t, err, "checksum mismatch")
+}
+
+func TestManagedVGPURuntimeVerificationIsReusedUntilFilesChange(t *testing.T) {
+	p, dir, _ := managedVGPUFixture(t)
+	binary := filepath.Join(dir, "qemu-system-x86_64")
+	info, err := os.Stat(binary)
+	require.NoError(t, err)
+	_, err = loadVGPURuntime(p)
+	require.NoError(t, err)
+
+	// Same size and modification time: the earlier verification is reused.
+	tampered := []byte(strings.Repeat("x", int(info.Size())))
+	require.NoError(t, os.WriteFile(binary, tampered, 0o755))
+	require.NoError(t, os.Chtimes(binary, info.ModTime(), info.ModTime()))
+	_, err = loadVGPURuntime(p)
+	require.NoError(t, err)
+
+	// Any change to a file's metadata forces the checksums to be recomputed.
+	later := info.ModTime().Add(time.Second)
+	require.NoError(t, os.Chtimes(binary, later, later))
+	_, err = loadVGPURuntime(p)
+	require.ErrorContains(t, err, "binary checksum mismatch")
+}
+
+func TestManagedVGPURuntimeRejectsUnexpectedUpstreamVersion(t *testing.T) {
+	p, dir, manifest := managedVGPUFixture(t)
+	binary := filepath.Join(dir, "qemu-system-x86_64")
+	require.NoError(t, os.WriteFile(binary, []byte("#!/bin/sh\necho 'QEMU emulator version 8.2.2'\n"), 0o755))
+	var err error
+	manifest.BinarySHA256, err = fileSHA256(binary)
+	require.NoError(t, err)
+	data, err := json.Marshal(manifest)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "manifest.json"), data, 0o644))
+	_, err = NewStarter().ResolveVersion(p, VGPUSnapshotVersion)
+	require.ErrorContains(t, err, "does not match")
 }
 
 func TestManagedVGPURuntimeMissingDoesNotUseSystemQEMU(t *testing.T) {
@@ -94,6 +131,21 @@ func TestVGPUForkClearsSourceDeviceAndBindsFreshIdentity(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, newDevice, fork.VGPUDevicePath)
 	require.NotEqual(t, vgpuInstanceUUID("source"), vgpuInstanceUUID(fork.InstanceID))
+}
+
+func TestRemoveSnapshotMemoryLeavesForkLinksIntact(t *testing.T) {
+	dir := t.TempDir()
+	memory := filepath.Join(dir, "memory")
+	forkLink := filepath.Join(dir, "fork-memory")
+	require.NoError(t, os.WriteFile(memory, []byte("template memory"), 0o644))
+	require.NoError(t, os.Link(memory, forkLink))
+
+	require.NoError(t, removeSnapshotMemory(memory))
+	require.NoFileExists(t, memory)
+	content, err := os.ReadFile(forkLink)
+	require.NoError(t, err)
+	require.Equal(t, "template memory", string(content))
+	require.NoError(t, removeSnapshotMemory(memory), "a missing file is not an error")
 }
 
 func TestVGPUArgumentsAreOptIn(t *testing.T) {

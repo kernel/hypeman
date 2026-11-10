@@ -262,9 +262,11 @@ func (m *manager) standbyInstance(
 		}
 	}
 	stored.Phases.Record(phasetracking.PhaseStandby, now)
-	if usesVGPUSnapshot(stored) {
+	// The VMM has exited, so its vGPU can serve another guest; restore claims
+	// a fresh one. A failed release keeps the claim for the reconciler.
+	if path := storedVGPUDevicePath(stored); path != "" {
 		if err := m.releaseStoredVGPU(ctx, stored); err != nil {
-			return &Instance{StoredMetadata: *stored}, fmt.Errorf("release vGPU after snapshot: %w", err)
+			log.WarnContext(ctx, "failed to release vGPU after standby; retaining assignment metadata", "instance_id", id, "device_path", path, "error", err)
 		}
 	}
 

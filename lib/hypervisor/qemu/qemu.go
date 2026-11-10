@@ -151,6 +151,9 @@ func (q *QEMU) Snapshot(ctx context.Context, destPath string) error {
 		if state != qemu.StatusRunning {
 			return fmt.Errorf("vGPU snapshot requires a running guest")
 		}
+		if err := removeSnapshotMemory(memoryFile); err != nil {
+			return err
+		}
 		if err := q.client.configureVGPUMigration(); err != nil {
 			return err
 		}
@@ -164,8 +167,10 @@ func (q *QEMU) Snapshot(ctx context.Context, destPath string) error {
 	// Wait for migration to complete
 	if err := q.client.WaitMigration(ctx, migrationTimeout); err != nil {
 		if saved.VGPUSnapshot {
+			// The guest was never paused, so stop the stream rather than
+			// leave it migrating into a file nobody will load.
 			if cancelErr := q.client.cancelMigration(); cancelErr != nil {
-				return fmt.Errorf("snapshot failed: %w; cancel migration: %v", err, cancelErr)
+				err = fmt.Errorf("%w; cancel migration: %v", err, cancelErr)
 			}
 		}
 		removeClient(q)

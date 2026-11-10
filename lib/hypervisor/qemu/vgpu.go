@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 
 	"github.com/digitalocean/go-qemu/qmp"
 	"github.com/google/uuid"
@@ -26,6 +27,10 @@ const (
 	vgpuUpstreamVersion             = "11.1.3"
 	vgpuSourceCommit                = "005c61c0ef6f6ae615283440b4bb7be51b2c6ddd"
 	vgpuMachineType     MachineType = "pc-q35-8.2"
+
+	vgpuRuntimeBinaryName   = "qemu-system-x86_64"
+	vgpuRuntimeFirmwareDir  = "firmware"
+	vgpuRuntimeManifestName = "manifest.json"
 )
 
 type vgpuRuntimeManifest struct {
@@ -35,6 +40,14 @@ type vgpuRuntimeManifest struct {
 	FirmwareSHA256 string `json:"firmware_sha256"`
 }
 
+// vgpuRuntime is a managed QEMU installation whose contents matched its manifest.
+type vgpuRuntime struct {
+	binary   string
+	firmware string
+	manifest vgpuRuntimeManifest
+}
+
+// vgpuSnapshotContract is the host state a vGPU snapshot can only be loaded on.
 type vgpuSnapshotContract struct {
 	Runtime       vgpuRuntimeManifest
 	DriverVersion string
@@ -43,11 +56,27 @@ type vgpuSnapshotContract struct {
 	ProfileType   string
 }
 
+// vgpuRuntimeCache holds the last verified runtime per installation
+// directory. Hashing the binary and firmware costs tens of milliseconds and
+// every start and restore resolves the runtime several times, so a
+// verification is reused while each file's size and modification time are
+// unchanged. Installations are immutable once placed; a replaced file is
+// hashed again.
+var vgpuRuntimeCache struct {
+	sync.Mutex
+	entries map[string]vgpuRuntimeCacheEntry
+}
+
+type vgpuRuntimeCacheEntry struct {
+	fingerprint string
+	runtime     vgpuRuntime
+}
+
 func vgpuRuntimeDir(p *paths.Paths) (string, error) {
 	if p == nil || runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
 		return "", fmt.Errorf("vGPU snapshots require a managed Linux amd64 runtime")
 	}
-	return filepath.Join(p.DataDir(), "system", "binaries", "qemu", VGPUSnapshotVersion, "x86_64"), nil
+	return p.QEMURuntimeDir(VGPUSnapshotVersion, "x86_64"), nil
 }
 
 func fileSHA256(path string) (string, error) {
@@ -63,6 +92,8 @@ func fileSHA256(path string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
+// firmwareSHA256 hashes every firmware file with its name and length, in
+// name order, so a renamed, added or removed blob changes the digest.
 func firmwareSHA256(dir string) (string, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -97,60 +128,113 @@ func firmwareSHA256(dir string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-func loadVGPURuntime(p *paths.Paths) (string, vgpuRuntimeManifest, error) {
+// vgpuRuntimeFingerprint summarizes the installed files without reading them.
+func vgpuRuntimeFingerprint(dir string) (string, error) {
+	var b strings.Builder
+	add := func(path string) error {
+		info, err := os.Lstat(path)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(&b, "%s\x00%d\x00%d\x00%o\n", path, info.Size(), info.ModTime().UnixNano(), info.Mode())
+		return nil
+	}
+	for _, name := range []string{vgpuRuntimeManifestName, vgpuRuntimeBinaryName} {
+		if err := add(filepath.Join(dir, name)); err != nil {
+			return "", err
+		}
+	}
+	firmware := filepath.Join(dir, vgpuRuntimeFirmwareDir)
+	entries, err := os.ReadDir(firmware)
+	if err != nil {
+		return "", err
+	}
+	for _, entry := range entries {
+		if err := add(filepath.Join(firmware, entry.Name())); err != nil {
+			return "", err
+		}
+	}
+	return b.String(), nil
+}
+
+func loadVGPURuntime(p *paths.Paths) (vgpuRuntime, error) {
 	dir, err := vgpuRuntimeDir(p)
 	if err != nil {
-		return "", vgpuRuntimeManifest{}, err
+		return vgpuRuntime{}, err
 	}
-	var manifest vgpuRuntimeManifest
-	data, err := os.ReadFile(filepath.Join(dir, "manifest.json"))
+	fingerprint, err := vgpuRuntimeFingerprint(dir)
 	if err != nil {
-		return "", manifest, fmt.Errorf("read managed QEMU runtime manifest: %w", err)
+		return vgpuRuntime{}, fmt.Errorf("inspect managed QEMU runtime: %w", err)
 	}
-	if err := json.Unmarshal(data, &manifest); err != nil {
-		return "", manifest, fmt.Errorf("decode managed QEMU runtime manifest: %w", err)
+	vgpuRuntimeCache.Lock()
+	defer vgpuRuntimeCache.Unlock()
+	if entry, ok := vgpuRuntimeCache.entries[dir]; ok && entry.fingerprint == fingerprint {
+		return entry.runtime, nil
 	}
-	if manifest.Version != VGPUSnapshotVersion || manifest.SourceCommit != vgpuSourceCommit {
-		return "", manifest, fmt.Errorf("unsupported managed QEMU runtime manifest")
+	rt, err := verifyVGPURuntime(dir)
+	if err != nil {
+		delete(vgpuRuntimeCache.entries, dir)
+		return vgpuRuntime{}, err
 	}
-	for name, expected := range map[string]string{"qemu-system-x86_64": manifest.BinarySHA256, "firmware": manifest.FirmwareSHA256} {
-		var actual string
-		var err error
-		if name == "firmware" {
-			actual, err = firmwareSHA256(filepath.Join(dir, name))
-		} else {
-			actual, err = fileSHA256(filepath.Join(dir, name))
-		}
-		if err != nil {
-			return "", manifest, fmt.Errorf("verify managed runtime %s: %w", name, err)
-		}
-		if len(expected) != 64 || actual != expected {
-			return "", manifest, fmt.Errorf("managed runtime %s checksum mismatch", name)
-		}
+	if vgpuRuntimeCache.entries == nil {
+		vgpuRuntimeCache.entries = make(map[string]vgpuRuntimeCacheEntry)
 	}
-	binary := filepath.Join(dir, "qemu-system-x86_64")
-	if err := validateExecutable(binary); err != nil {
-		return "", manifest, fmt.Errorf("managed QEMU binary: %w", err)
+	vgpuRuntimeCache.entries[dir] = vgpuRuntimeCacheEntry{fingerprint: fingerprint, runtime: rt}
+	return rt, nil
+}
+
+// verifyVGPURuntime checks the installation against its manifest and confirms
+// the binary reports the pinned upstream version.
+func verifyVGPURuntime(dir string) (vgpuRuntime, error) {
+	rt := vgpuRuntime{
+		binary:   filepath.Join(dir, vgpuRuntimeBinaryName),
+		firmware: filepath.Join(dir, vgpuRuntimeFirmwareDir),
 	}
-	return binary, manifest, nil
+	data, err := os.ReadFile(filepath.Join(dir, vgpuRuntimeManifestName))
+	if err != nil {
+		return vgpuRuntime{}, fmt.Errorf("read managed QEMU runtime manifest: %w", err)
+	}
+	if err := json.Unmarshal(data, &rt.manifest); err != nil {
+		return vgpuRuntime{}, fmt.Errorf("decode managed QEMU runtime manifest: %w", err)
+	}
+	if rt.manifest.Version != VGPUSnapshotVersion || rt.manifest.SourceCommit != vgpuSourceCommit {
+		return vgpuRuntime{}, fmt.Errorf("unsupported managed QEMU runtime manifest")
+	}
+	binarySum, err := fileSHA256(rt.binary)
+	if err != nil {
+		return vgpuRuntime{}, fmt.Errorf("verify managed runtime binary: %w", err)
+	}
+	if binarySum != rt.manifest.BinarySHA256 {
+		return vgpuRuntime{}, fmt.Errorf("managed runtime binary checksum mismatch")
+	}
+	firmwareSum, err := firmwareSHA256(rt.firmware)
+	if err != nil {
+		return vgpuRuntime{}, fmt.Errorf("verify managed runtime firmware: %w", err)
+	}
+	if firmwareSum != rt.manifest.FirmwareSHA256 {
+		return vgpuRuntime{}, fmt.Errorf("managed runtime firmware checksum mismatch")
+	}
+	if err := validateExecutable(rt.binary); err != nil {
+		return vgpuRuntime{}, fmt.Errorf("managed QEMU binary: %w", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), versionProbeTimeout)
+	defer cancel()
+	version, err := versionFromBinary(ctx, rt.binary)
+	if err != nil {
+		return vgpuRuntime{}, err
+	}
+	if version != vgpuUpstreamVersion {
+		return vgpuRuntime{}, fmt.Errorf("managed QEMU version %s does not match %s", version, vgpuUpstreamVersion)
+	}
+	return rt, nil
 }
 
 func (s *Starter) resolveVGPURuntime(p *paths.Paths) (string, error) {
 	if s.profile.hypervisorType() != hypervisor.TypeQEMU {
 		return "", fmt.Errorf("vGPU snapshot runtime requires standard QEMU")
 	}
-	binary, _, err := loadVGPURuntime(p)
-	if err != nil {
+	if _, err := loadVGPURuntime(p); err != nil {
 		return "", err
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), versionProbeTimeout)
-	defer cancel()
-	version, err := versionFromBinary(ctx, binary)
-	if err != nil {
-		return "", err
-	}
-	if version != vgpuUpstreamVersion {
-		return "", fmt.Errorf("managed QEMU version %s does not match %s", version, vgpuUpstreamVersion)
 	}
 	return VGPUSnapshotVersion, nil
 }
@@ -162,7 +246,7 @@ func newVGPUSnapshotContract(p *paths.Paths, config hypervisor.VMConfig) (*vgpuS
 	if !strings.HasPrefix(config.VGPUDevicePath, "/sys/bus/pci/devices/") {
 		return nil, fmt.Errorf("vGPU snapshots require vendor VFIO")
 	}
-	_, manifest, err := loadVGPURuntime(p)
+	rt, err := loadVGPURuntime(p)
 	if err != nil {
 		return nil, err
 	}
@@ -177,7 +261,7 @@ func newVGPUSnapshotContract(p *paths.Paths, config hypervisor.VMConfig) (*vgpuS
 		}
 		return value, nil
 	}
-	contract := &vgpuSnapshotContract{Runtime: manifest}
+	contract := &vgpuSnapshotContract{Runtime: rt.manifest}
 	if contract.DriverVersion, err = read("/sys/module/nvidia/version"); err != nil {
 		return nil, fmt.Errorf("read NVIDIA host driver: %w", err)
 	}
@@ -207,11 +291,21 @@ func validateVGPUSnapshotContract(saved, current *vgpuSnapshotContract) error {
 }
 
 func vgpuRuntimeArgs(p *paths.Paths) ([]string, error) {
-	dir, err := vgpuRuntimeDir(p)
+	rt, err := loadVGPURuntime(p)
 	if err != nil {
 		return nil, err
 	}
-	return []string{"-L", filepath.Join(dir, "firmware"), "-bios", filepath.Join(dir, "firmware", "bios-256k.bin")}, nil
+	return []string{"-L", rt.firmware, "-bios", filepath.Join(rt.firmware, "bios-256k.bin")}, nil
+}
+
+// removeSnapshotMemory unlinks a previous snapshot's memory file. QEMU writes
+// mapped RAM into an existing file in place, and forks hardlink the previous
+// snapshot's memory, so a new snapshot must start from a new inode.
+func removeSnapshotMemory(path string) error {
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove previous snapshot memory: %w", err)
+	}
+	return nil
 }
 
 func vgpuInstanceUUID(instanceID string) string {

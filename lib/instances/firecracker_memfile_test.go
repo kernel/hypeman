@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/kernel/hypeman/lib/hypervisor"
+	"github.com/kernel/hypeman/lib/hypervisor/qemu"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -61,4 +63,39 @@ func TestEnsureExclusiveSnapshotMemoryOwnershipSkipsPrivateMemory(t *testing.T) 
 	assert.NoFileExists(t, stalePath, "stale unshare tmp must be swept on standby entry")
 
 	require.NoError(t, ensureExclusiveSnapshotMemoryOwnership(context.Background(), filepath.Join(t.TempDir(), "missing")))
+}
+
+func TestForkSharesSnapshotMemory(t *testing.T) {
+	t.Parallel()
+
+	gpu := &StoredMetadata{HypervisorType: hypervisor.TypeQEMU, HypervisorVersion: qemu.VGPUSnapshotVersion, GPUProfile: "NVIDIA L40S-3Q"}
+	assert.True(t, forkSharesSnapshotMemory(&StoredMetadata{HypervisorType: hypervisor.TypeFirecracker}))
+	assert.True(t, forkSharesSnapshotMemory(gpu))
+	// System QEMU streams its snapshot through a pipe and keeps private copies.
+	assert.False(t, forkSharesSnapshotMemory(&StoredMetadata{HypervisorType: hypervisor.TypeQEMU}))
+	assert.False(t, forkSharesSnapshotMemory(&StoredMetadata{HypervisorType: hypervisor.TypeCloudHypervisor}))
+}
+
+func TestCloneGuestDirectoryForForkHardlinksSharedMemory(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	src := filepath.Join(root, "template")
+	dst := filepath.Join(root, "fork")
+	srcMem := firecrackerSnapshotMemoryPathInGuestDir(src)
+	require.NoError(t, os.MkdirAll(filepath.Dir(srcMem), 0755))
+	require.NoError(t, os.WriteFile(srcMem, []byte("guest memory"), 0644))
+	srcConfig := filepath.Join(filepath.Dir(srcMem), "qemu-config.json")
+	require.NoError(t, os.WriteFile(srcConfig, []byte("{}"), 0644))
+
+	m := &manager{}
+	require.NoError(t, m.cloneGuestDirectoryForFork(context.Background(), src, dst, true))
+
+	dstMem := firecrackerSnapshotMemoryPathInGuestDir(dst)
+	srcInfo, err := os.Stat(srcMem)
+	require.NoError(t, err)
+	dstInfo, err := os.Stat(dstMem)
+	require.NoError(t, err)
+	assert.True(t, os.SameFile(srcInfo, dstInfo), "fork must share the template's memory inode")
+	assertDifferentInode(t, srcConfig, filepath.Join(filepath.Dir(dstMem), "qemu-config.json"))
 }

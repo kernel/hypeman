@@ -115,6 +115,11 @@ func (p *Paths) FirecrackerBinary(version, arch string) string {
 	return filepath.Join(p.dataDir, "system", "binaries", "firecracker", version, arch, "firecracker")
 }
 
+// QEMURuntimeDir returns the directory of a managed QEMU runtime installation.
+func (p *Paths) QEMURuntimeDir(version, arch string) string {
+	return filepath.Join(p.dataDir, "system", "binaries", "qemu", version, arch)
+}
+
 // Image path methods
 
 // ImageContentDir returns the directory for content-addressed image data.

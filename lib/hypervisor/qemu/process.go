@@ -94,8 +94,8 @@ func (s *Starter) SocketName() string {
 // Unversioned/default requests use the system binary; vGPU snapshots opt in to a managed runtime.
 func (s *Starter) GetBinaryPath(p *paths.Paths, version string) (string, error) {
 	if version == VGPUSnapshotVersion {
-		binary, _, err := loadVGPURuntime(p)
-		return binary, err
+		rt, err := loadVGPURuntime(p)
+		return rt.binary, err
 	}
 	binaryName, err := qemuBinaryName()
 	if err != nil {

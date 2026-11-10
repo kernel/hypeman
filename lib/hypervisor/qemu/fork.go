@@ -39,8 +39,9 @@ func (s *Starter) PrepareFork(ctx context.Context, req hypervisor.ForkPrepareReq
 		if req.VGPUDevicePath != "" {
 			cfg.VGPUDevicePath = req.VGPUDevicePath
 		}
-		if req.SourceDataDir != req.TargetDataDir && req.TargetDataDir != "" {
-			// A child must claim a new VF before restore can launch it.
+		if req.TargetDataDir != "" && req.TargetDataDir != req.SourceDataDir {
+			// A fork never opens its source's VF: restore claims a fresh one
+			// and binds it here before launching QEMU.
 			cfg.VGPUDevicePath = ""
 		}
 	}
