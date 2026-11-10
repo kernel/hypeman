@@ -26,14 +26,14 @@ var (
 	dumpErofsTimestamp = regexp.MustCompile(`Timestamp: \S+ \S+\.(\d+)`)
 )
 
-func TestExportImageRootfsKeepsImageOwners(t *testing.T) {
+// exportOwnersImage builds an image whose files have non-root owners and
+// exports it with exportImageRootfs, returning the erofs disk path.
+func exportOwnersImage(t *testing.T) string {
+	t.Helper()
 	for _, binary := range []string{"mkfs.erofs", "dump.erofs"} {
 		if _, err := exec.LookPath(binary); err != nil {
 			t.Skipf("%s not available", binary)
 		}
-	}
-	if os.Geteuid() != 0 && !mkfsErofsReadsTarMtimes() {
-		t.Skip("rootless export needs mkfs.erofs 1.8 or newer")
 	}
 
 	mtime := time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC)
@@ -83,6 +83,21 @@ func TestExportImageRootfsKeepsImageOwners(t *testing.T) {
 	diskPath := filepath.Join(t.TempDir(), "rootfs.erofs")
 	_, err = exportImageRootfs(context.Background(), rootfsDir, diskPath, FormatErofs)
 	require.NoError(t, err)
+	return diskPath
+}
+
+func dumpErofsInode(t *testing.T, diskPath, path string) []byte {
+	t.Helper()
+	output, err := exec.Command("dump.erofs", "--path="+path, diskPath).CombinedOutput()
+	require.NoError(t, err, string(output))
+	return output
+}
+
+func TestExportImageRootfsKeepsImageOwners(t *testing.T) {
+	if os.Geteuid() != 0 && !mkfsErofsReadsTarMtimes() {
+		t.Skip("rootless export needs mkfs.erofs 1.8 or newer")
+	}
+	diskPath := exportOwnersImage(t)
 
 	for _, tc := range []struct {
 		path, uid, gid, mode string
@@ -93,8 +108,7 @@ func TestExportImageRootfsKeepsImageOwners(t *testing.T) {
 		{"/home/app/data", "1000", "1000", "0600"},
 		{"/home/app/data-link", "1000", "1000", "0600"},
 	} {
-		output, err := exec.Command("dump.erofs", "--path="+tc.path, diskPath).CombinedOutput()
-		require.NoError(t, err, string(output))
+		output := dumpErofsInode(t, diskPath, tc.path)
 		owner := dumpErofsOwner.FindSubmatch(output)
 		require.NotNil(t, owner, string(output))
 		assert.Equal(t, []string{tc.uid, tc.gid, tc.mode}, []string{string(owner[1]), string(owner[2]), string(owner[3])}, tc.path)
@@ -103,5 +117,22 @@ func TestExportImageRootfsKeepsImageOwners(t *testing.T) {
 			require.NotNil(t, timestamp, string(output))
 			assert.Equal(t, "000000000", string(timestamp[1]), "%s mtime nanoseconds", tc.path)
 		}
+	}
+}
+
+func TestExportImageRootfsOwnsFilesByRootWithOldMkfsErofs(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("the fallback only applies when not running as root")
+	}
+	original := mkfsErofsReadsTarMtimes
+	mkfsErofsReadsTarMtimes = func() bool { return false }
+	t.Cleanup(func() { mkfsErofsReadsTarMtimes = original })
+	diskPath := exportOwnersImage(t)
+
+	for _, path := range []string{"/", "/etc/shadow", "/home/app", "/home/app/data"} {
+		output := dumpErofsInode(t, diskPath, path)
+		owner := dumpErofsOwner.FindSubmatch(output)
+		require.NotNil(t, owner, string(output))
+		assert.Equal(t, []string{"0", "0"}, []string{string(owner[1]), string(owner[2])}, path)
 	}
 }
