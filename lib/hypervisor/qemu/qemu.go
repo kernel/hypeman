@@ -138,6 +138,8 @@ func (q *QEMU) Snapshot(ctx context.Context, destPath string) error {
 	if err != nil {
 		return fmt.Errorf("load snapshot configuration: %w", err)
 	}
+	// QEMU uses migrate to file for snapshots
+	// The "file:" protocol is deprecated in QEMU 7.2+, use "exec:cat > path" instead
 	memoryFile := filepath.Join(destPath, "memory")
 	uri := "exec:cat > " + memoryFile
 	if saved.VGPUSnapshot {
@@ -157,6 +159,8 @@ func (q *QEMU) Snapshot(ctx context.Context, destPath string) error {
 		if err := q.client.configureVGPUMigration(); err != nil {
 			return err
 		}
+		// Mapped RAM needs a seekable target, which the managed runtime's
+		// "file:" transport provides.
 		uri = "file:" + memoryFile
 	}
 	if err := q.client.Migrate(uri); err != nil {

@@ -124,7 +124,8 @@ func (m *manager) standbyInstance(
 		return nil, err
 	}
 
-	// VFIO precopy needs the guest driver running until migration stops it.
+	// 6. Transition: Running → Paused. A vGPU guest keeps running instead:
+	// VFIO precopy needs its driver until the migration itself stops it.
 	if !usesVGPUSnapshot(stored) {
 		log.DebugContext(ctx, "pausing VM", "instance_id", id)
 		pauseCtx, pauseSpanEnd := m.startLifecycleStep(ctx, "pause_vm",

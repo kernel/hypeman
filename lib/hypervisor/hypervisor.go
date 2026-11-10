@@ -272,8 +272,11 @@ type ForkPrepareRequest struct {
 	VsockCID    int64
 	VsockSocket string
 
-	SerialLogPath  string
-	Network        *ForkNetworkConfig
+	SerialLogPath string
+	Network       *ForkNetworkConfig
+
+	// InstanceID is the fork's own id. VGPUDevicePath, when set, replaces the
+	// vGPU the snapshot was captured with.
 	InstanceID     string
 	VGPUDevicePath string
 }

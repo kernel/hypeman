@@ -53,23 +53,37 @@ func TestManagedVGPURuntimeIsExplicitAndChecksumPinned(t *testing.T) {
 }
 
 func TestManagedVGPURuntimeVerificationIsReusedUntilFilesChange(t *testing.T) {
-	p, dir, _ := managedVGPUFixture(t)
+	p, dir, manifest := managedVGPUFixture(t)
 	binary := filepath.Join(dir, "qemu-system-x86_64")
+	probes := filepath.Join(t.TempDir(), "probes")
+	script := "#!/bin/sh\necho probe >> " + probes + "\necho 'QEMU emulator version 11.1.3'\n"
+	require.NoError(t, os.WriteFile(binary, []byte(script), 0o755))
+	var err error
+	manifest.BinarySHA256, err = fileSHA256(binary)
+	require.NoError(t, err)
+	data, err := json.Marshal(manifest)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "manifest.json"), data, 0o644))
+	verifications := func() int {
+		content, err := os.ReadFile(probes)
+		require.NoError(t, err)
+		return strings.Count(string(content), "probe")
+	}
+
+	for range 3 {
+		_, err = loadVGPURuntime(p)
+		require.NoError(t, err)
+	}
+	require.Equal(t, 1, verifications(), "an unchanged installation is verified once")
+
+	// Rewriting a file with the same size and modification time still
+	// forces the checksums to be recomputed.
 	info, err := os.Stat(binary)
 	require.NoError(t, err)
-	_, err = loadVGPURuntime(p)
-	require.NoError(t, err)
-
-	// Same size and modification time: the earlier verification is reused.
+	time.Sleep(10 * time.Millisecond)
 	tampered := []byte(strings.Repeat("x", int(info.Size())))
 	require.NoError(t, os.WriteFile(binary, tampered, 0o755))
 	require.NoError(t, os.Chtimes(binary, info.ModTime(), info.ModTime()))
-	_, err = loadVGPURuntime(p)
-	require.NoError(t, err)
-
-	// Any change to a file's metadata forces the checksums to be recomputed.
-	later := info.ModTime().Add(time.Second)
-	require.NoError(t, os.Chtimes(binary, later, later))
 	_, err = loadVGPURuntime(p)
 	require.ErrorContains(t, err, "binary checksum mismatch")
 }

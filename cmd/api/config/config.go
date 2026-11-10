@@ -718,7 +718,7 @@ func (c *Config) Validate() error {
 		c.Builders.IdleTTLDuration = ttl
 	}
 	if c.Hypervisor.VGPUMaxConcurrentRestores < 0 {
-		return fmt.Errorf("hypervisor.vgpu_max_concurrent_restores must be >= 0")
+		return fmt.Errorf("hypervisor.vgpu_max_concurrent_restores must be >= 0, got %d", c.Hypervisor.VGPUMaxConcurrentRestores)
 	}
 	if c.Hypervisor.FirecrackerMaxConcurrentRestores < 0 {
 		return fmt.Errorf("hypervisor.firecracker_max_concurrent_restores must be >= 0, got %d", c.Hypervisor.FirecrackerMaxConcurrentRestores)

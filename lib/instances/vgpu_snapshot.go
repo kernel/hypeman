@@ -16,21 +16,23 @@ func sharedVGPURestoreSlots(limit int) chan struct{} {
 	return slots.(chan struct{})
 }
 
+// acquireInstanceRestoreSlot takes the vGPU slot before the hypervisor-wide
+// one, so queued vGPU restores do not hold capacity other guests could use.
 func (m *manager) acquireInstanceRestoreSlot(ctx context.Context, stored *StoredMetadata) (func(), error) {
-	release, err := m.acquireRestoreSlot(ctx, stored.HypervisorType)
-	if err != nil {
-		return nil, err
-	}
 	if !usesVGPUSnapshot(stored) || m.vgpuRestoreSlots == nil {
-		return release, nil
+		return m.acquireRestoreSlot(ctx, stored.HypervisorType)
 	}
 	select {
 	case m.vgpuRestoreSlots <- struct{}{}:
-		return func() { <-m.vgpuRestoreSlots; release() }, nil
 	case <-ctx.Done():
-		release()
 		return nil, ctx.Err()
 	}
+	release, err := m.acquireRestoreSlot(ctx, stored.HypervisorType)
+	if err != nil {
+		<-m.vgpuRestoreSlots
+		return nil, err
+	}
+	return func() { release(); <-m.vgpuRestoreSlots }, nil
 }
 
 func (m *manager) shutdownFailedRestore(ctx context.Context, stored *StoredMetadata, hv hypervisor.Hypervisor) error {

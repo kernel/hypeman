@@ -705,6 +705,8 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 		if saved.VGPU != nil || saved.QEMUVersion == VGPUSnapshotVersion {
 			return 0, nil, fmt.Errorf("vGPU snapshot is missing its device configuration")
 		}
+		// Add incoming migration flag to restore from snapshot
+		// The "file:" protocol is deprecated in QEMU 7.2+, use "exec:cat < path" instead
 		args = append(args, "-incoming", "exec:cat < "+memoryFile)
 	}
 

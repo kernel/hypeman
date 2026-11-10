@@ -65,9 +65,8 @@ type vgpuSnapshotContract struct {
 // vgpuRuntimeCache holds the last verified runtime per installation
 // directory. Hashing the binary and firmware costs tens of milliseconds and
 // every start and restore resolves the runtime several times, so a
-// verification is reused while each file's size and modification time are
-// unchanged. Installations are immutable once placed; a replaced file is
-// hashed again.
+// verification is reused until a file is replaced or written: either one
+// changes its inode or change time, which a caller cannot set.
 var vgpuRuntimeCache struct {
 	sync.Mutex
 	entries map[string]vgpuRuntimeCacheEntry
@@ -142,7 +141,8 @@ func vgpuRuntimeFingerprint(dir string) (string, error) {
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(&b, "%s\x00%d\x00%d\x00%o\n", path, info.Size(), info.ModTime().UnixNano(), info.Mode())
+		inode, changed := fileChangeIdentity(info)
+		fmt.Fprintf(&b, "%s\x00%d\x00%d\x00%o\x00%d\x00%d\n", path, info.Size(), info.ModTime().UnixNano(), info.Mode(), inode, changed)
 		return nil
 	}
 	for _, name := range []string{vgpuRuntimeManifestName, vgpuRuntimeBinaryName} {
