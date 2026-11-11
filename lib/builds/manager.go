@@ -5,6 +5,7 @@ import (
 	"context"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -113,6 +114,10 @@ type Config struct {
 
 	// DockerSocket is the path to the Docker socket for building the builder image
 	DockerSocket string
+
+	// Retention is how long a finished build's metadata and logs are kept.
+	// Its source is deleted as soon as the build finishes.
+	Retention time.Duration
 }
 
 // DefaultConfig returns the default build manager configuration
@@ -121,6 +126,7 @@ func DefaultConfig() Config {
 		MaxConcurrentBuilds: 2,
 		RegistryURL:         "localhost:4973",
 		DefaultTimeout:      600, // 10 minutes
+		Retention:           2 * time.Hour,
 	}
 }
 
@@ -175,6 +181,9 @@ func NewManager(
 	if logger == nil {
 		logger = slog.Default()
 	}
+	if config.Retention <= 0 {
+		config.Retention = DefaultConfig().Retention
+	}
 
 	m := &manager{
 		config:            config,
@@ -221,6 +230,7 @@ func (m *manager) Start(ctx context.Context) error {
 			}
 		}
 	}()
+	go m.runBuildGC(ctx)
 	m.logger.Info("build manager started")
 	return nil
 }
@@ -661,16 +671,70 @@ func (m *manager) BuilderHasBuilds(builderID string) bool {
 	return false
 }
 
-// storeSource stores the source tarball for a build
+// storeSource stores the source tarball for a build. The source can carry
+// build secrets, so it is readable only by the hypeman process.
 func (m *manager) storeSource(buildID string, data []byte) error {
 	sourceDir := m.paths.BuildSourceDir(buildID)
-	if err := ensureDir(sourceDir); err != nil {
+	if err := os.MkdirAll(sourceDir, 0700); err != nil {
 		return err
 	}
+	return os.WriteFile(sourceDir+"/source.tar.gz", data, 0600)
+}
 
-	// Write source tarball
-	sourcePath := sourceDir + "/source.tar.gz"
-	return writeFile(sourcePath, data)
+// removeSource deletes a build's source once the build no longer needs it.
+func (m *manager) removeSource(buildID string) {
+	if err := os.RemoveAll(m.paths.BuildSourceDir(buildID)); err != nil {
+		m.logger.Warn("failed to remove build source", "id", buildID, "error", err)
+	}
+}
+
+const buildGCInterval = 10 * time.Minute
+
+// runBuildGC periodically cleans up finished builds until ctx is done.
+func (m *manager) runBuildGC(ctx context.Context) {
+	ticker := time.NewTicker(buildGCInterval)
+	defer ticker.Stop()
+	for {
+		m.gcFinishedBuilds()
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+// gcFinishedBuilds deletes the source of every finished build, and the whole
+// build directory once the retention window since completion has elapsed.
+// Queued and running builds are left alone so startup recovery can re-run them.
+func (m *manager) gcFinishedBuilds() {
+	all, err := listAllBuilds(m.paths)
+	if err != nil {
+		m.logger.Error("list builds for gc", "error", err)
+		return
+	}
+	for _, meta := range all {
+		if meta.Status != StatusReady && meta.Status != StatusFailed && meta.Status != StatusCancelled {
+			continue
+		}
+		completedAt := meta.CompletedAt
+		if completedAt == nil {
+			// Older cancelled builds did not record CompletedAt.
+			info, err := os.Stat(m.paths.BuildMetadata(meta.ID))
+			if err != nil {
+				continue
+			}
+			mtime := info.ModTime()
+			completedAt = &mtime
+		}
+		if time.Since(*completedAt) < m.config.Retention {
+			m.removeSource(meta.ID)
+			continue
+		}
+		if err := deleteBuild(m.paths, meta.ID); err != nil && !errors.Is(err, ErrNotFound) {
+			m.logger.Warn("failed to delete expired build", "id", meta.ID, "error", err)
+		}
+	}
 }
 
 // runBuild executes a build in a builder VM
@@ -1079,14 +1143,18 @@ func (m *manager) waitForResult(ctx context.Context, buildID string, inst *insta
 }
 
 // updateStatus updates the build status
-func (m *manager) updateStatus(id string, status string, err error) {
+func (m *manager) updateStatus(id string, status string, err error) error {
 	meta, readErr := readMetadata(m.paths, id)
 	if readErr != nil {
 		m.logger.Error("read metadata for status update", "id", id, "error", readErr)
-		return
+		return readErr
 	}
 
 	meta.Status = status
+	if status == StatusCancelled {
+		now := time.Now()
+		meta.CompletedAt = &now
+	}
 	if status == StatusBuilding && meta.StartedAt == nil {
 		now := time.Now()
 		meta.StartedAt = &now
@@ -1098,10 +1166,15 @@ func (m *manager) updateStatus(id string, status string, err error) {
 
 	if writeErr := writeMetadata(m.paths, meta); writeErr != nil {
 		m.logger.Error("write metadata for status update", "id", id, "error", writeErr)
+		return writeErr
+	}
+	if status == StatusCancelled {
+		m.removeSource(id)
 	}
 
 	// Notify subscribers of status change
 	m.notifyStatusChange(id, status)
+	return nil
 }
 
 // updateBuildComplete updates the build with final results
@@ -1131,7 +1204,9 @@ func (m *manager) updateBuildComplete(id string, status string, digest *string, 
 
 	if writeErr := writeMetadata(m.paths, meta); writeErr != nil {
 		m.logger.Error("write metadata for completion", "id", id, "error", writeErr)
+		return
 	}
+	m.removeSource(id)
 
 	// Notify subscribers of status change
 	m.notifyStatusChange(id, status)
@@ -1244,12 +1319,16 @@ func (m *manager) CancelBuild(ctx context.Context, id string) error {
 
 	switch meta.Status {
 	case StatusQueued:
-		// Remove from queue
-		if m.queue.Cancel(id) {
-			m.updateStatus(id, StatusCancelled, nil)
-			return nil
+		cancelled, err := m.queue.Cancel(id, func() error {
+			return m.updateStatus(id, StatusCancelled, nil)
+		})
+		if err != nil {
+			return err
 		}
-		return ErrBuildInProgress // Was already picked up
+		if !cancelled {
+			return ErrBuildInProgress // Was already picked up
+		}
+		return nil
 
 	case StatusBuilding, StatusPushing:
 		// Can't cancel a running build easily
@@ -1257,8 +1336,7 @@ func (m *manager) CancelBuild(ctx context.Context, id string) error {
 		if meta.BuilderInstance != nil {
 			m.instanceManager.DeleteInstance(ctx, *meta.BuilderInstance)
 		}
-		m.updateStatus(id, StatusCancelled, nil)
-		return nil
+		return m.updateStatus(id, StatusCancelled, nil)
 
 	case StatusReady, StatusFailed, StatusCancelled:
 		return fmt.Errorf("build already completed with status: %s", meta.Status)
@@ -1588,14 +1666,6 @@ func (m *manager) refreshBuildToken(buildID string, req *CreateBuildRequest) err
 }
 
 // Helper functions
-
-func ensureDir(path string) error {
-	return os.MkdirAll(path, 0755)
-}
-
-func writeFile(path string, data []byte) error {
-	return os.WriteFile(path, data, 0644)
-}
 
 func readFile(path string) ([]byte, error) {
 	return os.ReadFile(path)

@@ -436,6 +436,7 @@ func ProvideBuildManager(p *paths.Paths, cfg *config.Config, instanceManager ins
 		DefaultTimeout:      cfg.Build.Timeout,
 		RegistrySecret:      cfg.JwtSecret, // Use same secret for registry tokens
 		DockerSocket:        cfg.Build.DockerSocket,
+		Retention:           cfg.Build.RetentionDuration,
 	}
 
 	// Configure secret provider (use NoOpSecretProvider as fallback to avoid nil panics)
