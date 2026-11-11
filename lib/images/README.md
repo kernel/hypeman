@@ -143,16 +143,18 @@ docker login ghcr.io
 
 Credentials are automatically discovered.
 
-Set `images.docker_hub_mirror` to a registry/repository prefix (for example,
-`123456789012.dkr.ecr.us-east-1.amazonaws.com/dockerhub`) to route Docker Hub
-image pulls and app-base prefetches through an authenticated pull-through cache.
-The host resolves credentials for the cache with its Docker credential helper;
-build guests still read the existing local registry and receive no upstream credentials.
-Original image names, tags, and digests are preserved. Other registries and
-requests with caller-supplied credentials bypass the mirror. Cache errors are
-not retried against Docker Hub by the image client.
+For source builds, `build.base_image_sources` maps an exact base repository to a
+host-authenticated upstream repository. Tags and digests are preserved, and the
+image is stored in the local registry under its original name:
 
-Leave the setting empty for direct pulls. Provision the cache and host IAM access
-before enabling it. Use a public-image-only upstream credential for a shared cache;
-otherwise the cache may expose images accessible to that credential. Mutable tags
-follow the cache's refresh interval; pin digests when immediate reproducibility matters.
+```yaml
+build:
+  base_image_sources:
+    example/node-base: registry.example/private/node-base
+```
+
+The host uses its credential helper for the upstream pull. Build guests keep
+their original Dockerfile references and scoped local-registry tokens.
+Mapped prefetch failures stop the build before a VM starts. Unmapped images
+retain best-effort prefetching. The builder's existing registry-mirror fallback
+behavior is otherwise unchanged. An empty map preserves direct upstream pulls.

@@ -87,10 +87,10 @@ type manager struct {
 
 // NewManager creates a new image manager.
 // If meter is nil, metrics are disabled.
-func NewManager(p *paths.Paths, maxConcurrentBuilds int, meter metric.Meter, options ...OCIOption) (Manager, error) {
+func NewManager(p *paths.Paths, maxConcurrentBuilds int, meter metric.Meter) (Manager, error) {
 	// Create cache directory under dataDir for OCI layouts
 	cacheDir := p.SystemOCICache()
-	ociClient, err := newOCIClient(cacheDir, options...)
+	ociClient, err := newOCIClient(cacheDir)
 	if err != nil {
 		return nil, fmt.Errorf("create oci client: %w", err)
 	}

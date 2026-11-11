@@ -81,12 +81,12 @@ func ProvidePaths(cfg *config.Config) *paths.Paths {
 // ProvideImageManager provides the image manager
 func ProvideImageManager(p *paths.Paths, cfg *config.Config) (images.Manager, error) {
 	meter := otel.GetMeterProvider().Meter("hypeman")
-	return images.NewManager(p, cfg.Limits.MaxConcurrentBuilds, meter, images.WithDockerHubMirror(cfg.Images.DockerHubMirror))
+	return images.NewManager(p, cfg.Limits.MaxConcurrentBuilds, meter)
 }
 
 // ProvideSystemManager provides the system manager
-func ProvideSystemManager(p *paths.Paths, cfg *config.Config) system.Manager {
-	return system.NewManager(p, images.WithDockerHubMirror(cfg.Images.DockerHubMirror))
+func ProvideSystemManager(p *paths.Paths) system.Manager {
+	return system.NewManager(p)
 }
 
 // ProvideNetworkManager provides the network manager
@@ -431,7 +431,7 @@ func ProvideBuildManager(p *paths.Paths, cfg *config.Config, instanceManager ins
 		MaxConcurrentBuilds: cfg.Build.MaxConcurrentSourceBuilds,
 		BuilderImage:        cfg.Build.BuilderImage,
 		RegistryURL:         registryURL,
-		DockerHubMirror:     cfg.Images.DockerHubMirror,
+		BaseImageSources:    cfg.Build.BaseImageSources,
 		RegistryInsecure:    cfg.Registry.Insecure,
 		RegistryCACert:      registryCACert,
 		DefaultTimeout:      cfg.Build.Timeout,

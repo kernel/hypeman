@@ -2,10 +2,14 @@ package builds
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/google/go-containerregistry/pkg/authn"
+	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/kernel/hypeman/lib/images"
 )
 
@@ -14,28 +18,37 @@ import (
 // with our registry as a mirror for docker.io, so pre-cached images will be
 // served locally without pulling from Docker Hub.
 //
-// Individual mirror failures are logged but do not fail the build (graceful
-// degradation — BuildKit will pull from Docker Hub as before).
+// Configured source repositories are required. Other images retain best-effort prefetching.
 func (m *manager) mirrorBaseImagesForBuild(ctx context.Context, id string, req CreateBuildRequest) error {
-	// Get Dockerfile content: prefer inline Dockerfile, fall back to tarball
-	var dockerfileContent string
-	if req.Dockerfile != "" {
-		dockerfileContent = req.Dockerfile
-	} else {
-		tarballPath := m.paths.BuildSourceDir(id) + "/source.tar.gz"
-		content, err := ExtractDockerfileFromTarball(tarballPath)
-		if err != nil {
-			m.logger.Warn("could not extract Dockerfile from tarball for mirroring",
-				"id", id, "error", err)
-			return nil
+	// Match the builder: an archived Dockerfile takes precedence over the inline one.
+	dockerfileContent, err := ExtractDockerfileFromTarball(m.paths.BuildSourceDir(id) + "/source.tar.gz")
+	if errors.Is(err, errDockerfileNotFound) || errors.Is(err, os.ErrNotExist) {
+		dockerfileContent, err = req.Dockerfile, nil
+	}
+	if err != nil {
+		if len(m.config.BaseImageSources) > 0 {
+			return fmt.Errorf("read Dockerfile for required base images: %w", err)
 		}
-		dockerfileContent = content
+		m.logger.Warn("could not extract Dockerfile from tarball for mirroring", "id", id, "error", err)
+		return nil
 	}
 
 	// Parse FROM references
 	refs := ParseDockerfileFROMs(dockerfileContent)
 	if len(refs) == 0 {
 		return nil
+	}
+
+	requests := make([]images.MirrorRequest, 0, len(refs))
+	required := false
+	for _, ref := range refs {
+		parsed, err := name.ParseReference(ref)
+		if err != nil {
+			return fmt.Errorf("parse base image: %w", err)
+		}
+		source := m.config.BaseImageSources[parsed.Context().Name()]
+		required = required || source != ""
+		requests = append(requests, images.MirrorRequest{SourceImage: ref, SourceRepository: source})
 	}
 
 	m.logger.Info("mirroring base images to local registry", "id", id, "images", refs)
@@ -63,6 +76,9 @@ func (m *manager) mirrorBaseImagesForBuild(ctx context.Context, id string, req C
 	}
 	registryToken, err := m.tokenGenerator.GenerateToken(id, repoPerms, 10*time.Minute)
 	if err != nil {
+		if required {
+			return fmt.Errorf("authorize required base images: %w", err)
+		}
 		m.logger.Warn("failed to generate registry token for mirroring",
 			"id", id, "error", err)
 		return nil
@@ -72,12 +88,13 @@ func (m *manager) mirrorBaseImagesForBuild(ctx context.Context, id string, req C
 	// our token handler extracts the JWT from the username field only.
 	authConfig := &authn.AuthConfig{Username: registryToken, Password: "x"}
 
-	for _, ref := range refs {
-		result, err := images.MirrorBaseImage(ctx, m.config.RegistryURL, images.MirrorRequest{
-			SourceImage:     ref,
-			DockerHubMirror: m.config.DockerHubMirror,
-		}, authConfig)
+	for _, request := range requests {
+		ref := request.SourceImage
+		result, err := images.MirrorBaseImage(ctx, m.config.RegistryURL, request, authConfig)
 		if err != nil {
+			if request.SourceRepository != "" {
+				return fmt.Errorf("prefetch required base image %s: %w", ref, err)
+			}
 			m.logger.Warn("failed to mirror base image",
 				"id", id, "image", ref, "error", err)
 			continue
@@ -87,4 +104,23 @@ func (m *manager) mirrorBaseImagesForBuild(ctx context.Context, id string, req C
 	}
 
 	return nil
+}
+
+func normalizeBaseImageSources(sources map[string]string) (map[string]string, error) {
+	normalized := make(map[string]string, len(sources))
+	for source, target := range sources {
+		src, err := name.NewRepository(source)
+		if err != nil {
+			return nil, fmt.Errorf("invalid base image repository %q: %w", source, err)
+		}
+		dst, err := name.NewRepository(target)
+		if err != nil {
+			return nil, fmt.Errorf("invalid base image source %q: %w", target, err)
+		}
+		if previous, exists := normalized[src.Name()]; exists && previous != dst.Name() {
+			return nil, fmt.Errorf("conflicting sources for base image repository %q", source)
+		}
+		normalized[src.Name()] = dst.Name()
+	}
+	return normalized, nil
 }

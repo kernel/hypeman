@@ -145,20 +145,20 @@ type OCICacheGCConfig struct {
 
 // ImagesConfig holds image-management settings.
 type ImagesConfig struct {
-	DockerHubMirror string                 `koanf:"docker_hub_mirror"`
-	AutoDelete      ImagesAutoDeleteConfig `koanf:"auto_delete"`
-	OCICacheGC      OCICacheGCConfig       `koanf:"oci_cache_gc"`
+	AutoDelete ImagesAutoDeleteConfig `koanf:"auto_delete"`
+	OCICacheGC OCICacheGCConfig       `koanf:"oci_cache_gc"`
 }
 
 // BuildConfig holds source-to-image build system settings.
 type BuildConfig struct {
-	MaxConcurrentSourceBuilds int           `koanf:"max_concurrent_source_builds"`
-	BuilderImage              string        `koanf:"builder_image"`
-	Timeout                   int           `koanf:"timeout"`
-	SecretsDir                string        `koanf:"secrets_dir"`
-	DockerSocket              string        `koanf:"docker_socket"`
-	Retention                 string        `koanf:"retention"` // how long finished builds are kept
-	RetentionDuration         time.Duration `koanf:"-"`         // parsed by Validate
+	BaseImageSources          map[string]string `koanf:"base_image_sources"`
+	MaxConcurrentSourceBuilds int               `koanf:"max_concurrent_source_builds"`
+	BuilderImage              string            `koanf:"builder_image"`
+	Timeout                   int               `koanf:"timeout"`
+	SecretsDir                string            `koanf:"secrets_dir"`
+	DockerSocket              string            `koanf:"docker_socket"`
+	Retention                 string            `koanf:"retention"` // how long finished builds are kept
+	RetentionDuration         time.Duration     `koanf:"-"`         // parsed by Validate
 }
 
 // BuildersConfig holds builder resource settings.

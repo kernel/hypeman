@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/paths"
 )
 
@@ -29,15 +28,13 @@ type Manager interface {
 }
 
 type manager struct {
-	paths        *paths.Paths
-	imageOptions []images.OCIOption
+	paths *paths.Paths
 }
 
 // NewManager creates a new system manager
-func NewManager(p *paths.Paths, imageOptions ...images.OCIOption) Manager {
+func NewManager(p *paths.Paths) Manager {
 	return &manager{
-		paths:        p,
-		imageOptions: imageOptions,
+		paths: p,
 	}
 }
 

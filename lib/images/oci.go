@@ -24,8 +24,7 @@ import (
 
 // ociClient handles OCI image operations without requiring Docker daemon
 type ociClient struct {
-	cacheDir        string
-	dockerHubMirror string
+	cacheDir string
 }
 
 type credentialedManifestInspector struct {
@@ -71,17 +70,11 @@ func (c *ociClient) existsInLayout(layoutTag string) bool {
 }
 
 // newOCIClient creates a new OCI client
-func newOCIClient(cacheDir string, options ...OCIOption) (*ociClient, error) {
+func newOCIClient(cacheDir string) (*ociClient, error) {
 	if err := os.MkdirAll(cacheDir, 0755); err != nil {
 		return nil, fmt.Errorf("create cache dir: %w", err)
 	}
-	client := &ociClient{cacheDir: cacheDir}
-	for _, option := range options {
-		if err := option(client); err != nil {
-			return nil, err
-		}
-	}
-	return client, nil
+	return &ociClient{cacheDir: cacheDir}, nil
 }
 
 // vmPlatform returns the target platform for VM images: a Linux guest on the
@@ -108,11 +101,6 @@ func (c *ociClient) inspectManifestWithPlatformAuth(ctx context.Context, imageRe
 	ref, err := name.ParseReference(imageRef)
 	if err != nil {
 		return "", fmt.Errorf("parse image reference: %w", err)
-	}
-
-	ref, err = dockerHubSource(ref, c.dockerHubMirror, credentials)
-	if err != nil {
-		return "", err
 	}
 
 	// Use remote.Image with platform filtering to get the platform-specific digest.
@@ -164,11 +152,6 @@ func (c *ociClient) inspectDigestPlatformAuth(ctx context.Context, imageRef stri
 	ref, err := name.ParseReference(imageRef)
 	if err != nil {
 		return Platform{}, "", fmt.Errorf("parse image reference: %w", err)
-	}
-
-	ref, err = dockerHubSource(ref, c.dockerHubMirror, credentials)
-	if err != nil {
-		return Platform{}, "", err
 	}
 
 	desc, err := remote.Get(ref, registryRemoteOptions(ctx, credentials)...)
@@ -333,11 +316,6 @@ func (c *ociClient) pullToOCILayoutWithPlatformAuth(ctx context.Context, imageRe
 	ref, err := name.ParseReference(imageRef)
 	if err != nil {
 		return fmt.Errorf("parse image reference: %w", err)
-	}
-
-	ref, err = dockerHubSource(ref, c.dockerHubMirror, credentials)
-	if err != nil {
-		return err
 	}
 
 	// Use system authentication (reads from ~/.docker/config.json, etc.)
