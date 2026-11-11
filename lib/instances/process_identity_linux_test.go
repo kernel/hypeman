@@ -721,6 +721,80 @@ func TestKillHypervisorEscalatesToSIGKILLWhenSIGTERMIgnored(t *testing.T) {
 	assert.ErrorIs(t, syscall.Kill(pid, 0), syscall.ESRCH, "SIGTERM-ignoring hypervisor must still be hard-killed")
 }
 
+// A VMM with VFIO devices exits only after the host driver has released its
+// device, and the driver is slower at that when many guests go down together.
+// The wait has to grow with their number, or a mass delete hard-kills and
+// then gives up on VMMs that were about to exit.
+func TestKillHypervisorWaitsLongerWhileOtherVFIOTeardownsAreInFlight(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		othersInQueue int32
+		exitsCleanly  bool
+	}{
+		{name: "alone", othersInQueue: 0, exitsCleanly: false},
+		{name: "behind two others", othersInQueue: 2, exitsCleanly: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			markerPath := filepath.Join(t.TempDir(), "released")
+			// Stands in for a VMM whose device release takes 0.6 s after SIGTERM.
+			pid, identity := startTrapProcess(t, "sleep 0.6; touch "+markerPath+"; exit 0")
+
+			m := &manager{vfioTermGrace: 100 * time.Millisecond}
+			m.vfioTeardowns.Store(tc.othersInQueue)
+			require.NoError(t, m.killHypervisor(context.Background(), &Instance{
+				State: StateRunning,
+				StoredMetadata: StoredMetadata{
+					Id:                        "kill-test",
+					GPUProfile:                "NVIDIA L40S-1Q",
+					GPUFramework:              devices.VGPUFrameworkVendorVFIO,
+					GPUDevicePath:             "/sys/bus/pci/devices/0000:82:00.4",
+					HypervisorProcessIdentity: identity,
+					SocketPath:                filepath.Join(t.TempDir(), "missing.sock"),
+				},
+			}))
+
+			assert.ErrorIs(t, syscall.Kill(pid, 0), syscall.ESRCH)
+			assert.Equal(t, tc.othersInQueue, m.vfioTeardowns.Load(), "the teardown must leave the queue when it returns")
+			if tc.exitsCleanly {
+				assert.FileExists(t, markerPath, "a queued VMM must be allowed to finish releasing its device")
+			} else {
+				assert.NoFileExists(t, markerPath, "without a queue the short grace still applies")
+			}
+		})
+	}
+}
+
+// The queue is made of the teardowns themselves: one that is in flight has to
+// count for the next one that starts.
+func TestKillHypervisorCountsVFIOTeardownsInFlight(t *testing.T) {
+	m := &manager{vfioTermGrace: 250 * time.Millisecond}
+	kill := func(identity HypervisorProcessIdentity) error {
+		return m.killHypervisor(context.Background(), &Instance{
+			State: StateRunning,
+			StoredMetadata: StoredMetadata{
+				Id:                        "kill-test",
+				GPUProfile:                "NVIDIA L40S-1Q",
+				GPUFramework:              devices.VGPUFrameworkVendorVFIO,
+				GPUDevicePath:             "/sys/bus/pci/devices/0000:82:00.4",
+				HypervisorProcessIdentity: identity,
+				SocketPath:                filepath.Join(t.TempDir(), "missing.sock"),
+			},
+		})
+	}
+	markerPath := filepath.Join(t.TempDir(), "released")
+	_, first := startTrapProcess(t, "sleep 0.6; exit 0")
+	_, second := startTrapProcess(t, "sleep 0.6; touch "+markerPath+"; exit 0")
+
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- kill(first) }()
+	require.Eventually(t, func() bool { return m.vfioTeardowns.Load() == 1 }, 5*time.Second, time.Millisecond)
+
+	require.NoError(t, kill(second))
+	assert.FileExists(t, markerPath, "a teardown in flight must lengthen the wait of one that starts meanwhile")
+	require.NoError(t, <-firstDone)
+	assert.Zero(t, m.vfioTeardowns.Load())
+}
+
 func TestKillHypervisorHardKillsNonVGPUHypervisor(t *testing.T) {
 	markerPath := filepath.Join(t.TempDir(), "terminated")
 	pid, identity := startTrapProcess(t, "touch "+markerPath+"; exit 0")

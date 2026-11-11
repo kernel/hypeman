@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/kernel/hypeman/lib/devices"
@@ -228,6 +229,8 @@ type manager struct {
 	vgpuReconcileInterval time.Duration
 
 	vfioTermGrace time.Duration
+	// vfioTeardowns counts the VMMs with VFIO devices being terminated now.
+	vfioTeardowns atomic.Int32
 
 	// Hypervisor support
 	vmStarters               map[hypervisor.Type]hypervisor.VMStarter
