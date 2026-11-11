@@ -178,6 +178,7 @@ func StartProcessWithArgs(ctx context.Context, p *paths.Paths, version CHVersion
 	for attempt := 1; attempt <= cloudHypervisorStartRetryAttempts; attempt++ {
 		// Use Command (not CommandContext) so process survives parent context cancellation.
 		cmd = exec.Command(binaryPath, args...)
+		cmd.Env = hypervisor.ProcessEnv()
 		cmd.SysProcAttr = &syscall.SysProcAttr{
 			Setpgid: true, // Create new process group
 		}
