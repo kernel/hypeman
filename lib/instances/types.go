@@ -97,6 +97,12 @@ type StoredMetadata struct {
 	// IdentityRekeyPending marks a macOS clone whose SSH host keys still come from its
 	// source. The next start rekeys them and clears the flag.
 	IdentityRekeyPending bool `json:"identity_rekey_pending,omitempty"`
+	// ForkPending marks a fork that has not yet reached the state its caller
+	// asked for. It is set when the fork's metadata is first saved and cleared
+	// when the fork request succeeds. A fork still marked when Hypeman starts
+	// was cut short by a crash or kill, so its caller never got an answer; it
+	// is deleted then instead of being left behind holding its resources.
+	ForkPending bool `json:"fork_pending,omitempty"`
 
 	// Resources (matching Cloud Hypervisor terminology)
 	Size                     int64 // Base memory in bytes

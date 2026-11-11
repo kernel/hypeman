@@ -365,6 +365,12 @@ func run() error {
 		return fmt.Errorf("reconcile device state: %w", err)
 	}
 
+	// A fork that a crash cut short still holds its VMM, memory and vGPU.
+	// Delete those before the vGPU reconciler counts their claims.
+	if r, ok := app.InstanceManager.(interface{ RecoverInterruptedForks(context.Context) }); ok {
+		r.RecoverInterruptedForks(app.Ctx)
+	}
+
 	logger.Info("Reconciling vGPU devices...")
 	if r, ok := app.InstanceManager.(interface{ StartVGPUReconciler(context.Context) }); ok {
 		r.StartVGPUReconciler(ctx)

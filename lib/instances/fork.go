@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -364,6 +365,7 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 		restoreNeedsSourceLock = prepareResult.RequiresSnapshotSourceAlias
 	}
 
+	forkMeta.ForkPending = true
 	newMeta := &metadata{StoredMetadata: forkMeta}
 	if err := m.saveForkMetadata(ctx, newMeta); err != nil {
 		return nil, false, err
@@ -561,6 +563,52 @@ func forkReturnNeedsGuestAgentReady(inst *Instance, guestReady bool) bool {
 	return inst != nil && (inst.State == StateRunning || inst.State == StateInitializing) && !guestReady
 }
 
+// completeFork clears the pending mark of a fork that reached its target state.
+func (m *manager) completeFork(inst *Instance) error {
+	lock := m.getInstanceLock(inst.Id)
+	lock.Lock()
+	defer lock.Unlock()
+
+	meta, err := m.loadMetadata(inst.Id)
+	if err != nil {
+		return fmt.Errorf("load completed fork metadata: %w", err)
+	}
+	if meta.ForkPending {
+		meta.ForkPending = false
+		if err := m.saveMetadata(meta); err != nil {
+			return fmt.Errorf("save completed fork metadata: %w", err)
+		}
+	}
+	inst.ForkPending = false
+	return nil
+}
+
+// RecoverInterruptedForks deletes the forks that were still on their way to
+// their target state when Hypeman last stopped. Nothing else does: such a fork
+// looks like an ordinary standby or paused instance, and a restore that was
+// cut short keeps its VMM, its memory and its vGPU. Call it once at startup,
+// before requests are served.
+func (m *manager) RecoverInterruptedForks(ctx context.Context) {
+	log := logger.FromContext(ctx)
+	files, err := m.listMetadataFiles()
+	if err != nil {
+		log.ErrorContext(ctx, "failed to list instances while recovering interrupted forks", "error", err)
+		return
+	}
+	for _, file := range files {
+		id := filepath.Base(filepath.Dir(file))
+		meta, err := m.loadMetadata(id)
+		if err != nil || !meta.ForkPending {
+			continue
+		}
+		if err := m.cleanupForkInstanceOnError(ctx, id); err != nil {
+			log.ErrorContext(ctx, "failed to delete interrupted fork; it stays until it is deleted", "instance_id", id, "instance_name", meta.Name, "error", err)
+			continue
+		}
+		log.WarnContext(ctx, "deleted fork interrupted by a restart", "instance_id", id, "instance_name", meta.Name)
+	}
+}
+
 func (m *manager) cleanupForkInstanceOnError(ctx context.Context, forkID string) error {
 	lock := m.getInstanceLock(forkID)
 	lock.Lock()
@@ -666,5 +714,8 @@ func cloneStoredMetadataWithoutPendingStandbyCompression(src StoredMetadata) Sto
 func cloneStoredMetadataForSnapshot(src StoredMetadata) StoredMetadata {
 	dst := cloneStoredMetadataWithoutPendingStandbyCompression(src)
 	dst.ExpiresAt = nil
+	// The mark belongs to the fork request, not to what is later made from
+	// a snapshot of its instance.
+	dst.ForkPending = false
 	return dst
 }
