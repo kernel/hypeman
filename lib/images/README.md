@@ -141,4 +141,18 @@ docker login
 docker login ghcr.io
 ```
 
-No code changes needed - credentials are automatically discovered.
+Credentials are automatically discovered.
+
+Set `images.docker_hub_mirror` to a registry/repository prefix (for example,
+`123456789012.dkr.ecr.us-east-1.amazonaws.com/dockerhub`) to route Docker Hub
+image pulls and app-base prefetches through an authenticated pull-through cache.
+The host resolves credentials for the cache with its Docker credential helper;
+build guests still read the existing local registry and receive no upstream credentials.
+Original image names, tags, and digests are preserved. Other registries and
+requests with caller-supplied credentials bypass the mirror. Cache errors are
+not retried against Docker Hub by the image client.
+
+Leave the setting empty for direct pulls. Provision the cache and host IAM access
+before enabling it. Use a public-image-only upstream credential for a shared cache;
+otherwise the cache may expose images accessible to that credential. Mutable tags
+follow the cache's refresh interval; pin digests when immediate reproducibility matters.

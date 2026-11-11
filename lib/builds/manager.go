@@ -98,6 +98,9 @@ type Config struct {
 	// RegistryURL is the URL of the registry to push built images to
 	RegistryURL string
 
+	// DockerHubMirror routes base-image prefetches through the host's registry cache.
+	DockerHubMirror string
+
 	// RegistryInsecure skips TLS verification for the registry (for self-signed certs)
 	RegistryInsecure bool
 

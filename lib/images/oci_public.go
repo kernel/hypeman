@@ -12,8 +12,8 @@ type OCIClient struct {
 }
 
 // NewOCIClient creates a new OCI client (public for system manager)
-func NewOCIClient(cacheDir string) (*OCIClient, error) {
-	client, err := newOCIClient(cacheDir)
+func NewOCIClient(cacheDir string, options ...OCIOption) (*OCIClient, error) {
+	client, err := newOCIClient(cacheDir, options...)
 	if err != nil {
 		return nil, err
 	}

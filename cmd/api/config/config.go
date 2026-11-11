@@ -145,8 +145,9 @@ type OCICacheGCConfig struct {
 
 // ImagesConfig holds image-management settings.
 type ImagesConfig struct {
-	AutoDelete ImagesAutoDeleteConfig `koanf:"auto_delete"`
-	OCICacheGC OCICacheGCConfig       `koanf:"oci_cache_gc"`
+	DockerHubMirror string                 `koanf:"docker_hub_mirror"`
+	AutoDelete      ImagesAutoDeleteConfig `koanf:"auto_delete"`
+	OCICacheGC      OCICacheGCConfig       `koanf:"oci_cache_gc"`
 }
 
 // BuildConfig holds source-to-image build system settings.
