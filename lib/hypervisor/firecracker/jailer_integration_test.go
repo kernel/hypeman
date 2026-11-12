@@ -74,12 +74,15 @@ func (env jailerTestEnv) config(t *testing.T, id string) hypervisor.VMConfig {
 	t.Helper()
 	require.NoError(t, os.MkdirAll(env.p.InstanceLogs(id), 0755))
 	overlay := env.p.InstanceOverlay(id)
-	require.NoError(t, os.WriteFile(overlay, make([]byte, 16<<20), 0644))
+	f, err := os.Create(overlay)
+	require.NoError(t, err)
+	require.NoError(t, f.Truncate(16<<20))
+	require.NoError(t, f.Close())
 	return hypervisor.VMConfig{
 		VCPUs:         1,
 		MemoryBytes:   256 << 20,
 		KernelPath:    env.kernel,
-		KernelArgs:    "console=ttyS0 reboot=k panic=1 pci=off",
+		KernelArgs:    "console=ttyS0 reboot=k panic=1 pci=off quiet i8042.noaux i8042.nomux i8042.dumbkbd",
 		Disks:         []hypervisor.DiskConfig{{Path: env.rootfs, Readonly: true}, {Path: overlay}},
 		SerialLogPath: env.p.InstanceAppLog(id),
 	}
@@ -162,7 +165,8 @@ func runStandbySnapshotRestore(t *testing.T, env jailerTestEnv, jailed bool) {
 
 		next := waitForHeartbeat(t, env.p, id, last)
 		assert.Greater(t, next, last, "cycle %d: counter must continue, not restart", cycle)
-		assert.LessOrEqual(t, next, last+5, "cycle %d: unexpected gap in the counter", cycle)
+		// The guest counts every 50 ms; 40 ticks is 2 s of guest time.
+		assert.LessOrEqual(t, next, last+40, "cycle %d: unexpected gap in the counter", cycle)
 		last = next
 	}
 }
@@ -195,7 +199,7 @@ func waitForHeartbeat(t *testing.T, p *paths.Paths, id string, after int64) int6
 	require.Eventually(t, func() bool {
 		best = heartbeatAbove(p, id, after)
 		return best >= 0
-	}, 30*time.Second, 200*time.Millisecond, "guest heartbeat did not advance past %d", after)
+	}, 30*time.Second, 20*time.Millisecond, "guest heartbeat did not advance past %d", after)
 	return best
 }
 

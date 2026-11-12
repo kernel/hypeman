@@ -1,5 +1,5 @@
 /*
- * Guest init for the jailed snapshot test. It prints a counter once a second,
+ * Guest init for the jailed snapshot test. It prints a counter every 50 ms,
  * so a restored guest shows whether its memory (and counter) survived.
  *
  * Build statically:  gcc -static -O2 -o init heartbeat-init.c
@@ -13,6 +13,6 @@ int main(void)
 	for (;;) {
 		printf("HB %lu\n", n++);
 		fflush(stdout);
-		sleep(1);
+		usleep(50000);
 	}
 }

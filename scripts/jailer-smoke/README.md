@@ -3,7 +3,7 @@
 The jailer tests in `lib/hypervisor/firecracker` boot real guests. They need a Linux
 host with root and `/dev/kvm`.
 
-    # guest init that prints a counter once a second
+    # guest init that prints a counter every 50 ms
     scripts/jailer-smoke/build-rootfs.sh heartbeat.ext4 scripts/jailer-smoke/heartbeat-init.c
 
     # embedded firecracker and jailer
