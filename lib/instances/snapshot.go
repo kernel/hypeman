@@ -558,7 +558,7 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 		}
 	}
 
-	forkMeta.ForkPending = true
+	forkMeta.ForkPending = currentForkOwner()
 	newMeta := &metadata{StoredMetadata: forkMeta}
 	if forkMeta.MacOS != nil {
 		if err := m.saveMacOSSnapshotFork(ctx, newMeta); err != nil {

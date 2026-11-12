@@ -365,7 +365,7 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 		restoreNeedsSourceLock = prepareResult.RequiresSnapshotSourceAlias
 	}
 
-	forkMeta.ForkPending = true
+	forkMeta.ForkPending = currentForkOwner()
 	newMeta := &metadata{StoredMetadata: forkMeta}
 	if err := m.saveForkMetadata(ctx, newMeta); err != nil {
 		return nil, false, err
@@ -573,21 +573,49 @@ func (m *manager) completeFork(inst *Instance) error {
 	if err != nil {
 		return fmt.Errorf("load completed fork metadata: %w", err)
 	}
-	if meta.ForkPending {
-		meta.ForkPending = false
+	if meta.ForkPending != nil {
+		meta.ForkPending = nil
 		if err := m.saveMetadata(meta); err != nil {
 			return fmt.Errorf("save completed fork metadata: %w", err)
 		}
 	}
-	inst.ForkPending = false
+	inst.ForkPending = nil
 	return nil
 }
 
-// RecoverInterruptedForks deletes the forks that were still on their way to
-// their target state when Hypeman last stopped. Nothing else does: such a fork
-// looks like an ordinary standby or paused instance, and a restore that was
-// cut short keeps its VMM, its memory and its vGPU. Call it once at startup,
-// before requests are served.
+// ForkOwner identifies the API process that is making a fork, across PID reuse
+// and host reboots.
+type ForkOwner struct {
+	PID       int    `json:"pid"`
+	StartTime uint64 `json:"start_time,omitempty"` // from /proc/<pid>/stat; 0 = unknown
+	BootID    string `json:"boot_id,omitempty"`    // Linux boot ID; empty = unknown
+}
+
+func currentForkOwner() *ForkOwner {
+	pid := os.Getpid()
+	return &ForkOwner{PID: pid, StartTime: processStartTime(pid), BootID: hostBootID()}
+}
+
+// gone reports whether the process that was making the fork no longer exists.
+// When that cannot be told the owner counts as running, so a fork that another
+// live API process is still working on is never deleted.
+func (o ForkOwner) gone() bool {
+	if bootID := hostBootID(); o.BootID != "" && bootID != "" && o.BootID != bootID {
+		return true
+	}
+	if !ProcessExists(o.PID) {
+		return true
+	}
+	// The PID is in use. A different start time means it was recycled.
+	startTime := processStartTime(o.PID)
+	return o.StartTime != 0 && startTime != 0 && o.StartTime != startTime
+}
+
+// RecoverInterruptedForks deletes the forks whose API process died before they
+// reached their target state. Nothing else does: such a fork looks like an
+// ordinary standby or paused instance, and a restore that was cut short keeps
+// its VMM, its memory and its vGPU. Call it once at startup, before requests
+// are served.
 func (m *manager) RecoverInterruptedForks(ctx context.Context) {
 	log := logger.FromContext(ctx)
 	files, err := m.listMetadataFiles()
@@ -598,7 +626,11 @@ func (m *manager) RecoverInterruptedForks(ctx context.Context) {
 	for _, file := range files {
 		id := filepath.Base(filepath.Dir(file))
 		meta, err := m.loadMetadata(id)
-		if err != nil || !meta.ForkPending {
+		if err != nil || meta.ForkPending == nil {
+			continue
+		}
+		if !meta.ForkPending.gone() {
+			log.WarnContext(ctx, "not deleting pending fork: the process making it is still running", "instance_id", id, "instance_name", meta.Name, "owner_pid", meta.ForkPending.PID)
 			continue
 		}
 		if err := m.cleanupForkInstanceOnError(ctx, id); err != nil {
@@ -716,6 +748,6 @@ func cloneStoredMetadataForSnapshot(src StoredMetadata) StoredMetadata {
 	dst.ExpiresAt = nil
 	// The mark belongs to the fork request, not to what is later made from
 	// a snapshot of its instance.
-	dst.ForkPending = false
+	dst.ForkPending = nil
 	return dst
 }
