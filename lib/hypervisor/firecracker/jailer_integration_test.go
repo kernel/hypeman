@@ -123,6 +123,7 @@ func runStandbySnapshotRestore(t *testing.T, env jailerTestEnv, jailed bool) {
 	})
 
 	last := waitForHeartbeat(t, env.p, id, -1)
+	requireSocketOwner(t, socketPath, pid)
 	if jailed {
 		// The VMM runs as the jail uid with no capabilities, and its API socket
 		// and inputs are links into the chroot.
@@ -163,12 +164,39 @@ func runStandbySnapshotRestore(t *testing.T, env jailerTestEnv, jailed bool) {
 			assert.Equal(t, uint64(1), linkCount(t, filepath.Join(snapDir, "memory")), "cycle %d", cycle)
 		}
 
+		requireSocketOwner(t, socketPath, pid)
 		next := waitForHeartbeat(t, env.p, id, last)
 		assert.Greater(t, next, last, "cycle %d: counter must continue, not restart", cycle)
 		// The guest counts every 50 ms; 40 ticks is 2 s of guest time.
 		assert.LessOrEqual(t, next, last+40, "cycle %d: unexpected gap in the counter", cycle)
 		last = next
 	}
+}
+
+// TestJailedSocketOwners runs two jailed VMs at once. Both bind /api.sock in
+// their own jail, and each host socket path must resolve to its own VMM.
+func TestJailedSocketOwners(t *testing.T) {
+	env := newJailerTestEnv(t)
+	SetJailerConfig(JailerConfig{Enabled: true, BinaryPath: env.jailer, UID: jailedTestUID, GID: jailedTestGID})
+	starter := NewStarter()
+	pids := map[string]int{}
+	for _, id := range []string{"owner-a", "owner-b"} {
+		socketPath := env.p.InstanceSocket(id, starter.SocketName())
+		pid, _, err := starter.StartVM(context.Background(), env.p, "v1.17.0", socketPath, env.config(t, id))
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
+		pids[socketPath] = pid
+	}
+	for socketPath, pid := range pids {
+		requireSocketOwner(t, socketPath, pid)
+	}
+}
+
+func requireSocketOwner(t *testing.T, socketPath string, pid int) {
+	t.Helper()
+	got, err := hypervisor.ResolveProcessPID(socketPath)
+	require.NoError(t, err)
+	require.Equal(t, pid, got, "socket owner of %s", socketPath)
 }
 
 // heartbeatAbove returns the highest "HB n" value in the app or VMM log that is above after, or -1.

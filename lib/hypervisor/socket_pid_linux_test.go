@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -120,14 +121,15 @@ func TestPidBySocketRefPrefersExpectedOwnerAmongMultiple(t *testing.T) {
 		require.NoError(t, os.Symlink("socket:[12345]", filepath.Join(fdDir, "3")))
 	}
 
-	pid, err := pidBySocketRef("socket:[12345]", 101)
+	match := func(_ int, target string) (bool, error) { return target == "socket:[12345]", nil }
+	pid, err := pidBySocket("/tmp/test.sock", match, 101)
 	require.NoError(t, err)
 	require.Equal(t, 101, pid)
 
-	_, err = pidBySocketRef("socket:[12345]", 0)
+	_, err = pidBySocket("/tmp/test.sock", match, 0)
 	require.ErrorContains(t, err, "multiple owning processes found")
 
-	_, err = pidBySocketRef("socket:[12345]", 999)
+	_, err = pidBySocket("/tmp/test.sock", match, 999)
 	require.ErrorContains(t, err, "multiple owning processes found")
 }
 
@@ -144,6 +146,48 @@ func TestResolveProcessPIDReportsNoOwnerAfterExitedProcesses(t *testing.T) {
 	_, err := ResolveProcessPID(socketPath)
 	require.ErrorIs(t, err, ErrNoOwningProcess)
 	require.NotContains(t, err.Error(), "inspect process fds")
+}
+
+func TestResolveProcessPIDMatchesSocketInProcessRoot(t *testing.T) {
+	oldProcDir := procDir
+	procDir = t.TempDir()
+	t.Cleanup(func() { procDir = oldProcDir })
+
+	// Two jailed VMMs each bind /api.sock inside their own root, so both
+	// listeners have the same path in /proc/net/unix. Each instance's host
+	// socket path is a link to its own jail's socket.
+	base, err := os.MkdirTemp("/tmp", "spid")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(base) })
+	var netUnix string
+	for i, pid := range []string{"100", "101"} {
+		root := filepath.Join(base, "jail"+pid)
+		require.NoError(t, os.MkdirAll(root, 0o755))
+		listener, err := net.Listen("unix", filepath.Join(root, "api.sock"))
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = listener.Close() })
+		require.NoError(t, os.Symlink(filepath.Join(root, "api.sock"), filepath.Join(base, "fc"+pid+".sock")))
+
+		inode := strconv.Itoa(5000 + i)
+		netUnix += "00000000: 00000002 00000000 00010000 0001 01 " + inode + " /api.sock\n"
+		require.NoError(t, os.MkdirAll(filepath.Join(procDir, pid, "fd"), 0o755))
+		require.NoError(t, os.Symlink("socket:["+inode+"]", filepath.Join(procDir, pid, "fd", "3")))
+		require.NoError(t, os.Symlink(root, filepath.Join(procDir, pid, "root")))
+	}
+	require.NoError(t, os.MkdirAll(filepath.Join(procDir, "net"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(procDir, "net", "unix"), []byte(netUnix), 0o644))
+
+	for _, pid := range []int{100, 101} {
+		got, err := ResolveProcessPID(filepath.Join(base, "fc"+strconv.Itoa(pid)+".sock"))
+		require.NoError(t, err)
+		require.Equal(t, pid, got)
+	}
+
+	// A process whose root does not hold the file is not the owner.
+	require.NoError(t, os.Remove(filepath.Join(procDir, "101", "root")))
+	require.NoError(t, os.Symlink(t.TempDir(), filepath.Join(procDir, "101", "root")))
+	_, err = ResolveProcessPID(filepath.Join(base, "fc101.sock"))
+	require.ErrorIs(t, err, ErrNoOwningProcess)
 }
 
 func TestResolveProcessPIDReportsMissingSocket(t *testing.T) {
