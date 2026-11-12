@@ -91,9 +91,6 @@ func ProvideSystemManager(p *paths.Paths) system.Manager {
 
 // ProvideNetworkManager provides the network manager
 func ProvideNetworkManager(p *paths.Paths, cfg *config.Config) network.Manager {
-	if jc := cfg.Hypervisor.FirecrackerJailer; jc.Enabled {
-		network.SetTAPOwner(jc.UID, jc.GID)
-	}
 	meter := otel.GetMeterProvider().Meter("hypeman")
 	return network.NewManager(p, cfg, meter)
 }

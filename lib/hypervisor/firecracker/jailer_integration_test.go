@@ -21,11 +21,11 @@ import (
 
 // These tests boot real guests. They need root, /dev/kvm, and:
 //
-//	HYPEMAN_JAILER_BINARY   the jailer matching the firecracker version
-//	HYPEMAN_TEST_FIRECRACKER firecracker
 //	HYPEMAN_TEST_KERNEL     a vmlinux
 //	HYPEMAN_HEARTBEAT_ROOTFS an ext4 image whose /sbin/init is scripts/jailer-smoke/heartbeat-init.c
 //	HYPEMAN_TEST_DATA_DIR   optional; must share a filesystem with the kernel and rootfs
+//	HYPEMAN_TEST_FIRECRACKER and HYPEMAN_JAILER_BINARY
+//	                        optional; external binaries instead of the embedded ones
 //
 // Run with: go test -tags jailer_integration -run Jailed ./lib/hypervisor/firecracker/
 const jailedTestUID, jailedTestGID = 2001, 2001
@@ -47,8 +47,8 @@ func newJailerTestEnv(t *testing.T) jailerTestEnv {
 		return v
 	}
 	env := jailerTestEnv{
-		jailer:      need("HYPEMAN_JAILER_BINARY"),
-		firecracker: need("HYPEMAN_TEST_FIRECRACKER"),
+		jailer:      os.Getenv("HYPEMAN_JAILER_BINARY"),
+		firecracker: os.Getenv("HYPEMAN_TEST_FIRECRACKER"),
 		kernel:      need("HYPEMAN_TEST_KERNEL"),
 		rootfs:      need("HYPEMAN_HEARTBEAT_ROOTFS"),
 	}
@@ -125,13 +125,21 @@ func runStandbySnapshotRestore(t *testing.T, env jailerTestEnv, jailed bool) {
 		// and inputs are links into the chroot.
 		assert.Equal(t, strconv.Itoa(jailedTestUID), procStatusField(t, pid, "Uid:", 1))
 		assert.Equal(t, "0000000000000000", procStatusField(t, pid, "CapEff:", 1))
-		assert.True(t, isJailedSocket(socketPath), "api socket should be a link into the jail")
-		assert.FileExists(t, filepath.Join(jailRoot(env.p.InstanceDir(id), env.firecracker), "vmlinux"))
+		info, err := os.Lstat(socketPath)
+		require.NoError(t, err)
+		assert.True(t, info.Mode()&os.ModeSymlink != 0, "api socket should be a link into the jail")
+		fcBinary, err := starter.GetBinaryPath(env.p, "v1.17.0")
+		require.NoError(t, err)
+		fcBinary, err = filepath.EvalSymlinks(fcBinary)
+		require.NoError(t, err)
+		assert.FileExists(t, filepath.Join(jailRoot(env.p.InstanceDir(id), fcBinary), "vmlinux"))
 	}
 	for cycle := 0; cycle < 2; cycle++ {
 		require.NoError(t, hv.Pause(ctx))
 		require.NoError(t, hv.Snapshot(ctx, snapDir), "cycle %d", cycle)
-		require.Equal(t, jailed, snapshotIsJailed(snapDir), "snapshot marker must match how the VM was started")
+		meta, err := loadRestoreMetadata(env.p.InstanceDir(id))
+		require.NoError(t, err)
+		require.Equal(t, jailed, meta.Jail != nil, "restore metadata must record how the VM was started")
 		if cycle == 1 {
 			assert.FileExists(t, filepath.Join(snapDir, "memory"), "the second snapshot is a diff over the first")
 		}

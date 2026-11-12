@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
+	"github.com/kernel/hypeman/lib/paths"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -52,7 +53,7 @@ func TestJailLaunchPrepareStagesInputsAndLinksSockets(t *testing.T) {
 	vsock := filepath.Join(instanceDir, "vsock.sock")
 
 	// Use the test process's own uid/gid so chown succeeds without root.
-	jc := JailerConfig{Enabled: true, BinaryPath: fcBinary, UID: os.Getuid(), GID: os.Getgid()}
+	jc := JailerConfig{Enabled: true, UID: os.Getuid(), GID: os.Getgid()}
 	in := jailInputs{
 		KernelPath:    kernel,
 		Disks:         []jailDisk{{Path: rootfs, Readonly: true}, {Path: overlay}},
@@ -60,7 +61,7 @@ func TestJailLaunchPrepareStagesInputsAndLinksSockets(t *testing.T) {
 		SerialLogPath: serial,
 	}
 
-	jl, err := newJailLaunch(socketPath, fcBinary, in, jc)
+	jl, err := newJailLaunch(socketPath, fcBinary, "/usr/bin/jailer", in, jc)
 	require.NoError(t, err)
 	require.NoError(t, jl.prepare(socketPath))
 
@@ -86,6 +87,29 @@ func TestJailLaunchPrepareStagesInputsAndLinksSockets(t *testing.T) {
 		"--chroot-base-dir", filepath.Join(instanceDir, "jail"),
 		"--", "--api-sock", "/api.sock",
 	}, args)
+}
+
+func TestJailRootFollowsResolvedFirecrackerBinary(t *testing.T) {
+	instanceDir := t.TempDir()
+	binDir := t.TempDir()
+	target := writeFile(t, filepath.Join(binDir, "firecracker-v1.17.0-x86_64"), "fc")
+	link := filepath.Join(binDir, "firecracker")
+	require.NoError(t, os.Symlink(target, link))
+
+	jl, err := newJailLaunch(filepath.Join(instanceDir, "fc.sock"), link, "/usr/bin/jailer", jailInputs{}, JailerConfig{})
+	require.NoError(t, err)
+
+	// The jailer canonicalizes --exec-file and names the chroot after the result.
+	assert.Equal(t, filepath.Join(instanceDir, "jail", "firecracker-v1.17.0-x86_64", "vm", "root"), jl.root)
+	assert.Contains(t, jl.args(), target)
+}
+
+func TestResolveJailerPathNeedsOverrideWithCustomFirecracker(t *testing.T) {
+	SetCustomBinaryPath(writeFile(t, filepath.Join(t.TempDir(), "firecracker"), "fc"))
+	t.Cleanup(func() { SetCustomBinaryPath("") })
+
+	_, err := resolveJailerPath(paths.New(t.TempDir()), "", JailerConfig{Enabled: true})
+	require.Error(t, err, "the embedded jailer may not match a custom firecracker")
 }
 
 func writeFile(t *testing.T, path, content string) string {

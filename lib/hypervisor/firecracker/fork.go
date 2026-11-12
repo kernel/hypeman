@@ -50,7 +50,7 @@ func (s *Starter) PrepareFork(ctx context.Context, req hypervisor.ForkPrepareReq
 	}
 	crossesDataDirs := req.SourceDataDir != "" && req.TargetDataDir != "" && req.SourceDataDir != req.TargetDataDir
 	switch {
-	case snapshotIsJailed(filepath.Dir(req.SnapshotConfigPath)):
+	case meta.Jail != nil:
 		// A jailed snapshot names its drives and vsock socket inside the jail, the
 		// same in every instance, so the state file needs no rewrite and no source
 		// alias. Only the copied jail inputs point at the source directory.

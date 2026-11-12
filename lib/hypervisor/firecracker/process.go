@@ -85,7 +85,11 @@ func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, s
 	bootConfig := config
 	var jl *jailLaunch
 	if jc := getJailerConfig(); jc.Enabled {
-		jl, err = newJailLaunch(socketPath, binaryPath, jailInputsFromConfig(config), jc)
+		jailerPath, err := resolveJailerPath(p, version, jc)
+		if err != nil {
+			return 0, nil, fmt.Errorf("resolve jailer binary: %w", err)
+		}
+		jl, err = newJailLaunch(socketPath, binaryPath, jailerPath, jailInputsFromConfig(config), jc)
 		if err != nil {
 			return 0, nil, fmt.Errorf("plan firecracker jail: %w", err)
 		}
@@ -129,8 +133,12 @@ func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, s
 }
 
 func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string, socketPath string, snapshotPath string) (int, hypervisor.Hypervisor, error) {
-	if snapshotIsJailed(snapshotPath) {
-		return s.restoreJailedVM(ctx, p, version, socketPath, snapshotPath)
+	meta, err := loadRestoreMetadata(filepath.Dir(socketPath))
+	if err != nil {
+		return 0, nil, fmt.Errorf("load firecracker restore metadata: %w", err)
+	}
+	if meta.Jail != nil {
+		return s.restoreJailedVM(ctx, p, version, socketPath, snapshotPath, meta)
 	}
 	binaryPath, err := s.GetBinaryPath(p, version)
 	if err != nil {
@@ -153,10 +161,6 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 		return 0, nil, fmt.Errorf("create firecracker client: %w", err)
 	}
 
-	meta, err := loadRestoreMetadata(filepath.Dir(socketPath))
-	if err != nil {
-		return 0, nil, fmt.Errorf("load firecracker restore metadata: %w", err)
-	}
 	backend := fileSnapshotMemBackend(snapshotPath)
 	targetDataDir := filepath.Dir(socketPath)
 	loadSnapshot := func() error {
@@ -293,7 +297,8 @@ func startProcess(binaryPath string, socketPath string, jl *jailLaunch) (int, er
 	} else {
 		cmd = exec.Command(binaryPath, "--api-sock", socketPath)
 	}
-	// The jailer passes its environment on to firecracker.
+	// The jailer clears its environment before exec'ing firecracker, so this
+	// only reaches an unjailed firecracker.
 	cmd.Env = hypervisor.ProcessEnv()
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Stdout = vmmLogFile

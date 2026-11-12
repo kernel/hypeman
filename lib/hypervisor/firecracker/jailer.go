@@ -18,7 +18,8 @@ import (
 // The VMM runs as UID/GID inside a chroot under its instance directory and can
 // open only the files hypeman links into that chroot.
 type JailerConfig struct {
-	Enabled    bool
+	Enabled bool
+	// BinaryPath overrides the jailer embedded with each firecracker version.
 	BinaryPath string
 	UID        int
 	GID        int
@@ -59,7 +60,8 @@ func jailedDiskPath(i int) string {
 }
 
 // jailRoot returns the host path of the chroot root. The jailer names the
-// root after the basename of the exec file.
+// root after the basename of the exec file, so fcBinary must already have its
+// symlinks resolved, as the jailer does.
 func jailRoot(instanceDir, fcBinary string) string {
 	return filepath.Join(instanceDir, jailBaseDirName, filepath.Base(fcBinary), jailerID, "root")
 }
@@ -151,19 +153,18 @@ type jailLaunch struct {
 	snapshotDir string
 }
 
-func newJailLaunch(socketPath, fcBinary string, in jailInputs, jc JailerConfig) (*jailLaunch, error) {
-	if jc.BinaryPath == "" {
-		return nil, errors.New("firecracker jailer enabled without a jailer binary path")
-	}
-	if _, err := os.Stat(jc.BinaryPath); err != nil {
-		return nil, fmt.Errorf("jailer binary: %w", err)
-	}
+func newJailLaunch(socketPath, fcBinary, jailerPath string, in jailInputs, jc JailerConfig) (*jailLaunch, error) {
 	if !filepath.IsAbs(socketPath) {
 		return nil, fmt.Errorf("jailed firecracker needs an absolute socket path, got %q", socketPath)
 	}
+	// The jailer canonicalizes --exec-file and names the chroot after the result.
+	fcBinary, err := filepath.EvalSymlinks(fcBinary)
+	if err != nil {
+		return nil, fmt.Errorf("resolve firecracker binary: %w", err)
+	}
 	instanceDir := filepath.Dir(socketPath)
 	return &jailLaunch{
-		jailerPath:  jc.BinaryPath,
+		jailerPath:  jailerPath,
 		fcBinary:    fcBinary,
 		instanceDir: instanceDir,
 		root:        jailRoot(instanceDir, fcBinary),
@@ -295,10 +296,4 @@ func replaceWithSymlink(target, linkPath string) error {
 		return err
 	}
 	return os.Symlink(target, linkPath)
-}
-
-// isJailedSocket reports whether socketPath is a jailed VM's API socket.
-func isJailedSocket(socketPath string) bool {
-	info, err := os.Lstat(socketPath)
-	return err == nil && info.Mode()&os.ModeSymlink != 0
 }

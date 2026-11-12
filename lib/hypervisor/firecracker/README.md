@@ -20,21 +20,27 @@ Multiple versions are embedded so snapshots can be restored with the Firecracker
 ## Jailer (optional, prototype)
 
 `hypervisor.firecracker_jailer.enabled` runs each VM's firecracker under the
-`jailer` as `uid`/`gid`, in a chroot at `<instance>/jail/firecracker/vm/root`.
+`jailer` as `uid`/`gid`, in a chroot at `<instance>/jail/<firecracker binary>/vm/root`.
+
+- The jailer is embedded next to each firecracker version, from the same release
+  tarball, so it always matches the VM's firecracker. `binary_path` overrides it
+  and is required with `hypervisor.firecracker_binary_path`.
 
 - Kernel, initrd, and disks are hardlinked into the chroot. Writable disks are
   chowned to the jail uid, so inputs must share a filesystem with the instance.
 - The API socket, vsock socket, and serial log keep their host paths. Each is a
   symlink into the chroot.
-- TAP devices are owned by the jail uid (`network.SetTAPOwner`).
-- Snapshot, standby, restore, and fork work for jailed VMs. Snapshot directories
-  record that they were taken jailed, and restore follows that record, not the flag.
+- TAP devices are owned by the jail uid.
+- Snapshot, standby, restore, and fork work for jailed VMs. Each boot records the
+  jail inputs in the instance's restore metadata, and snapshot, restore and fork
+  follow that record, not the flag.
   Restoring a jailed snapshot needs the flag on. If it is off, restore fails before
   anything starts, so keep the flag on while jailed standby VMs exist.
 - AppArmor profiles do not cover the jailed launch yet. Keep the flag off where
   AppArmor is enforced.
 
-`jailer_integration_test.go` (`-tags jailer_integration`) boots jailed guests and
+`jailer_integration_test.go` (`-tags jailer_integration`) boots jailed guests with the
+embedded binaries and
 runs a full/diff standby and restore cycle, jailed and unjailed. Setup is in
 `scripts/jailer-smoke/README.md`.
 

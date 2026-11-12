@@ -15,17 +15,16 @@ import (
 
 // Jailed snapshots. Firecracker can read and write only inside its chroot, so
 // the host snapshot files are hardlinked into the jail for the duration of a
-// snapshot or restore and moved back out afterwards. The snapshot directory
-// records whether it was taken jailed. Restore uses that record, not the
-// global jailer flag, so unjailed standby snapshots keep their current behavior.
+// snapshot or restore and moved back out afterwards. The restore metadata's Jail
+// field, written on every boot, records whether the VM runs jailed. Snapshot,
+// restore and fork use it rather than the global jailer flag, so unjailed
+// standby snapshots keep their current behavior.
 
 const (
 	// jailedSnapshotDirName is the staging directory inside the chroot.
 	jailedSnapshotDirName = "snapshot"
 	// jailedSnapshotDir is the same directory as firecracker sees it.
 	jailedSnapshotDir = "/" + jailedSnapshotDirName
-	// jailedSnapshotMarker is written into a snapshot directory taken from a jailed VM.
-	jailedSnapshotMarker = "jailed"
 )
 
 // jailRootForSocket returns the chroot root of a jailed VM. Its API socket is a
@@ -49,25 +48,6 @@ func jailOwner(root string) (int, int, error) {
 		return 0, 0, errors.New("jail root has no unix ownership")
 	}
 	return int(st.Uid), int(st.Gid), nil
-}
-
-func snapshotIsJailed(snapshotDir string) bool {
-	_, err := os.Stat(filepath.Join(snapshotDir, jailedSnapshotMarker))
-	return err == nil
-}
-
-func setSnapshotJailedMarker(snapshotDir string, jailed bool) error {
-	marker := filepath.Join(snapshotDir, jailedSnapshotMarker)
-	if !jailed {
-		if err := os.Remove(marker); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("clear jailed snapshot marker: %w", err)
-		}
-		return nil
-	}
-	if err := os.WriteFile(marker, nil, 0644); err != nil {
-		return fmt.Errorf("write jailed snapshot marker: %w", err)
-	}
-	return nil
 }
 
 // snapshotJailed takes a snapshot of a jailed VM into destPath.
@@ -133,7 +113,7 @@ func (f *Firecracker) snapshotJailed(ctx context.Context, destPath string) error
 			return fmt.Errorf("chown snapshot %s: %w", name, err)
 		}
 	}
-	return setSnapshotJailedMarker(destPath, true)
+	return nil
 }
 
 // recordJailInputs stores the jail inputs in the instance's restore metadata.
@@ -147,18 +127,11 @@ func recordJailInputs(instanceDir string, in jailInputs) error {
 }
 
 // restoreJailedVM starts a jailed firecracker and loads a jailed snapshot.
-func (s *Starter) restoreJailedVM(ctx context.Context, p *paths.Paths, version string, socketPath string, snapshotPath string) (int, hypervisor.Hypervisor, error) {
+// meta is the instance's restore metadata, with Jail set.
+func (s *Starter) restoreJailedVM(ctx context.Context, p *paths.Paths, version string, socketPath string, snapshotPath string, meta *restoreMetadata) (int, hypervisor.Hypervisor, error) {
 	jc := getJailerConfig()
 	if !jc.Enabled {
 		return 0, nil, fmt.Errorf("restore jailed snapshot with jailer disabled: %w", hypervisor.ErrNotSupported)
-	}
-	instanceDir := filepath.Dir(socketPath)
-	meta, err := loadRestoreMetadata(instanceDir)
-	if err != nil {
-		return 0, nil, fmt.Errorf("load firecracker restore metadata: %w", err)
-	}
-	if meta.Jail == nil {
-		return 0, nil, errors.New("jailed snapshot has no recorded jail inputs")
 	}
 	if meta.SnapshotSourceDataDir != "" {
 		return 0, nil, fmt.Errorf("restore jailed fork: %w", hypervisor.ErrNotSupported)
@@ -168,7 +141,11 @@ func (s *Starter) restoreJailedVM(ctx context.Context, p *paths.Paths, version s
 	if err != nil {
 		return 0, nil, fmt.Errorf("resolve firecracker binary: %w", err)
 	}
-	jl, err := newJailLaunch(socketPath, binaryPath, *meta.Jail, jc)
+	jailerPath, err := resolveJailerPath(p, version, jc)
+	if err != nil {
+		return 0, nil, fmt.Errorf("resolve jailer binary: %w", err)
+	}
+	jl, err := newJailLaunch(socketPath, binaryPath, jailerPath, *meta.Jail, jc)
 	if err != nil {
 		return 0, nil, fmt.Errorf("plan firecracker jail: %w", err)
 	}

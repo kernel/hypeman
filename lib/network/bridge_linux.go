@@ -550,7 +550,10 @@ func (m *manager) createTAPDevice(ctx context.Context, tapName, bridgeName strin
 	// 2. Create TAP device with current user as owner
 	// This allows Cloud Hypervisor (running as current user) to access the TAP.
 	// A jailed firecracker runs as the jailer uid, which then becomes the owner.
-	uid, gid := tapOwner(os.Getuid(), os.Getgid())
+	uid, gid := os.Getuid(), os.Getgid()
+	if jc := m.config.Hypervisor.FirecrackerJailer; jc.Enabled {
+		uid, gid = jc.UID, jc.GID
+	}
 
 	tap := &netlink.Tuntap{
 		LinkAttrs: netlink.LinkAttrs{

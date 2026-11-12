@@ -46,8 +46,8 @@ func serveFakeFirecracker(t *testing.T, sockPath string, write func(snapshotCrea
 	t.Cleanup(func() { _ = srv.Close() })
 }
 
-// jailedFixture returns an instance dir, a jailed firecracker socket symlink, and
-// the chroot root behind it.
+// jailedFixture returns an instance dir with recorded jail inputs, a jailed
+// firecracker socket symlink, and the chroot root behind it.
 func jailedFixture(t *testing.T) (instanceDir, socketPath, root string) {
 	t.Helper()
 	instanceDir = shortTempDir(t)
@@ -56,6 +56,7 @@ func jailedFixture(t *testing.T) (instanceDir, socketPath, root string) {
 	require.NoError(t, os.MkdirAll(root, 0755))
 	socketPath = filepath.Join(instanceDir, "fc.sock")
 	require.NoError(t, os.Symlink(filepath.Join(root, "api.sock"), socketPath))
+	require.NoError(t, recordJailInputs(instanceDir, jailInputs{KernelPath: "/system/vmlinux"}))
 	return instanceDir, socketPath, root
 }
 
@@ -88,7 +89,6 @@ func TestJailedSnapshotDiffWritesInPlaceAndMovesStateOut(t *testing.T) {
 	memAfter, err := os.Stat(filepath.Join(destPath, "memory"))
 	require.NoError(t, err)
 	assert.True(t, os.SameFile(memBefore, memAfter), "diff writes the base memory in place, as unjailed standby does")
-	assert.True(t, snapshotIsJailed(destPath))
 
 	_, err = os.Stat(filepath.Join(root, jailedSnapshotDirName))
 	assert.True(t, os.IsNotExist(err), "staging is removed after the snapshot")
@@ -113,25 +113,6 @@ func TestJailedSnapshotFullWhenNoBaseMemory(t *testing.T) {
 	assert.Equal(t, "Full", got.SnapshotType)
 	assert.Equal(t, "mem-1", readFileString(t, filepath.Join(destPath, "memory")))
 	assert.Equal(t, "state-1", readFileString(t, filepath.Join(destPath, "state")))
-	assert.True(t, snapshotIsJailed(destPath))
-}
-
-func TestUnjailedSnapshotClearsStaleJailedMarker(t *testing.T) {
-	dir := shortTempDir(t)
-	socketPath := filepath.Join(dir, "fc.sock")
-	destPath := filepath.Join(dir, "snapshot-latest")
-	require.NoError(t, os.MkdirAll(destPath, 0755))
-	require.NoError(t, setSnapshotJailedMarker(destPath, true))
-
-	serveFakeFirecracker(t, socketPath, func(p snapshotCreateParams) {
-		require.NoError(t, os.WriteFile(p.SnapshotPath, []byte("state"), 0644))
-		require.NoError(t, os.WriteFile(p.MemFilePath, []byte("mem"), 0644))
-	})
-	f, err := New(socketPath)
-	require.NoError(t, err)
-	require.NoError(t, f.Snapshot(context.Background(), destPath))
-
-	assert.False(t, snapshotIsJailed(destPath), "an unjailed snapshot must not look jailed")
 }
 
 func TestRestoreJailedSnapshotWithJailerDisabledFailsBeforeStart(t *testing.T) {
@@ -139,7 +120,7 @@ func TestRestoreJailedSnapshotWithJailerDisabledFailsBeforeStart(t *testing.T) {
 	dir := shortTempDir(t)
 	snapshotDir := filepath.Join(dir, "snapshot-latest")
 	require.NoError(t, os.MkdirAll(snapshotDir, 0755))
-	require.NoError(t, setSnapshotJailedMarker(snapshotDir, true))
+	require.NoError(t, recordJailInputs(dir, jailInputs{KernelPath: "/system/vmlinux"}))
 
 	_, _, err := NewStarter().RestoreVM(context.Background(), paths.New(dir), "v1.17.0", filepath.Join(dir, "fc.sock"), snapshotDir)
 	require.ErrorIs(t, err, hypervisor.ErrNotSupported)
@@ -152,7 +133,6 @@ func TestPrepareForkRebasesJailInputsForJailedSnapshot(t *testing.T) {
 	target := shortTempDir(t)
 	snapshotDir := filepath.Join(target, "snapshots", "snapshot-latest")
 	require.NoError(t, os.MkdirAll(snapshotDir, 0755))
-	require.NoError(t, setSnapshotJailedMarker(snapshotDir, true))
 	// The copied metadata still names the source instance's files.
 	require.NoError(t, saveRestoreMetadata(target, nil))
 	require.NoError(t, recordJailInputs(target, jailInputs{
@@ -195,9 +175,9 @@ func TestJailPrepareStagesSnapshotForRestore(t *testing.T) {
 	mem := writeFile(t, filepath.Join(snapshotDir, "memory"), "mem")
 	kernel := writeFile(t, filepath.Join(instanceDir, "vmlinux"), "k")
 
-	jc := JailerConfig{Enabled: true, BinaryPath: fcBinary, UID: os.Getuid(), GID: os.Getgid()}
+	jc := JailerConfig{Enabled: true, UID: os.Getuid(), GID: os.Getgid()}
 	socketPath := filepath.Join(instanceDir, "fc.sock")
-	jl, err := newJailLaunch(socketPath, fcBinary, jailInputs{KernelPath: kernel}, jc)
+	jl, err := newJailLaunch(socketPath, fcBinary, "/usr/bin/jailer", jailInputs{KernelPath: kernel}, jc)
 	require.NoError(t, err)
 	jl.snapshotDir = snapshotDir
 	require.NoError(t, jl.prepare(socketPath))

@@ -6,13 +6,12 @@ host with root and `/dev/kvm`.
     # guest init that prints a counter once a second
     scripts/jailer-smoke/build-rootfs.sh heartbeat.ext4 scripts/jailer-smoke/heartbeat-init.c
 
-    # firecracker and jailer v1.17.0 from the release tarball (contains both)
+    # embedded firecracker and jailer
+    make ensure-firecracker-binaries
     # kernel: hypeman's pinned Kernel_202610301 x86_64 vmlinux
 
     cd lib/hypervisor/firecracker
-    sudo env HYPEMAN_JAILER_BINARY=/path/jailer-v1.17.0-x86_64 \
-      HYPEMAN_TEST_FIRECRACKER=/path/firecracker-v1.17.0-x86_64 \
-      HYPEMAN_TEST_KERNEL=/path/vmlinux \
+    sudo env HYPEMAN_TEST_KERNEL=/path/vmlinux \
       HYPEMAN_HEARTBEAT_ROOTFS=$PWD/../../../scripts/jailer-smoke/heartbeat.ext4 \
       go test -tags jailer_integration -count=1 -run 'Jailed|StandbySnapshotRestore' .
 

@@ -227,10 +227,11 @@ type HypervisorConfig struct {
 }
 
 // FirecrackerJailerConfig runs firecracker VMs under the firecracker jailer as a
-// dedicated uid/gid. Prototype: off by default; snapshot and restore are
-// unsupported while enabled.
+// dedicated uid/gid. Off by default.
 type FirecrackerJailerConfig struct {
-	Enabled    bool   `koanf:"enabled"`
+	Enabled bool `koanf:"enabled"`
+	// BinaryPath overrides the jailer embedded with each firecracker version.
+	// Required when firecracker_binary_path is set.
 	BinaryPath string `koanf:"binary_path"`
 	UID        int    `koanf:"uid"`
 	GID        int    `koanf:"gid"`
@@ -731,8 +732,8 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("hypervisor.firecracker_max_concurrent_restores must be >= 0, got %d", c.Hypervisor.FirecrackerMaxConcurrentRestores)
 	}
 	if jc := c.Hypervisor.FirecrackerJailer; jc.Enabled {
-		if jc.BinaryPath == "" {
-			return fmt.Errorf("hypervisor.firecracker_jailer.binary_path is required when the jailer is enabled")
+		if jc.BinaryPath == "" && c.Hypervisor.FirecrackerBinaryPath != "" {
+			return fmt.Errorf("hypervisor.firecracker_jailer.binary_path is required when hypervisor.firecracker_binary_path is set")
 		}
 		if jc.UID <= 0 || jc.GID <= 0 {
 			return fmt.Errorf("hypervisor.firecracker_jailer.uid and gid must be > 0 when the jailer is enabled, got uid=%d gid=%d", jc.UID, jc.GID)
