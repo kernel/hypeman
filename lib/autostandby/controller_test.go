@@ -518,7 +518,59 @@ func TestActiveReconcileSharesOneConntrackSnapshot(t *testing.T) {
 
 	lists = source.listCalls()
 	controller.reconcileActiveInstances(context.Background())
-	assert.Equal(t, lists, source.listCalls(), "no dump when nothing is active")
+	assert.Equal(t, lists, source.listCalls(), "no dump when nothing needs a check")
+}
+
+func TestActiveReconcileCancelsQueuedStandbyWhenConntrackReportsConnection(t *testing.T) {
+	t.Parallel()
+
+	idleSince := time.Date(2026, 4, 6, 10, 55, 0, 0, time.UTC)
+	store := newFakeInstanceStore([]Instance{
+		idleTestInstance("inst-busy", "192.168.100.93", idleSince),
+		idleTestInstance("inst-pending", "192.168.100.94", idleSince),
+	})
+	store.standbyStarted = make(chan string, 2)
+	store.standbyRelease = make(chan struct{})
+	source := &fakeConnectionSource{}
+	controller := NewController(store, source, ControllerOptions{
+		Now:                   func() time.Time { return idleSince.Add(time.Minute) },
+		MaxConcurrentStandbys: 1,
+	})
+
+	require.NoError(t, controller.startupResync(context.Background()))
+
+	controller.handleStandbyTimer(context.Background(), "inst-busy")
+	require.Equal(t, "inst-busy", <-store.standbyStarted)
+	controller.handleStandbyTimer(context.Background(), "inst-pending")
+
+	// A reconcile that still finds the queued instance idle leaves it queued.
+	controller.reconcileActiveInstances(context.Background())
+	controller.mu.RLock()
+	assert.True(t, controller.states["inst-pending"].standbyRequested)
+	controller.mu.RUnlock()
+
+	// A connection arrives while the standby waits for a worker slot, and its
+	// NEW event never reaches the controller.
+	source.connections = []Connection{{
+		OriginalSourceIP:        mustAddr("1.2.3.4"),
+		OriginalSourcePort:      50003,
+		OriginalDestinationIP:   mustAddr("192.168.100.94"),
+		OriginalDestinationPort: 8080,
+		TCPState:                TCPStateEstablished,
+	}}
+	controller.reconcileActiveInstances(context.Background())
+
+	controller.mu.RLock()
+	pending := controller.states["inst-pending"]
+	require.NotNil(t, pending)
+	assert.False(t, pending.standbyRequested)
+	assert.Len(t, pending.activeInbound, 1)
+	assert.Nil(t, pending.idleSince)
+	controller.mu.RUnlock()
+
+	close(store.standbyRelease)
+	controller.standbyWG.Wait()
+	assert.Equal(t, []string{"inst-busy"}, store.standbyCalls())
 }
 
 func TestDuplicateDestroyDoesNotGoNegative(t *testing.T) {

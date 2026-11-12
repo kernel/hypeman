@@ -970,16 +970,17 @@ func (c *Controller) executeStandby(ctx context.Context, id string, instanceName
 	_ = c.persistRuntime(ctx, persistence)
 }
 
-// reconcileActiveInstances checks every instance the controller believes is
-// busy against one conntrack snapshot, so a close whose event was lost still
-// starts the idle countdown. The snapshot is a dump of the whole host table and
-// is shared by all instances: its cost per pass does not grow with how many
-// are busy.
+// reconcileActiveInstances checks instances against one conntrack snapshot to
+// recover from lost events: a busy instance whose connections have all closed
+// starts its idle countdown, and an instance queued for standby that has
+// gained a connection is taken back out of the queue. The snapshot is a dump
+// of the whole host table and is shared by all instances: its cost per pass
+// does not grow with how many are checked.
 func (c *Controller) reconcileActiveInstances(ctx context.Context) {
 	c.mu.RLock()
 	var ids []string
 	for id, state := range c.states {
-		if state.compiledPolicy != nil && len(state.activeInbound) > 0 {
+		if needsReconcile(state) {
 			ids = append(ids, id)
 		}
 	}
@@ -1001,10 +1002,21 @@ func (c *Controller) reconcileActiveInstances(ctx context.Context) {
 	}
 }
 
+// needsReconcile reports whether lost conntrack events could leave the
+// instance in the wrong state: it is believed busy, or it is waiting for a
+// standby worker, which acts on in-memory state alone. An executing standby
+// owns the state until it finishes.
+func needsReconcile(state *controllerState) bool {
+	if state == nil || state.compiledPolicy == nil || state.standbyExecuting {
+		return false
+	}
+	return len(state.activeInbound) > 0 || state.standbyRequested
+}
+
 func (c *Controller) reconcileInstance(ctx context.Context, id string, conns []Connection, now time.Time) {
 	c.mu.Lock()
 	state := c.states[id]
-	if state == nil || state.compiledPolicy == nil || len(state.activeInbound) == 0 {
+	if !needsReconcile(state) {
 		c.mu.Unlock()
 		return
 	}
@@ -1017,21 +1029,40 @@ func (c *Controller) reconcileInstance(ctx context.Context, id string, conns []C
 		return
 	}
 
-	state.activeInbound = activeSet
-	if len(activeSet) > 0 {
+	wasActive := len(state.activeInbound) > 0
+	switch {
+	case len(activeSet) > 0 && wasActive:
+		state.activeInbound = activeSet
+		state.standbyRequested = false
 		c.mu.Unlock()
-		return
+	case len(activeSet) > 0:
+		state.activeInbound = activeSet
+		state.standbyRequested = false
+		state.idleSince = nil
+		state.lastInboundAt = &now
+		c.cancelTimerLocked(state)
+		persistence := c.stageRuntimePersistenceLocked(id, state, &Runtime{
+			LastInboundActivityAt: cloneTimePtr(state.lastInboundAt),
+		}, true, "record reconcile activity")
+		c.log.Info("auto-standby cancelled queued standby, conntrack reports inbound connections", "instance_id", id, "active_inbound_connections", len(activeSet))
+		c.mu.Unlock()
+		_ = c.persistRuntime(ctx, persistence)
+	case wasActive:
+		state.activeInbound = activeSet
+		state.standbyRequested = false
+		state.idleSince = &now
+		c.armTimerLocked(id, state, now)
+		persistence := c.stageRuntimePersistenceLocked(id, state, &Runtime{
+			IdleSince:             cloneTimePtr(state.idleSince),
+			LastInboundActivityAt: cloneTimePtr(state.lastInboundAt),
+		}, true, "start idle countdown after reconcile")
+		c.log.Info("auto-standby idle countdown started after active connection reconcile", "instance_id", id, "idle_timeout", state.idleTimeout)
+		c.mu.Unlock()
+		_ = c.persistRuntime(ctx, persistence)
+	default:
+		// Still idle and still queued: leave the pending standby alone.
+		c.mu.Unlock()
 	}
-
-	state.idleSince = &now
-	c.armTimerLocked(id, state, now)
-	persistence := c.stageRuntimePersistenceLocked(id, state, &Runtime{
-		IdleSince:             cloneTimePtr(state.idleSince),
-		LastInboundActivityAt: cloneTimePtr(state.lastInboundAt),
-	}, true, "start idle countdown after reconcile")
-	c.log.Info("auto-standby idle countdown started after active connection reconcile", "instance_id", id, "idle_timeout", state.idleTimeout)
-	c.mu.Unlock()
-	_ = c.persistRuntime(ctx, persistence)
 }
 
 func (c *Controller) reconnectStream(ctx context.Context) {
