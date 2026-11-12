@@ -1096,6 +1096,24 @@ func (m *manager) tapDeviceExists(tapName string) bool {
 	return err == nil
 }
 
+// forgetNeighbor removes the host's neighbor entry for a guest address on the
+// bridge. A missing entry is not an error.
+func (m *manager) forgetNeighbor(bridgeName, ip string) error {
+	addr := net.ParseIP(ip).To4()
+	if addr == nil {
+		return fmt.Errorf("parse IPv4 address %q", ip)
+	}
+	bridge, err := netlink.LinkByName(bridgeName)
+	if err != nil {
+		return fmt.Errorf("get bridge: %w", err)
+	}
+	err = netlink.NeighDel(&netlink.Neigh{LinkIndex: bridge.Attrs().Index, Family: netlink.FAMILY_V4, IP: addr})
+	if err != nil && !errors.Is(err, unix.ENOENT) {
+		return fmt.Errorf("delete neighbor entry: %w", err)
+	}
+	return nil
+}
+
 // queryNetworkState queries kernel for bridge state.
 func (m *manager) queryNetworkState(bridgeName string) (*Network, error) {
 	link, err := netlink.LinkByName(bridgeName)

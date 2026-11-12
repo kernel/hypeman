@@ -3,9 +3,15 @@
 package network
 
 import (
+	"context"
 	"errors"
+	"fmt"
+	"net"
+	"os"
 	"testing"
 
+	"github.com/kernel/hypeman/cmd/api/config"
+	"github.com/kernel/hypeman/lib/paths"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/vishvananda/netlink"
@@ -106,4 +112,117 @@ func TestRetryNetlinkDumpGivesUpAfterBudget(t *testing.T) {
 
 	require.ErrorIs(t, err, netlink.ErrDumpInterrupted)
 	assert.Equal(t, netlinkDumpRetryCount, calls)
+}
+
+func TestForgetNeighborDropsReusedAddressEntry(t *testing.T) {
+	bridge := newNeighborTestBridge(t)
+	ip := net.ParseIP("198.51.100.7").To4()
+	addStaleNeighbor(t, bridge, ip)
+	require.True(t, hasUsableNeighbor(t, bridge, ip))
+
+	m := &manager{}
+	require.NoError(t, m.forgetNeighbor(bridge.Name, ip.String()))
+	assert.False(t, hasUsableNeighbor(t, bridge, ip))
+
+	require.NoError(t, m.forgetNeighbor(bridge.Name, ip.String()), "a missing entry is not an error")
+	assert.Error(t, m.forgetNeighbor("hm-no-such-bridge", ip.String()))
+	assert.Error(t, m.forgetNeighbor(bridge.Name, "not-an-address"))
+}
+
+// A new guest must not inherit the neighbor entry of whichever guest held its
+// address before: the host would keep sending to the old MAC.
+func TestCreateAllocationForgetsNeighborOfReusedAddress(t *testing.T) {
+	bridge := newNeighborTestBridge(t)
+	const subnet = "198.51.100.0/29"
+	var candidates []net.IP
+	for last := byte(2); last <= 6; last++ {
+		ip := net.IPv4(198, 51, 100, last).To4()
+		candidates = append(candidates, ip)
+		addStaleNeighbor(t, bridge, ip)
+	}
+
+	m := &manager{
+		paths:              paths.New(t.TempDir()),
+		config:             &config.Config{Network: config.NetworkConfig{BridgeName: bridge.Name}},
+		pendingAllocations: make(map[string]pendingAllocation),
+	}
+	m.setDefaultNetwork(newDefaultNetwork(bridge.Name, subnet, "198.51.100.1"))
+
+	// The TAP is named after the first eight characters of the instance ID.
+	instanceID := fmt.Sprintf("n%07d", os.Getpid())
+	allocated, err := m.CreateAllocation(context.Background(), AllocateRequest{InstanceID: instanceID, InstanceName: instanceID})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		if tap, err := netlink.LinkByName(allocated.TAPDevice); err == nil {
+			_ = netlink.LinkDel(tap)
+		}
+	})
+
+	for _, ip := range candidates {
+		assert.Equal(t, ip.String() != allocated.IP, hasUsableNeighbor(t, bridge, ip), "neighbor entry for %s", ip)
+	}
+}
+
+func newNeighborTestBridge(t *testing.T) *netlink.Bridge {
+	t.Helper()
+	if os.Geteuid() != 0 {
+		t.Skip("managing neighbor entries requires CAP_NET_ADMIN")
+	}
+	bridge := &netlink.Bridge{LinkAttrs: netlink.LinkAttrs{Name: fmt.Sprintf("hmn%d", os.Getpid())}}
+	require.NoError(t, netlink.LinkAdd(bridge))
+	t.Cleanup(func() { _ = netlink.LinkDel(bridge) })
+
+	// The kernel drops every neighbor entry of a bridge whose address changes
+	// or that has no carrier when a port is added. Pin the address and give
+	// the bridge a running port, like a host with guests has, so only the
+	// entry under test goes away. The TAP has carrier while this process
+	// holds it open.
+	address, err := net.ParseMAC("02:00:00:00:00:01")
+	require.NoError(t, err)
+	require.NoError(t, netlink.LinkSetHardwareAddr(bridge, address))
+	port := &netlink.Tuntap{
+		LinkAttrs:  netlink.LinkAttrs{Name: fmt.Sprintf("hmp%d", os.Getpid())},
+		Mode:       netlink.TUNTAP_MODE_TAP,
+		Queues:     1,
+		NonPersist: true,
+	}
+	require.NoError(t, netlink.LinkAdd(port))
+	t.Cleanup(func() {
+		for _, fd := range port.Fds {
+			_ = fd.Close()
+		}
+	})
+	require.NoError(t, netlink.LinkSetMaster(port, bridge))
+	require.NoError(t, netlink.LinkSetUp(port))
+	require.NoError(t, netlink.LinkSetUp(bridge))
+	return bridge
+}
+
+func addStaleNeighbor(t *testing.T, bridge *netlink.Bridge, ip net.IP) {
+	t.Helper()
+	previousOwner, err := net.ParseMAC("02:00:00:aa:bb:cc")
+	require.NoError(t, err)
+	require.NoError(t, netlink.NeighSet(&netlink.Neigh{
+		LinkIndex:    bridge.Attrs().Index,
+		Family:       netlink.FAMILY_V4,
+		State:        netlink.NUD_STALE,
+		IP:           ip,
+		HardwareAddr: previousOwner,
+	}))
+}
+
+func hasUsableNeighbor(t *testing.T, bridge *netlink.Bridge, ip net.IP) bool {
+	t.Helper()
+	var neighbors []netlink.Neigh
+	require.NoError(t, retryNetlinkDump(func() error {
+		var err error
+		neighbors, err = netlink.NeighList(bridge.Attrs().Index, netlink.FAMILY_V4)
+		return err
+	}))
+	for _, neighbor := range neighbors {
+		if neighbor.IP.Equal(ip) && neighbor.State != netlink.NUD_FAILED {
+			return true
+		}
+	}
+	return false
 }
