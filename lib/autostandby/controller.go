@@ -978,14 +978,18 @@ func (c *Controller) executeStandby(ctx context.Context, id string, instanceName
 // does not grow with how many are checked.
 func (c *Controller) reconcileActiveInstances(ctx context.Context) {
 	c.mu.RLock()
-	var ids []string
+	var queued, busy []string
 	for id, state := range c.states {
-		if needsReconcile(state) {
-			ids = append(ids, id)
+		switch {
+		case !needsReconcile(state):
+		case state.standbyRequested:
+			queued = append(queued, id)
+		default:
+			busy = append(busy, id)
 		}
 	}
 	c.mu.RUnlock()
-	if len(ids) == 0 {
+	if len(queued)+len(busy) == 0 {
 		return
 	}
 
@@ -996,9 +1000,17 @@ func (c *Controller) reconcileActiveInstances(ctx context.Context) {
 		return
 	}
 
+	// A queued standby starts as soon as a worker slot frees up, after which
+	// the snapshot can no longer cancel it. Apply the snapshot to queued
+	// instances first and keep metadata writes out of the way until every
+	// instance has been updated in memory.
 	now := c.now().UTC()
-	for _, id := range ids {
-		c.reconcileInstance(ctx, id, conns, now)
+	var persistences []runtimePersistence
+	for _, id := range append(queued, busy...) {
+		persistences = append(persistences, c.reconcileInstance(id, conns, now))
+	}
+	for _, persistence := range persistences {
+		_ = c.persistRuntime(ctx, persistence)
 	}
 }
 
@@ -1013,20 +1025,20 @@ func needsReconcile(state *controllerState) bool {
 	return len(state.activeInbound) > 0 || state.standbyRequested
 }
 
-func (c *Controller) reconcileInstance(ctx context.Context, id string, conns []Connection, now time.Time) {
+func (c *Controller) reconcileInstance(id string, conns []Connection, now time.Time) runtimePersistence {
 	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	state := c.states[id]
 	if !needsReconcile(state) {
-		c.mu.Unlock()
-		return
+		return runtimePersistence{}
 	}
 
 	activeSet, err := matchingConnections(state.instance, state.compiledPolicy, conns)
 	if err != nil {
-		c.mu.Unlock()
 		c.recordControllerError("reconcile")
 		c.log.Warn("auto-standby active connection reconcile failed to classify connections", "instance_id", id, "error", err)
-		return
+		return runtimePersistence{}
 	}
 
 	wasActive := len(state.activeInbound) > 0
@@ -1034,34 +1046,30 @@ func (c *Controller) reconcileInstance(ctx context.Context, id string, conns []C
 	case len(activeSet) > 0 && wasActive:
 		state.activeInbound = activeSet
 		state.standbyRequested = false
-		c.mu.Unlock()
+		return runtimePersistence{}
 	case len(activeSet) > 0:
 		state.activeInbound = activeSet
 		state.standbyRequested = false
 		state.idleSince = nil
 		state.lastInboundAt = &now
 		c.cancelTimerLocked(state)
-		persistence := c.stageRuntimePersistenceLocked(id, state, &Runtime{
+		c.log.Info("auto-standby cancelled queued standby, conntrack reports inbound connections", "instance_id", id, "active_inbound_connections", len(activeSet))
+		return c.stageRuntimePersistenceLocked(id, state, &Runtime{
 			LastInboundActivityAt: cloneTimePtr(state.lastInboundAt),
 		}, true, "record reconcile activity")
-		c.log.Info("auto-standby cancelled queued standby, conntrack reports inbound connections", "instance_id", id, "active_inbound_connections", len(activeSet))
-		c.mu.Unlock()
-		_ = c.persistRuntime(ctx, persistence)
 	case wasActive:
 		state.activeInbound = activeSet
 		state.standbyRequested = false
 		state.idleSince = &now
 		c.armTimerLocked(id, state, now)
-		persistence := c.stageRuntimePersistenceLocked(id, state, &Runtime{
+		c.log.Info("auto-standby idle countdown started after active connection reconcile", "instance_id", id, "idle_timeout", state.idleTimeout)
+		return c.stageRuntimePersistenceLocked(id, state, &Runtime{
 			IdleSince:             cloneTimePtr(state.idleSince),
 			LastInboundActivityAt: cloneTimePtr(state.lastInboundAt),
 		}, true, "start idle countdown after reconcile")
-		c.log.Info("auto-standby idle countdown started after active connection reconcile", "instance_id", id, "idle_timeout", state.idleTimeout)
-		c.mu.Unlock()
-		_ = c.persistRuntime(ctx, persistence)
 	default:
 		// Still idle and still queued: leave the pending standby alone.
-		c.mu.Unlock()
+		return runtimePersistence{}
 	}
 }
 
