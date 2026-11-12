@@ -115,8 +115,15 @@ func (f *Firecracker) Resume(ctx context.Context) error {
 }
 
 func (f *Firecracker) Snapshot(ctx context.Context, destPath string) error {
+	if isJailedSocket(f.socketPath) {
+		return f.snapshotJailed(ctx, destPath)
+	}
 	if err := os.MkdirAll(destPath, 0755); err != nil {
 		return fmt.Errorf("create snapshot directory: %w", err)
+	}
+	// An unjailed snapshot replaces any jailed one in this directory.
+	if err := setSnapshotJailedMarker(destPath, false); err != nil {
+		return err
 	}
 	params := toSnapshotCreateParams(destPath)
 	if _, err := f.do(ctx, http.MethodPut, "/snapshot/create", params, http.StatusNoContent); err != nil {

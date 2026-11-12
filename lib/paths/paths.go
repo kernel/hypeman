@@ -270,6 +270,11 @@ func (p *Paths) InstanceVsockSocket(id string) string {
 	return filepath.Join(p.InstanceDir(id), "vsock.sock")
 }
 
+// InstanceJailDirName is the per-instance directory a jailed VMM's chroot lives
+// under. It is a runtime artifact: snapshot and fork copies skip it, and restore
+// rebuilds it from the instance's own files.
+const InstanceJailDirName = "jail"
+
 // InstanceLogs returns the path to instance logs directory.
 func (p *Paths) InstanceLogs(id string) string {
 	return filepath.Join(p.InstanceDir(id), "logs")

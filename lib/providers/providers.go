@@ -91,6 +91,9 @@ func ProvideSystemManager(p *paths.Paths) system.Manager {
 
 // ProvideNetworkManager provides the network manager
 func ProvideNetworkManager(p *paths.Paths, cfg *config.Config) network.Manager {
+	if jc := cfg.Hypervisor.FirecrackerJailer; jc.Enabled {
+		network.SetTAPOwner(jc.UID, jc.GID)
+	}
 	meter := otel.GetMeterProvider().Meter("hypeman")
 	return network.NewManager(p, cfg, meter)
 }
@@ -103,6 +106,12 @@ func ProvideDeviceManager(p *paths.Paths) devices.Manager {
 // ProvideInstanceManager provides the instance manager
 func ProvideInstanceManager(p *paths.Paths, cfg *config.Config, imageManager images.Manager, systemManager system.Manager, networkManager network.Manager, deviceManager devices.Manager, volumeManager volumes.Manager) (instances.Manager, error) {
 	firecracker.SetCustomBinaryPath(cfg.Hypervisor.FirecrackerBinaryPath)
+	firecracker.SetJailerConfig(firecracker.JailerConfig{
+		Enabled:    cfg.Hypervisor.FirecrackerJailer.Enabled,
+		BinaryPath: cfg.Hypervisor.FirecrackerJailer.BinaryPath,
+		UID:        cfg.Hypervisor.FirecrackerJailer.UID,
+		GID:        cfg.Hypervisor.FirecrackerJailer.GID,
+	})
 	if err := cloudhypervisor.SetDefaultVersion(cfg.Hypervisor.CloudHypervisorDefaultVersion); err != nil {
 		return nil, fmt.Errorf("invalid cloud-hypervisor default version: %w", err)
 	}

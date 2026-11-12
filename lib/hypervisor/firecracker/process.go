@@ -75,8 +75,25 @@ func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, s
 	if err := s.ValidateConfig(config); err != nil {
 		return 0, nil, fmt.Errorf("validate firecracker config: %w", err)
 	}
-	processCtx, processSpan := hypervisor.StartProcessSpan(ctx, hypervisor.TypeFirecracker)
-	pid, err := s.startProcess(processCtx, p, version, socketPath)
+
+	// bootConfig holds the paths firecracker sees. Under the jailer those are
+	// in-jail paths; the host paths stay in jl for staging.
+	binaryPath, err := s.GetBinaryPath(p, version)
+	if err != nil {
+		return 0, nil, fmt.Errorf("resolve firecracker binary: %w", err)
+	}
+	bootConfig := config
+	var jl *jailLaunch
+	if jc := getJailerConfig(); jc.Enabled {
+		jl, err = newJailLaunch(socketPath, binaryPath, jailInputsFromConfig(config), jc)
+		if err != nil {
+			return 0, nil, fmt.Errorf("plan firecracker jail: %w", err)
+		}
+		bootConfig = jailedVMConfig(config)
+	}
+
+	_, processSpan := hypervisor.StartProcessSpan(ctx, hypervisor.TypeFirecracker)
+	pid, err := startProcess(binaryPath, socketPath, jl)
 	hypervisor.FinishTraceSpan(processSpan, err)
 	if err != nil {
 		return 0, nil, fmt.Errorf("start firecracker process: %w", err)
@@ -92,11 +109,16 @@ func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, s
 		return 0, nil, fmt.Errorf("create firecracker client: %w", err)
 	}
 
-	if err := hv.configureForBoot(ctx, config); err != nil {
+	if err := hv.configureForBoot(ctx, bootConfig); err != nil {
 		return 0, nil, fmt.Errorf("configure firecracker vm: %w", err)
 	}
 	if err := saveRestoreMetadata(filepath.Dir(socketPath), toNetworkInterfaces(config)); err != nil {
 		return 0, nil, fmt.Errorf("persist firecracker restore metadata: %w", err)
+	}
+	if jl != nil {
+		if err := recordJailInputs(filepath.Dir(socketPath), jl.in); err != nil {
+			return 0, nil, fmt.Errorf("persist jail inputs: %w", err)
+		}
 	}
 	if err := hv.instanceStart(ctx); err != nil {
 		return 0, nil, fmt.Errorf("start firecracker vm: %w", err)
@@ -107,8 +129,15 @@ func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, s
 }
 
 func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string, socketPath string, snapshotPath string) (int, hypervisor.Hypervisor, error) {
-	processCtx, processSpan := hypervisor.StartProcessSpan(ctx, hypervisor.TypeFirecracker)
-	pid, err := s.startProcess(processCtx, p, version, socketPath)
+	if snapshotIsJailed(snapshotPath) {
+		return s.restoreJailedVM(ctx, p, version, socketPath, snapshotPath)
+	}
+	binaryPath, err := s.GetBinaryPath(p, version)
+	if err != nil {
+		return 0, nil, fmt.Errorf("resolve firecracker binary: %w", err)
+	}
+	_, processSpan := hypervisor.StartProcessSpan(ctx, hypervisor.TypeFirecracker)
+	pid, err := startProcess(binaryPath, socketPath, nil)
 	hypervisor.FinishTraceSpan(processSpan, err)
 	if err != nil {
 		return 0, nil, fmt.Errorf("start firecracker process: %w", err)
@@ -235,12 +264,8 @@ func needsSnapshotSourceDirAlias(meta *restoreMetadata, targetDataDir string) bo
 	return sourceDataDir != targetDataDir
 }
 
-func (s *Starter) startProcess(_ context.Context, p *paths.Paths, version string, socketPath string) (int, error) {
-	binaryPath, err := s.GetBinaryPath(p, version)
-	if err != nil {
-		return 0, fmt.Errorf("resolve firecracker binary: %w", err)
-	}
-
+// startProcess starts firecracker (or the jailer when jl is set) and waits for its API socket.
+func startProcess(binaryPath string, socketPath string, jl *jailLaunch) (int, error) {
 	if isSocketInUse(socketPath) {
 		return 0, fmt.Errorf("socket already in use, firecracker may already be running at %s", socketPath)
 	}
@@ -259,7 +284,16 @@ func (s *Starter) startProcess(_ context.Context, p *paths.Paths, version string
 	defer vmmLogFile.Close()
 
 	// Use Command (not CommandContext) so the VMM survives request-scoped context cancellation.
-	cmd := exec.Command(binaryPath, "--api-sock", socketPath)
+	var cmd *exec.Cmd
+	if jl != nil {
+		if err := jl.prepare(socketPath); err != nil {
+			return 0, fmt.Errorf("prepare firecracker jail: %w", err)
+		}
+		cmd = exec.Command(jl.jailerPath, jl.args()...)
+	} else {
+		cmd = exec.Command(binaryPath, "--api-sock", socketPath)
+	}
+	// The jailer passes its environment on to firecracker.
 	cmd.Env = hypervisor.ProcessEnv()
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Stdout = vmmLogFile
