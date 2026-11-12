@@ -993,12 +993,15 @@ func (c *Controller) reconcileActiveInstances(ctx context.Context) {
 		return
 	}
 
+	dumpStart := time.Now()
 	conns, err := c.source.ListConnections(ctx)
 	if err != nil {
+		c.recordReconcileDump(dumpStart, "error")
 		c.recordControllerError("reconcile")
 		c.log.Warn("auto-standby active connection reconcile failed", "error", err)
 		return
 	}
+	c.recordReconcileDump(dumpStart, "success")
 
 	// A queued standby starts as soon as a worker slot frees up, after which
 	// the snapshot can no longer cancel it. Apply the snapshot to queued
