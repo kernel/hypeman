@@ -218,11 +218,23 @@ type CapacityConfig struct {
 
 // HypervisorConfig holds hypervisor settings.
 type HypervisorConfig struct {
-	Default                          string                 `koanf:"default"`
-	CloudHypervisorDefaultVersion    string                 `koanf:"cloud_hypervisor_default_version"`
-	FirecrackerBinaryPath            string                 `koanf:"firecracker_binary_path"`
-	FirecrackerMaxConcurrentRestores int                    `koanf:"firecracker_max_concurrent_restores"`
-	Memory                           HypervisorMemoryConfig `koanf:"memory"`
+	Default                          string                  `koanf:"default"`
+	CloudHypervisorDefaultVersion    string                  `koanf:"cloud_hypervisor_default_version"`
+	FirecrackerBinaryPath            string                  `koanf:"firecracker_binary_path"`
+	FirecrackerMaxConcurrentRestores int                     `koanf:"firecracker_max_concurrent_restores"`
+	FirecrackerJailer                FirecrackerJailerConfig `koanf:"firecracker_jailer"`
+	Memory                           HypervisorMemoryConfig  `koanf:"memory"`
+}
+
+// FirecrackerJailerConfig runs firecracker VMs under the firecracker jailer as a
+// dedicated uid/gid. Off by default.
+type FirecrackerJailerConfig struct {
+	Enabled bool `koanf:"enabled"`
+	// BinaryPath overrides the jailer embedded with each firecracker version.
+	// Required when firecracker_binary_path is set.
+	BinaryPath string `koanf:"binary_path"`
+	UID        int    `koanf:"uid"`
+	GID        int    `koanf:"gid"`
 }
 
 // HypervisorMemoryConfig holds guest memory management settings.
@@ -573,6 +585,7 @@ func (c *Config) expandPathFields() {
 	c.Build.DockerSocket = expandHomePath(c.Build.DockerSocket)
 	c.Registry.CACertFile = expandHomePath(c.Registry.CACertFile)
 	c.Hypervisor.FirecrackerBinaryPath = expandHomePath(c.Hypervisor.FirecrackerBinaryPath)
+	c.Hypervisor.FirecrackerJailer.BinaryPath = expandHomePath(c.Hypervisor.FirecrackerJailer.BinaryPath)
 }
 
 func expandHomePath(path string) string {
@@ -717,6 +730,14 @@ func (c *Config) Validate() error {
 	}
 	if c.Hypervisor.FirecrackerMaxConcurrentRestores < 0 {
 		return fmt.Errorf("hypervisor.firecracker_max_concurrent_restores must be >= 0, got %d", c.Hypervisor.FirecrackerMaxConcurrentRestores)
+	}
+	if jc := c.Hypervisor.FirecrackerJailer; jc.Enabled {
+		if jc.BinaryPath == "" && c.Hypervisor.FirecrackerBinaryPath != "" {
+			return fmt.Errorf("hypervisor.firecracker_jailer.binary_path is required when hypervisor.firecracker_binary_path is set")
+		}
+		if jc.UID <= 0 || jc.GID <= 0 {
+			return fmt.Errorf("hypervisor.firecracker_jailer.uid and gid must be > 0 when the jailer is enabled, got uid=%d gid=%d", jc.UID, jc.GID)
+		}
 	}
 	if c.Instances.LifecycleEventBufferSize <= 0 {
 		return fmt.Errorf("instances.lifecycle_event_buffer_size must be positive, got %d", c.Instances.LifecycleEventBufferSize)

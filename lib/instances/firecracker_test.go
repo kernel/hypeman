@@ -43,8 +43,9 @@ func setupTestManagerForFirecrackerWithConfig(t *testing.T, networkCfg config.Ne
 	tmpDir := t.TempDir()
 	prepareIntegrationTestDataDir(t, tmpDir)
 	cfg := &config.Config{
-		DataDir: tmpDir,
-		Network: networkCfg,
+		DataDir:    tmpDir,
+		Network:    networkCfg,
+		Hypervisor: config.HypervisorConfig{FirecrackerJailer: testFirecrackerJailer},
 	}
 
 	p := paths.New(tmpDir)

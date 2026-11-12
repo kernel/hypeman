@@ -63,12 +63,16 @@ download-firecracker-binaries:
 		mkdir -p lib/hypervisor/firecracker/binaries/firecracker/$$version/{x86_64,aarch64}; \
 		for arch in x86_64 aarch64; do \
 			echo "Downloading $$version for $$arch..."; \
-			curl -fL "https://github.com/firecracker-microvm/firecracker/releases/download/$$version/firecracker-$$version-$$arch.tgz" \
-				| tar -xzO "release-$$version-$$arch/firecracker-$$version-$$arch" \
-				> lib/hypervisor/firecracker/binaries/firecracker/$$version/$$arch/firecracker; \
+			tgz=$$(mktemp); \
+			curl -fL -o "$$tgz" "https://github.com/firecracker-microvm/firecracker/releases/download/$$version/firecracker-$$version-$$arch.tgz"; \
+			for bin in firecracker jailer; do \
+				tar -xzOf "$$tgz" "release-$$version-$$arch/$$bin-$$version-$$arch" \
+					> lib/hypervisor/firecracker/binaries/firecracker/$$version/$$arch/$$bin; \
+			done; \
+			rm -f "$$tgz"; \
 		done; \
 	done
-	@chmod +x lib/hypervisor/firecracker/binaries/firecracker/v*/*/firecracker
+	@chmod +x lib/hypervisor/firecracker/binaries/firecracker/v*/*/firecracker lib/hypervisor/firecracker/binaries/firecracker/v*/*/jailer
 	@echo "Firecracker binaries downloaded successfully"
 
 # Caddy version and modules
@@ -216,7 +220,8 @@ ensure-firecracker-binaries:
 		echo "Unsupported architecture: $$ARCH"; exit 1; \
 	fi; \
 	for version in $(FIRECRACKER_VERSIONS); do \
-		if [ ! -f lib/hypervisor/firecracker/binaries/firecracker/$$version/$$FC_ARCH/firecracker ]; then \
+		if [ ! -f lib/hypervisor/firecracker/binaries/firecracker/$$version/$$FC_ARCH/firecracker ] || \
+			[ ! -f lib/hypervisor/firecracker/binaries/firecracker/$$version/$$FC_ARCH/jailer ]; then \
 			echo "Firecracker binaries not found, downloading..."; \
 			$(MAKE) download-firecracker-binaries; \
 			break; \
@@ -306,6 +311,7 @@ test-linux: ensure-ch-binaries ensure-firecracker-binaries ensure-caddy-binaries
 			"HYPEMAN_TEST_PREWARM_DIR=$${HYPEMAN_TEST_PREWARM_DIR:-}" \
 			"HYPEMAN_TEST_PREWARM_STRICT=$${HYPEMAN_TEST_PREWARM_STRICT:-}" \
 			"HYPEMAN_TEST_REGISTRY=$${HYPEMAN_TEST_REGISTRY:-}" \
+			"HYPEMAN_TEST_FIRECRACKER_JAILER=$${HYPEMAN_TEST_FIRECRACKER_JAILER:-}" \
 			"HYPEMAN_HYPERVISOR_BOOT_BENCH=$${HYPEMAN_HYPERVISOR_BOOT_BENCH:-}" \
 			"HYPEMAN_HYPERVISOR_BOOT_BENCH_SAMPLES=$${HYPEMAN_HYPERVISOR_BOOT_BENCH_SAMPLES:-}" \
 			"HYPEMAN_HYPERVISOR_BOOT_BENCH_TYPES=$${HYPEMAN_HYPERVISOR_BOOT_BENCH_TYPES:-}" \
@@ -317,6 +323,7 @@ test-linux: ensure-ch-binaries ensure-firecracker-binaries ensure-caddy-binaries
 			"HYPEMAN_TEST_PREWARM_DIR=$${HYPEMAN_TEST_PREWARM_DIR:-}" \
 			"HYPEMAN_TEST_PREWARM_STRICT=$${HYPEMAN_TEST_PREWARM_STRICT:-}" \
 			"HYPEMAN_TEST_REGISTRY=$${HYPEMAN_TEST_REGISTRY:-}" \
+			"HYPEMAN_TEST_FIRECRACKER_JAILER=$${HYPEMAN_TEST_FIRECRACKER_JAILER:-}" \
 			"HYPEMAN_HYPERVISOR_BOOT_BENCH=$${HYPEMAN_HYPERVISOR_BOOT_BENCH:-}" \
 			"HYPEMAN_HYPERVISOR_BOOT_BENCH_SAMPLES=$${HYPEMAN_HYPERVISOR_BOOT_BENCH_SAMPLES:-}" \
 			"HYPEMAN_HYPERVISOR_BOOT_BENCH_TYPES=$${HYPEMAN_HYPERVISOR_BOOT_BENCH_TYPES:-}" \

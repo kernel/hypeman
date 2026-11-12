@@ -93,8 +93,9 @@ func setupCompressionTestManagerForHypervisor(t *testing.T, hvType hypervisor.Ty
 	prepareIntegrationTestDataDir(t, tmpDir)
 
 	cfg := &config.Config{
-		DataDir: tmpDir,
-		Network: legacyParallelTestNetworkConfig(testNetworkSeq.Add(1)),
+		DataDir:    tmpDir,
+		Network:    legacyParallelTestNetworkConfig(testNetworkSeq.Add(1)),
+		Hypervisor: config.HypervisorConfig{FirecrackerJailer: testFirecrackerJailer},
 	}
 
 	p := paths.New(tmpDir)

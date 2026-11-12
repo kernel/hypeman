@@ -36,19 +36,61 @@ func ResolveProcessPIDForOwner(socketPath string, ownerPID int) (pid int, err er
 }
 
 func resolveProcessPID(socketPath string, ownerPID int) (pid int, err error) {
-	socketRef, err := socketRefForPath(socketPath)
+	match, err := socketMatcherForPath(socketPath)
 	if err != nil {
 		return 0, err
 	}
 	// Confirm the expected owner first so a live stored PID does not
 	// require scanning every process fd.
-	if ownerPID > 0 && processHoldsSocketRef(ownerPID, socketRef) {
+	if ownerPID > 0 && processHoldsSocket(ownerPID, match) {
 		return ownerPID, nil
 	}
-	return pidBySocketRef(socketRef, ownerPID)
+	return pidBySocket(socketPath, match, ownerPID)
 }
 
-func processHoldsSocketRef(pid int, socketRef string) bool {
+// socketMatcher reports whether fd target ("socket:[inode]") held by pid is
+// the listener being resolved.
+type socketMatcher func(pid int, target string) (bool, error)
+
+// socketMatcherForPath matches the listener bound to socketPath. A VMM that
+// runs in its own root, such as a jailed firecracker, binds its socket inside
+// that root, so /proc/net/unix lists the in-root path and socketPath is a link
+// to it. When no listener is listed under socketPath, a listener matches if
+// its path, resolved in the holding process's root, is the file socketPath
+// names.
+func socketMatcherForPath(socketPath string) (socketMatcher, error) {
+	socketRef, err := socketRefForPath(socketPath)
+	if err == nil {
+		return func(_ int, target string) (bool, error) { return target == socketRef, nil }, nil
+	}
+	if !errors.Is(err, ErrNoOwningProcess) {
+		return nil, err
+	}
+	want, statErr := os.Stat(socketPath)
+	if statErr != nil || want.Mode()&os.ModeSocket == 0 {
+		return nil, err
+	}
+	listeners, listErr := listeningSocketPaths()
+	if listErr != nil {
+		return nil, listErr
+	}
+	return func(pid int, target string) (bool, error) {
+		path, ok := listeners[target]
+		if !ok {
+			return false, nil
+		}
+		got, err := os.Stat(filepath.Join(procDir, strconv.Itoa(pid), "root", path))
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ESRCH) {
+				return false, nil
+			}
+			return false, err
+		}
+		return os.SameFile(want, got), nil
+	}, nil
+}
+
+func processHoldsSocket(pid int, match socketMatcher) bool {
 	fdEntries, err := os.ReadDir(filepath.Join(procDir, strconv.Itoa(pid), "fd"))
 	if err != nil {
 		return false
@@ -60,14 +102,14 @@ func processHoldsSocketRef(pid int, socketRef string) bool {
 			// vanishing mid-scan must not hide a listener held by a later fd.
 			continue
 		}
-		if strings.TrimSpace(target) == socketRef {
+		if ok, _ := match(pid, strings.TrimSpace(target)); ok {
 			return true
 		}
 	}
 	return false
 }
 
-func pidBySocketRef(socketRef string, ownerPID int) (int, error) {
+func pidBySocket(socketPath string, match socketMatcher, ownerPID int) (int, error) {
 	procEntries, err := os.ReadDir(procDir)
 	if err != nil {
 		return 0, fmt.Errorf("read /proc: %w", err)
@@ -102,7 +144,12 @@ func pidBySocketRef(socketRef string, ownerPID int) (int, error) {
 				scanErr = err
 				continue
 			}
-			if strings.TrimSpace(target) == socketRef {
+			ok, err := match(pid, strings.TrimSpace(target))
+			if err != nil {
+				scanErr = err
+				continue
+			}
+			if ok {
 				owners = append(owners, pid)
 				break
 			}
@@ -119,55 +166,74 @@ func pidBySocketRef(socketRef string, ownerPID int) (int, error) {
 		return owners[0], nil
 	}
 	if len(owners) > 1 {
-		return 0, fmt.Errorf("resolve process pid for %s: multiple owning processes found: %v", socketRef, owners)
+		return 0, fmt.Errorf("resolve process pid for %s: multiple owning processes found: %v", socketPath, owners)
 	}
 	if scanErr != nil {
-		return 0, fmt.Errorf("resolve process pid for %s: inspect process fds: %w", socketRef, scanErr)
+		return 0, fmt.Errorf("resolve process pid for %s: inspect process fds: %w", socketPath, scanErr)
 	}
-	return 0, fmt.Errorf("resolve process pid for %s: %w", socketRef, ErrNoOwningProcess)
+	return 0, fmt.Errorf("resolve process pid for %s: %w", socketPath, ErrNoOwningProcess)
+}
+
+// listeningSocketPaths maps each listening socket with a filesystem path to that path.
+func listeningSocketPaths() (map[string]string, error) {
+	paths := make(map[string]string)
+	err := scanListeners(func(ref, path string) error {
+		if strings.HasPrefix(path, "/") {
+			paths[ref] = path
+		}
+		return nil
+	})
+	return paths, err
 }
 
 func socketRefForPath(socketPath string) (string, error) {
-	file, err := os.Open(filepath.Join(procDir, "net", "unix"))
-	if err != nil {
-		return "", fmt.Errorf("open /proc/net/unix: %w", err)
-	}
-	defer file.Close()
-
-	scanner := bufio.NewScanner(file)
 	var socketRef string
-	for scanner.Scan() {
-		fields := strings.Fields(scanner.Text())
-		if len(fields) < 7 {
-			continue
-		}
-		if fields[0] == "Num" {
-			continue
-		}
-		path := fields[len(fields)-1]
+	err := scanListeners(func(ref, path string) error {
 		if path != socketPath {
-			continue
-		}
-		// Accepted server-side sockets list the bound path too; only the
-		// listener identifies the owning process.
-		flags, parseErr := strconv.ParseUint(fields[3], 16, 32)
-		if parseErr != nil || flags&soAcceptcon == 0 {
-			continue
-		}
-		inode := fields[6]
-		if inode == "" {
-			break
+			return nil
 		}
 		if socketRef != "" {
-			return "", fmt.Errorf("resolve process pid for socket %s: multiple socket inodes found", socketPath)
+			return fmt.Errorf("resolve process pid for socket %s: multiple socket inodes found", socketPath)
 		}
-		socketRef = fmt.Sprintf("socket:[%s]", inode)
-	}
-	if err := scanner.Err(); err != nil {
-		return "", fmt.Errorf("scan /proc/net/unix: %w", err)
+		socketRef = ref
+		return nil
+	})
+	if err != nil {
+		return "", err
 	}
 	if socketRef != "" {
 		return socketRef, nil
 	}
 	return "", fmt.Errorf("resolve process pid for socket %s: socket inode not found: %w", socketPath, ErrNoOwningProcess)
+}
+
+// scanListeners calls fn with the fd target ("socket:[inode]") and bound path
+// of each listening socket in /proc/net/unix.
+func scanListeners(fn func(ref, path string) error) error {
+	file, err := os.Open(filepath.Join(procDir, "net", "unix"))
+	if err != nil {
+		return fmt.Errorf("open /proc/net/unix: %w", err)
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		fields := strings.Fields(scanner.Text())
+		if len(fields) < 8 || fields[0] == "Num" {
+			continue
+		}
+		// Accepted server-side sockets list the bound path too; only the
+		// listener identifies the owning process.
+		flags, err := strconv.ParseUint(fields[3], 16, 32)
+		if err != nil || flags&soAcceptcon == 0 {
+			continue
+		}
+		if err := fn(fmt.Sprintf("socket:[%s]", fields[6]), fields[len(fields)-1]); err != nil {
+			return err
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("scan /proc/net/unix: %w", err)
+	}
+	return nil
 }
