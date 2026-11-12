@@ -438,21 +438,18 @@ func TestAutoStandbyFirecrackerHoldStandby(t *testing.T) {
 	autoStandbyHoldStandbyScenario(t, hypervisor.TypeFirecracker)
 }
 
-// autoStandbyDisabledStaysRunningScenario is the pin the Kernel hot pool applies:
-// an idle instance whose auto-standby policy is disabled must not go to standby,
+// An idle instance whose auto-standby policy is disabled must not go to standby,
 // and re-enabling the policy must bring the standby back.
-func autoStandbyDisabledStaysRunningScenario(t *testing.T, hvType hypervisor.Type) {
+func TestAutoStandbyFirecrackerDisabledStaysRunning(t *testing.T) {
 	requireAutoStandbyE2EManualRun(t)
 	requireKVMAccess(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	mgr, connSource, inst := setupAutoStandbyE2EInstanceFor(t, ctx, "auto-standby-e2e-pinned", hvType)
+	mgr, connSource, inst := setupAutoStandbyE2EInstanceFor(t, ctx, "auto-standby-e2e-pinned", hypervisor.TypeFirecracker)
 	instanceID := inst.Id
 
-	// Pin the instance the way the Kernel's DisableAutostandby does: an instance
-	// update that sets auto_standby.enabled to false.
 	_, err := mgr.UpdateInstance(ctx, instanceID, UpdateInstanceRequest{
 		AutoStandby: &autostandby.Policy{Enabled: false, IdleTimeout: "3s"},
 	})
@@ -475,10 +472,6 @@ func autoStandbyDisabledStaysRunningScenario(t *testing.T, hvType hypervisor.Typ
 	inst, err = waitForInstanceState(ctx, mgr, instanceID, StateStandby, 45*time.Second)
 	require.NoError(t, err)
 	require.Equal(t, StateStandby, inst.State)
-}
-
-func TestAutoStandbyFirecrackerDisabledStaysRunning(t *testing.T) {
-	autoStandbyDisabledStaysRunningScenario(t, hypervisor.TypeFirecracker)
 }
 
 func runIptables(args ...string) error {

@@ -60,59 +60,44 @@ func jailedFixture(t *testing.T) (instanceDir, socketPath, root string) {
 	return instanceDir, socketPath, root
 }
 
-func TestJailedSnapshotDiffWritesInPlaceAndMovesStateOut(t *testing.T) {
-	_, socketPath, root := jailedFixture(t)
-	destPath := filepath.Join(filepath.Dir(root), "snapshot-latest")
-	writeFile(t, filepath.Join(destPath, "state"), "state-v1")
-	writeFile(t, filepath.Join(destPath, "memory"), "mem-v1")
-	memBefore, err := os.Stat(filepath.Join(destPath, "memory"))
-	require.NoError(t, err)
+func TestJailedSnapshot(t *testing.T) {
+	for _, diff := range []bool{false, true} {
+		t.Run(map[bool]string{false: "full", true: "diff"}[diff], func(t *testing.T) {
+			_, socketPath, root := jailedFixture(t)
+			destPath := filepath.Join(filepath.Dir(root), "snapshot-latest")
+			require.NoError(t, os.MkdirAll(destPath, 0755))
+			memPath := filepath.Join(destPath, "memory")
+			if diff {
+				writeFile(t, memPath, "mem-v1")
+			}
 
-	var got snapshotCreateParams
-	serveFakeFirecracker(t, filepath.Join(root, "api.sock"), func(p snapshotCreateParams) {
-		got = p
-		// Firecracker writes inside its chroot, at the in-jail paths it was given.
-		require.NoError(t, os.WriteFile(filepath.Join(root, p.SnapshotPath), []byte("state-v2"), 0644))
-		require.NoError(t, os.WriteFile(filepath.Join(root, p.MemFilePath), []byte("mem-v2"), 0644))
-	})
+			var got snapshotCreateParams
+			serveFakeFirecracker(t, filepath.Join(root, "api.sock"), func(p snapshotCreateParams) {
+				got = p
+				// Firecracker writes inside its chroot, at the in-jail paths it was given.
+				require.NoError(t, os.WriteFile(filepath.Join(root, p.SnapshotPath), []byte("state-v2"), 0644))
+				require.NoError(t, os.WriteFile(filepath.Join(root, p.MemFilePath), []byte("mem-v2"), 0644))
+			})
+			before, _ := os.Stat(memPath)
 
-	f, err := New(socketPath)
-	require.NoError(t, err)
-	require.NoError(t, f.Snapshot(context.Background(), destPath))
+			f, err := New(socketPath)
+			require.NoError(t, err)
+			require.NoError(t, f.Snapshot(context.Background(), destPath))
 
-	assert.Equal(t, "Diff", got.SnapshotType, "an existing memory file means a diff snapshot")
-	assert.Equal(t, "/snapshot/memory", got.MemFilePath)
-	assert.Equal(t, "/snapshot/state", got.SnapshotPath)
-
-	assert.Equal(t, "state-v2", readFileString(t, filepath.Join(destPath, "state")))
-	assert.Equal(t, "mem-v2", readFileString(t, filepath.Join(destPath, "memory")))
-	memAfter, err := os.Stat(filepath.Join(destPath, "memory"))
-	require.NoError(t, err)
-	assert.True(t, os.SameFile(memBefore, memAfter), "diff writes the base memory in place, as unjailed standby does")
-
-	_, err = os.Stat(filepath.Join(root, jailedSnapshotDirName))
-	assert.True(t, os.IsNotExist(err), "staging is removed after the snapshot")
-	assert.Equal(t, uint64(1), linkCount(t, filepath.Join(destPath, "memory")), "no staging link is left on the host file")
-}
-
-func TestJailedSnapshotFullWhenNoBaseMemory(t *testing.T) {
-	_, socketPath, root := jailedFixture(t)
-	destPath := filepath.Join(filepath.Dir(root), "snapshot-latest")
-
-	var got snapshotCreateParams
-	serveFakeFirecracker(t, filepath.Join(root, "api.sock"), func(p snapshotCreateParams) {
-		got = p
-		require.NoError(t, os.WriteFile(filepath.Join(root, p.SnapshotPath), []byte("state-1"), 0644))
-		require.NoError(t, os.WriteFile(filepath.Join(root, p.MemFilePath), []byte("mem-1"), 0644))
-	})
-
-	f, err := New(socketPath)
-	require.NoError(t, err)
-	require.NoError(t, f.Snapshot(context.Background(), destPath))
-
-	assert.Equal(t, "Full", got.SnapshotType)
-	assert.Equal(t, "mem-1", readFileString(t, filepath.Join(destPath, "memory")))
-	assert.Equal(t, "state-1", readFileString(t, filepath.Join(destPath, "state")))
+			assert.Equal(t, map[bool]string{false: "Full", true: "Diff"}[diff], got.SnapshotType)
+			assert.Equal(t, "/snapshot/memory", got.MemFilePath)
+			assert.Equal(t, "/snapshot/state", got.SnapshotPath)
+			assert.Equal(t, "state-v2", readFileString(t, filepath.Join(destPath, "state")))
+			assert.Equal(t, "mem-v2", readFileString(t, memPath))
+			if diff {
+				after, err := os.Stat(memPath)
+				require.NoError(t, err)
+				assert.True(t, os.SameFile(before, after), "diff writes the base memory in place, as unjailed standby does")
+			}
+			assert.NoDirExists(t, filepath.Join(root, jailedSnapshotDir), "staging is removed after the snapshot")
+			assert.Equal(t, uint64(1), linkCount(t, memPath), "no staging link is left on the host file")
+		})
+	}
 }
 
 func TestRestoreJailedSnapshotWithJailerDisabledFailsBeforeStart(t *testing.T) {
@@ -165,26 +150,6 @@ func TestRebaseJailInputsIgnoresSiblingPrefixes(t *testing.T) {
 	in := &jailInputs{Disks: []jailDisk{{Path: "/data/guests/a-copy/overlay.raw"}}}
 	assert.False(t, rebaseJailInputs(in, "/data/guests/a", "/data/guests/b"), "a-copy is not under a")
 	assert.Equal(t, "/data/guests/a-copy/overlay.raw", in.Disks[0].Path)
-}
-
-func TestJailPrepareStagesSnapshotForRestore(t *testing.T) {
-	instanceDir := shortTempDir(t)
-	fcBinary := writeFile(t, filepath.Join(instanceDir, "bin", "firecracker"), "fc")
-	snapshotDir := filepath.Join(instanceDir, "snapshots", "snapshot-latest")
-	state := writeFile(t, filepath.Join(snapshotDir, "state"), "state")
-	mem := writeFile(t, filepath.Join(snapshotDir, "memory"), "mem")
-	kernel := writeFile(t, filepath.Join(instanceDir, "vmlinux"), "k")
-
-	jc := JailerConfig{Enabled: true, UID: os.Getuid(), GID: os.Getgid()}
-	socketPath := filepath.Join(instanceDir, "fc.sock")
-	jl, err := newJailLaunch(socketPath, fcBinary, "/usr/bin/jailer", jailInputs{KernelPath: kernel}, jc)
-	require.NoError(t, err)
-	jl.snapshotDir = snapshotDir
-	require.NoError(t, jl.prepare(socketPath))
-
-	stage := filepath.Join(jailRoot(instanceDir, fcBinary), jailedSnapshotDirName)
-	assertSameInode(t, state, filepath.Join(stage, "state"))
-	assertSameInode(t, mem, filepath.Join(stage, "memory"))
 }
 
 func readFileString(t *testing.T, path string) string {

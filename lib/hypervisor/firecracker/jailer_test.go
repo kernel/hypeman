@@ -41,7 +41,7 @@ func TestJailedVMConfigRewritesOnlyHostPaths(t *testing.T) {
 	assert.Equal(t, "/host/rootfs", host.Disks[0].Path)
 }
 
-func TestJailLaunchPrepareStagesInputsAndLinksSockets(t *testing.T) {
+func TestJailLaunchPrepare(t *testing.T) {
 	instanceDir := t.TempDir()
 	socketPath := filepath.Join(instanceDir, "fc.sock")
 	fcBinary := writeFile(t, filepath.Join(t.TempDir(), "firecracker"), "fc")
@@ -51,6 +51,9 @@ func TestJailLaunchPrepareStagesInputsAndLinksSockets(t *testing.T) {
 	serial := filepath.Join(instanceDir, "logs", "app.log")
 	require.NoError(t, os.MkdirAll(filepath.Dir(serial), 0755))
 	vsock := filepath.Join(instanceDir, "vsock.sock")
+	snapshotDir := filepath.Join(instanceDir, "snapshots", "snapshot-latest")
+	state := writeFile(t, filepath.Join(snapshotDir, "state"), "state")
+	mem := writeFile(t, filepath.Join(snapshotDir, "memory"), "mem")
 
 	// Use the test process's own uid/gid so chown succeeds without root.
 	jc := JailerConfig{Enabled: true, UID: os.Getuid(), GID: os.Getgid()}
@@ -63,12 +66,15 @@ func TestJailLaunchPrepareStagesInputsAndLinksSockets(t *testing.T) {
 
 	jl, err := newJailLaunch(socketPath, fcBinary, "/usr/bin/jailer", in, jc)
 	require.NoError(t, err)
+	jl.snapshotDir = snapshotDir
 	require.NoError(t, jl.prepare(socketPath))
 
 	root := jailRoot(instanceDir, fcBinary)
 	assertSameInode(t, kernel, filepath.Join(root, "vmlinux"))
 	assertSameInode(t, rootfs, filepath.Join(root, "disk0"))
 	assertSameInode(t, overlay, filepath.Join(root, "disk1"))
+	assertSameInode(t, state, filepath.Join(root, "snapshot", "state"))
+	assertSameInode(t, mem, filepath.Join(root, "snapshot", "memory"))
 
 	// Writable inputs are chowned to the jail uid; read-only ones are not touched.
 	assertOwner(t, filepath.Join(root, "disk1"), os.Getuid())

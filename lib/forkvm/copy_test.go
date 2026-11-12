@@ -109,6 +109,5 @@ func TestCopyGuestDirectorySkipsJailDir(t *testing.T) {
 	require.NoError(t, CopyGuestDirectory(src, dst))
 
 	assert.FileExists(t, filepath.Join(dst, "overlay.raw"))
-	_, err := os.Stat(filepath.Join(dst, paths.InstanceJailDirName))
-	assert.True(t, os.IsNotExist(err), "the jail is a runtime artifact and must not be copied")
+	assert.NoDirExists(t, filepath.Join(dst, paths.InstanceJailDirName), "the jail is a runtime artifact and must not be copied")
 }

@@ -137,15 +137,36 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 	if err != nil {
 		return 0, nil, fmt.Errorf("load firecracker restore metadata: %w", err)
 	}
-	if meta.Jail != nil {
-		return s.restoreJailedVM(ctx, p, version, socketPath, snapshotPath, meta)
+	jc := getJailerConfig()
+	if meta.Jail != nil && !jc.Enabled {
+		return 0, nil, fmt.Errorf("restore jailed snapshot with jailer disabled: %w", hypervisor.ErrNotSupported)
 	}
 	binaryPath, err := s.GetBinaryPath(p, version)
 	if err != nil {
 		return 0, nil, fmt.Errorf("resolve firecracker binary: %w", err)
 	}
+	// A jailed VM loads its snapshot from staging links inside the jail.
+	var jl *jailLaunch
+	loadPath := snapshotPath
+	if meta.Jail != nil {
+		if meta.SnapshotSourceDataDir != "" {
+			return 0, nil, fmt.Errorf("restore jailed fork: %w", hypervisor.ErrNotSupported)
+		}
+		jailerPath, err := resolveJailerPath(p, version, jc)
+		if err != nil {
+			return 0, nil, fmt.Errorf("resolve jailer binary: %w", err)
+		}
+		if jl, err = newJailLaunch(socketPath, binaryPath, jailerPath, *meta.Jail, jc); err != nil {
+			return 0, nil, fmt.Errorf("plan firecracker jail: %w", err)
+		}
+		jl.snapshotDir = snapshotPath
+		loadPath = "/" + jailedSnapshotDir
+		// A staging link left behind keeps the memory file's link count above one,
+		// and the next standby then copies the whole file before its diff.
+		defer os.RemoveAll(filepath.Join(jl.root, jailedSnapshotDir))
+	}
 	_, processSpan := hypervisor.StartProcessSpan(ctx, hypervisor.TypeFirecracker)
-	pid, err := startProcess(binaryPath, socketPath, nil)
+	pid, err := startProcess(binaryPath, socketPath, jl)
 	hypervisor.FinishTraceSpan(processSpan, err)
 	if err != nil {
 		return 0, nil, fmt.Errorf("start firecracker process: %w", err)
@@ -161,10 +182,10 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 		return 0, nil, fmt.Errorf("create firecracker client: %w", err)
 	}
 
-	backend := fileSnapshotMemBackend(snapshotPath)
+	backend := fileSnapshotMemBackend(loadPath)
 	targetDataDir := filepath.Dir(socketPath)
 	loadSnapshot := func() error {
-		return hv.loadSnapshot(ctx, snapshotPath, meta.NetworkOverrides, backend)
+		return hv.loadSnapshot(ctx, loadPath, meta.NetworkOverrides, backend)
 	}
 	if needsSnapshotSourceDirAlias(meta, targetDataDir) {
 		err = func() error {

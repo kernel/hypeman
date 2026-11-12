@@ -6,7 +6,6 @@ host with root and `/dev/kvm`.
     # guest init that prints a counter every 50 ms
     scripts/jailer-smoke/build-rootfs.sh heartbeat.ext4 scripts/jailer-smoke/heartbeat-init.c
 
-    # embedded firecracker and jailer
     make ensure-firecracker-binaries
     # kernel: hypeman's pinned Kernel_202610301 x86_64 vmlinux
 
@@ -15,10 +14,5 @@ host with root and `/dev/kvm`.
       HYPEMAN_HEARTBEAT_ROOTFS=$PWD/../../../scripts/jailer-smoke/heartbeat.ext4 \
       go test -tags jailer_integration -count=1 -run 'Jailed|StandbySnapshotRestore' .
 
-Measurements behind the design (deft-kernel-dev, shared host, small samples):
-
-- Jailed and unjailed guests have the same random 4 KiB read latency (about 40 us) and
-  IOPS (about 25k). The jail adds nothing per I/O.
-- Jailer setup adds about 25-30 ms per VMM start. The binary copy is about 7 ms of that.
-- The API socket was polled every 50 ms, which added up to 50 ms to every start. It is
-  polled every 2 ms now.
+Measured on deft-kernel-dev: the jail adds no per-I/O cost (4 KiB random reads, about
+40 us and 25k IOPS either way) and about 25-30 ms of setup per VMM start.

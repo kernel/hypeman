@@ -1,14 +1,12 @@
 package firecracker
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/paths"
@@ -43,27 +41,26 @@ func getJailerConfig() JailerConfig {
 	return jailerCfg
 }
 
+// Names of the files firecracker opens, relative to the chroot root.
 const (
 	jailerID          = "vm"
-	jailBaseDirName   = paths.InstanceJailDirName
-	jailedAPISocket   = "/api.sock"
-	jailedVsockSocket = "/vsock.sock"
-	jailedSerialLog   = "/serial.log"
-	jailedKernel      = "/vmlinux"
-	jailedInitrd      = "/initrd"
-	jailedVsockName   = "vsock.sock"
-	jailedSerialName  = "serial.log"
+	jailedAPISocket   = "api.sock"
+	jailedVsockSocket = "vsock.sock"
+	jailedSerialLog   = "serial.log"
+	jailedKernel      = "vmlinux"
+	jailedInitrd      = "initrd"
+	jailedSnapshotDir = "snapshot"
 )
 
 func jailedDiskPath(i int) string {
-	return fmt.Sprintf("/disk%d", i)
+	return fmt.Sprintf("disk%d", i)
 }
 
 // jailRoot returns the host path of the chroot root. The jailer names the
 // root after the basename of the exec file, so fcBinary must already have its
 // symlinks resolved, as the jailer does.
 func jailRoot(instanceDir, fcBinary string) string {
-	return filepath.Join(instanceDir, jailBaseDirName, filepath.Base(fcBinary), jailerID, "root")
+	return filepath.Join(instanceDir, paths.InstanceJailDirName, filepath.Base(fcBinary), jailerID, "root")
 }
 
 // jailInputs are the host paths a jailed VM is started with. They are
@@ -97,9 +94,6 @@ func jailInputsFromConfig(cfg hypervisor.VMConfig) jailInputs {
 
 // rebaseJailInputs repoints host paths under from at to. It reports whether anything changed.
 func rebaseJailInputs(in *jailInputs, from, to string) bool {
-	if in == nil {
-		return false
-	}
 	from, to = filepath.Clean(from), filepath.Clean(to)
 	changed := false
 	rebase := func(p string) string {
@@ -120,21 +114,21 @@ func rebaseJailInputs(in *jailInputs, from, to string) bool {
 // jailedVMConfig returns cfg with each path firecracker opens replaced by its
 // in-jail path. It does not modify cfg.
 func jailedVMConfig(cfg hypervisor.VMConfig) hypervisor.VMConfig {
-	out := cfg
-	out.KernelPath = jailedKernel
-	if cfg.InitrdPath != "" {
-		out.InitrdPath = jailedInitrd
+	inJail := func(host, name string) string {
+		if host == "" {
+			return ""
+		}
+		return "/" + name
 	}
+	out := cfg
+	out.KernelPath = inJail(cfg.KernelPath, jailedKernel)
+	out.InitrdPath = inJail(cfg.InitrdPath, jailedInitrd)
+	out.VsockSocket = inJail(cfg.VsockSocket, jailedVsockSocket)
+	out.SerialLogPath = inJail(cfg.SerialLogPath, jailedSerialLog)
 	out.Disks = make([]hypervisor.DiskConfig, len(cfg.Disks))
 	for i, d := range cfg.Disks {
-		d.Path = jailedDiskPath(i)
+		d.Path = "/" + jailedDiskPath(i)
 		out.Disks[i] = d
-	}
-	if cfg.VsockSocket != "" {
-		out.VsockSocket = jailedVsockSocket
-	}
-	if cfg.SerialLogPath != "" {
-		out.SerialLogPath = jailedSerialLog
 	}
 	return out
 }
@@ -190,69 +184,72 @@ func (jl *jailLaunch) prepare(socketPath string) error {
 		return fmt.Errorf("read jail root: %w", err)
 	}
 	for _, e := range entries {
-		if e.Name() == jailedSerialName {
+		if e.Name() == jailedSerialLog {
 			continue
 		}
 		if err := os.RemoveAll(filepath.Join(jl.root, e.Name())); err != nil {
 			return fmt.Errorf("clear jail entry %s: %w", e.Name(), err)
 		}
 	}
-	_ = os.Remove(socketPath)
 
-	if err := linkIntoJail(jl.in.KernelPath, filepath.Join(jl.root, jailedKernel), false, jl.uid, jl.gid); err != nil {
-		return err
+	type input struct {
+		src, name string
+		writable  bool
 	}
-	if jl.in.InitrdPath != "" {
-		if err := linkIntoJail(jl.in.InitrdPath, filepath.Join(jl.root, jailedInitrd), false, jl.uid, jl.gid); err != nil {
-			return err
-		}
-	}
+	inputs := []input{{jl.in.KernelPath, jailedKernel, false}, {jl.in.InitrdPath, jailedInitrd, false}}
 	for i, d := range jl.in.Disks {
-		if err := linkIntoJail(d.Path, filepath.Join(jl.root, jailedDiskPath(i)), !d.Readonly, jl.uid, jl.gid); err != nil {
-			return err
-		}
-	}
-	if jl.in.SerialLogPath != "" {
-		// The host log becomes a link to the jail's copy. A log written by an earlier
-		// unjailed launch is replaced, which only happens when a VM is moved into the jail.
-		if err := replaceWithSymlink(filepath.Join(jl.root, jailedSerialName), jl.in.SerialLogPath); err != nil {
-			return fmt.Errorf("link serial log: %w", err)
-		}
-	}
-	if jl.in.VsockSocket != "" {
-		if err := replaceWithSymlink(filepath.Join(jl.root, jailedVsockName), jl.in.VsockSocket); err != nil {
-			return fmt.Errorf("link vsock socket: %w", err)
-		}
+		inputs = append(inputs, input{d.Path, jailedDiskPath(i), !d.Readonly})
 	}
 	if jl.snapshotDir != "" {
-		if err := jl.stageSnapshot(); err != nil {
+		// Restore loads the snapshot from the jail. The memory file is writable
+		// because a later diff snapshot writes it in place.
+		if _, err := makeJailStage(jl.root, jl.uid, jl.gid); err != nil {
+			return err
+		}
+		for _, name := range []string{snapshotStateFile, snapshotMemoryFile} {
+			inputs = append(inputs, input{filepath.Join(jl.snapshotDir, name), filepath.Join(jailedSnapshotDir, name), true})
+		}
+	}
+	for _, in := range inputs {
+		if in.src == "" {
+			continue
+		}
+		if err := linkIntoJail(in.src, filepath.Join(jl.root, in.name), in.writable, jl.uid, jl.gid); err != nil {
 			return err
 		}
 	}
-	// The API socket is created by firecracker inside the jail. This symlink lets
-	// hypeman dial it at the usual instance path.
-	if err := replaceWithSymlink(filepath.Join(jl.root, "api.sock"), socketPath); err != nil {
-		return fmt.Errorf("link api socket: %w", err)
+
+	// The host paths of the sockets and serial log become links into the jail, so
+	// hypeman uses them as before. A serial log written by an earlier unjailed
+	// launch is replaced, which only happens when a VM is moved into the jail.
+	for name, host := range map[string]string{jailedAPISocket: socketPath, jailedVsockSocket: jl.in.VsockSocket, jailedSerialLog: jl.in.SerialLogPath} {
+		if host == "" {
+			continue
+		}
+		if err := os.Remove(host); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("link %s: %w", name, err)
+		}
+		if err := os.Symlink(filepath.Join(jl.root, name), host); err != nil {
+			return fmt.Errorf("link %s: %w", name, err)
+		}
 	}
 	return nil
 }
 
-// stageSnapshot links a host snapshot's state and memory into the jail. The
-// memory file is writable because a later diff snapshot writes it in place.
-func (jl *jailLaunch) stageSnapshot() error {
-	stage := filepath.Join(jl.root, jailedSnapshotDirName)
-	if err := os.MkdirAll(stage, 0755); err != nil {
-		return fmt.Errorf("create jail snapshot staging: %w", err)
+// makeJailStage recreates the snapshot staging directory in the jail, owned by
+// the jail uid so firecracker can create files in it.
+func makeJailStage(root string, uid, gid int) (string, error) {
+	stage := filepath.Join(root, jailedSnapshotDir)
+	if err := os.RemoveAll(stage); err != nil {
+		return "", fmt.Errorf("clear jail snapshot staging: %w", err)
 	}
-	if err := os.Chown(stage, jl.uid, jl.gid); err != nil {
-		return fmt.Errorf("chown jail snapshot staging: %w", err)
+	if err := os.Mkdir(stage, 0755); err != nil {
+		return "", fmt.Errorf("create jail snapshot staging: %w", err)
 	}
-	for _, name := range []string{snapshotStateFile, snapshotMemoryFile} {
-		if err := linkIntoJail(filepath.Join(jl.snapshotDir, name), filepath.Join(stage, name), true, jl.uid, jl.gid); err != nil {
-			return err
-		}
+	if err := os.Chown(stage, uid, gid); err != nil {
+		return "", fmt.Errorf("chown jail snapshot staging: %w", err)
 	}
-	return nil
+	return stage, nil
 }
 
 // args returns the jailer command line. Arguments after "--" go to firecracker.
@@ -262,26 +259,20 @@ func (jl *jailLaunch) args() []string {
 		"--exec-file", jl.fcBinary,
 		"--uid", strconv.Itoa(jl.uid),
 		"--gid", strconv.Itoa(jl.gid),
-		"--chroot-base-dir", filepath.Join(jl.instanceDir, jailBaseDirName),
-		"--", "--api-sock", jailedAPISocket,
+		"--chroot-base-dir", filepath.Join(jl.instanceDir, paths.InstanceJailDirName),
+		"--", "--api-sock", "/" + jailedAPISocket,
 	}
 }
 
-// linkIntoJail hardlinks src into the jail at dst. Hardlinks share the inode, so
-// a writable file is chowned to the jail uid for the host copy too.
+// linkIntoJail hardlinks src into the jail at dst, which must not exist. Hardlinks
+// share the inode, so a writable file is chowned to the jail uid for the host copy too.
 func linkIntoJail(src, dst string, writable bool, uid, gid int) error {
 	resolved, err := filepath.EvalSymlinks(src)
 	if err != nil {
 		return fmt.Errorf("resolve jail input %s: %w", src, err)
 	}
-	if err := os.Remove(dst); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("clear jail input %s: %w", dst, err)
-	}
 	if err := os.Link(resolved, dst); err != nil {
-		if errors.Is(err, syscall.EXDEV) {
-			return fmt.Errorf("link jail input %s: jailed VMs need inputs on the same filesystem as the instance directory: %w", src, err)
-		}
-		return fmt.Errorf("link jail input %s: %w", src, err)
+		return fmt.Errorf("link jail input %s (it must share a filesystem with the instance): %w", src, err)
 	}
 	if writable {
 		if err := os.Chown(dst, uid, gid); err != nil {
@@ -289,11 +280,4 @@ func linkIntoJail(src, dst string, writable bool, uid, gid int) error {
 		}
 	}
 	return nil
-}
-
-func replaceWithSymlink(target, linkPath string) error {
-	if err := os.Remove(linkPath); err != nil && !os.IsNotExist(err) {
-		return err
-	}
-	return os.Symlink(target, linkPath)
 }
