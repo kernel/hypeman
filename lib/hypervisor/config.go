@@ -26,6 +26,12 @@ type VMConfig struct {
 	// PCI device passthrough (GPU, etc.)
 	PCIDevices     []string
 	VGPUDevicePath string
+	// VGPUSnapshot launches the guest so its vGPU state can be captured and
+	// restored. Only QEMU's managed vGPU runtime supports it.
+	VGPUSnapshot bool
+	// InstanceID identifies the guest to backends that derive guest-visible
+	// identity from it.
+	InstanceID string
 
 	// Boot configuration. Empty BootMode preserves the existing direct-kernel
 	// behavior for Linux callers.

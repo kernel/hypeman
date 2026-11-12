@@ -32,6 +32,19 @@ func (s *Starter) PrepareFork(ctx context.Context, req hypervisor.ForkPrepareReq
 		return hypervisor.ForkPrepareResult{}, fmt.Errorf("select qemu fork machine type: %w", err)
 	}
 	cfg := saved.VMConfig
+	if req.InstanceID != "" {
+		cfg.InstanceID = req.InstanceID
+	}
+	if cfg.VGPUSnapshot {
+		if req.VGPUDevicePath != "" {
+			cfg.VGPUDevicePath = req.VGPUDevicePath
+		}
+		if req.TargetDataDir != "" && req.TargetDataDir != req.SourceDataDir {
+			// A fork never opens its source's VF: restore claims a fresh one
+			// and records it with a second PrepareFork before launching QEMU.
+			cfg.VGPUDevicePath = ""
+		}
+	}
 
 	if req.SourceDataDir != "" && req.TargetDataDir != "" && req.SourceDataDir != req.TargetDataDir {
 		cfg = rewriteQEMUConfigPaths(cfg, req.SourceDataDir, req.TargetDataDir)

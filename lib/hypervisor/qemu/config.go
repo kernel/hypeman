@@ -25,6 +25,9 @@ func buildArgs(cfg hypervisor.VMConfig, machine MachineType) []string {
 
 	// Machine type with KVM acceleration (arch-specific when omitted).
 	machineArg := string(machine) + ",accel=kvm"
+	if cfg.VGPUSnapshot {
+		machineArg += ",smbios-entry-point-type=32,memory-backend=" + vgpuRAMBackendID
+	}
 	if cfg.Firmware != nil && cfg.Firmware.SecureBoot {
 		machineArg += ",smm=on"
 	}
@@ -47,6 +50,16 @@ func buildArgs(cfg hypervisor.VMConfig, machine MachineType) []string {
 	// Memory configuration
 	memMB := cfg.MemoryBytes / (1024 * 1024)
 	args = append(args, "-m", fmt.Sprintf("%dM", memMB))
+	if cfg.VGPUSnapshot {
+		// VFIO pins every guest page when the device attaches. Populating RAM
+		// first, in parallel, is much cheaper than faulting it in during the
+		// pin; the default backend would only use one thread per vCPU.
+		args = append(args, "-object", fmt.Sprintf(
+			"memory-backend-ram,id=%s,size=%dM,prealloc=on,prealloc-threads=%d,x-use-canonical-path-for-ramblock-id=off",
+			vgpuRAMBackendID, memMB, vgpuPreallocThreads))
+		id := vgpuInstanceUUID(cfg.InstanceID)
+		args = append(args, "-device", "vmgenid,guid=auto", "-uuid", id, "-smbios", "type=1,uuid="+id)
+	}
 
 	if cfg.GuestMemory.EnableBalloon {
 		balloonOpts := []string{virtioDevice(microvm, "virtio-balloon")}
@@ -144,7 +157,11 @@ func buildArgs(cfg hypervisor.VMConfig, machine MachineType) []string {
 	}
 
 	if cfg.VGPUDevicePath != "" {
-		args = append(args, "-device", fmt.Sprintf("vfio-pci,sysfsdev=%s", cfg.VGPUDevicePath))
+		device := fmt.Sprintf("vfio-pci,sysfsdev=%s", cfg.VGPUDevicePath)
+		if cfg.VGPUSnapshot {
+			device += ",enable-migration=on"
+		}
+		args = append(args, "-device", device)
 	}
 
 	// Serial console output to file. Use a chardev with append=on so QEMU

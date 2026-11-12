@@ -495,7 +495,7 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 	if target != nil && target.State == compressionJobStateRunning {
 		m.recordSnapshotCompressionPreemption(ctx, snapshotCompressionPreemptionForkSnapshot, target.Target)
 	}
-	shareMemFile := rec.StoredMetadata.HypervisorType == hypervisor.TypeFirecracker && rec.Snapshot.Kind == SnapshotKindStandby
+	shareMemFile := rec.Snapshot.Kind == SnapshotKindStandby && forkSharesSnapshotMemory(&rec.StoredMetadata)
 	if err := m.copySnapshotGuestDirectoryForFork(ctx, snapshotID, rec.StoredMetadata.HypervisorType, dstDir, shareMemFile); err != nil {
 		return nil, err
 	}
@@ -518,7 +518,7 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 	forkMeta.ExitMessage = ""
 	forkMeta.RestartStatus = restartpolicy.Status{}
 	clearStoredVGPUDevice(&forkMeta)
-	if rec.Snapshot.Kind == SnapshotKindStandby {
+	if rec.Snapshot.Kind == SnapshotKindStandby && !usesVGPUSnapshot(&forkMeta) {
 		forkMeta.VsockCID = rec.StoredMetadata.VsockCID
 	} else {
 		forkMeta.VsockCID = generateVsockCID(forkID)
@@ -537,6 +537,7 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 			SnapshotConfigPath: m.paths.InstanceSnapshotConfig(forkID),
 			SourceDataDir:      rec.StoredMetadata.DataDir,
 			TargetDataDir:      forkMeta.DataDir,
+			InstanceID:         forkMeta.Id,
 			VsockCID:           forkMeta.VsockCID,
 			VsockSocket:        forkMeta.VsockSocket,
 			SerialLogPath:      m.paths.InstanceAppLog(forkID),

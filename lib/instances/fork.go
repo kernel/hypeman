@@ -263,7 +263,7 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 
 	srcDir := m.paths.InstanceDir(id)
 	dstDir := m.paths.InstanceDir(forkID)
-	shareMemFile := stored.HypervisorType == hypervisor.TypeFirecracker && source.State == StateStandby
+	shareMemFile := source.State == StateStandby && forkSharesSnapshotMemory(stored)
 
 	cu := cleanup.Make(func() {
 		_ = os.RemoveAll(dstDir)
@@ -315,7 +315,9 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 	// memory snapshots is not reliable across hypervisors. Concurrent standby
 	// fork prepare is currently enabled only for Firecracker, whose host vsock
 	// dialer routes through the per-VM UDS path rather than this metadata CID.
-	if source.State == StateStandby {
+	// Managed QEMU vGPU forks do get a fresh CID: the device resets its
+	// transport on restore and the guest agent listens on every CID.
+	if source.State == StateStandby && !usesVGPUSnapshot(&forkMeta) {
 		forkMeta.VsockCID = stored.VsockCID
 	} else {
 		forkMeta.VsockCID = generateVsockCID(forkID)
@@ -342,6 +344,7 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 			SnapshotConfigPath: snapshotConfigPath,
 			SourceDataDir:      stored.DataDir,
 			TargetDataDir:      forkMeta.DataDir,
+			InstanceID:         forkMeta.Id,
 			VsockCID:           forkMeta.VsockCID,
 			VsockSocket:        forkMeta.VsockSocket,
 			SerialLogPath:      m.paths.InstanceAppLog(forkID),

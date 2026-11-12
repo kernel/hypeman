@@ -384,7 +384,7 @@ func TestLifecycleNoopStandbyRejectsVendorVFIOVGPU(t *testing.T) {
 
 	_, err = m.StandbyInstance(context.Background(), id, StandbyInstanceRequest{})
 	require.ErrorIs(t, err, ErrInvalidState)
-	assert.ErrorContains(t, err, "standby is not supported for instances with vGPU attached")
+	assert.ErrorContains(t, err, "vGPU snapshots require the opt-in managed QEMU runtime")
 }
 
 func newLifecycleNoopManagerWithInstance(t *testing.T, state State, now time.Time) (*manager, string) {

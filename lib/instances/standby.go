@@ -65,10 +65,10 @@ func (m *manager) standbyInstance(
 		return nil, fmt.Errorf("%w: cannot standby from state %s", ErrInvalidState, inst.State)
 	}
 
-	// 2b. Block standby for vGPU instances (driver limitation - NVIDIA vGPU doesn't support snapshots)
 	if inst.GPUMdevUUID != "" || inst.GPUProfile != "" {
-		log.ErrorContext(ctx, "standby not supported for vGPU instances", "instance_id", id, "gpu_profile", inst.GPUProfile)
-		return nil, fmt.Errorf("%w: standby is not supported for instances with vGPU attached (driver limitation)", ErrInvalidState)
+		if err := validateVGPUSnapshotCapture(stored); err != nil {
+			return nil, err
+		}
 	}
 
 	// Resolve/validate compression policy early so invalid request/config
@@ -124,24 +124,27 @@ func (m *manager) standbyInstance(
 		return nil, err
 	}
 
-	// 6. Transition: Running → Paused
-	log.DebugContext(ctx, "pausing VM", "instance_id", id)
-	pauseCtx, pauseSpanEnd := m.startLifecycleStep(ctx, "pause_vm",
-		attribute.String("instance_id", id),
-		attribute.String("hypervisor", string(stored.HypervisorType)),
-		attribute.String("operation", "pause_vm"),
-	)
-	if err := hv.Pause(pauseCtx); err != nil {
-		pauseSpanEnd(err)
-		log.ErrorContext(ctx, "failed to pause VM", "instance_id", id, "error", err)
-		if stored.MacOS != nil {
-			if resumeErr := resumeSnapshotAfterError(ctx, stored, hv); resumeErr != nil {
-				log.ErrorContext(ctx, "failed to resume VM after pause error", "instance_id", id, "error", resumeErr)
+	// 6. Transition: Running → Paused. A vGPU guest keeps running instead:
+	// VFIO precopy needs its driver until the migration itself stops it.
+	if !usesVGPUSnapshot(stored) {
+		log.DebugContext(ctx, "pausing VM", "instance_id", id)
+		pauseCtx, pauseSpanEnd := m.startLifecycleStep(ctx, "pause_vm",
+			attribute.String("instance_id", id),
+			attribute.String("hypervisor", string(stored.HypervisorType)),
+			attribute.String("operation", "pause_vm"),
+		)
+		if err := hv.Pause(pauseCtx); err != nil {
+			pauseSpanEnd(err)
+			log.ErrorContext(ctx, "failed to pause VM", "instance_id", id, "error", err)
+			if stored.MacOS != nil {
+				if resumeErr := resumeSnapshotAfterError(ctx, stored, hv); resumeErr != nil {
+					log.ErrorContext(ctx, "failed to resume VM after pause error", "instance_id", id, "error", resumeErr)
+				}
 			}
+			return nil, fmt.Errorf("pause vm failed: %w", err)
 		}
-		return nil, fmt.Errorf("pause vm failed: %w", err)
+		pauseSpanEnd(nil)
 	}
-	pauseSpanEnd(nil)
 
 	// 7. Create snapshot
 	snapshotDir := m.paths.InstanceSnapshotLatest(id)
@@ -260,6 +263,13 @@ func (m *manager) standbyInstance(
 		}
 	}
 	stored.Phases.Record(phasetracking.PhaseStandby, now)
+	// The VMM has exited, so its vGPU can serve another guest; restore claims
+	// a fresh one. A failed release keeps the claim for the reconciler.
+	if path := storedVGPUDevicePath(stored); path != "" {
+		if err := m.releaseStoredVGPU(ctx, stored); err != nil {
+			log.WarnContext(ctx, "failed to release vGPU after standby; retaining assignment metadata", "instance_id", id, "device_path", path, "error", err)
+		}
+	}
 
 	meta = &metadata{StoredMetadata: *stored}
 	if err := m.saveMetadata(meta); err != nil {

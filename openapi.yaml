@@ -656,6 +656,11 @@ components:
           enum: [cloud-hypervisor, firecracker, qemu, qemu-microvm, vz]
           description: Hypervisor backend to use for this instance. qemu uses the architecture-native standard board; qemu-microvm uses QEMU's minimal Linux amd64 board and does not support PCI devices, hotplug memory, or more than eight virtio-mmio devices. Defaults to server configuration.
           example: cloud-hypervisor
+        hypervisor_version:
+          type: string
+          maxLength: 128
+          description: Optional installed runtime version. The backend validates availability and snapshot compatibility. Omit to use the backend default.
+          example: 11.1.3-vgpu.1
         snapshot_policy:
           description: Snapshot policy for this instance. Controls compression settings applied when creating snapshots or entering standby, plus any default standby-only compression delay.
           $ref: "#/components/schemas/SnapshotPolicy"
@@ -1126,6 +1131,10 @@ components:
           enum: [cloud-hypervisor, firecracker, qemu, qemu-microvm, vz]
           description: Hypervisor backend running this instance
           example: cloud-hypervisor
+        hypervisor_version:
+          type: string
+          description: Runtime version selected for this instance.
+          example: 11.1.3-vgpu.1
         snapshot_policy:
           $ref: "#/components/schemas/SnapshotPolicy"
         auto_standby:

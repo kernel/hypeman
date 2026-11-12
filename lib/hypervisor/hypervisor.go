@@ -274,6 +274,11 @@ type ForkPrepareRequest struct {
 
 	SerialLogPath string
 	Network       *ForkNetworkConfig
+
+	// InstanceID is the fork's own id. VGPUDevicePath, when set, replaces the
+	// vGPU the snapshot was captured with.
+	InstanceID     string
+	VGPUDevicePath string
 }
 
 // ForkPrepareResult describes which optional fork rewrites were actually applied.
