@@ -44,7 +44,7 @@ func TestJailedVMConfigRewritesOnlyHostPaths(t *testing.T) {
 func TestJailLaunchPrepare(t *testing.T) {
 	instanceDir := t.TempDir()
 	socketPath := filepath.Join(instanceDir, "fc.sock")
-	fcBinary := writeFile(t, filepath.Join(t.TempDir(), "firecracker"), "fc")
+	fcBinary := writeFile(t, filepath.Join(realTempDir(t), "firecracker"), "fc")
 	kernel := writeFile(t, filepath.Join(t.TempDir(), "vmlinux"), "kernel")
 	rootfs := writeFile(t, filepath.Join(t.TempDir(), "rootfs"), "rootfs")
 	overlay := writeFile(t, filepath.Join(instanceDir, "overlay.raw"), "overlay")
@@ -97,7 +97,7 @@ func TestJailLaunchPrepare(t *testing.T) {
 
 func TestJailRootFollowsResolvedFirecrackerBinary(t *testing.T) {
 	instanceDir := t.TempDir()
-	binDir := t.TempDir()
+	binDir := realTempDir(t)
 	target := writeFile(t, filepath.Join(binDir, "firecracker-v1.17.0-x86_64"), "fc")
 	link := filepath.Join(binDir, "firecracker")
 	require.NoError(t, os.Symlink(target, link))
@@ -116,6 +116,15 @@ func TestResolveJailerPathNeedsOverrideWithCustomFirecracker(t *testing.T) {
 
 	_, err := resolveJailerPath(paths.New(t.TempDir()), "", JailerConfig{Enabled: true})
 	require.Error(t, err, "the embedded jailer may not match a custom firecracker")
+}
+
+// realTempDir returns a temp dir with symlinks resolved, as the jailer resolves
+// --exec-file. On macOS t.TempDir() is under the /var -> /private/var link.
+func realTempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	return dir
 }
 
 func writeFile(t *testing.T, path, content string) string {
