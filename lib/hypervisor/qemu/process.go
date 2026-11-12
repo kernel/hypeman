@@ -350,6 +350,7 @@ func (s *Starter) startQEMUProcess(ctx context.Context, p *paths.Paths, version 
 
 	// Create command
 	cmd := exec.Command(binaryPath, args...)
+	cmd.Env = hypervisor.ProcessEnv()
 
 	// Daemonize: detach from parent process group
 	cmd.SysProcAttr = &syscall.SysProcAttr{

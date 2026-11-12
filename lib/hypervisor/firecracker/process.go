@@ -260,6 +260,7 @@ func (s *Starter) startProcess(_ context.Context, p *paths.Paths, version string
 
 	// Use Command (not CommandContext) so the VMM survives request-scoped context cancellation.
 	cmd := exec.Command(binaryPath, "--api-sock", socketPath)
+	cmd.Env = hypervisor.ProcessEnv()
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Stdout = vmmLogFile
 	cmd.Stderr = vmmLogFile

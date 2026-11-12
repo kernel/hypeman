@@ -6,6 +6,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/kernel/hypeman/lib/paths"
@@ -191,4 +192,23 @@ func TestStartProcessCreatesLogFiles(t *testing.T) {
 
 	// Cleanup
 	client.ShutdownVMMWithResponse(ctx)
+}
+
+func TestStartProcessDoesNotInheritEnvironment(t *testing.T) {
+	t.Setenv("HYPEMAN_TEST_SECRET", "do-not-pass")
+	tmpDir := t.TempDir()
+	socketPath := filepath.Join(tmpDir, "test.sock")
+	ctx := context.Background()
+
+	pid, err := StartProcess(ctx, paths.New(tmpDir), V51_1, socketPath)
+	require.NoError(t, err)
+
+	client, err := NewVMM(socketPath)
+	require.NoError(t, err)
+	defer client.ShutdownVMMWithResponse(ctx)
+
+	environ, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "environ"))
+	require.NoError(t, err)
+	assert.NotContains(t, string(environ), "HYPEMAN_TEST_SECRET")
+	assert.Contains(t, string(environ), "PATH=")
 }
