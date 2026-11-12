@@ -190,6 +190,44 @@ func TestResolveProcessPIDMatchesSocketInProcessRoot(t *testing.T) {
 	require.ErrorIs(t, err, ErrNoOwningProcess)
 }
 
+func TestResolveProcessPIDSkipsFDScanForStaleSocket(t *testing.T) {
+	oldProcDir := procDir
+	procDir = t.TempDir()
+	t.Cleanup(func() { procDir = oldProcDir })
+
+	// A jailed VMM's listener is live, and a process with an unreadable fd
+	// would turn any fd scan into an error instead of ErrNoOwningProcess.
+	require.NoError(t, os.MkdirAll(filepath.Join(procDir, "net"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(procDir, "net", "unix"), []byte("00000000: 00000002 00000000 00010000 0001 01 5000 /api.sock\n"), 0o644))
+	require.NoError(t, os.MkdirAll(filepath.Join(procDir, "123"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(procDir, "123", "fd"), nil, 0o644))
+
+	dir, err := os.MkdirTemp("/tmp", "spid")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	staleSocket := func(path string) {
+		listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
+		require.NoError(t, err)
+		listener.SetUnlinkOnClose(false)
+		require.NoError(t, listener.Close())
+	}
+
+	// A dead unjailed VMM leaves its socket file behind.
+	unjailed := filepath.Join(dir, "fc.sock")
+	staleSocket(unjailed)
+	_, err = ResolveProcessPID(unjailed)
+	require.ErrorIs(t, err, ErrNoOwningProcess)
+
+	// A dead jailed VMM leaves a link to a socket no listener is bound to.
+	jailRoot := filepath.Join(dir, "jail")
+	require.NoError(t, os.MkdirAll(jailRoot, 0o755))
+	staleSocket(filepath.Join(jailRoot, "vsock.sock"))
+	jailed := filepath.Join(dir, "jailed.sock")
+	require.NoError(t, os.Symlink(filepath.Join(jailRoot, "vsock.sock"), jailed))
+	_, err = ResolveProcessPID(jailed)
+	require.ErrorIs(t, err, ErrNoOwningProcess)
+}
+
 func TestResolveProcessPIDReportsMissingSocket(t *testing.T) {
 	oldProcDir := procDir
 	procDir = t.TempDir()

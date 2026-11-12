@@ -55,9 +55,13 @@ type socketMatcher func(pid int, target string) (bool, error)
 // socketMatcherForPath matches the listener bound to socketPath. A VMM that
 // runs in its own root, such as a jailed firecracker, binds its socket inside
 // that root, so /proc/net/unix lists the in-root path and socketPath is a link
-// to it. When no listener is listed under socketPath, a listener matches if
-// its path, resolved in the holding process's root, is the file socketPath
-// names.
+// to it. When socketPath is such a link and no listener is listed under it, a
+// listener bound to the link target's name at the root matches if its path,
+// resolved in the holding process's root, is the file socketPath names.
+//
+// Any other socketPath with no listener is reported as ErrNoOwningProcess
+// without scanning process fds, so a stale socket left by a dead VMM stays
+// cheap to resolve.
 func socketMatcherForPath(socketPath string) (socketMatcher, error) {
 	socketRef, err := socketRefForPath(socketPath)
 	if err == nil {
@@ -66,13 +70,20 @@ func socketMatcherForPath(socketPath string) (socketMatcher, error) {
 	if !errors.Is(err, ErrNoOwningProcess) {
 		return nil, err
 	}
+	linkTarget, linkErr := os.Readlink(socketPath)
+	if linkErr != nil {
+		return nil, err
+	}
 	want, statErr := os.Stat(socketPath)
 	if statErr != nil || want.Mode()&os.ModeSocket == 0 {
 		return nil, err
 	}
-	listeners, listErr := listeningSocketPaths()
+	listeners, listErr := listenersBoundTo("/" + filepath.Base(linkTarget))
 	if listErr != nil {
 		return nil, listErr
+	}
+	if len(listeners) == 0 {
+		return nil, err
 	}
 	return func(pid int, target string) (bool, error) {
 		path, ok := listeners[target]
@@ -174,12 +185,12 @@ func pidBySocket(socketPath string, match socketMatcher, ownerPID int) (int, err
 	return 0, fmt.Errorf("resolve process pid for %s: %w", socketPath, ErrNoOwningProcess)
 }
 
-// listeningSocketPaths maps each listening socket with a filesystem path to that path.
-func listeningSocketPaths() (map[string]string, error) {
+// listenersBoundTo maps each listening socket bound to path to that path.
+func listenersBoundTo(path string) (map[string]string, error) {
 	paths := make(map[string]string)
-	err := scanListeners(func(ref, path string) error {
-		if strings.HasPrefix(path, "/") {
-			paths[ref] = path
+	err := scanListeners(func(ref, bound string) error {
+		if bound == path {
+			paths[ref] = bound
 		}
 		return nil
 	})
