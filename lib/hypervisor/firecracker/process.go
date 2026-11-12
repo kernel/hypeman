@@ -18,7 +18,7 @@ import (
 
 const (
 	socketWaitTimeout = 10 * time.Second
-	socketPollEvery   = 50 * time.Millisecond
+	socketPollEvery   = 2 * time.Millisecond
 	socketDialTimeout = 100 * time.Millisecond
 )
 
