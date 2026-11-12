@@ -118,7 +118,6 @@ type controllerState struct {
 	nextStandbyAt    *time.Time
 	holdUntil        time.Time
 	timer            *time.Timer
-	reconcileTimer   *time.Timer
 	standbyRequested bool
 	standbyExecuting bool
 }
@@ -145,7 +144,6 @@ type Controller struct {
 	reconcileDelay       time.Duration
 	snapshotSyncInterval time.Duration
 	timerFired           chan string
-	reconcileFired       chan string
 	streamReady          chan ConnectionStream
 	standbySlots         chan struct{}
 	standbyWG            sync.WaitGroup
@@ -196,7 +194,6 @@ func NewController(store InstanceStore, source ConnectionSource, opts Controller
 		reconcileDelay:       reconcileDelay,
 		snapshotSyncInterval: snapshotSyncInterval,
 		timerFired:           make(chan string, 128),
-		reconcileFired:       make(chan string, 128),
 		streamReady:          make(chan ConnectionStream, 4),
 		standbySlots:         make(chan struct{}, maxConcurrentStandbys),
 		states:               make(map[string]*controllerState),
@@ -246,6 +243,8 @@ func (c *Controller) Run(ctx context.Context) error {
 	}
 	snapshotTicker := time.NewTicker(c.snapshotSyncInterval)
 	defer snapshotTicker.Stop()
+	reconcileTicker := time.NewTicker(c.reconcileDelay)
+	defer reconcileTicker.Stop()
 
 	for {
 		var streamEvents <-chan ConnectionEvent
@@ -308,8 +307,8 @@ func (c *Controller) Run(ctx context.Context) error {
 			}
 		case id := <-c.timerFired:
 			c.handleStandbyTimer(workerCtx, id)
-		case id := <-c.reconcileFired:
-			c.handleActiveReconcile(ctx, id)
+		case <-reconcileTicker.C:
+			c.reconcileActiveInstances(ctx)
 		case <-snapshotTicker.C:
 			if err := c.periodicSnapshotSync(ctx); err != nil {
 				c.recordControllerError("snapshot_sync")
@@ -632,7 +631,6 @@ func (c *Controller) refreshInstanceLocked(inst Instance, conns []Connection, no
 			state.lastInboundAt = &now
 		}
 		c.cancelTimerLocked(state)
-		c.armReconcileLocked(inst.ID, state)
 		return c.stageRuntimePersistenceLocked(inst.ID, state, &Runtime{
 			LastInboundActivityAt: cloneTimePtr(state.lastInboundAt),
 		}, false, "refresh active instance"), nil
@@ -704,13 +702,11 @@ func (c *Controller) handleConnectionEvent(ctx context.Context, event Connection
 				}
 				delete(state.activeInbound, key)
 				if len(state.activeInbound) > 0 {
-					c.armReconcileLocked(id, state)
 					continue
 				}
 				idleSince := event.ObservedAt.UTC()
 				state.idleSince = &idleSince
 				state.standbyRequested = false
-				c.cancelReconcileLocked(state)
 				c.armTimerLocked(id, state, idleSince)
 				persistences = append(persistences, c.stageRuntimePersistenceLocked(id, state, &Runtime{
 					IdleSince:             cloneTimePtr(state.idleSince),
@@ -727,7 +723,6 @@ func (c *Controller) handleConnectionEvent(ctx context.Context, event Connection
 			state.lastInboundAt = cloneTimePtr(&event.ObservedAt)
 			state.standbyRequested = false
 			c.cancelTimerLocked(state)
-			c.armReconcileLocked(id, state)
 			persistences = append(persistences, c.stageRuntimePersistenceLocked(id, state, &Runtime{
 				LastInboundActivityAt: cloneTimePtr(state.lastInboundAt),
 			}, true, "record inbound activity"))
@@ -738,13 +733,11 @@ func (c *Controller) handleConnectionEvent(ctx context.Context, event Connection
 			}
 			delete(state.activeInbound, key)
 			if len(state.activeInbound) > 0 {
-				c.armReconcileLocked(id, state)
 				continue
 			}
 			idleSince := event.ObservedAt.UTC()
 			state.idleSince = &idleSince
 			state.standbyRequested = false
-			c.cancelReconcileLocked(state)
 			c.armTimerLocked(id, state, idleSince)
 			persistences = append(persistences, c.stageRuntimePersistenceLocked(id, state, &Runtime{
 				IdleSince:             cloneTimePtr(state.idleSince),
@@ -807,7 +800,6 @@ func (c *Controller) confirmIdleBeforeStandby(ctx context.Context, id string) bo
 	state.idleSince = nil
 	state.lastInboundAt = &now
 	c.cancelTimerLocked(state)
-	c.armReconcileLocked(id, state)
 	persistence := c.stageRuntimePersistenceLocked(id, state, &Runtime{
 		LastInboundActivityAt: cloneTimePtr(state.lastInboundAt),
 	}, true, "record standby confirmation activity")
@@ -978,51 +970,60 @@ func (c *Controller) executeStandby(ctx context.Context, id string, instanceName
 	_ = c.persistRuntime(ctx, persistence)
 }
 
-func (c *Controller) handleActiveReconcile(ctx context.Context, id string) {
+// reconcileActiveInstances checks every instance the controller believes is
+// busy against one conntrack snapshot, so a close whose event was lost still
+// starts the idle countdown. The snapshot is a dump of the whole host table and
+// is shared by all instances: its cost per pass does not grow with how many
+// are busy.
+func (c *Controller) reconcileActiveInstances(ctx context.Context) {
+	c.mu.RLock()
+	var ids []string
+	for id, state := range c.states {
+		if state.compiledPolicy != nil && len(state.activeInbound) > 0 {
+			ids = append(ids, id)
+		}
+	}
+	c.mu.RUnlock()
+	if len(ids) == 0 {
+		return
+	}
+
 	conns, err := c.source.ListConnections(ctx)
 	if err != nil {
 		c.recordControllerError("reconcile")
-		c.log.Warn("auto-standby active connection reconcile failed", "instance_id", id, "error", err)
-
-		c.mu.Lock()
-		defer c.mu.Unlock()
-		if state := c.states[id]; state != nil && len(state.activeInbound) > 0 {
-			c.armReconcileLocked(id, state)
-		}
+		c.log.Warn("auto-standby active connection reconcile failed", "error", err)
 		return
 	}
 
 	now := c.now().UTC()
+	for _, id := range ids {
+		c.reconcileInstance(ctx, id, conns, now)
+	}
+}
 
+func (c *Controller) reconcileInstance(ctx context.Context, id string, conns []Connection, now time.Time) {
 	c.mu.Lock()
 	state := c.states[id]
-	if state == nil || state.compiledPolicy == nil {
+	if state == nil || state.compiledPolicy == nil || len(state.activeInbound) == 0 {
 		c.mu.Unlock()
 		return
 	}
 
 	activeSet, err := matchingConnections(state.instance, state.compiledPolicy, conns)
 	if err != nil {
+		c.mu.Unlock()
 		c.recordControllerError("reconcile")
 		c.log.Warn("auto-standby active connection reconcile failed to classify connections", "instance_id", id, "error", err)
-		if len(state.activeInbound) > 0 {
-			c.armReconcileLocked(id, state)
-		}
-		c.mu.Unlock()
 		return
 	}
 
 	state.activeInbound = activeSet
 	if len(activeSet) > 0 {
-		state.standbyRequested = false
-		c.armReconcileLocked(id, state)
 		c.mu.Unlock()
 		return
 	}
 
 	state.idleSince = &now
-	state.standbyRequested = false
-	c.cancelReconcileLocked(state)
 	c.armTimerLocked(id, state, now)
 	persistence := c.stageRuntimePersistenceLocked(id, state, &Runtime{
 		IdleSince:             cloneTimePtr(state.idleSince),
@@ -1078,7 +1079,6 @@ func (c *Controller) removeStateLocked(id string) {
 	state := c.states[id]
 	if state != nil {
 		c.cancelTimerLocked(state)
-		c.cancelReconcileLocked(state)
 	}
 	delete(c.states, id)
 }
@@ -1093,7 +1093,6 @@ func (c *Controller) clearStateLocked(state *controllerState) {
 	state.holdUntil = time.Time{}
 	state.standbyRequested = false
 	c.cancelTimerLocked(state)
-	c.cancelReconcileLocked(state)
 }
 
 func (c *Controller) armTimerLocked(id string, state *controllerState, now time.Time) {
@@ -1131,34 +1130,11 @@ func (c *Controller) cancelTimerLocked(state *controllerState) {
 	state.nextStandbyAt = nil
 }
 
-func (c *Controller) armReconcileLocked(id string, state *controllerState) {
-	if len(state.activeInbound) == 0 || c.reconcileDelay <= 0 {
-		c.cancelReconcileLocked(state)
-		return
-	}
-
-	c.cancelReconcileLocked(state)
-	state.reconcileTimer = time.AfterFunc(c.reconcileDelay, func() {
-		select {
-		case c.reconcileFired <- id:
-		default:
-		}
-	})
-}
-
-func (c *Controller) cancelReconcileLocked(state *controllerState) {
-	if state.reconcileTimer != nil {
-		state.reconcileTimer.Stop()
-		state.reconcileTimer = nil
-	}
-}
-
 func (c *Controller) stopAllTimers() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for _, state := range c.states {
 		c.cancelTimerLocked(state)
-		c.cancelReconcileLocked(state)
 	}
 }
 

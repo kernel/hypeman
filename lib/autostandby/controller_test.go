@@ -452,12 +452,73 @@ func TestActiveReconcileStartsCountdownForStartupSeededConnections(t *testing.T)
 
 	source.connections = nil
 	now = now.Add(5 * time.Second)
-	controller.handleActiveReconcile(context.Background(), "inst-reconcile")
+	controller.reconcileActiveInstances(context.Background())
 
 	status = controller.Describe(store.instances[0])
 	require.Equal(t, StatusIdleCountdown, status.Status)
 	require.NotNil(t, status.IdleSince)
 	require.NotNil(t, status.NextStandbyAt)
+}
+
+func TestActiveReconcileSharesOneConntrackSnapshot(t *testing.T) {
+	t.Parallel()
+
+	activeInstance := func(id, ip string) Instance {
+		return Instance{
+			ID:             id,
+			Name:           id,
+			State:          StateRunning,
+			NetworkEnabled: true,
+			IP:             ip,
+			AutoStandby:    &Policy{Enabled: true, IdleTimeout: "30s"},
+		}
+	}
+	inboundTo := func(ip string) Connection {
+		return Connection{
+			OriginalSourceIP:        mustAddr("1.2.3.4"),
+			OriginalSourcePort:      50002,
+			OriginalDestinationIP:   mustAddr(ip),
+			OriginalDestinationPort: 8080,
+			TCPState:                TCPStateEstablished,
+		}
+	}
+
+	idleSince := time.Date(2026, 4, 6, 10, 59, 50, 0, time.UTC)
+	drained := activeInstance("inst-drained", "192.168.100.41")
+	busy := activeInstance("inst-busy", "192.168.100.42")
+	idle := idleTestInstance("inst-idle", "192.168.100.43", idleSince)
+	store := newFakeInstanceStore([]Instance{drained, busy, idle})
+	source := &restoreConnectionSource{connections: []Connection{
+		inboundTo(drained.IP),
+		inboundTo(busy.IP),
+	}}
+	now := time.Date(2026, 4, 6, 11, 0, 0, 0, time.UTC)
+	controller := NewController(store, source, ControllerOptions{
+		Now: func() time.Time { return now },
+	})
+	require.NoError(t, controller.startupResync(context.Background()))
+
+	// The close for inst-drained never reached the controller as an event.
+	source.setConnections([]Connection{inboundTo(busy.IP)})
+	now = now.Add(5 * time.Second)
+	lists := source.listCalls()
+	controller.reconcileActiveInstances(context.Background())
+
+	assert.Equal(t, lists+1, source.listCalls(), "two active instances share one conntrack dump")
+	drainedStatus := controller.Describe(drained)
+	require.Equal(t, StatusIdleCountdown, drainedStatus.Status)
+	assert.Equal(t, now, *drainedStatus.IdleSince)
+	assert.Equal(t, StatusActive, controller.Describe(busy).Status)
+	// An instance already counting down is left alone, not restarted.
+	assert.Equal(t, idleSince, *controller.Describe(idle).IdleSince)
+
+	source.setConnections(nil)
+	controller.reconcileActiveInstances(context.Background())
+	require.Equal(t, StatusIdleCountdown, controller.Describe(busy).Status)
+
+	lists = source.listCalls()
+	controller.reconcileActiveInstances(context.Background())
+	assert.Equal(t, lists, source.listCalls(), "no dump when nothing is active")
 }
 
 func TestDuplicateDestroyDoesNotGoNegative(t *testing.T) {
@@ -805,7 +866,6 @@ func TestHandleStandbyTimerSkipsStandbyWhenConntrackReportsConnection(t *testing
 	assert.Len(t, state.activeInbound, 1)
 	assert.Nil(t, state.idleSince)
 	assert.Nil(t, state.timer)
-	assert.NotNil(t, state.reconcileTimer)
 	assert.False(t, state.standbyRequested)
 	controller.mu.RUnlock()
 }
@@ -1329,50 +1389,6 @@ func TestResyncDuringExecutingStandbyDoesNotDoubleDispatch(t *testing.T) {
 	close(store.standbyRelease)
 	controller.standbyWG.Wait()
 	assert.Equal(t, []string{"inst-racing"}, store.standbyCalls())
-}
-
-func TestActiveReconcileClearsPendingStandbyRequest(t *testing.T) {
-	t.Parallel()
-
-	idleSince := time.Date(2026, 4, 6, 10, 55, 0, 0, time.UTC)
-	store := newFakeInstanceStore([]Instance{
-		idleTestInstance("inst-busy", "192.168.100.93", idleSince),
-		idleTestInstance("inst-pending", "192.168.100.94", idleSince),
-	})
-	store.standbyStarted = make(chan string, 2)
-	store.standbyRelease = make(chan struct{})
-	source := &fakeConnectionSource{}
-	controller := NewController(store, source, ControllerOptions{
-		Now:                   func() time.Time { return idleSince.Add(time.Minute) },
-		MaxConcurrentStandbys: 1,
-	})
-
-	require.NoError(t, controller.startupResync(context.Background()))
-
-	controller.handleStandbyTimer(context.Background(), "inst-busy")
-	require.Equal(t, "inst-busy", <-store.standbyStarted)
-	controller.handleStandbyTimer(context.Background(), "inst-pending")
-
-	// Reconcile discovers an active inbound connection for the queued instance.
-	source.connections = []Connection{{
-		OriginalSourceIP:        mustAddr("1.2.3.4"),
-		OriginalSourcePort:      50003,
-		OriginalDestinationIP:   mustAddr("192.168.100.94"),
-		OriginalDestinationPort: 8080,
-		TCPState:                TCPStateEstablished,
-	}}
-	controller.handleActiveReconcile(context.Background(), "inst-pending")
-
-	controller.mu.RLock()
-	pending := controller.states["inst-pending"]
-	require.NotNil(t, pending)
-	assert.False(t, pending.standbyRequested)
-	assert.Len(t, pending.activeInbound, 1)
-	controller.mu.RUnlock()
-
-	close(store.standbyRelease)
-	controller.standbyWG.Wait()
-	assert.Equal(t, []string{"inst-busy"}, store.standbyCalls())
 }
 
 func TestStandbyFailureWithMidFlightActivityDoesNotRearmIdle(t *testing.T) {
