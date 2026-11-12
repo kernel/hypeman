@@ -13,6 +13,7 @@ import (
 type Metrics struct {
 	conntrackEventsTotal   metric.Int64Counter
 	startupResyncDuration  metric.Float64Histogram
+	reconcileDumpDuration  metric.Float64Histogram
 	standbyAttemptsTotal   metric.Int64Counter
 	holdDuration           metric.Float64Histogram
 	controllerErrorsTotal  metric.Int64Counter
@@ -38,6 +39,15 @@ func newMetrics(meter metric.Meter, tracer trace.Tracer, controller *Controller)
 	startupResyncDuration, err := meter.Float64Histogram(
 		"hypeman_auto_standby_startup_resync_duration_seconds",
 		metric.WithDescription("Time spent rebuilding auto-standby state during controller startup"),
+		metric.WithUnit("s"),
+		metric.WithExplicitBucketBoundaries(hypotel.CommonDurationHistogramBuckets()...),
+	)
+	if err != nil {
+		return &Metrics{tracer: tracer}
+	}
+	reconcileDumpDuration, err := meter.Float64Histogram(
+		"hypeman_auto_standby_reconcile_dump_duration_seconds",
+		metric.WithDescription("Time spent dumping the conntrack table for an active connection reconcile"),
 		metric.WithUnit("s"),
 		metric.WithExplicitBucketBoundaries(hypotel.CommonDurationHistogramBuckets()...),
 	)
@@ -99,6 +109,7 @@ func newMetrics(meter metric.Meter, tracer trace.Tracer, controller *Controller)
 	m := &Metrics{
 		conntrackEventsTotal:   conntrackEventsTotal,
 		startupResyncDuration:  startupResyncDuration,
+		reconcileDumpDuration:  reconcileDumpDuration,
 		standbyAttemptsTotal:   standbyAttemptsTotal,
 		holdDuration:           holdDuration,
 		controllerErrorsTotal:  controllerErrorsTotal,
@@ -142,6 +153,15 @@ func (c *Controller) recordStartupResync(start time.Time, status string) {
 		return
 	}
 	c.metrics.startupResyncDuration.Record(context.Background(), time.Since(start).Seconds(), metric.WithAttributes(
+		attribute.String("status", status),
+	))
+}
+
+func (c *Controller) recordReconcileDump(start time.Time, status string) {
+	if c.metrics == nil || c.metrics.reconcileDumpDuration == nil {
+		return
+	}
+	c.metrics.reconcileDumpDuration.Record(context.Background(), time.Since(start).Seconds(), metric.WithAttributes(
 		attribute.String("status", status),
 	))
 }
