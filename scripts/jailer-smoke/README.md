@@ -14,5 +14,5 @@ host with root and `/dev/kvm`.
       HYPEMAN_HEARTBEAT_ROOTFS=$PWD/../../../scripts/jailer-smoke/heartbeat.ext4 \
       go test -tags jailer_integration -count=1 -run 'Jailed|StandbySnapshotRestore' .
 
-Measured on deft-kernel-dev: the jail adds no per-I/O cost (4 KiB random reads, about
+Measured on a shared x86_64 dev host: the jail adds no per-I/O cost (4 KiB random reads, about
 40 us and 25k IOPS either way) and about 25-30 ms of setup per VMM start.
