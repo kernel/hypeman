@@ -190,6 +190,29 @@ func TestResolveProcessPIDMatchesSocketInProcessRoot(t *testing.T) {
 	require.ErrorIs(t, err, ErrNoOwningProcess)
 }
 
+func TestResolveProcessPIDSkipsProcessScanForSocketWithoutListener(t *testing.T) {
+	oldProcDir := procDir
+	procDir = t.TempDir()
+	t.Cleanup(func() { procDir = oldProcDir })
+
+	// A VMM that died without unlinking its socket leaves the file behind.
+	socketPath := filepath.Join(t.TempDir(), "fc.sock")
+	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: socketPath, Net: "unix"})
+	require.NoError(t, err)
+	listener.SetUnlinkOnClose(false)
+	require.NoError(t, listener.Close())
+
+	require.NoError(t, os.MkdirAll(filepath.Join(procDir, "net"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(procDir, "net", "unix"), nil, 0o644))
+	// A process scan would fail on this unreadable fd instead of reporting no owner.
+	fdDir := filepath.Join(procDir, "123", "fd")
+	require.NoError(t, os.MkdirAll(fdDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(fdDir, "3"), nil, 0o644))
+
+	_, err = ResolveProcessPID(socketPath)
+	require.ErrorIs(t, err, ErrNoOwningProcess)
+}
+
 func TestResolveProcessPIDReportsMissingSocket(t *testing.T) {
 	oldProcDir := procDir
 	procDir = t.TempDir()

@@ -7,18 +7,22 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net"
 	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 )
 
 var procDir = "/proc"
 
 // soAcceptcon marks a listening socket in /proc/net/unix (__SO_ACCEPTCON).
 const soAcceptcon = 0x10000
+
+const socketProbeTimeout = 100 * time.Millisecond
 
 // ResolveProcessPID finds the process currently holding the listening Unix
 // socket for the given hypervisor control path, via the socket inode in
@@ -70,6 +74,12 @@ func socketMatcherForPath(socketPath string) (socketMatcher, error) {
 	if statErr != nil || want.Mode()&os.ModeSocket == 0 {
 		return nil, err
 	}
+	// A refused connection proves no listener is bound to the file in any
+	// root, so a socket left behind by a dead VMM does not cost a scan of
+	// every process fd.
+	if socketRefusesConnections(socketPath) {
+		return nil, err
+	}
 	listeners, listErr := listeningSocketPaths()
 	if listErr != nil {
 		return nil, listErr
@@ -88,6 +98,15 @@ func socketMatcherForPath(socketPath string) (socketMatcher, error) {
 		}
 		return os.SameFile(want, got), nil
 	}, nil
+}
+
+func socketRefusesConnections(socketPath string) bool {
+	conn, err := net.DialTimeout("unix", socketPath, socketProbeTimeout)
+	if err == nil {
+		_ = conn.Close()
+		return false
+	}
+	return errors.Is(err, syscall.ECONNREFUSED)
 }
 
 func processHoldsSocket(pid int, match socketMatcher) bool {
