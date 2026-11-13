@@ -261,13 +261,14 @@ func (m *manager) stopInstance(
 		}
 	}
 
-	// 8. Drop the guest-agent connection for this VM incarnation and remove
-	// stale runtime sockets after process exit. The hypervisor shutdown closes
-	// the live peer, but the keyed gRPC ClientConn must not survive into a later
-	// start that reuses the same per-instance socket path.
+	// 8. Drop the guest-agent and hypervisor connections for this VM incarnation
+	// and remove stale runtime sockets after process exit. The hypervisor
+	// shutdown closes the live peer, but the keyed gRPC ClientConn must not
+	// survive into a later start that reuses the same per-instance socket path.
 	if dialer, err := hypervisor.NewVsockDialer(inst.HypervisorType, inst.VsockSocket, inst.VsockCID); err == nil {
 		guest.CloseConn(dialer.Key())
 	}
+	hypervisor.ReleaseVMMState(inst.HypervisorType, inst.SocketPath)
 	// If graceful guest shutdown exits before shutdownHypervisor() is called, these
 	// files may still exist and cause state derivation as Unknown or bind conflicts.
 	_ = os.Remove(inst.SocketPath)

@@ -55,6 +55,7 @@ func init() {
 		hypervisor.RegisterClientFactory(t, func(socketPath string) (hypervisor.Hypervisor, error) {
 			return NewForType(socketPath, t)
 		})
+		hypervisor.RegisterVMMStateReleaser(t, releaseVMMState)
 	}
 }
 
@@ -309,6 +310,13 @@ func (p *startedProcess) cleanup() {
 	_ = os.Remove(p.socketPath)
 }
 
+// cleanupFailedStart kills a QEMU process whose start failed. The failure can
+// come after the QMP client is pooled, so the client is dropped with it.
+func cleanupFailedStart(proc *startedProcess) {
+	proc.cleanup()
+	releaseVMMState(proc.socketPath)
+}
+
 func vfioTermGraceFor(cfg hypervisor.VMConfig) time.Duration {
 	if cfg.VGPUDevicePath != "" || len(cfg.PCIDevices) > 0 {
 		return hypervisor.VFIOTermGrace
@@ -343,9 +351,9 @@ func (s *Starter) startQEMUProcess(ctx context.Context, p *paths.Paths, version 
 		return 0, nil, nil, fmt.Errorf("socket already in use, QEMU may be running at %s", socketPath)
 	}
 
-	// A graceful guest shutdown can leave the old QMP client pooled even though
-	// the process exited. Drop it before this process reuses the socket path.
-	resetClient(socketPath)
+	// A QEMU that exited on its own leaves its QMP client and balloon target
+	// cached. Drop both before this process reuses the socket path.
+	releaseVMMState(socketPath)
 	os.Remove(socketPath)
 
 	// Create command
@@ -394,7 +402,7 @@ func (s *Starter) startQEMUProcess(ctx context.Context, p *paths.Paths, version 
 	log.DebugContext(processCtx, "QEMU process started", "pid", pid, "duration_ms", time.Since(processStartTime).Milliseconds())
 
 	// Setup cleanup to kill, reap, and remove the socket if subsequent steps fail.
-	cu := cleanup.Make(proc.cleanup)
+	cu := cleanup.Make(func() { cleanupFailedStart(proc) })
 
 	// Wait for socket to be ready
 	socketWaitStart := time.Now()
