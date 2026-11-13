@@ -3,6 +3,7 @@
 package network
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -17,6 +19,7 @@ import (
 
 	"github.com/kernel/hypeman/lib/logger"
 	"github.com/vishvananda/netlink"
+	"github.com/vishvananda/netlink/nl"
 	"go.opentelemetry.io/otel/attribute"
 	"golang.org/x/sys/unix"
 )
@@ -526,13 +529,18 @@ func (m *manager) lastHypemanForwardRulePosition() int {
 }
 
 // createTAPDevice creates TAP device and attaches it to the bridge.
-func (m *manager) createTAPDevice(ctx context.Context, tapName, bridgeName, guestMAC string, isolated bool) error {
+func (m *manager) createTAPDevice(ctx context.Context, tapName, bridgeName, guestMAC, guestIP string, isolated bool) error {
 	var mac net.HardwareAddr
+	var ip net.IP
 	if isolated {
 		var err error
 		mac, err = net.ParseMAC(guestMAC)
 		if err != nil {
 			return fmt.Errorf("parse guest MAC %q: %w", guestMAC, err)
+		}
+		ip = net.ParseIP(guestIP).To4()
+		if ip == nil {
+			return fmt.Errorf("parse guest IPv4 address %q", guestIP)
 		}
 	}
 
@@ -583,9 +591,23 @@ func (m *manager) createTAPDevice(ctx context.Context, tapName, bridgeName, gues
 		return fmt.Errorf("create TAP device: %w", err)
 	}
 
-	// 3. Set TAP up
+	// 3. Drop frames from the guest unless they carry its own MAC and IPv4
+	// address, so it cannot impersonate another guest. Adding the qdisc
+	// before the link is up is cheaper and leaves no unfiltered window.
 	tapLink := tap
+	if isolated {
+		_, filterEnd := startNetworkStep(ctx, "network.create_tap.filter_guest_source",
+			attribute.String("operation", "filter_guest_source"),
+			attribute.String("tap", tapName),
+		)
+		err = filterGuestSource(tapLink, mac, ip)
+		filterEnd(err)
+		if err != nil {
+			return err
+		}
+	}
 
+	// 4. Set TAP up
 	_, setUpEnd := startNetworkStep(ctx, "network.create_tap.link_set_up",
 		attribute.String("operation", "link_set_up"),
 		attribute.String("tap", tapName),
@@ -596,7 +618,7 @@ func (m *manager) createTAPDevice(ctx context.Context, tapName, bridgeName, gues
 		return fmt.Errorf("set TAP up: %w", err)
 	}
 
-	// 4. Attach TAP to bridge
+	// 5. Attach TAP to bridge
 	_, bridgeLookupEnd := startNetworkStep(ctx, "network.create_tap.link_lookup_bridge",
 		attribute.String("operation", "link_lookup_bridge"),
 		attribute.String("bridge", bridgeName),
@@ -618,7 +640,7 @@ func (m *manager) createTAPDevice(ctx context.Context, tapName, bridgeName, gues
 		return fmt.Errorf("attach TAP to bridge: %w", err)
 	}
 
-	// 5. Enable port isolation so isolated TAPs can't directly talk to each other (requires kernel support and capabilities)
+	// 6. Enable port isolation so isolated TAPs can't directly talk to each other (requires kernel support and capabilities)
 	if isolated {
 		_, isolationEnd := startNetworkStep(ctx, "network.create_tap.set_isolation",
 			attribute.String("operation", "set_isolation"),
@@ -630,7 +652,7 @@ func (m *manager) createTAPDevice(ctx context.Context, tapName, bridgeName, gues
 			return fmt.Errorf("set isolation mode: %w", err)
 		}
 
-		// 6. Isolation only stops guest-to-guest forwarding. Frames for a MAC the
+		// 7. Isolation only stops guest-to-guest forwarding. Frames for a MAC the
 		// bridge has no entry for are still flooded to every port, so a guest
 		// in promiscuous mode can read other guests' inbound traffic. Pin the
 		// guest's MAC to its port, then stop flooding and learning on it.
@@ -640,6 +662,20 @@ func (m *manager) createTAPDevice(ctx context.Context, tapName, bridgeName, gues
 		)
 		err = hardenIsolatedPort(tapLink, mac)
 		hardenEnd(err)
+		if err != nil {
+			return err
+		}
+
+		// 8. Pin the host's neighbor entry for the guest address. ARP never
+		// changes a permanent entry, so no other guest can redirect the host's
+		// traffic for this address, and a reused address does not keep the
+		// previous owner's MAC.
+		_, pinEnd := startNetworkStep(ctx, "network.create_tap.pin_neighbor",
+			attribute.String("operation", "pin_neighbor"),
+			attribute.String("tap", tapName),
+		)
+		err = m.pinNeighbor(bridge, ip, mac)
+		pinEnd(err)
 		if err != nil {
 			return err
 		}
@@ -671,6 +707,145 @@ func hardenIsolatedPort(port netlink.Link, mac net.HardwareAddr) error {
 	}
 	if err := netlink.LinkSetLearning(port, false); err != nil {
 		return fmt.Errorf("disable MAC learning: %w", err)
+	}
+	return nil
+}
+
+// filterGuestSource adds a clsact qdisc to the TAP with ingress filters that
+// pass ARP and IPv4 only when the Ethernet source, ARP sender and IPv4 source
+// are the guest's own, and drop every other frame from the guest. The kernel
+// removes the qdisc and filters with the TAP.
+func filterGuestSource(tap netlink.Link, mac net.HardwareAddr, ip net.IP) error {
+	index := tap.Attrs().Index
+	err := netlink.QdiscAdd(&netlink.Clsact{QdiscAttrs: netlink.QdiscAttrs{
+		LinkIndex: index,
+		Handle:    netlink.MakeHandle(0xffff, 0),
+		Parent:    netlink.HANDLE_CLSACT,
+	}})
+	if err != nil {
+		return fmt.Errorf("add clsact qdisc: %w", err)
+	}
+
+	// u32 offsets are relative to the network header; the Ethernet source
+	// address starts 8 bytes before it.
+	ethSource := u32MatchBytes(-8, mac)
+	arpKeys := slices.Concat(ethSource,
+		u32MatchBytes(0, []byte{0, 1, 0x08, 0x00, 6, 4}), // Ethernet/IPv4 ARP
+		u32MatchBytes(8, mac),                            // sender hardware address
+		u32MatchBytes(14, ip),                            // sender protocol address
+	)
+	ipKeys := slices.Concat(ethSource, u32MatchBytes(12, ip)) // IPv4 source address
+
+	filters := []struct {
+		protocol uint16
+		action   netlink.TcAct
+		keys     []netlink.TcU32Key
+	}{
+		{unix.ETH_P_ARP, netlink.TC_ACT_OK, arpKeys},
+		{unix.ETH_P_IP, netlink.TC_ACT_OK, ipKeys},
+		{unix.ETH_P_ALL, netlink.TC_ACT_SHOT, []netlink.TcU32Key{{}}},
+	}
+	for i, f := range filters {
+		err := netlink.FilterAdd(&netlink.U32{
+			FilterAttrs: netlink.FilterAttrs{
+				LinkIndex: index,
+				Parent:    netlink.HANDLE_MIN_INGRESS,
+				Priority:  uint16(i + 1),
+				Protocol:  f.protocol,
+			},
+			Sel:     &netlink.TcU32Sel{Flags: nl.TC_U32_TERMINAL, Keys: f.keys},
+			Actions: []netlink.Action{&netlink.GenericAction{ActionAttrs: netlink.ActionAttrs{Action: f.action}}},
+		})
+		if err != nil {
+			return fmt.Errorf("add guest source filter: %w", err)
+		}
+	}
+	return nil
+}
+
+// u32MatchBytes returns u32 keys that match b at off bytes from the network
+// header, split into the 4-byte aligned words u32 compares.
+func u32MatchBytes(off int32, b []byte) []netlink.TcU32Key {
+	var keys []netlink.TcU32Key
+	for i := 0; i < len(b); {
+		key := netlink.TcU32Key{Off: (off + int32(i)) &^ 3}
+		for ; i < len(b) && off+int32(i) < key.Off+4; i++ {
+			shift := 8 * (3 - (off + int32(i) - key.Off))
+			key.Mask |= 0xff << shift
+			key.Val |= uint32(b[i]) << shift
+		}
+		keys = append(keys, key)
+	}
+	return keys
+}
+
+// pinNeighbor sets a permanent neighbor entry on the bridge for a guest.
+func (m *manager) pinNeighbor(bridge netlink.Link, ip net.IP, mac net.HardwareAddr) error {
+	m.neighMu.Lock()
+	defer m.neighMu.Unlock()
+	err := netlink.NeighSet(&netlink.Neigh{
+		LinkIndex:    bridge.Attrs().Index,
+		Family:       netlink.FAMILY_V4,
+		State:        netlink.NUD_PERMANENT,
+		IP:           ip,
+		HardwareAddr: mac,
+	})
+	if err != nil {
+		return fmt.Errorf("pin guest neighbor entry: %w", err)
+	}
+	return nil
+}
+
+// unpinNeighbors deletes the bridge's permanent neighbor entries that point at
+// the guest MAC pinned to port. An address that was handed to another guest
+// since points at that guest's MAC and is left alone.
+func (m *manager) unpinNeighbors(port netlink.Link) error {
+	bridgeIndex := port.Attrs().MasterIndex
+	if bridgeIndex == 0 {
+		return nil
+	}
+	var fdb []netlink.Neigh
+	err := retryNetlinkDump(func() error {
+		var listErr error
+		fdb, listErr = netlink.NeighList(port.Attrs().Index, unix.AF_BRIDGE)
+		return listErr
+	})
+	if err != nil {
+		return fmt.Errorf("list bridge FDB: %w", err)
+	}
+	var guestMACs []net.HardwareAddr
+	for _, entry := range fdb {
+		if entry.State&netlink.NUD_NOARP != 0 {
+			guestMACs = append(guestMACs, entry.HardwareAddr)
+		}
+	}
+	if len(guestMACs) == 0 {
+		return nil
+	}
+
+	m.neighMu.Lock()
+	defer m.neighMu.Unlock()
+	var neighbors []netlink.Neigh
+	err = retryNetlinkDump(func() error {
+		var listErr error
+		neighbors, listErr = netlink.NeighList(bridgeIndex, netlink.FAMILY_V4)
+		return listErr
+	})
+	if err != nil {
+		return fmt.Errorf("list neighbor entries: %w", err)
+	}
+	for _, neighbor := range neighbors {
+		if neighbor.State&netlink.NUD_PERMANENT == 0 {
+			continue
+		}
+		for _, mac := range guestMACs {
+			if !bytes.Equal(neighbor.HardwareAddr, mac) {
+				continue
+			}
+			if err := netlink.NeighDel(&neighbor); err != nil && !errors.Is(err, unix.ENOENT) {
+				return fmt.Errorf("delete neighbor entry: %w", err)
+			}
+		}
 	}
 	return nil
 }
@@ -1129,6 +1304,12 @@ func (m *manager) deleteTAPDevice(ctx context.Context, tapName string) error {
 	if err != nil {
 		// TAP doesn't exist, nothing to do
 		return nil
+	}
+
+	// Keep the TAP while its guest's neighbor entry is pinned, so a failed
+	// cleanup is retried by the orphan TAP sweep.
+	if err := m.unpinNeighbors(link); err != nil {
+		return err
 	}
 
 	// Remove HTB class from bridge before deleting TAP
