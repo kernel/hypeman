@@ -7,7 +7,7 @@ host with root and `/dev/kvm`.
     scripts/jailer-smoke/build-rootfs.sh heartbeat.ext4 scripts/jailer-smoke/heartbeat-init.c
 
     make ensure-firecracker-binaries
-    # kernel: hypeman's pinned Kernel_202610301 x86_64 vmlinux
+    # kernel: the x86_64 vmlinux for DefaultKernelVersion in lib/system/versions.go
 
     cd lib/hypervisor/firecracker
     sudo env HYPEMAN_TEST_KERNEL=/path/vmlinux \

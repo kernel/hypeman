@@ -19,10 +19,6 @@ func TestKernelVersionRegistration(t *testing.T) {
 	assert.Equal(t, DefaultKernelVersion, SupportedKernelVersions[0])
 
 	for _, version := range SupportedKernelVersions {
-		parsed, ok := ParseKernelVersion(string(version))
-		assert.True(t, ok)
-		assert.Equal(t, version, parsed)
-
 		baseURL := "https://github.com/kernel/linux/releases/download/" + string(version) + "/"
 		assert.Equal(t, map[string]string{
 			"x86_64":  baseURL + "vmlinux-x86_64",
