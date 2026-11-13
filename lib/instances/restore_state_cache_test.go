@@ -32,7 +32,7 @@ func (s *staleCacheRestoreStarter) ResolveVersion(*paths.Paths, string) (string,
 func (s *staleCacheRestoreStarter) StartVM(context.Context, *paths.Paths, string, string, hypervisor.VMConfig) (int, hypervisor.Hypervisor, error) {
 	return 0, nil, nil
 }
-func (s *staleCacheRestoreStarter) RestoreVM(_ context.Context, _ *paths.Paths, _ string, socketPath string, _ string, _ hypervisor.RestoreOptions) (int, hypervisor.Hypervisor, error) {
+func (s *staleCacheRestoreStarter) RestoreVM(_ context.Context, _ *paths.Paths, _ string, socketPath string, _ string) (int, hypervisor.Hypervisor, error) {
 	s.restoreCalls++
 	if err := os.MkdirAll(filepath.Dir(socketPath), 0o755); err != nil {
 		return 0, nil, err

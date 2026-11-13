@@ -67,37 +67,8 @@ func TestDefaultConfigIncludesMetricsSettings(t *testing.T) {
 	if cfg.Instances.LifecycleEventBufferSize != 256 {
 		t.Fatalf("expected default instances.lifecycle_event_buffer_size to be 256, got %d", cfg.Instances.LifecycleEventBufferSize)
 	}
-	if cfg.Hypervisor.FirecrackerSnapshotMemoryBackend != "file" {
-		t.Fatalf("expected default firecracker snapshot backend to be file, got %q", cfg.Hypervisor.FirecrackerSnapshotMemoryBackend)
-	}
-	if cfg.Hypervisor.FirecrackerUFFDCacheMaxBytes != "4294967296" {
-		t.Fatalf("expected default firecracker uffd cache size to be 4294967296, got %q", cfg.Hypervisor.FirecrackerUFFDCacheMaxBytes)
-	}
 	if cfg.Hypervisor.FirecrackerMaxConcurrentRestores != 32 {
 		t.Fatalf("expected default firecracker max concurrent restores to be 32, got %d", cfg.Hypervisor.FirecrackerMaxConcurrentRestores)
-	}
-}
-
-func TestValidateFirecrackerSnapshotMemoryBackend(t *testing.T) {
-	cfg := defaultConfig()
-	cfg.Hypervisor.FirecrackerSnapshotMemoryBackend = "UFFD"
-	if err := cfg.Validate(); err != nil {
-		t.Fatalf("expected UFFD backend to validate, got %v", err)
-	}
-	if cfg.Hypervisor.FirecrackerSnapshotMemoryBackend != "uffd" {
-		t.Fatalf("expected backend to normalize to uffd, got %q", cfg.Hypervisor.FirecrackerSnapshotMemoryBackend)
-	}
-
-	cfg = defaultConfig()
-	cfg.Hypervisor.FirecrackerSnapshotMemoryBackend = "bad"
-	if err := cfg.Validate(); err == nil {
-		t.Fatalf("expected invalid firecracker snapshot backend validation error")
-	}
-
-	cfg = defaultConfig()
-	cfg.Hypervisor.FirecrackerUFFDCacheMaxBytes = "not-a-size"
-	if err := cfg.Validate(); err == nil {
-		t.Fatalf("expected invalid firecracker uffd cache size validation error")
 	}
 }
 
@@ -358,6 +329,24 @@ func TestLoadUsesConfiguredLifecycleEventBufferSize(t *testing.T) {
 
 	if cfg.Instances.LifecycleEventBufferSize != 384 {
 		t.Fatalf("expected instances.lifecycle_event_buffer_size from config file, got %d", cfg.Instances.LifecycleEventBufferSize)
+	}
+}
+
+func TestLoadReadsRevokedTokenHashes(t *testing.T) {
+	tmp := t.TempDir()
+	cfgPath := filepath.Join(tmp, "config.yaml")
+	hash := strings.Repeat("ab", 32)
+	if err := os.WriteFile(cfgPath, []byte("revoked_token_hashes:\n  - "+hash+"\n"), 0600); err != nil {
+		t.Fatalf("write temp config: %v", err)
+	}
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	if len(cfg.RevokedTokenHashes) != 1 || cfg.RevokedTokenHashes[0] != hash {
+		t.Fatalf("expected revoked_token_hashes from config file, got %v", cfg.RevokedTokenHashes)
 	}
 }
 

@@ -50,6 +50,19 @@ func (m *manager) CreateAllocation(ctx context.Context, req AllocateRequest) (*N
 		return nil, err
 	}
 
+	// Addresses are reused. Drop what the host remembers about this one so the
+	// first packet to the new guest is resolved, not sent to the previous
+	// owner's MAC until that entry times out.
+	_, neighborSpanEnd := startNetworkStep(ctx, "network.forget_neighbor",
+		attribute.String("operation", "forget_neighbor"),
+		attribute.String("instance_id", req.InstanceID),
+	)
+	err = m.forgetNeighbor(network.Bridge, netConfig.IP)
+	neighborSpanEnd(err)
+	if err != nil {
+		log.WarnContext(ctx, "failed to forget neighbor entry for allocated address", "ip", netConfig.IP, "error", err)
+	}
+
 	// Create the TAP synchronously because the VMM restore depends on it.
 	tapCtx, tapSpanEnd := startNetworkStep(ctx, "network.create_tap",
 		attribute.String("operation", "create_tap"),
@@ -59,7 +72,7 @@ func (m *manager) CreateAllocation(ctx context.Context, req AllocateRequest) (*N
 		attribute.Bool("download_rate_limit", req.DownloadBps > 0),
 		attribute.Bool("upload_rate_limit", req.UploadBps > 0),
 	)
-	err = m.createTAPDevice(tapCtx, netConfig.TAPDevice, network.Bridge, network.Isolated)
+	err = m.createTAPDevice(tapCtx, netConfig.TAPDevice, network.Bridge, netConfig.MAC, network.Isolated)
 	tapSpanEnd(err)
 	if err != nil {
 		cleanupErr := m.deleteTAPDeviceForInstanceSerialized(ctx, req.InstanceID, netConfig.TAPDevice)
@@ -143,7 +156,7 @@ func (m *manager) RecreateAllocation(ctx context.Context, instanceID string, dow
 		attribute.Bool("download_rate_limit", downloadBps > 0),
 		attribute.Bool("upload_rate_limit", uploadBps > 0),
 	)
-	err = m.createTAPDevice(tapCtx, alloc.TAPDevice, network.Bridge, network.Isolated)
+	err = m.createTAPDevice(tapCtx, alloc.TAPDevice, network.Bridge, alloc.MAC, network.Isolated)
 	tapSpanEnd(err)
 	if err != nil {
 		_ = m.deleteTAPDeviceForInstanceSerialized(ctx, instanceID, alloc.TAPDevice)

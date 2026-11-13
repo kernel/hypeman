@@ -16,9 +16,22 @@ const (
 	tapGCMinAge = 5 * time.Minute
 )
 
+// TAPPreserveIDs returns the instances whose TAPs must survive orphan cleanup.
+// Paused guests still own their TAPs; Unknown guests may still have a live VMM.
+func TAPPreserveIDs(instances []Instance) []string {
+	ids := make([]string, 0, len(instances))
+	for _, inst := range instances {
+		switch inst.State {
+		case StateRunning, StateInitializing, StatePaused, StateUnknown:
+			ids = append(ids, inst.Id)
+		}
+	}
+	return ids
+}
+
 // StartTAPGCReconciler starts a background goroutine that periodically deletes
 // orphaned TAP devices on the host. Orphaned means: a hype-prefixed netdev whose
-// instance ID does not correspond to any Running/Initializing/Unknown instance.
+// instance ID does not correspond to any Running/Initializing/Paused/Unknown instance.
 // To avoid racing against in-flight CreateAllocation calls whose metadata hasn't
 // been persisted yet, only TAPs older than tapGCMinAge are considered.
 // The goroutine stops when ctx is cancelled.
@@ -45,20 +58,12 @@ func (m *manager) StartTAPGCReconciler(ctx context.Context) {
 func (m *manager) reconcileTAPs(ctx context.Context) {
 	log := logger.FromContext(ctx)
 
-	// Same preservation rules as startup (cmd/api/main.go): include Running,
-	// Initializing, and Unknown. "Better to leave a stale TAP than crash a
-	// running VM."
 	insts, err := m.ListInstances(ctx, nil)
 	var preserve []string
 	if err != nil {
 		log.WarnContext(ctx, "TAP GC: failed to list instances, skipping TAP pass", "error", err)
 	} else {
-		preserve = make([]string, 0, len(insts))
-		for _, inst := range insts {
-			if inst.State == StateRunning || inst.State == StateInitializing || inst.State == StateUnknown {
-				preserve = append(preserve, inst.Id)
-			}
-		}
+		preserve = TAPPreserveIDs(insts)
 	}
 
 	if err == nil {

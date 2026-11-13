@@ -148,12 +148,6 @@ type StoredMetadata struct {
 	// Embedded so its fields keep their flat JSON keys in persisted metadata.
 	HypervisorProcessIdentity
 
-	// Firecracker UFFD snapshot restore metadata.
-	FirecrackerSnapshotCacheKey     string
-	FirecrackerUseUFFDOnNextRestore bool
-	FirecrackerUFFDSessionID        string
-	FirecrackerUFFDPagerVersion     string
-
 	// Paths
 	SocketPath string // Path to API socket
 	DataDir    string // Instance data directory

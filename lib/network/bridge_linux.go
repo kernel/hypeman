@@ -526,7 +526,16 @@ func (m *manager) lastHypemanForwardRulePosition() int {
 }
 
 // createTAPDevice creates TAP device and attaches it to the bridge.
-func (m *manager) createTAPDevice(ctx context.Context, tapName, bridgeName string, isolated bool) error {
+func (m *manager) createTAPDevice(ctx context.Context, tapName, bridgeName, guestMAC string, isolated bool) error {
+	var mac net.HardwareAddr
+	if isolated {
+		var err error
+		mac, err = net.ParseMAC(guestMAC)
+		if err != nil {
+			return fmt.Errorf("parse guest MAC %q: %w", guestMAC, err)
+		}
+	}
+
 	// 1. Check if TAP already exists
 	_, linkLookupEnd := startNetworkStep(ctx, "network.create_tap.link_lookup_existing",
 		attribute.String("operation", "link_lookup_existing"),
@@ -548,9 +557,12 @@ func (m *manager) createTAPDevice(ctx context.Context, tapName, bridgeName strin
 	}
 
 	// 2. Create TAP device with current user as owner
-	// This allows Cloud Hypervisor (running as current user) to access the TAP
-	uid := os.Getuid()
-	gid := os.Getgid()
+	// This allows Cloud Hypervisor (running as current user) to access the TAP.
+	// A jailed firecracker runs as the jailer uid, which then becomes the owner.
+	uid, gid := os.Getuid(), os.Getgid()
+	if jc := m.config.Hypervisor.FirecrackerJailer; jc.Enabled {
+		uid, gid = jc.UID, jc.GID
+	}
 
 	tap := &netlink.Tuntap{
 		LinkAttrs: netlink.LinkAttrs{
@@ -617,8 +629,49 @@ func (m *manager) createTAPDevice(ctx context.Context, tapName, bridgeName strin
 		if err != nil {
 			return fmt.Errorf("set isolation mode: %w", err)
 		}
+
+		// 6. Isolation only stops guest-to-guest forwarding. Frames for a MAC the
+		// bridge has no entry for are still flooded to every port, so a guest
+		// in promiscuous mode can read other guests' inbound traffic. Pin the
+		// guest's MAC to its port, then stop flooding and learning on it.
+		_, hardenEnd := startNetworkStep(ctx, "network.create_tap.harden_port",
+			attribute.String("operation", "harden_port"),
+			attribute.String("tap", tapName),
+		)
+		err = hardenIsolatedPort(tapLink, mac)
+		hardenEnd(err)
+		if err != nil {
+			return err
+		}
 	}
 
+	return nil
+}
+
+// hardenIsolatedPort pins mac to the bridge port as a sticky static FDB entry
+// and turns off unknown-unicast flooding and source-MAC learning on the port.
+func hardenIsolatedPort(port netlink.Link, mac net.HardwareAddr) error {
+	// NUD_NOARP is `bridge fdb add ... static`. NUD_PERMANENT would make the
+	// entry local to the bridge instead of an address behind this port.
+	// Sticky keeps a frame with a spoofed source MAC from moving the entry to
+	// a port that still has learning on, such as a TAP created before this
+	// hardening existed.
+	err := netlink.NeighSet(&netlink.Neigh{
+		LinkIndex:    port.Attrs().Index,
+		Family:       unix.AF_BRIDGE,
+		State:        netlink.NUD_NOARP,
+		Flags:        netlink.NTF_MASTER | netlink.NTF_STICKY,
+		HardwareAddr: mac,
+	})
+	if err != nil {
+		return fmt.Errorf("pin guest MAC in bridge FDB: %w", err)
+	}
+	if err := netlink.LinkSetFlood(port, false); err != nil {
+		return fmt.Errorf("disable unicast flooding: %w", err)
+	}
+	if err := netlink.LinkSetLearning(port, false); err != nil {
+		return fmt.Errorf("disable MAC learning: %w", err)
+	}
 	return nil
 }
 
@@ -1091,6 +1144,24 @@ func (m *manager) deleteTAPDevice(ctx context.Context, tapName string) error {
 func (m *manager) tapDeviceExists(tapName string) bool {
 	_, err := netlink.LinkByName(tapName)
 	return err == nil
+}
+
+// forgetNeighbor removes the host's neighbor entry for a guest address on the
+// bridge. A missing entry is not an error.
+func (m *manager) forgetNeighbor(bridgeName, ip string) error {
+	addr := net.ParseIP(ip).To4()
+	if addr == nil {
+		return fmt.Errorf("parse IPv4 address %q", ip)
+	}
+	bridge, err := netlink.LinkByName(bridgeName)
+	if err != nil {
+		return fmt.Errorf("get bridge: %w", err)
+	}
+	err = netlink.NeighDel(&netlink.Neigh{LinkIndex: bridge.Attrs().Index, Family: netlink.FAMILY_V4, IP: addr})
+	if err != nil && !errors.Is(err, unix.ENOENT) {
+		return fmt.Errorf("delete neighbor entry: %w", err)
+	}
+	return nil
 }
 
 // queryNetworkState queries kernel for bridge state.

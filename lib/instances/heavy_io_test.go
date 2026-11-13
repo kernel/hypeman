@@ -11,7 +11,7 @@ import (
 // lets hundreds of VM-booting tests run at once. Under that contention guests
 // boot/restore too slowly and their in-guest agents never connect, producing
 // flaky timeouts. Light unit tests are left fully parallel; only tests that
-// boot VMs and do snapshot/fork/restore/UFFD/warm-fork/compression work
+// boot VMs and do snapshot/fork/restore/warm-fork/compression work
 // acquire a slot via acquireHeavyIO.
 //
 // The slot count is controlled by HYPEMAN_TEST_HEAVY_IO_PARALLELISM (default

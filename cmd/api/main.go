@@ -30,16 +30,16 @@ import (
 	"github.com/kernel/hypeman/lib/imageretention"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/instances"
+	"github.com/kernel/hypeman/lib/jwtauth"
 	loglib "github.com/kernel/hypeman/lib/logger"
 	mw "github.com/kernel/hypeman/lib/middleware"
 	"github.com/kernel/hypeman/lib/oapi"
 	"github.com/kernel/hypeman/lib/ocicachegc"
 	"github.com/kernel/hypeman/lib/otel"
 	"github.com/kernel/hypeman/lib/paths"
-	"github.com/kernel/hypeman/lib/providers"
 	"github.com/kernel/hypeman/lib/registry"
 	"github.com/kernel/hypeman/lib/scopes"
-	"github.com/kernel/hypeman/lib/uffdgraduate"
+	"github.com/kernel/hypeman/lib/tokenrevocation"
 	"github.com/kernel/hypeman/lib/vmm"
 	nethttpmiddleware "github.com/oapi-codegen/nethttp-middleware"
 	"github.com/riandyrn/otelchi"
@@ -158,32 +158,6 @@ func startOCICacheGC(grp *errgroup.Group, ctx context.Context, runner ociCacheGC
 		return runner.Run(ctx)
 	})
 	return true
-}
-
-func configureUFFDGraduationController(cfg *config.Config, instanceManager instances.Manager, logger *slog.Logger) (*uffdgraduate.Controller, error) {
-	g := cfg.Hypervisor.FirecrackerUFFDGraduation
-	if !g.Enabled {
-		return nil, nil
-	}
-	minSessionAge, err := time.ParseDuration(g.MinSessionAge)
-	if err != nil {
-		return nil, fmt.Errorf("invalid hypervisor.firecracker_uffd_graduation.min_session_age %q: %w", g.MinSessionAge, err)
-	}
-	scanInterval, err := time.ParseDuration(g.ScanInterval)
-	if err != nil {
-		return nil, fmt.Errorf("invalid hypervisor.firecracker_uffd_graduation.scan_interval %q: %w", g.ScanInterval, err)
-	}
-	completionTimeout, err := time.ParseDuration(g.CompletionTimeout)
-	if err != nil {
-		return nil, fmt.Errorf("invalid hypervisor.firecracker_uffd_graduation.completion_timeout %q: %w", g.CompletionTimeout, err)
-	}
-	return providers.ProvideUFFDGraduationController(instanceManager, uffdgraduate.Config{
-		Enabled:           true,
-		MinSessionAge:     minSessionAge,
-		MaxConcurrent:     g.MaxConcurrent,
-		ScanInterval:      scanInterval,
-		CompletionTimeout: completionTimeout,
-	}, logger), nil
 }
 
 func run() error {
@@ -308,9 +282,16 @@ func run() error {
 		logger.Info("OpenTelemetry push disabled; Prometheus pull metrics remain available")
 	}
 
-	// Refuse to start without a JWT secret: an empty HMAC key makes forged tokens valid
-	if app.Config.JwtSecret == "" {
-		return errors.New("JWT_SECRET must be set")
+	jwtVerifier, err := jwtauth.NewVerifier(app.Config.JwtSecret, app.Config.JwtVerificationSecrets, otelProvider.Meter)
+	if err != nil {
+		return fmt.Errorf("initialize JWT verifier: %w", err)
+	}
+	revokedTokens, err := tokenrevocation.New(app.Config.RevokedTokenHashes)
+	if err != nil {
+		return fmt.Errorf("invalid revoked_token_hashes: %w", err)
+	}
+	if revokedTokens.Len() > 0 {
+		logger.Info("API token revocation list loaded", "revoked_tokens", revokedTokens.Len())
 	}
 
 	// Verify hypervisor access (KVM on Linux, Virtualization.framework on macOS)
@@ -349,9 +330,7 @@ func run() error {
 		"kernel", kernelVer)
 
 	// Initialize network manager (creates default network if needed)
-	// Get instance IDs that might have a running VMM for TAP cleanup safety.
-	// Include Unknown state: we couldn't confirm their state, but they might still
-	// have a running VMM. Better to leave a stale TAP than crash a running VM.
+	// Preserve TAPs for running, paused, and potentially live VMMs.
 	var preserveTAPs []string
 	allInstances, err := app.InstanceManager.ListInstances(app.Ctx, nil)
 	if err != nil {
@@ -360,13 +339,7 @@ func run() error {
 		logger.Warn("failed to list instances for TAP cleanup, skipping cleanup", "error", err)
 		preserveTAPs = nil
 	} else {
-		// Initialize to empty slice (not nil) so cleanup runs even with no running VMs
-		preserveTAPs = []string{}
-		for _, inst := range allInstances {
-			if inst.State == instances.StateRunning || inst.State == instances.StateInitializing || inst.State == instances.StateUnknown {
-				preserveTAPs = append(preserveTAPs, inst.Id)
-			}
-		}
+		preserveTAPs = instances.TAPPreserveIDs(allInstances)
 	}
 	logger.Info("Initializing network manager...")
 	if err := app.NetworkManager.Initialize(app.Ctx, preserveTAPs); err != nil {
@@ -451,7 +424,7 @@ func run() error {
 		middleware.Recoverer,
 		mw.InjectLogger(logger),
 		mw.AccessLogger(accessLogger),
-		mw.JwtAuth(app.Config.JwtSecret),
+		mw.JwtAuth(jwtVerifier, revokedTokens),
 		scopes.RequireScope(scopes.InstanceWrite),
 		mw.ResolveResource(app.ApiService.NewResolvers(), api.ResolverErrorResponder),
 	).Get("/instances/{id}/exec", app.ApiService.ExecHandler)
@@ -463,7 +436,7 @@ func run() error {
 		middleware.Recoverer,
 		mw.InjectLogger(logger),
 		mw.AccessLogger(accessLogger),
-		mw.JwtAuth(app.Config.JwtSecret),
+		mw.JwtAuth(jwtVerifier, revokedTokens),
 		scopes.RequireScope(scopes.InstanceWrite),
 		mw.ResolveResource(app.ApiService.NewResolvers(), api.ResolverErrorResponder),
 	).Get("/instances/{id}/cp", app.ApiService.CpHandler)
@@ -472,7 +445,7 @@ func run() error {
 	// This validates that token requests from builder VMs are for their authorized repos only
 	// Create token handler for Docker Registry Token Authentication
 	// All clients must provide explicit credentials (Basic or Bearer auth with JWT)
-	tokenHandler := registry.NewTokenHandler(app.Config.JwtSecret)
+	tokenHandler := registry.NewTokenHandler(jwtVerifier, revokedTokens)
 
 	// OCI Distribution registry endpoints for image push (outside OpenAPI spec)
 	r.Route("/v2", func(r chi.Router) {
@@ -484,7 +457,7 @@ func run() error {
 		}
 		r.Use(mw.InjectLogger(logger))
 		r.Use(mw.AccessLogger(accessLogger))
-		r.Use(mw.JwtAuth(app.Config.JwtSecret))
+		r.Use(mw.JwtAuth(jwtVerifier, revokedTokens))
 
 		// Token endpoint for Docker Registry Token Authentication
 		// This is called by clients (like BuildKit) after receiving a 401 with WWW-Authenticate
@@ -538,7 +511,7 @@ func run() error {
 		// OpenAPI request validation with authentication
 		validatorOptions := &nethttpmiddleware.Options{
 			Options: openapi3filter.Options{
-				AuthenticationFunc: mw.OapiAuthenticationFunc(app.Config.JwtSecret),
+				AuthenticationFunc: mw.OapiAuthenticationFunc(jwtVerifier, revokedTokens),
 			},
 			ErrorHandler: mw.OapiErrorHandler,
 		}
@@ -652,16 +625,6 @@ func run() error {
 		})
 	}
 
-	uffdGraduationController, err := configureUFFDGraduationController(app.Config, app.InstanceManager, logger)
-	if err != nil {
-		return err
-	}
-	if uffdGraduationController != nil {
-		grp.Go(func() error {
-			logger.Info("starting uffd graduation controller")
-			return uffdGraduationController.Run(gctx)
-		})
-	}
 	if app.HealthCheckController != nil {
 		grp.Go(func() error {
 			logger.Info("starting health check controller")

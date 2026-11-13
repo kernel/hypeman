@@ -115,6 +115,8 @@ api:
 
 With this configuration, use `https://api.example.com` as the API base URL. Without it, the API is available on the server's configured port (4973 by default).
 
+For staged signing-key rotation, see [JWT secret rotation](docs/jwt-rotation.md).
+
 ## Usage
 
 ```bash

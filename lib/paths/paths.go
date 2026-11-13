@@ -115,31 +115,6 @@ func (p *Paths) FirecrackerBinary(version, arch string) string {
 	return filepath.Join(p.dataDir, "system", "binaries", "firecracker", version, arch, "firecracker")
 }
 
-// UFFDDir returns the root directory for Firecracker UFFD pager state.
-func (p *Paths) UFFDDir() string {
-	return filepath.Join(p.dataDir, "uffd")
-}
-
-func (p *Paths) UFFDPagerDir(versionKey string) string {
-	return filepath.Join(p.UFFDDir(), versionKey)
-}
-
-func (p *Paths) UFFDControlSocket(versionKey string) string {
-	return filepath.Join(p.UFFDPagerDir(versionKey), "control.sock")
-}
-
-func (p *Paths) UFFDPagerPID(versionKey string) string {
-	return filepath.Join(p.UFFDPagerDir(versionKey), "pager.pid")
-}
-
-func (p *Paths) UFFDPagerLog(versionKey string) string {
-	return filepath.Join(p.UFFDPagerDir(versionKey), "pager.log")
-}
-
-func (p *Paths) UFFDSessionsDir(versionKey string) string {
-	return filepath.Join(p.UFFDPagerDir(versionKey), "sessions")
-}
-
 // Image path methods
 
 // ImageContentDir returns the directory for content-addressed image data.
@@ -312,6 +287,11 @@ func (p *Paths) InstanceSocket(id string, socketName string) string {
 func (p *Paths) InstanceVsockSocket(id string) string {
 	return filepath.Join(p.InstanceDir(id), "vsock.sock")
 }
+
+// InstanceJailDirName is the per-instance directory a jailed VMM's chroot lives
+// under. It is a runtime artifact: snapshot and fork copies skip it, and restore
+// rebuilds it from the instance's own files.
+const InstanceJailDirName = "jail"
 
 // InstanceLogs returns the path to instance logs directory.
 func (p *Paths) InstanceLogs(id string) string {

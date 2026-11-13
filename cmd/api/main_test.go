@@ -11,12 +11,14 @@ import (
 	"github.com/getkin/kin-openapi/openapi3filter"
 	"github.com/go-chi/chi/v5"
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/kernel/hypeman/lib/jwtauth"
 	mw "github.com/kernel/hypeman/lib/middleware"
 	"github.com/kernel/hypeman/lib/oapi"
 	nethttpmiddleware "github.com/oapi-codegen/nethttp-middleware"
 	"github.com/oapi-codegen/runtime"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/metric/noop"
 )
 
 const testJWTSecret = "test-secret-key"
@@ -57,6 +59,8 @@ func generateValidJWT(userID string) (string, error) {
 }
 
 func setupTestRouter(t *testing.T) http.Handler {
+	verifier, err := jwtauth.NewVerifier(testJWTSecret, nil, noop.NewMeterProvider().Meter("test"))
+	require.NoError(t, err)
 	spec, err := oapi.GetSwagger()
 	require.NoError(t, err)
 	spec.Servers = nil
@@ -64,7 +68,7 @@ func setupTestRouter(t *testing.T) http.Handler {
 	r := chi.NewRouter()
 	r.Use(nethttpmiddleware.OapiRequestValidatorWithOptions(spec, &nethttpmiddleware.Options{
 		Options: openapi3filter.Options{
-			AuthenticationFunc: mw.OapiAuthenticationFunc(testJWTSecret),
+			AuthenticationFunc: mw.OapiAuthenticationFunc(verifier, nil),
 		},
 		ErrorHandler: mw.OapiErrorHandler,
 	}))

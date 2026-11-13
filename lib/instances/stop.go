@@ -277,7 +277,6 @@ func (m *manager) stopInstance(
 			_ = os.Remove(match)
 		}
 	}
-	m.closeFirecrackerUFFDSession(ctx, stored)
 
 	// 9. Ensure terminal stop semantics: no snapshot should remain in Stopped state.
 	// This prevents stale snapshot directories from deriving state as Standby and
@@ -304,8 +303,6 @@ func (m *manager) stopInstance(
 	stored.ProgramStartedAt = nil
 	stored.GuestAgentReadyAt = nil
 	stored.GuestAgent = nil
-	stored.FirecrackerSnapshotCacheKey = ""
-	clearFirecrackerUFFDRestoreState(stored)
 	stored.Phases.Record(phasetracking.PhaseStopped, now)
 
 	meta = &metadata{StoredMetadata: *stored}

@@ -302,11 +302,11 @@ type macOSSnapshotRestoreContextStarter struct {
 	concurrentForkPrepareTestStarter
 }
 
-func (s macOSSnapshotRestoreContextStarter) RestoreVM(ctx context.Context, p *paths.Paths, version, socket, snapshot string, options hypervisor.RestoreOptions) (int, hypervisor.Hypervisor, error) {
+func (s macOSSnapshotRestoreContextStarter) RestoreVM(ctx context.Context, p *paths.Paths, version, socket, snapshot string) (int, hypervisor.Hypervisor, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, nil, err
 	}
-	return s.concurrentForkPrepareTestStarter.RestoreVM(ctx, p, version, socket, snapshot, options)
+	return s.concurrentForkPrepareTestStarter.RestoreVM(ctx, p, version, socket, snapshot)
 }
 
 func TestMacOSSnapshotRestoresSourceAfterRequestCancellation(t *testing.T) {
@@ -472,8 +472,8 @@ type macOSResumeProbeStarter struct {
 	onResume func()
 }
 
-func (s macOSResumeProbeStarter) RestoreVM(ctx context.Context, p *paths.Paths, version, socket, snapshot string, options hypervisor.RestoreOptions) (int, hypervisor.Hypervisor, error) {
-	pid, hv, err := s.concurrentForkPrepareTestStarter.RestoreVM(ctx, p, version, socket, snapshot, options)
+func (s macOSResumeProbeStarter) RestoreVM(ctx context.Context, p *paths.Paths, version, socket, snapshot string) (int, hypervisor.Hypervisor, error) {
+	pid, hv, err := s.concurrentForkPrepareTestStarter.RestoreVM(ctx, p, version, socket, snapshot)
 	if err != nil {
 		return 0, nil, err
 	}

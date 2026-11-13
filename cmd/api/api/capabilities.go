@@ -58,7 +58,7 @@ func (s *ApiService) GetCapabilities(ctx context.Context, _ oapi.GetCapabilities
 	// was constructed from — launches still route through the wrapped manager,
 	// so a hardcoded fallback would misreport a Firecracker/QEMU default as
 	// cloud-hypervisor. Only an empty (unconfigured) value normalizes to the
-	// compile-time default, mirroring lib/instances.NewManagerWithConfigE.
+	// compile-time default, mirroring lib/instances.NewManagerWithConfig.
 	defaultRuntime := hypervisor.Type(s.Config.Hypervisor.Default)
 	if defaultRuntime == "" {
 		defaultRuntime = hypervisor.TypeCloudHypervisor

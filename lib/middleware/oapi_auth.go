@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -12,8 +13,10 @@ import (
 	"github.com/getkin/kin-openapi/openapi3filter"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/gorilla/mux"
+	"github.com/kernel/hypeman/lib/jwtauth"
 	"github.com/kernel/hypeman/lib/logger"
 	"github.com/kernel/hypeman/lib/scopes"
+	"github.com/kernel/hypeman/lib/tokenrevocation"
 )
 
 // errRepoNotAllowed is returned when a valid token doesn't have access to the requested repository.
@@ -22,6 +25,9 @@ var errRepoNotAllowed = errors.New("repository not allowed by token")
 // errInvalidTokenType is returned when a token is valid JWT but carries claims
 // reserved for registry-scoped builder tokens.
 var errInvalidTokenType = errors.New("invalid token type")
+
+// errTokenRevoked is returned when a correctly signed token is on the revocation list.
+var errTokenRevoked = errors.New("token revoked")
 
 type contextKey string
 
@@ -53,7 +59,7 @@ type RegistryTokenClaims struct {
 
 // OapiAuthenticationFunc creates an AuthenticationFunc compatible with nethttp-middleware
 // that validates JWT bearer tokens for endpoints with security requirements.
-func OapiAuthenticationFunc(jwtSecret string) openapi3filter.AuthenticationFunc {
+func OapiAuthenticationFunc(verifier *jwtauth.Verifier, revoked *tokenrevocation.List) openapi3filter.AuthenticationFunc {
 	return func(ctx context.Context, input *openapi3filter.AuthenticationInput) error {
 		log := logger.FromContext(ctx)
 
@@ -81,9 +87,9 @@ func OapiAuthenticationFunc(jwtSecret string) openapi3filter.AuthenticationFunc 
 			return fmt.Errorf("invalid authorization header format")
 		}
 
-		claims, err := validateUserToken(token, jwtSecret)
+		claims, err := validateUserToken(ctx, token, verifier, revoked)
 		if err != nil {
-			log.DebugContext(ctx, "user token validation failed", "error", err)
+			logTokenValidationFailure(ctx, log, err, input.RequestValidationInput.Request)
 			if errors.Is(err, errInvalidTokenType) {
 				return errInvalidTokenType
 			}
@@ -235,16 +241,11 @@ func writeRegistryUnauthorized(w http.ResponseWriter, r *http.Request) {
 
 // validateRegistryToken validates a registry-scoped JWT token and checks repository access.
 // Returns the claims if valid, nil otherwise.
-func validateRegistryToken(tokenString, jwtSecret, requestPath, method string) (*RegistryTokenClaims, error) {
-	token, err := jwt.ParseWithClaims(tokenString, &RegistryTokenClaims{}, func(token *jwt.Token) (interface{}, error) {
-		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
-		}
-		if jwtSecret == "" {
-			return nil, errors.New("JWT secret not configured")
-		}
-		return []byte(jwtSecret), nil
-	})
+func validateRegistryToken(ctx context.Context, tokenString string, verifier *jwtauth.Verifier, revoked *tokenrevocation.List, requestPath, method string) (*RegistryTokenClaims, error) {
+	if revoked.IsRevoked(tokenString) {
+		return nil, errTokenRevoked
+	}
+	token, err := verifier.ParseWithClaims(ctx, tokenString, &RegistryTokenClaims{})
 
 	if err != nil {
 		return nil, fmt.Errorf("parse token: %w", err)
@@ -309,17 +310,12 @@ func validateRegistryToken(tokenString, jwtSecret, requestPath, method string) (
 }
 
 // validateUserToken validates a regular user JWT and rejects builder/registry tokens.
-func validateUserToken(tokenString, jwtSecret string) (jwt.MapClaims, error) {
+func validateUserToken(ctx context.Context, tokenString string, verifier *jwtauth.Verifier, revoked *tokenrevocation.List) (jwt.MapClaims, error) {
+	if revoked.IsRevoked(tokenString) {
+		return nil, errTokenRevoked
+	}
 	claims := jwt.MapClaims{}
-	parsedToken, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (interface{}, error) {
-		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
-		}
-		if jwtSecret == "" {
-			return nil, errors.New("JWT secret not configured")
-		}
-		return []byte(jwtSecret), nil
-	})
+	parsedToken, err := verifier.ParseWithClaims(ctx, tokenString, claims)
 
 	if err != nil {
 		return nil, fmt.Errorf("parse token: %w", err)
@@ -348,6 +344,18 @@ func validateUserToken(tokenString, jwtSecret string) (jwt.MapClaims, error) {
 	return claims, nil
 }
 
+// logTokenValidationFailure logs revoked tokens at warn level so continued use
+// of a revoked credential is visible; other failures stay at debug.
+func logTokenValidationFailure(ctx context.Context, log *slog.Logger, err error, r *http.Request) {
+	if errors.Is(err, errTokenRevoked) {
+		log.WarnContext(ctx, "revoked token presented",
+			"path", r.URL.Path,
+			"remote_addr", r.RemoteAddr)
+		return
+	}
+	log.DebugContext(ctx, "user token validation failed", "error", err)
+}
+
 func contextWithUserClaims(ctx context.Context, claims jwt.MapClaims) context.Context {
 	var userID string
 	if sub, ok := claims["sub"].(string); ok {
@@ -361,7 +369,7 @@ func contextWithUserClaims(ctx context.Context, claims jwt.MapClaims) context.Co
 }
 
 // JwtAuth creates a chi middleware that validates JWT bearer tokens
-func JwtAuth(jwtSecret string) func(http.Handler) http.Handler {
+func JwtAuth(verifier *jwtauth.Verifier, revoked *tokenrevocation.List) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			log := logger.FromContext(r.Context())
@@ -392,7 +400,7 @@ func JwtAuth(jwtSecret string) func(http.Handler) http.Handler {
 						log.DebugContext(r.Context(), "extracted token for registry request", "auth_type", authType)
 
 						// Try to validate as a registry-scoped token
-						registryClaims, err := validateRegistryToken(token, jwtSecret, r.URL.Path, r.Method)
+						registryClaims, err := validateRegistryToken(r.Context(), token, verifier, revoked, r.URL.Path, r.Method)
 						if err == nil {
 							// Valid registry token - set build ID as user for audit trail
 							log.DebugContext(r.Context(), "registry token validated",
@@ -401,6 +409,11 @@ func JwtAuth(jwtSecret string) func(http.Handler) http.Handler {
 								"scope", registryClaims.Scope)
 							ctx := context.WithValue(r.Context(), userIDKey, "builder-"+registryClaims.BuildID)
 							next.ServeHTTP(w, requestWithoutAuthorization(r, ctx))
+							return
+						}
+						if errors.Is(err, errTokenRevoked) {
+							logTokenValidationFailure(r.Context(), log, err, r)
+							writeRegistryUnauthorized(w, r)
 							return
 						}
 						log.DebugContext(r.Context(), "registry token validation failed", "error", err)
@@ -420,7 +433,7 @@ func JwtAuth(jwtSecret string) func(http.Handler) http.Handler {
 						}
 
 						// Fall back to regular user JWTs for direct registry access.
-						userClaims, err := validateUserToken(token, jwtSecret)
+						userClaims, err := validateUserToken(r.Context(), token, verifier, revoked)
 						if err == nil {
 							log.DebugContext(r.Context(), "user token validated for registry request",
 								"auth_type", authType,
@@ -462,9 +475,9 @@ func JwtAuth(jwtSecret string) func(http.Handler) http.Handler {
 				return
 			}
 
-			claims, err := validateUserToken(token, jwtSecret)
+			claims, err := validateUserToken(r.Context(), token, verifier, revoked)
 			if err != nil {
-				log.DebugContext(r.Context(), "user token validation failed", "error", err)
+				logTokenValidationFailure(r.Context(), log, err, r)
 				if errors.Is(err, errInvalidTokenType) {
 					OapiErrorHandler(w, errInvalidTokenType.Error(), http.StatusUnauthorized)
 					return

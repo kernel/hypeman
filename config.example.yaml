@@ -14,6 +14,17 @@
 # e.g. `openssl rand -hex 32`. The API will not start with an empty value.
 jwt_secret: ""
 
+# Optional - additional verification-only keys for JWT rotation. New tokens are
+# still signed with jwt_secret. Restart after changes; see docs/jwt-rotation.md.
+# jwt_verification_secrets:
+#   - "<previous-or-next-secret>"
+
+# Optional - revoke individual API tokens before they expire. Each entry is the
+# hex SHA-256 of the full token string, e.g. `printf '%s' "$TOKEN" | sha256sum`.
+# Changes take effect when hypeman restarts.
+# revoked_token_hashes:
+#   - 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+
 # Data directory (default: /var/lib/hypeman)
 data_dir: /var/lib/hypeman
 
@@ -164,6 +175,8 @@ data_dir: /var/lib/hypeman
 #   docker_socket: /var/run/docker.sock
 #   max_concurrent_source_builds: 2
 #   timeout: 600
+#   retention: 2h                   # keep finished builds this long (GC may lag by up to 10m)
+#                                   # sources are deleted when a build finishes
 
 # builders:
 #   max_count: 0                    # max number of builders (0 = unlimited)

@@ -10,6 +10,8 @@ on:
 permissions:
   contents: read
   pull-requests: read
+  # pr-risk.yml exchanges the job's OIDC token for short-lived model credentials.
+  id-token: write
 
 jobs:
   classify:
@@ -25,4 +27,3 @@ jobs:
     secrets:
       ADMIN_APP_ID: ${{ secrets.ADMIN_APP_ID }}
       ADMIN_APP_PRIVATE_KEY: ${{ secrets.ADMIN_APP_PRIVATE_KEY }}
-      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}

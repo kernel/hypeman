@@ -65,15 +65,24 @@ func (m *manager) ensureDirectories(id string) error {
 
 // loadMetadata loads instance metadata from disk
 func (m *manager) loadMetadata(id string) (*metadata, error) {
+	return m.loadMetadataTimed(id, nil)
+}
+
+// loadMetadataTimed is loadMetadata for scans: it adds the time spent in each
+// step to timings.
+func (m *manager) loadMetadataTimed(id string, timings *metadataScanTimings) (*metadata, error) {
 	if err := paths.ValidatePathComponent(id); err != nil {
 		return nil, ErrNotFound
 	}
+	start := time.Now()
 	unlockAliasReaders := hypervisor.LockSnapshotSourceAliasReaders()
 	defer unlockAliasReaders()
+	start = timings.lap(metadataScanStepAliasLockWait, id, start)
 
 	metaPath := m.paths.InstanceMetadata(id)
 
 	data, err := os.ReadFile(metaPath)
+	start = timings.lap(metadataScanStepRead, id, start)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, ErrNotFound
@@ -82,7 +91,9 @@ func (m *manager) loadMetadata(id string) (*metadata, error) {
 	}
 
 	var meta metadata
-	if err := json.Unmarshal(data, &meta); err != nil {
+	err = json.Unmarshal(data, &meta)
+	timings.lap(metadataScanStepDecode, id, start)
+	if err != nil {
 		return nil, fmt.Errorf("unmarshal metadata: %w", err)
 	}
 
@@ -190,7 +201,7 @@ func removeAllWithRetry(path string, removeAll func(string) error, sleep func(ti
 }
 
 func (m *manager) listMetadataFiles() ([]string, error) {
-	files, _, err := m.walkMetadataFiles()
+	files, _, err := m.walkMetadataFiles(nil)
 	return files, err
 }
 
@@ -198,7 +209,7 @@ func (m *manager) listMetadataFiles() ([]string, error) {
 // fail-closed callers treat an unreadable instance as an error instead of
 // silently missing it.
 func (m *manager) listMetadataFilesStrict() ([]string, error) {
-	files, statErrs, err := m.walkMetadataFiles()
+	files, statErrs, err := m.walkMetadataFiles(nil)
 	if err != nil {
 		return nil, err
 	}
@@ -210,15 +221,18 @@ func (m *manager) listMetadataFilesStrict() ([]string, error) {
 
 // walkMetadataFiles returns readable metadata paths plus one error per
 // instance whose metadata could not be stat'd for a reason other than absence.
-func (m *manager) walkMetadataFiles() ([]string, []error, error) {
+// It adds the time spent listing and stat'ing to timings.
+func (m *manager) walkMetadataFiles(timings *metadataScanTimings) ([]string, []error, error) {
 	guestsDir := m.paths.GuestsDir()
 
+	start := time.Now()
 	// Ensure guests directory exists
 	if err := os.MkdirAll(guestsDir, 0755); err != nil {
 		return nil, nil, fmt.Errorf("create guests directory: %w", err)
 	}
 
 	entries, err := os.ReadDir(guestsDir)
+	start = timings.lap(metadataScanStepListDir, "", start)
 	if err != nil {
 		return nil, nil, fmt.Errorf("read guests directory: %w", err)
 	}
@@ -231,7 +245,9 @@ func (m *manager) walkMetadataFiles() ([]string, []error, error) {
 		}
 
 		metaPath := filepath.Join(guestsDir, entry.Name(), "metadata.json")
-		if _, err := os.Stat(metaPath); err == nil {
+		_, err := os.Stat(metaPath)
+		start = timings.lap(metadataScanStepStat, entry.Name(), start)
+		if err == nil {
 			metaFiles = append(metaFiles, metaPath)
 		} else if !os.IsNotExist(err) {
 			statErrs = append(statErrs, fmt.Errorf("stat metadata for instance %s: %w", entry.Name(), err))

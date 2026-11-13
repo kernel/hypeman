@@ -115,7 +115,8 @@ func TestBuildQueue_Cancel(t *testing.T) {
 	queue.Enqueue("build-3", CreateBuildRequest{}, func() {})
 
 	// Cancel build-2
-	cancelled := queue.Cancel("build-2")
+	cancelled, err := queue.Cancel("build-2", nil)
+	require.NoError(t, err)
 	require.True(t, cancelled, "should be able to cancel pending build")
 
 	// Verify build-3 moved up
@@ -124,7 +125,8 @@ func TestBuildQueue_Cancel(t *testing.T) {
 	assert.Equal(t, 1, *pos, "build-3 should move to position 1")
 
 	// Can't cancel active build
-	cancelled = queue.Cancel("build-1")
+	cancelled, err = queue.Cancel("build-1", nil)
+	require.NoError(t, err)
 	assert.False(t, cancelled, "should not be able to cancel active build")
 
 	close(done)

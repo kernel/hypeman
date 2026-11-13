@@ -13,12 +13,14 @@ import (
 
 	"github.com/Code-Hex/vz/v4/diskimagekit"
 	"github.com/kernel/hypeman/lib/images"
+	"github.com/kernel/hypeman/lib/jwtauth"
 	"github.com/kernel/hypeman/lib/machineimage"
 	"github.com/kernel/hypeman/lib/middleware"
 	"github.com/kernel/hypeman/lib/paths"
 	"github.com/kernel/hypeman/lib/registry"
 	"github.com/kernel/hypeman/lib/registrytoken"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/metric/noop"
 )
 
 type machineImportStub struct {
@@ -52,13 +54,20 @@ func machinePublisherStorage(t *testing.T) machineimage.Storage {
 	return storage
 }
 
+func registryAuth(t *testing.T) func(http.Handler) http.Handler {
+	t.Helper()
+	verifier, e := jwtauth.NewVerifier("synthetic registry secret", nil, noop.NewMeterProvider().Meter("test"))
+	require.NoError(t, e)
+	return middleware.JwtAuth(verifier, nil)
+}
+
 func TestStreamingMachinePublisherAuthenticatedRegistry(t *testing.T) {
 	// Tiny storage is intentional: this proves auth/streaming/commit ordering, not bootability.
 	imports := &machineImportStub{imported: make(chan string, 1)}
 	reg, e := registry.New(paths.New(t.TempDir()), imports)
 	require.NoError(t, e)
 	var uploads atomic.Int32
-	handler := middleware.JwtAuth("synthetic registry secret")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := registryAuth(t)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/blobs/uploads/") {
 			uploads.Add(1)
 		}
@@ -104,7 +113,7 @@ func TestStreamingMachinePublisherReusesBaseLayers(t *testing.T) {
 	reg, e := registry.New(paths.New(t.TempDir()), imports)
 	require.NoError(t, e)
 	var uploads atomic.Int32
-	server := httptest.NewServer(middleware.JwtAuth("synthetic registry secret")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(registryAuth(t)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/blobs/uploads/") {
 			uploads.Add(1)
 		}
@@ -157,7 +166,7 @@ func TestMintedTokenPublishesOnlyItsImage(t *testing.T) {
 	imports := &machineImportStub{imported: make(chan string, 2)}
 	reg, e := registry.New(paths.New(t.TempDir()), imports)
 	require.NoError(t, e)
-	server := httptest.NewServer(middleware.JwtAuth("synthetic registry secret")(reg.Handler()))
+	server := httptest.NewServer(registryAuth(t)(reg.Handler()))
 	defer server.Close()
 	token, e := machineimage.MintToken(registrytoken.NewGenerator("synthetic registry secret"), "qa-minted", nil, time.Hour)
 	require.NoError(t, e)

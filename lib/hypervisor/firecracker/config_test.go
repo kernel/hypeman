@@ -91,16 +91,6 @@ func TestSnapshotParamPaths(t *testing.T) {
 	require.Len(t, load.NetworkOverrides, 1)
 }
 
-func TestSnapshotLoadParamsSupportsUFFDBackend(t *testing.T) {
-	load := toSnapshotLoadParams("/tmp/snapshot-latest", nil, snapshotMemBackend{
-		BackendType: "Uffd",
-		BackendPath: "/tmp/pager.sock",
-	})
-	require.NotNil(t, load.MemBackend)
-	assert.Equal(t, "Uffd", load.MemBackend.BackendType)
-	assert.Equal(t, "/tmp/pager.sock", load.MemBackend.BackendPath)
-}
-
 func TestToBalloonConfig(t *testing.T) {
 	cfg := hypervisor.VMConfig{
 		GuestMemory: hypervisor.GuestMemoryConfig{

@@ -213,24 +213,31 @@ func (q *BuildQueue) pendingPositionLocked(buildID string) *int {
 // Cancel removes a build from the pending queue.
 // Returns true if the build was cancelled, false if it was not in the queue
 // (already running or not found).
-func (q *BuildQueue) Cancel(buildID string) bool {
+// persist, if set, runs under the queue lock before removal; on failure the
+// build remains queued. It must not call back into the queue.
+func (q *BuildQueue) Cancel(buildID string, persist func() error) (bool, error) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
 	// Can't cancel if actively running
 	if q.active[buildID] {
-		return false
+		return false, nil
 	}
 
 	// Find and remove from pending
 	for i, build := range q.pending {
 		if build.BuildID == buildID {
+			if persist != nil {
+				if err := persist(); err != nil {
+					return false, err
+				}
+			}
 			q.pending = append(q.pending[:i], q.pending[i+1:]...)
-			return true
+			return true, nil
 		}
 	}
 
-	return false
+	return false, nil
 }
 
 // IsActive returns true if the build is actively running

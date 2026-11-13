@@ -91,11 +91,6 @@ jobs:
           cache: false
           go-version-file: go.mod
 
-      - name: Check UFFD pager version
-        run: |
-          git fetch "https://github.com/${{ github.repository }}.git" main --depth=1
-          bash scripts/check-uffd-version.sh FETCH_HEAD
-      
       - name: Install dependencies
         run: |
           set -xe
@@ -223,29 +218,6 @@ jobs:
           done
           exit 1
 
-      - name: Install UFFD pager systemd template
-        run: |
-          sudo mkdir -p /run/hypeman/uffd
-          sudo tee /etc/systemd/system/hypeman-uffd@.service > /dev/null <<'EOF'
-          [Unit]
-          Description=Hypeman UFFD Pager (%i)
-          Documentation=https://github.com/kernel/hypeman
-          After=network.target
-
-          [Service]
-          Type=simple
-          Environment="HYPEMAN_UFFD_BINARY=/opt/hypeman/bin/hypeman-uffd-pager"
-          Environment="HYPEMAN_UFFD_DATA_DIR=/var/lib/hypeman"
-          Environment="HYPEMAN_UFFD_VERSION_KEY=%i"
-          Environment="HYPEMAN_UFFD_CACHE_MAX_BYTES=4294967296"
-          EnvironmentFile=-/run/hypeman/uffd/%i.env
-          ExecStart=/bin/sh -c 'exec "$HYPEMAN_UFFD_BINARY" --data-dir "$HYPEMAN_UFFD_DATA_DIR" --version-key "$HYPEMAN_UFFD_VERSION_KEY" --cache-max-bytes "$HYPEMAN_UFFD_CACHE_MAX_BYTES"'
-          Restart=on-failure
-          RestartSec=5
-          KillMode=process
-          EOF
-          sudo systemctl daemon-reload
-
       - name: Prewarm test cache
         env:
           DOCKER_CONFIG: /home/debianuser/.docker
@@ -300,52 +272,15 @@ jobs:
           HYPEMAN_TEST_PREWARM_STRICT: "1"
           HYPEMAN_TEST_REFLINK_STRICT: "1"
           HYPEMAN_TEST_REGISTRY: 127.0.0.1:5001
-          HYPEMAN_UFFD_PAGER_BINARY: ${{ runner.temp }}/hypeman-uffd-pager-${{ github.run_id }}-${{ github.run_attempt }}
-          HYPEMAN_UFFD_SYSTEMD_INSTANCE_PREFIX: ci-${{ github.run_id }}-${{ github.run_attempt }}
+          # Run the firecracker instance tests under the jailer, the most restrictive mode.
+          HYPEMAN_TEST_FIRECRACKER_JAILER: "1"
           # Fast scratch filesystem provisioned on the runner. Must be reflink-capable
           # (the VM disk fork fast path uses FICLONE) and kept short to stay under the
           # 108-char AF_UNIX sun_path limit for VMM control sockets.
           TMPDIR: /ci
         run: |
-          cp "$PWD/bin/hypeman-uffd-pager" "$HYPEMAN_UFFD_PAGER_BINARY"
-          chmod +x "$HYPEMAN_UFFD_PAGER_BINARY"
           export HYPEMAN_TEST_PREWARM_DIR="/ci/prewarm/linux-amd64"
           make test TEST_TIMEOUT=20m
-
-      - name: Cleanup
-        if: always()
-        run: |
-          set -euo pipefail
-
-          run_prefix="ci-${{ github.run_id }}-${{ github.run_attempt }}"
-          guest_pids=()
-          mapfile -t vmm_pids < <(pgrep -x 'cloud-hyperviso|firecracker|qemu-system-.*' || true)
-          for pid in "${vmm_pids[@]}"; do
-            proc="/proc/$pid"
-            cmdline="$(cat "$proc/cmdline" 2>/dev/null | tr '\0' ' ' || true)"
-            if [[ "$cmdline" == *"/ci/"* ]] && sudo grep -zFqx "HYPEMAN_UFFD_SYSTEMD_INSTANCE_PREFIX=$run_prefix" "$proc/environ" 2>/dev/null; then
-              guest_pids+=("$pid")
-            fi
-          done
-
-          if (( ${#guest_pids[@]} > 0 )); then
-            echo "Stopping leftover test VMs: ${guest_pids[*]}"
-            sudo kill -TERM "${guest_pids[@]}" 2>/dev/null || true
-            sleep 2
-            for pid in "${guest_pids[@]}"; do
-              if sudo kill -0 "$pid" 2>/dev/null; then
-                sudo kill -KILL "$pid" 2>/dev/null || true
-              fi
-            done
-          fi
-
-          units="$(systemctl list-units --all --full --plain 'hypeman-uffd@ci-${{ github.run_id }}-${{ github.run_attempt }}-*.service' --no-legend | awk '{print $1}' || true)"
-          if [ -n "$units" ]; then
-            echo "$units" | xargs -r sudo systemctl stop || true
-            echo "$units" | xargs -r sudo systemctl reset-failed || true
-          fi
-          sudo rm -f /run/hypeman/uffd/ci-${{ github.run_id }}-${{ github.run_attempt }}-*.env
-          rm -f "${{ runner.temp }}/hypeman-uffd-pager-${{ github.run_id }}-${{ github.run_attempt }}"
 
   report-pr-test:
     if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.pr_number != '' }}

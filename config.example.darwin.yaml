@@ -20,6 +20,11 @@
 # Required - used to sign and verify API tokens
 jwt_secret: dev-secret-change-me
 
+# Optional - additional verification-only keys for JWT rotation. New tokens are
+# still signed with jwt_secret. Restart after changes; see docs/jwt-rotation.md.
+# jwt_verification_secrets:
+#   - "<previous-or-next-secret>"
+
 # Data directory - use macOS conventions
 # Note: ~ is NOT expanded; use full path or let the install script fill this in
 data_dir: ~/Library/Application Support/hypeman
@@ -134,6 +139,8 @@ build:
   docker_socket: /var/run/docker.sock
   max_concurrent_source_builds: 2
   timeout: 600
+  # retention: 2h  # keep finished builds this long (GC may lag by up to 10m)
+  #                # sources are deleted when a build finishes
 
 # =============================================================================
 # Resource Limits (same as Linux)

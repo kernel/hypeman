@@ -277,12 +277,6 @@ func (m *manager) restoreInstance(
 		proxyRegistered = true
 	}
 
-	restoreOptions, err := m.firecrackerSnapshotRestoreOptions(stored, snapshotDir)
-	if err != nil {
-		releaseNetwork()
-		return nil, fmt.Errorf("configure snapshot memory backend: %w", err)
-	}
-
 	restoreSlotCtx, restoreSlotSpanEnd := m.startLifecycleStep(ctx, "restore_capacity_wait",
 		attribute.String("instance_id", id),
 		attribute.String("hypervisor", string(stored.HypervisorType)),
@@ -311,11 +305,10 @@ func (m *manager) restoreInstance(
 	)
 	log.InfoContext(ctx, "restoring from snapshot", "instance_id", id, "snapshot_dir", snapshotDir, "hypervisor", stored.HypervisorType)
 	// restoreFromSnapshot records the hypervisor process identity on stored.
-	_, hv, err := m.restoreFromSnapshot(restoreCtx, stored, snapshotDir, restoreOptions)
+	_, hv, err := m.restoreFromSnapshot(restoreCtx, stored, snapshotDir)
 	restoreSpanEnd(err)
 	if err != nil {
 		log.ErrorContext(ctx, "failed to restore from snapshot", "instance_id", id, "error", err)
-		m.closeFirecrackerUFFDSession(ctx, stored)
 		// Cleanup network on failure
 		releaseNetwork()
 		return nil, err
@@ -340,7 +333,6 @@ func (m *manager) restoreInstance(
 		log.ErrorContext(ctx, "failed to resume VM", "instance_id", id, "error", err)
 		// Cleanup on failure
 		hv.Shutdown(ctx)
-		m.closeFirecrackerUFFDSession(ctx, stored)
 		releaseNetwork()
 		return nil, fmt.Errorf("resume vm failed: %w", err)
 	}
@@ -368,7 +360,6 @@ func (m *manager) restoreInstance(
 			reconfigureSpanEnd(err)
 			log.ErrorContext(ctx, "failed to configure guest network after restore", "instance_id", id, "error", err)
 			_ = hv.Shutdown(ctx)
-			m.closeFirecrackerUFFDSession(ctx, stored)
 			m.rollbackAdmissionAllocationActive(stored)
 			releaseNetwork()
 			return nil, fmt.Errorf("configure guest network after restore: %w", err)
@@ -397,9 +388,6 @@ func (m *manager) restoreInstance(
 	// before markers ever hydrated we resume in Initializing.
 	resumePhase, _ := runningPhaseFromMarkers(stored)
 	stored.Phases.Record(resumePhase, time.Now().UTC())
-	// The one-shot restore has been consumed, but a UFFD-backed VM keeps its
-	// pager session serving faults until the next standby or stop closes it.
-	stored.FirecrackerUseUFFDOnNextRestore = false
 	meta = &metadata{StoredMetadata: *stored}
 	if err := m.saveMetadata(meta); err != nil {
 		// VM is running but metadata failed
@@ -449,7 +437,6 @@ func (m *manager) restoreFromSnapshot(
 	ctx context.Context,
 	stored *StoredMetadata,
 	snapshotDir string,
-	opts hypervisor.RestoreOptions,
 ) (int, hypervisor.Hypervisor, error) {
 	log := logger.FromContext(ctx)
 
@@ -461,7 +448,7 @@ func (m *manager) restoreFromSnapshot(
 
 	// Restore VM from snapshot (handles process start + restore)
 	log.DebugContext(ctx, "restoring VM from snapshot", "instance_id", stored.Id, "hypervisor", stored.HypervisorType, "version", stored.HypervisorVersion, "snapshot_dir", snapshotDir)
-	pid, hv, err := starter.RestoreVM(ctx, m.paths, stored.HypervisorVersion, stored.SocketPath, snapshotDir, opts)
+	pid, hv, err := starter.RestoreVM(ctx, m.paths, stored.HypervisorVersion, stored.SocketPath, snapshotDir)
 	if err != nil {
 		return 0, nil, fmt.Errorf("restore vm: %w", err)
 	}

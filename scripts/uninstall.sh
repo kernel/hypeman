@@ -94,6 +94,7 @@ if [ "$OS" = "darwin" ]; then
         launchctl unload "$PLIST_PATH" 2>/dev/null || true
     fi
 else
+    # Legacy: hosts installed before the UFFD pager was removed may still run its units.
     $SUDO systemctl list-units "${SERVICE_NAME}-uffd@*.service" --all --no-legend 2>/dev/null | awk '{print $1}' | while read -r unit; do
         if [ -n "$unit" ]; then
             info "Stopping ${unit}..."
@@ -126,8 +127,9 @@ else
         info "Removing systemd service..."
         $SUDO rm -f "${SYSTEMD_DIR}/${SERVICE_NAME}.service"
     fi
+    # Legacy: template from installs that predate the UFFD pager removal.
     if [ -f "${SYSTEMD_DIR}/${SERVICE_NAME}-uffd@.service" ]; then
-        info "Removing UFFD pager systemd service template..."
+        info "Removing legacy UFFD pager systemd service template..."
         $SUDO rm -f "${SYSTEMD_DIR}/${SERVICE_NAME}-uffd@.service"
     fi
     $SUDO systemctl daemon-reload

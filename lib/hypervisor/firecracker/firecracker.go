@@ -58,17 +58,16 @@ func capabilities() hypervisor.Capabilities {
 	return hypervisor.Capabilities{
 		SupportsSnapshot: true,
 		// PrepareFork persists restore metadata overrides for forks (fork.go).
-		SupportsFork:                      true,
-		SupportsHotplugMemory:             false,
-		SupportsBalloonControl:            true,
-		SupportsPause:                     true,
-		SupportsVsock:                     true,
-		SupportsGPUPassthrough:            false,
-		SupportsDiskIOLimit:               true,
-		SupportsGracefulVMMShutdown:       false,
-		SupportsSnapshotBaseReuse:         true,
-		SupportsConcurrentForkPrepare:     true,
-		UsesDetachableSnapshotMemoryPager: true,
+		SupportsFork:                  true,
+		SupportsHotplugMemory:         false,
+		SupportsBalloonControl:        true,
+		SupportsPause:                 true,
+		SupportsVsock:                 true,
+		SupportsGPUPassthrough:        false,
+		SupportsDiskIOLimit:           true,
+		SupportsGracefulVMMShutdown:   false,
+		SupportsSnapshotBaseReuse:     true,
+		SupportsConcurrentForkPrepare: true,
 	}
 }
 
@@ -116,6 +115,13 @@ func (f *Firecracker) Resume(ctx context.Context) error {
 }
 
 func (f *Firecracker) Snapshot(ctx context.Context, destPath string) error {
+	meta, err := loadRestoreMetadata(filepath.Dir(f.socketPath))
+	if err != nil {
+		return err
+	}
+	if meta.Jail != nil {
+		return f.snapshotJailed(ctx, destPath)
+	}
 	if err := os.MkdirAll(destPath, 0755); err != nil {
 		return fmt.Errorf("create snapshot directory: %w", err)
 	}

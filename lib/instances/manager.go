@@ -7,7 +7,6 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
@@ -22,7 +21,6 @@ import (
 	"github.com/kernel/hypeman/lib/paths"
 	"github.com/kernel/hypeman/lib/resources"
 	"github.com/kernel/hypeman/lib/system"
-	"github.com/kernel/hypeman/lib/uffdpager"
 	"github.com/kernel/hypeman/lib/volumes"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
@@ -91,8 +89,6 @@ type ManagerConfig struct {
 	MacOSOnly                         bool
 	MacOSGuestSubnet                  netip.Prefix // pool for macOS guest networks; zero uses DefaultMacOSGuestSubnet
 	LifecycleEventBufferSize          int
-	FirecrackerSnapshotMemoryBackend  string
-	FirecrackerUFFDCacheMaxBytes      int64
 	MaxConcurrentRestoresByHypervisor map[hypervisor.Type]int
 }
 
@@ -109,13 +105,6 @@ var restoreSlotPools sync.Map // map[restoreSlotPoolKey]chan struct{}
 func (c ManagerConfig) Normalize() ManagerConfig {
 	if c.LifecycleEventBufferSize <= 0 {
 		c.LifecycleEventBufferSize = defaultLifecycleEventBufferSize
-	}
-	c.FirecrackerSnapshotMemoryBackend = strings.ToLower(strings.TrimSpace(c.FirecrackerSnapshotMemoryBackend))
-	if c.FirecrackerSnapshotMemoryBackend == "" {
-		c.FirecrackerSnapshotMemoryBackend = uffdpager.BackendFile
-	}
-	if c.FirecrackerUFFDCacheMaxBytes <= 0 {
-		c.FirecrackerUFFDCacheMaxBytes = 4 << 30
 	}
 	if c.MaxConcurrentRestoresByHypervisor == nil {
 		c.MaxConcurrentRestoresByHypervisor = map[hypervisor.Type]int{
@@ -241,12 +230,10 @@ type manager struct {
 	vfioTermGrace time.Duration
 
 	// Hypervisor support
-	vmStarters                       map[hypervisor.Type]hypervisor.VMStarter
-	defaultHypervisor                hypervisor.Type // Default hypervisor type when not specified in request
-	guestMemoryPolicy                guestmemory.Policy
-	firecrackerSnapshotMemoryBackend string
-	firecrackerUFFDPager             *uffdpager.Supervisor
-	restoreSlotsByHypervisor         map[hypervisor.Type]chan struct{}
+	vmStarters               map[hypervisor.Type]hypervisor.VMStarter
+	defaultHypervisor        hypervisor.Type // Default hypervisor type when not specified in request
+	guestMemoryPolicy        guestmemory.Policy
+	restoreSlotsByHypervisor map[hypervisor.Type]chan struct{}
 }
 
 // platformStarters is populated by platform-specific init functions.
@@ -261,16 +248,6 @@ func NewManager(p *paths.Paths, imageManager images.Manager, systemManager syste
 
 // NewManagerWithConfig creates a new instances manager with additional manager settings.
 func NewManagerWithConfig(p *paths.Paths, imageManager images.Manager, systemManager system.Manager, networkManager network.Manager, deviceManager devices.Manager, volumeManager volumes.Manager, limits ResourceLimits, defaultHypervisor hypervisor.Type, snapshotDefaults SnapshotPolicy, managerConfig ManagerConfig, meter metric.Meter, tracer trace.Tracer, memoryPolicy ...guestmemory.Policy) Manager {
-	m, err := NewManagerWithConfigE(p, imageManager, systemManager, networkManager, deviceManager, volumeManager, limits, defaultHypervisor, snapshotDefaults, managerConfig, meter, tracer, memoryPolicy...)
-	if err != nil {
-		panic(err)
-	}
-	return m
-}
-
-// NewManagerWithConfigE creates a new instances manager and returns startup
-// errors for optional host services such as the Firecracker UFFD pager.
-func NewManagerWithConfigE(p *paths.Paths, imageManager images.Manager, systemManager system.Manager, networkManager network.Manager, deviceManager devices.Manager, volumeManager volumes.Manager, limits ResourceLimits, defaultHypervisor hypervisor.Type, snapshotDefaults SnapshotPolicy, managerConfig ManagerConfig, meter metric.Meter, tracer trace.Tracer, memoryPolicy ...guestmemory.Policy) (Manager, error) {
 	// Validate and default the hypervisor type
 	if defaultHypervisor == "" {
 		defaultHypervisor = hypervisor.TypeCloudHypervisor
@@ -284,47 +261,37 @@ func NewManagerWithConfigE(p *paths.Paths, imageManager images.Manager, systemMa
 	managerConfig = managerConfig.Normalize()
 
 	// Initialize VM starters from platform-specific init functions
-	rawStarters := make(map[hypervisor.Type]hypervisor.VMStarter, len(platformStarters))
+	vmStarters := make(map[hypervisor.Type]hypervisor.VMStarter, len(platformStarters))
 	for hvType, starter := range platformStarters {
-		rawStarters[hvType] = starter
-	}
-	firecrackerUFFDPager, err := configurePlatformStarters(context.Background(), p, rawStarters, managerConfig)
-	if err != nil {
-		return nil, err
-	}
-	vmStarters := make(map[hypervisor.Type]hypervisor.VMStarter, len(rawStarters))
-	for hvType, starter := range rawStarters {
 		vmStarters[hvType] = hypervisor.WrapVMStarter(hvType, starter)
 	}
 
 	m := &manager{
-		paths:                            p,
-		macOSOnly:                        managerConfig.MacOSOnly,
-		macOSGuestSubnet:                 managerConfig.MacOSGuestSubnet,
-		imageManager:                     imageManager,
-		systemManager:                    systemManager,
-		networkManager:                   networkManager,
-		deviceManager:                    deviceManager,
-		volumeManager:                    volumeManager,
-		limits:                           limits,
-		instanceLocks:                    sync.Map{},
-		bootMarkerScans:                  sync.Map{},
-		hostTopology:                     detectHostTopology(), // Detect and cache host topology
-		vmStarters:                       vmStarters,
-		defaultHypervisor:                defaultHypervisor,
-		now:                              time.Now,
-		writeFile:                        os.WriteFile,
-		meter:                            meter,
-		tracer:                           tracer,
-		guestMemoryPolicy:                policy,
-		firecrackerSnapshotMemoryBackend: managerConfig.FirecrackerSnapshotMemoryBackend,
-		firecrackerUFFDPager:             firecrackerUFFDPager,
-		restoreSlotsByHypervisor:         sharedRestoreSlotsByHypervisor(managerConfig.MaxConcurrentRestoresByHypervisor),
-		snapshotDefaults:                 snapshotDefaults,
-		compressionJobs:                  make(map[string]*compressionJob),
-		nativeCodecPaths:                 make(map[string]string),
-		lifecycleEvents:                  newLifecycleSubscribersWithBufferSize(managerConfig.LifecycleEventBufferSize),
-		guestAgentReadyProbe:             probeGuestAgentReady,
+		paths:                    p,
+		macOSOnly:                managerConfig.MacOSOnly,
+		macOSGuestSubnet:         managerConfig.MacOSGuestSubnet,
+		imageManager:             imageManager,
+		systemManager:            systemManager,
+		networkManager:           networkManager,
+		deviceManager:            deviceManager,
+		volumeManager:            volumeManager,
+		limits:                   limits,
+		instanceLocks:            sync.Map{},
+		bootMarkerScans:          sync.Map{},
+		hostTopology:             detectHostTopology(), // Detect and cache host topology
+		vmStarters:               vmStarters,
+		defaultHypervisor:        defaultHypervisor,
+		now:                      time.Now,
+		writeFile:                os.WriteFile,
+		meter:                    meter,
+		tracer:                   tracer,
+		guestMemoryPolicy:        policy,
+		restoreSlotsByHypervisor: sharedRestoreSlotsByHypervisor(managerConfig.MaxConcurrentRestoresByHypervisor),
+		snapshotDefaults:         snapshotDefaults,
+		compressionJobs:          make(map[string]*compressionJob),
+		nativeCodecPaths:         make(map[string]string),
+		lifecycleEvents:          newLifecycleSubscribersWithBufferSize(managerConfig.LifecycleEventBufferSize),
+		guestAgentReadyProbe:     probeGuestAgentReady,
 	}
 	m.deleteSnapshotFn = m.deleteSnapshot
 
@@ -347,7 +314,7 @@ func NewManagerWithConfigE(p *paths.Paths, imageManager images.Manager, systemMa
 		logger.FromContext(context.Background()).ErrorContext(context.Background(), "macOS restore staging recovery failed", "error", err)
 	}
 
-	return m, nil
+	return m
 }
 
 // SetResourceValidator sets the resource validator for aggregate limit checking.
@@ -891,7 +858,7 @@ func (m *manager) getInstanceWithMinIDPrefix(ctx context.Context, idOrName strin
 
 	// 2. Resolve exact name or ID prefix from metadata only, then hydrate the
 	// single matched instance.
-	meta, err := m.findInstanceMetadataByNameOrIDPrefix(idOrName, minPrefixLength)
+	meta, err := m.findInstanceMetadataByNameOrIDPrefix(ctx, idOrName, minPrefixLength)
 	if err != nil {
 		return nil, err
 	}

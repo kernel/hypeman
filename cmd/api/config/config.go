@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/netip"
 	"os"
@@ -150,11 +151,13 @@ type ImagesConfig struct {
 
 // BuildConfig holds source-to-image build system settings.
 type BuildConfig struct {
-	MaxConcurrentSourceBuilds int    `koanf:"max_concurrent_source_builds"`
-	BuilderImage              string `koanf:"builder_image"`
-	Timeout                   int    `koanf:"timeout"`
-	SecretsDir                string `koanf:"secrets_dir"`
-	DockerSocket              string `koanf:"docker_socket"`
+	MaxConcurrentSourceBuilds int           `koanf:"max_concurrent_source_builds"`
+	BuilderImage              string        `koanf:"builder_image"`
+	Timeout                   int           `koanf:"timeout"`
+	SecretsDir                string        `koanf:"secrets_dir"`
+	DockerSocket              string        `koanf:"docker_socket"`
+	Retention                 string        `koanf:"retention"` // how long finished builds are kept
+	RetentionDuration         time.Duration `koanf:"-"`         // parsed by Validate
 }
 
 // BuildersConfig holds builder resource settings.
@@ -215,26 +218,23 @@ type CapacityConfig struct {
 
 // HypervisorConfig holds hypervisor settings.
 type HypervisorConfig struct {
-	Default                          string                          `koanf:"default"`
-	CloudHypervisorDefaultVersion    string                          `koanf:"cloud_hypervisor_default_version"`
-	FirecrackerBinaryPath            string                          `koanf:"firecracker_binary_path"`
-	FirecrackerSnapshotMemoryBackend string                          `koanf:"firecracker_snapshot_memory_backend"`
-	FirecrackerUFFDCacheMaxBytes     string                          `koanf:"firecracker_uffd_cache_max_bytes"`
-	FirecrackerMaxConcurrentRestores int                             `koanf:"firecracker_max_concurrent_restores"`
-	FirecrackerUFFDGraduation        FirecrackerUFFDGraduationConfig `koanf:"firecracker_uffd_graduation"`
-	Memory                           HypervisorMemoryConfig          `koanf:"memory"`
+	Default                          string                  `koanf:"default"`
+	CloudHypervisorDefaultVersion    string                  `koanf:"cloud_hypervisor_default_version"`
+	FirecrackerBinaryPath            string                  `koanf:"firecracker_binary_path"`
+	FirecrackerMaxConcurrentRestores int                     `koanf:"firecracker_max_concurrent_restores"`
+	FirecrackerJailer                FirecrackerJailerConfig `koanf:"firecracker_jailer"`
+	Memory                           HypervisorMemoryConfig  `koanf:"memory"`
 }
 
-// FirecrackerUFFDGraduationConfig controls the background controller that
-// detaches running UFFD-backed VMs from their snapshot memory pager once they
-// have soaked, so long-lived VMs stop depending on a pager and old pager
-// versions retire. Disabled by default and only active on the uffd backend.
-type FirecrackerUFFDGraduationConfig struct {
-	Enabled           bool   `koanf:"enabled"`
-	MinSessionAge     string `koanf:"min_session_age"`
-	MaxConcurrent     int    `koanf:"max_concurrent"`
-	ScanInterval      string `koanf:"scan_interval"`
-	CompletionTimeout string `koanf:"completion_timeout"`
+// FirecrackerJailerConfig runs firecracker VMs under the firecracker jailer as a
+// dedicated uid/gid. Off by default.
+type FirecrackerJailerConfig struct {
+	Enabled bool `koanf:"enabled"`
+	// BinaryPath overrides the jailer embedded with each firecracker version.
+	// Required when firecracker_binary_path is set.
+	BinaryPath string `koanf:"binary_path"`
+	UID        int    `koanf:"uid"`
+	GID        int    `koanf:"gid"`
 }
 
 // HypervisorMemoryConfig holds guest memory management settings.
@@ -286,6 +286,13 @@ type Config struct {
 	Env           string `koanf:"env"`
 	Version       string `koanf:"version"`
 	MacOSOnly     bool   `koanf:"macos_only"` // Experimental: omit Linux boot downloads and reject Linux creates.
+
+	// JwtVerificationSecrets accepts additional keys without using them to sign tokens.
+	JwtVerificationSecrets []string `koanf:"jwt_verification_secrets"`
+
+	// RevokedTokenHashes lists hex SHA-256 digests of API tokens to reject
+	// even though they are signed with JwtSecret and not yet expired.
+	RevokedTokenHashes []string `koanf:"revoked_token_hashes"`
 
 	Network          NetworkConfig          `koanf:"network"`
 	Caddy            CaddyConfig            `koanf:"caddy"`
@@ -412,6 +419,7 @@ func defaultConfig() *Config {
 			Timeout:                   600,
 			SecretsDir:                "",
 			DockerSocket:              "/var/run/docker.sock",
+			Retention:                 "2h",
 		},
 
 		Builders: BuildersConfig{
@@ -464,16 +472,7 @@ func defaultConfig() *Config {
 			Default:                          "firecracker",
 			CloudHypervisorDefaultVersion:    "",
 			FirecrackerBinaryPath:            "",
-			FirecrackerSnapshotMemoryBackend: "file",
-			FirecrackerUFFDCacheMaxBytes:     "4294967296",
 			FirecrackerMaxConcurrentRestores: 32,
-			FirecrackerUFFDGraduation: FirecrackerUFFDGraduationConfig{
-				Enabled:           false,
-				MinSessionAge:     "10m",
-				MaxConcurrent:     1,
-				ScanInterval:      "1m",
-				CompletionTimeout: "10m",
-			},
 			Memory: HypervisorMemoryConfig{
 				Enabled:            false,
 				KernelPageInitMode: "hardened",
@@ -553,9 +552,18 @@ func Load(configPath string) (*Config, error) {
 	// The "__" delimiter maps double-underscore in env var names to nested
 	// koanf key separators: CADDY__LISTEN_ADDRESS → caddy.listen_address.
 	// Single underscores are preserved: JWT_SECRET → jwt_secret (top-level).
+	var verificationSecrets []string
+	if value := os.Getenv("JWT_VERIFICATION_SECRETS"); value != "" {
+		if err := json.Unmarshal([]byte(value), &verificationSecrets); err != nil || verificationSecrets == nil {
+			return nil, fmt.Errorf("JWT_VERIFICATION_SECRETS must be a JSON array of strings")
+		}
+	}
 	envProvider := env.ProviderWithValue("", "__", func(key string, value string) (string, interface{}) {
 		if value == "" {
 			return "", nil
+		}
+		if key == "JWT_VERIFICATION_SECRETS" {
+			return "jwt_verification_secrets", verificationSecrets
 		}
 		return strings.ToLower(key), value
 	})
@@ -577,6 +585,7 @@ func (c *Config) expandPathFields() {
 	c.Build.DockerSocket = expandHomePath(c.Build.DockerSocket)
 	c.Registry.CACertFile = expandHomePath(c.Registry.CACertFile)
 	c.Hypervisor.FirecrackerBinaryPath = expandHomePath(c.Hypervisor.FirecrackerBinaryPath)
+	c.Hypervisor.FirecrackerJailer.BinaryPath = expandHomePath(c.Hypervisor.FirecrackerJailer.BinaryPath)
 }
 
 func expandHomePath(path string) string {
@@ -595,6 +604,11 @@ func expandHomePath(path string) string {
 // Validate checks configuration values for correctness.
 // Returns an error if any configuration value is invalid.
 func (c *Config) Validate() error {
+	for i, secret := range c.JwtVerificationSecrets {
+		if secret == "" {
+			return fmt.Errorf("jwt_verification_secrets entry %d must not be empty", i)
+		}
+	}
 	if c.MacOSOnly && (runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" || c.Hypervisor.Default != "vz") {
 		return fmt.Errorf("macos_only requires vz on Apple silicon")
 	}
@@ -683,6 +697,14 @@ func (c *Config) Validate() error {
 	if c.Build.Timeout <= 0 {
 		return fmt.Errorf("build.timeout must be positive, got %d", c.Build.Timeout)
 	}
+	retention, err := time.ParseDuration(c.Build.Retention)
+	if err != nil {
+		return fmt.Errorf("build.retention must be a valid duration, got %q: %w", c.Build.Retention, err)
+	}
+	if retention <= 0 {
+		return fmt.Errorf("build.retention must be positive, got %q", c.Build.Retention)
+	}
+	c.Build.RetentionDuration = retention
 	if c.Builders.MaxCount < 0 {
 		return fmt.Errorf("builders.max_count must be >= 0, got %d", c.Builders.MaxCount)
 	}
@@ -708,6 +730,14 @@ func (c *Config) Validate() error {
 	}
 	if c.Hypervisor.FirecrackerMaxConcurrentRestores < 0 {
 		return fmt.Errorf("hypervisor.firecracker_max_concurrent_restores must be >= 0, got %d", c.Hypervisor.FirecrackerMaxConcurrentRestores)
+	}
+	if jc := c.Hypervisor.FirecrackerJailer; jc.Enabled {
+		if jc.BinaryPath == "" && c.Hypervisor.FirecrackerBinaryPath != "" {
+			return fmt.Errorf("hypervisor.firecracker_jailer.binary_path is required when hypervisor.firecracker_binary_path is set")
+		}
+		if jc.UID <= 0 || jc.GID <= 0 {
+			return fmt.Errorf("hypervisor.firecracker_jailer.uid and gid must be > 0 when the jailer is enabled, got uid=%d gid=%d", jc.UID, jc.GID)
+		}
 	}
 	if c.Instances.LifecycleEventBufferSize <= 0 {
 		return fmt.Errorf("instances.lifecycle_event_buffer_size must be positive, got %d", c.Instances.LifecycleEventBufferSize)
@@ -761,22 +791,6 @@ func (c *Config) Validate() error {
 	if c.Hypervisor.Memory.KernelPageInitMode != "performance" && c.Hypervisor.Memory.KernelPageInitMode != "hardened" {
 		return fmt.Errorf("hypervisor.memory.kernel_page_init_mode must be one of {performance,hardened}, got %q", c.Hypervisor.Memory.KernelPageInitMode)
 	}
-	backend := strings.ToLower(strings.TrimSpace(c.Hypervisor.FirecrackerSnapshotMemoryBackend))
-	if backend == "" {
-		backend = "file"
-	}
-	switch backend {
-	case "file", "uffd":
-		c.Hypervisor.FirecrackerSnapshotMemoryBackend = backend
-	default:
-		return fmt.Errorf("hypervisor.firecracker_snapshot_memory_backend must be one of {file,uffd}, got %q", c.Hypervisor.FirecrackerSnapshotMemoryBackend)
-	}
-	if err := validateByteSize("hypervisor.firecracker_uffd_cache_max_bytes", c.Hypervisor.FirecrackerUFFDCacheMaxBytes); err != nil {
-		return err
-	}
-	if err := c.validateFirecrackerUFFDGraduation(); err != nil {
-		return err
-	}
 	if err := validateDuration("hypervisor.memory.active_ballooning.poll_interval", c.Hypervisor.Memory.ActiveBallooning.PollInterval); err != nil {
 		return err
 	}
@@ -825,26 +839,6 @@ func validateDuration(field string, value string) error {
 	}
 	if _, err := time.ParseDuration(value); err != nil {
 		return fmt.Errorf("%s must be a valid duration, got %q: %w", field, value, err)
-	}
-	return nil
-}
-
-func (c *Config) validateFirecrackerUFFDGraduation() error {
-	g := c.Hypervisor.FirecrackerUFFDGraduation
-	if !g.Enabled {
-		return nil
-	}
-	for field, value := range map[string]string{
-		"hypervisor.firecracker_uffd_graduation.min_session_age":    g.MinSessionAge,
-		"hypervisor.firecracker_uffd_graduation.scan_interval":      g.ScanInterval,
-		"hypervisor.firecracker_uffd_graduation.completion_timeout": g.CompletionTimeout,
-	} {
-		if err := validateDuration(field, value); err != nil {
-			return err
-		}
-	}
-	if g.MaxConcurrent < 0 {
-		return fmt.Errorf("hypervisor.firecracker_uffd_graduation.max_concurrent must not be negative")
 	}
 	return nil
 }
