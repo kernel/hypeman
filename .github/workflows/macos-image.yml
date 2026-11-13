@@ -36,10 +36,10 @@ jobs:
       PACKER_VERSION: 1.16.2
       PACKER_SHA256: 3d7e4df8e7e8c21bdf495c4f63ad9189e22540dc8126dee6db791aa8519e8b3a
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.4.0
         with:
           persist-credentials: false
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v6.5.0
         with:
           go-version-file: go.mod
           cache: false

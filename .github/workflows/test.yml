@@ -42,7 +42,7 @@ jobs:
   test:
     runs-on: [self-hosted, linux, x64, kvm]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.4.0
         with:
           clean: false
           repository: ${{ env.TEST_SOURCE_REPO }}
@@ -84,7 +84,7 @@ jobs:
           echo "swept $(wc -l < "$RUNNER_TEMP/net-sweep-dead") interfaces (DOWN, portless, older than 1h)"
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v6.5.0
         with:
           # Not necessary to upload cache on self-hosted runner(s)
           # ~/go/pkg/mod and ~/.cache/go-build stay on disk between runs automatically.
@@ -169,7 +169,7 @@ jobs:
       # Slash-command runs are maintainer-approved and need authenticated pulls
       # for images that are not covered by the prewarm cache.
       - name: Login to Docker Hub
-        uses: docker/login-action@v3
+        uses: docker/login-action@v3.7.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_PASSWORD }}
@@ -330,12 +330,12 @@ jobs:
     env:
       DATA_DIR: /tmp/hypeman-ci-${{ github.run_id }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.4.0
         with:
           repository: ${{ env.TEST_SOURCE_REPO }}
           ref: ${{ env.TEST_SOURCE_REF }}
           persist-credentials: false
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v6.5.0
         with:
           go-version-file: go.mod
           cache: false
@@ -369,7 +369,7 @@ jobs:
 
           docker info
       - name: Login to Docker Hub
-        uses: docker/login-action@v3
+        uses: docker/login-action@v3.7.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_PASSWORD }}
@@ -444,12 +444,12 @@ jobs:
       group: macos-ci-e2e-${{ inputs.pr_head_sha || github.ref }}
       cancel-in-progress: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.4.0
         with:
           repository: ${{ env.TEST_SOURCE_REPO }}
           ref: ${{ env.TEST_SOURCE_REF }}
           persist-credentials: false
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v6.5.0
         with:
           go-version-file: go.mod
           cache: false
@@ -474,7 +474,7 @@ jobs:
           # what is stale, and fall back to a full prune when host disk is low.
           bash scripts/docker-ci-cleanup.sh
       - name: Login to Docker Hub
-        uses: docker/login-action@v3
+        uses: docker/login-action@v3.7.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_PASSWORD }}

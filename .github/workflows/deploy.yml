@@ -20,9 +20,9 @@ jobs:
   validate:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.4.0
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v6.5.0
         with:
           go-version-file: go.mod
           cache: false
@@ -51,9 +51,9 @@ jobs:
       CLOUDFORMATION_TEMPLATE_KEY: v1/hypeman/template.yaml
       CLOUDFORMATION_TEMPLATE_SOURCE: deploy/aws/cloudformation/template.yaml
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.4.0
 
-      - uses: aws-actions/configure-aws-credentials@v4
+      - uses: aws-actions/configure-aws-credentials@v4.3.1
         with:
           role-to-assume: arn:aws:iam::613957054632:role/github-actions-hypeman-cloudformation-publisher
           aws-region: ${{ env.AWS_REGION }}
