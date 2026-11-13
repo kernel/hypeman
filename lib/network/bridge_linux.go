@@ -743,7 +743,9 @@ func filterGuestSource(tap netlink.Link, mac net.HardwareAddr, ip net.IP) error 
 	}{
 		{unix.ETH_P_ARP, netlink.TC_ACT_OK, arpKeys},
 		{unix.ETH_P_IP, netlink.TC_ACT_OK, ipKeys},
-		{unix.ETH_P_ALL, netlink.TC_ACT_SHOT, []netlink.TcU32Key{{}}},
+		// The key reads the end of the Ethernet header, which every frame
+		// has; a key past it would not match, and so pass, a runt frame.
+		{unix.ETH_P_ALL, netlink.TC_ACT_SHOT, []netlink.TcU32Key{{Off: -4}}},
 	}
 	for i, f := range filters {
 		err := netlink.FilterAdd(&netlink.U32{
@@ -1306,10 +1308,10 @@ func (m *manager) deleteTAPDevice(ctx context.Context, tapName string) error {
 		return nil
 	}
 
-	// Keep the TAP while its guest's neighbor entry is pinned, so a failed
-	// cleanup is retried by the orphan TAP sweep.
+	// A pin left behind points at a MAC no guest uses and is replaced when
+	// the address is handed out again, so it must not keep the TAP.
 	if err := m.unpinNeighbors(link); err != nil {
-		return err
+		logger.FromContext(ctx).WarnContext(ctx, "failed to unpin guest neighbor entry", "tap", tapName, "error", err)
 	}
 
 	// Remove HTB class from bridge before deleting TAP

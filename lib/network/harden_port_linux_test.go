@@ -282,6 +282,16 @@ func TestGuestSourceFilterDropsSpoofedFrames(t *testing.T) {
 		sendRawFrame(t, send, guest, c.frame(marker))
 		assert.Equal(t, c.pass, receivedMarker(host, marker), "%s: passed=%v", c.name, !c.pass)
 	}
+
+	// Frames too short to hold the fields the filters read, sent unpadded
+	// and marked by their spoofed source MAC.
+	for payload := 0; payload < 4; payload++ {
+		runtMAC := net.HardwareAddr{0x02, 0x00, 0x00, 0xde, 0xad, byte(0x10 + payload)}
+		frame := append(append(append([]byte{}, bridgeMAC...), runtMAC...), 0x08, 0x00)
+		frame = append(frame, make([]byte, payload)...)
+		require.NoError(t, unix.Sendto(send, frame, 0, &unix.SockaddrLinklayer{Ifindex: guest.Attrs().Index, Halen: 6}))
+		assert.False(t, receivedMarker(host, runtMAC), "%d-byte frame passed", len(frame))
+	}
 }
 
 // TestReleasedAddressKeepsNoPinnedNeighbor drives TAP setup and every release
