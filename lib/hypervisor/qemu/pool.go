@@ -63,14 +63,6 @@ func poolTypeMismatchError(socketPath string, cached, requested hypervisor.Type)
 	return fmt.Errorf("QEMU client for %s is pooled as hypervisor %s, not %s", socketPath, cached, requested)
 }
 
-// resetClient drops a pooled connection before a new QEMU process reuses the
-// same socket path. Disconnect happens outside the pool lock and stale users
-// can only remove their own client generation.
-func resetClient(socketPath string) {
-	client := takeClient(socketPath, nil)
-	closeClientAsync(client)
-}
-
 // removeClient removes client only if it is still the current generation for
 // its socket path. This prevents a late error from an old QEMU process from
 // evicting the replacement process's client.
@@ -86,6 +78,14 @@ func removeClient(client *QEMU) {
 func Remove(socketPath string) {
 	client := takeClient(socketPath, nil)
 	closeClientAsync(client)
+}
+
+// releaseVMMState drops what is cached for a socket whose QEMU has exited.
+// Unlike Remove, it also forgets the balloon target, which has to outlive a
+// reconnect to a QEMU that is still running.
+func releaseVMMState(socketPath string) {
+	Remove(socketPath)
+	clearBalloonTargetCache(socketPath)
 }
 
 // takeClient removes the current client. When expected is non-nil, removal is

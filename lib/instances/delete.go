@@ -143,6 +143,14 @@ func (m *manager) deleteInstanceWithOptions(
 		}
 	}
 
+	// The VMM is gone. Drop what the hypervisor cached for it, and close the
+	// guest-agent connection that the graceful shutdown RPC opened again after
+	// step 3. Both would otherwise stay for the life of the process.
+	hypervisor.ReleaseVMMState(inst.HypervisorType, inst.SocketPath)
+	if dialer, err := hypervisor.NewVsockDialer(inst.HypervisorType, inst.VsockSocket, inst.VsockCID); err == nil {
+		guest.CloseConn(dialer.Key())
+	}
+
 	// Release before deleting metadata so a failed release can be retried safely.
 	if storedVGPUDevicePath(stored) != "" {
 		log.InfoContext(ctx, "destroying vGPU", "instance_id", id, "uuid", stored.GPUMdevUUID)
