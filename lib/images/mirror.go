@@ -15,6 +15,8 @@ import (
 type MirrorRequest struct {
 	// SourceImage is the full image reference to pull from (e.g., "docker.io/onkernel/nodejs22-base:0.1.1")
 	SourceImage string
+	// SourceRepository overrides the upstream repository, preserving the tag or digest and local name.
+	SourceRepository string
 	// Platform selects which platform variant to mirror as os/arch[/variant]
 	// (e.g., linux/amd64). Empty means the host platform.
 	Platform string
@@ -57,7 +59,19 @@ func MirrorBaseImage(ctx context.Context, registryURL string, req MirrorRequest,
 	// by digest is therefore mirrored as the index itself, byte for byte.
 	// Tag references keep the existing behavior of mirroring only the
 	// requested platform, which is what saves storage.
-	desc, err := remote.Get(srcRef,
+	pullRef := srcRef
+	if req.SourceRepository != "" {
+		repository, err := name.NewRepository(req.SourceRepository)
+		if err != nil {
+			return nil, fmt.Errorf("parse source repository: %w", err)
+		}
+		if digest, ok := srcRef.(name.Digest); ok {
+			pullRef = repository.Digest(digest.DigestStr())
+		} else {
+			pullRef = repository.Tag(srcRef.Identifier())
+		}
+	}
+	desc, err := remote.Get(pullRef,
 		remote.WithContext(ctx),
 		remote.WithAuthFromKeychain(authn.DefaultKeychain),
 		remote.WithPlatform(platform.ToGCR()))

@@ -98,6 +98,9 @@ type Config struct {
 	// RegistryURL is the URL of the registry to push built images to
 	RegistryURL string
 
+	// BaseImageSources maps base repositories to required host-authenticated sources.
+	BaseImageSources map[string]string
+
 	// RegistryInsecure skips TLS verification for the registry (for self-signed certs)
 	RegistryInsecure bool
 
@@ -178,6 +181,11 @@ func NewManager(
 	logger *slog.Logger,
 	meter metric.Meter,
 ) (Manager, error) {
+	sources, err := normalizeBaseImageSources(config.BaseImageSources)
+	if err != nil {
+		return nil, err
+	}
+	config.BaseImageSources = sources
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -752,12 +760,11 @@ func (m *manager) runBuild(ctx context.Context, id string, req CreateBuildReques
 	// Mirror base images to the local registry before launching the VM.
 	// BuildKit is configured with our registry as a mirror for docker.io,
 	// so pre-cached images will be served locally without pulling from Docker Hub.
-	if err := m.mirrorBaseImagesForBuild(buildCtx, id, req); err != nil {
-		m.logger.Warn("failed to mirror base images", "id", id, "error", err)
+	err := m.mirrorBaseImagesForBuild(buildCtx, id, req)
+	var result *BuildResult
+	if err == nil {
+		result, err = m.executeBuild(buildCtx, id, req, policy)
 	}
-
-	// Run the build in a builder VM
-	result, err := m.executeBuild(buildCtx, id, req, policy)
 
 	// executeBuild's defers release the builder acquisition when it returns,
 	// so same-builder builds may start while this build waits for image

@@ -141,4 +141,20 @@ docker login
 docker login ghcr.io
 ```
 
-No code changes needed - credentials are automatically discovered.
+Credentials are automatically discovered.
+
+For source builds, `build.base_image_sources` maps an exact base repository to a
+host-authenticated upstream repository. Tags and digests are preserved, and the
+image is stored in the local registry under its original name:
+
+```yaml
+build:
+  base_image_sources:
+    example/node-base: registry.example/private/node-base
+```
+
+The host uses its credential helper for the upstream pull. Build guests keep
+their original Dockerfile references and scoped local-registry tokens.
+Mapped prefetch failures stop the build before a VM starts. Unmapped images
+retain best-effort prefetching. The builder's existing registry-mirror fallback
+behavior is otherwise unchanged. An empty map preserves direct upstream pulls.

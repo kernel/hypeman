@@ -432,6 +432,7 @@ func ProvideBuildManager(p *paths.Paths, cfg *config.Config, instanceManager ins
 		MaxConcurrentBuilds: cfg.Build.MaxConcurrentSourceBuilds,
 		BuilderImage:        cfg.Build.BuilderImage,
 		RegistryURL:         registryURL,
+		BaseImageSources:    cfg.Build.BaseImageSources,
 		RegistryInsecure:    cfg.Registry.Insecure,
 		RegistryCACert:      registryCACert,
 		DefaultTimeout:      cfg.Build.Timeout,

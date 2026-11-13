@@ -170,6 +170,20 @@ hypervisor:
 	assertPath("hypervisor.firecracker_binary_path", cfg.Hypervisor.FirecrackerBinaryPath, filepath.Join("bin", "firecracker"))
 }
 
+func TestLoadBaseImageSources(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("build:\n  base_image_sources:\n    onkernel/python3.11-base: registry.example/kernel/python3.11-base\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Build.BaseImageSources["onkernel/python3.11-base"] != "registry.example/kernel/python3.11-base" {
+		t.Fatalf("repository names must survive config decoding: %v", cfg.Build.BaseImageSources)
+	}
+}
+
 func clearPathEnvOverrides(t *testing.T) {
 	t.Helper()
 	for _, key := range []string{

@@ -3,6 +3,7 @@ package builds
 import (
 	"archive/tar"
 	"compress/gzip"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -125,6 +126,8 @@ func normalizeImageRef(ref string) string {
 	return repo + suffix
 }
 
+var errDockerfileNotFound = errors.New("Dockerfile not found in tarball")
+
 // ExtractDockerfileFromTarball reads just the Dockerfile entry from a .tar.gz
 // archive and returns its content as a string. It looks for entries named
 // "Dockerfile" or "./Dockerfile" at the root of the archive.
@@ -162,5 +165,5 @@ func ExtractDockerfileFromTarball(tarballPath string) (string, error) {
 		}
 	}
 
-	return "", fmt.Errorf("Dockerfile not found in tarball")
+	return "", errDockerfileNotFound
 }
