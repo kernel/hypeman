@@ -131,7 +131,7 @@ func TestForgetNeighborDropsReusedAddressEntry(t *testing.T) {
 
 // A new guest must not inherit the neighbor entry of whichever guest held its
 // address before: the host would keep sending to the old MAC.
-func TestCreateAllocationForgetsNeighborOfReusedAddress(t *testing.T) {
+func TestCreateAllocationPinsNeighborOfReusedAddress(t *testing.T) {
 	bridge := newNeighborTestBridge(t)
 	const subnet = "198.51.100.0/29"
 	var candidates []net.IP
@@ -158,8 +158,14 @@ func TestCreateAllocationForgetsNeighborOfReusedAddress(t *testing.T) {
 		}
 	})
 
+	mac, err := net.ParseMAC(allocated.MAC)
+	require.NoError(t, err)
 	for _, ip := range candidates {
-		assert.Equal(t, ip.String() != allocated.IP, hasUsableNeighbor(t, bridge, ip), "neighbor entry for %s", ip)
+		if ip.String() == allocated.IP {
+			assertPinned(t, bridge, ip, mac)
+		} else {
+			assert.True(t, hasUsableNeighbor(t, bridge, ip), "neighbor entry for %s", ip)
+		}
 	}
 }
 
