@@ -367,8 +367,11 @@ func run() error {
 
 	// A fork that a crash cut short still holds its VMM, memory and vGPU.
 	// Delete those before the vGPU reconciler counts their claims.
+	logger.Info("Recovering interrupted forks...")
 	if r, ok := app.InstanceManager.(interface{ RecoverInterruptedForks(context.Context) }); ok {
 		r.RecoverInterruptedForks(app.Ctx)
+	} else {
+		logger.Warn("instance manager does not implement RecoverInterruptedForks")
 	}
 
 	logger.Info("Reconciling vGPU devices...")

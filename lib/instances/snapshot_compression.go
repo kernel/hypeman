@@ -321,7 +321,9 @@ func (m *manager) clearPendingStandbyCompression(ctx context.Context, instanceID
 // has ended, unless the instance is locked. The job cannot wait for the lock:
 // its holder may be waiting for the job to end. Writing without it would put
 // back whatever the holder changes in between, such as a fork's pending mark.
-// A plan left behind is cleared by the holder or at the next start.
+// Any holder blocks the clear, readers included, so a plan can outlive its
+// job. Nothing acts on a plan except startup recovery, which compresses the
+// snapshot if it is still raw and clears the plan otherwise.
 func (m *manager) clearFinishedStandbyCompression(ctx context.Context, instanceID string) error {
 	lock := m.getInstanceLock(instanceID)
 	if !lock.TryLock() {

@@ -114,6 +114,7 @@ func TestRecoverInterruptedForksDeletesOnlyForksWhoseProcessIsGone(t *testing.T)
 	_, err = mgr.loadMetadata("fork-recover-finished")
 	require.NoError(t, err)
 
+	assert.Contains(t, logs.String(), "deleted=1 failed=0 owner_running=1")
 	for _, id := range []string{"fork-recover-no-stat", "fork-recover-corrupt"} {
 		assert.DirExists(t, mgr.paths.InstanceDir(id))
 		assert.Contains(t, logs.String(), id, "an instance recovery cannot read must be logged")

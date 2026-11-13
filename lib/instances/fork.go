@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/kernel/hypeman/lib/guest"
@@ -122,22 +123,27 @@ func (m *manager) forkInstance(ctx context.Context, id string, req ForkInstanceR
 // If it does not come back the request fails, so the fork it made is deleted
 // instead of staying up under the requested name.
 func (m *manager) restoreSourceAfterRunningFork(ctx context.Context, sourceID string, forked *Instance, forkErr error) error {
+	err := m.restoreRunningForkSource(ctx, sourceID)
+	if err == nil {
+		return forkErr
+	}
+	if forkErr != nil {
+		return fmt.Errorf("fork failed: %v; additionally failed to %w", forkErr, err)
+	}
+	return m.discardFork(ctx, forked.Id, err)
+}
+
+func (m *manager) restoreRunningForkSource(ctx context.Context, sourceID string) error {
 	restoredSource, err := m.restoreInstance(ctx, sourceID)
 	if err != nil {
-		if forkErr != nil {
-			return fmt.Errorf("fork failed: %v; additionally failed to restore source instance: %w", forkErr, err)
-		}
-		return m.discardFork(ctx, forked.Id, fmt.Errorf("restore source instance after fork: %w", err))
+		return fmt.Errorf("restore source instance after fork: %w", err)
 	}
 	if restoredSource != nil && !restoredSource.NetworkEnabled && (restoredSource.State == StateRunning || restoredSource.State == StateInitializing) {
 		if err := ensureGuestAgentReadyForForkPhase(ctx, &restoredSource.StoredMetadata, "after restoring running fork source"); err != nil {
-			if forkErr != nil {
-				return fmt.Errorf("fork failed: %v; additionally restored source guest agent was not ready: %w", forkErr, err)
-			}
-			return m.discardFork(ctx, forked.Id, fmt.Errorf("wait for restored source guest agent readiness: %w", err))
+			return fmt.Errorf("wait for restored source guest agent readiness: %w", err)
 		}
 	}
-	return forkErr
+	return nil
 }
 
 func ensureGuestAgentReadyForRunningFork(ctx context.Context, source *StoredMetadata) error {
@@ -629,6 +635,7 @@ const interruptedForkMaxConcurrentDeletes = 8
 // are served.
 func (m *manager) RecoverInterruptedForks(ctx context.Context) {
 	log := logger.FromContext(ctx)
+	start := time.Now()
 	files, statErrs, err := m.walkMetadataFiles(nil)
 	if err != nil {
 		log.ErrorContext(ctx, "failed to list instances while recovering interrupted forks", "error", err)
@@ -640,6 +647,8 @@ func (m *manager) RecoverInterruptedForks(ctx context.Context) {
 	// Each delete of a fork that was running waits on its guest to shut down.
 	var deletes errgroup.Group
 	deletes.SetLimit(interruptedForkMaxConcurrentDeletes)
+	var deleted, failed atomic.Int64
+	ownerRunning := 0
 	for _, file := range files {
 		id := filepath.Base(filepath.Dir(file))
 		meta, err := m.loadMetadata(id)
@@ -652,19 +661,23 @@ func (m *manager) RecoverInterruptedForks(ctx context.Context) {
 		}
 		if !meta.ForkPending.gone() {
 			log.WarnContext(ctx, "not deleting pending fork: the process making it is still running", "instance_id", id, "instance_name", meta.Name, "owner_pid", meta.ForkPending.PID)
+			ownerRunning++
 			continue
 		}
 		name := meta.Name
 		deletes.Go(func() error {
 			if err := m.cleanupForkInstanceOnError(ctx, id); err != nil {
 				log.ErrorContext(ctx, "failed to delete interrupted fork; it stays until it is deleted", "instance_id", id, "instance_name", name, "error", err)
+				failed.Add(1)
 				return nil
 			}
 			log.WarnContext(ctx, "deleted fork interrupted by a restart", "instance_id", id, "instance_name", name)
+			deleted.Add(1)
 			return nil
 		})
 	}
 	_ = deletes.Wait()
+	log.InfoContext(ctx, "recovered interrupted forks", "deleted", deleted.Load(), "failed", failed.Load(), "owner_running", ownerRunning, "duration", time.Since(start))
 }
 
 // discardFork deletes a fork whose request is failing with cause.
@@ -761,6 +774,10 @@ func cloneStoredMetadata(src StoredMetadata) StoredMetadata {
 	if src.GPUClaimedAt != nil {
 		gpuClaimedAt := *src.GPUClaimedAt
 		dst.GPUClaimedAt = &gpuClaimedAt
+	}
+	if src.ForkPending != nil {
+		forkPending := *src.ForkPending
+		dst.ForkPending = &forkPending
 	}
 	if src.ExitCode != nil {
 		exitCode := *src.ExitCode
