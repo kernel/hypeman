@@ -64,7 +64,17 @@ func (m *manager) claimVGPU(ctx context.Context, meta *metadata, profileName str
 	if err != nil {
 		return nil, err
 	}
-	candidates := vendorVFIOCandidates{vfs: vfs, profilesByVF: profilesByVF, claims: allMetadata, quarantined: quarantined}
+	listSupported := m.vendorVFIOSupported
+	if listSupported == nil {
+		listSupported = devices.SupportedVGPUProfileNames
+	}
+	candidates := vendorVFIOCandidates{
+		vfs:          vfs,
+		profilesByVF: profilesByVF,
+		claims:       allMetadata,
+		quarantined:  quarantined,
+		supported:    func() (map[string]struct{}, error) { return listSupported(vfs) },
+	}
 	vfAddress, profileType, err := selectVendorVFIOVF(candidates, profileName, m.pickVFIndex)
 	if err != nil {
 		// A dirty unclaimed VF consumes framebuffer, which can make the
@@ -195,6 +205,9 @@ type vendorVFIOCandidates struct {
 	profilesByVF map[string][]devices.VGPUProfileType
 	claims       []StoredMetadata // every instance; those with a device path hold a VF
 	quarantined  map[string]struct{}
+	// supported lists every profile name the GPUs support. Only a profile
+	// missing from profilesByVF needs it, so it is read on that path alone.
+	supported func() (map[string]struct{}, error)
 }
 
 // selectVendorVFIOVF picks the VF to claim for profileName. Quarantined VFs
@@ -217,7 +230,7 @@ func selectVendorVFIOVF(c vendorVFIOCandidates, profileName string, pick func(n 
 		if len(profilesByName) == 0 && len(c.vfs) > 0 {
 			return "", "", fmt.Errorf("%w: no creatable vGPU profiles on any VF (GPUs at capacity or dirty VFs consuming framebuffer): profile %q", ErrInsufficientResources, profileName)
 		}
-		return "", "", fmt.Errorf("profile %q is not creatable on any VF (unknown profile or insufficient capacity)", profileName)
+		return "", "", uncreatableProfileErr(c.supported, profileName)
 	}
 
 	vfsByAddress := make(map[string]devices.VirtualFunction, len(c.vfs))
@@ -309,6 +322,24 @@ func selectVendorVFIOVF(c vendorVFIOCandidates, profileName string, pick func(n 
 		pick = rand.IntN
 	}
 	return candidates[pick(n)].PCIAddress, requested.TypeName, nil
+}
+
+// uncreatableProfileErr explains a profile that no VF can create while others
+// remain creatable. A profile the GPUs support has no room left, as when the
+// free framebuffer is split into pieces smaller than it; a name they don't
+// support is a bad request. Without the driver's supported list the two can't
+// be told apart.
+func uncreatableProfileErr(supported func() (map[string]struct{}, error), profileName string) error {
+	if supported != nil {
+		names, err := supported()
+		if err == nil {
+			if _, ok := names[profileName]; ok {
+				return fmt.Errorf("%w: no GPU has room for vGPU profile %q", ErrInsufficientResources, profileName)
+			}
+			return fmt.Errorf("%w: vGPU profile %q is not supported by this host's GPUs", ErrInvalidRequest, profileName)
+		}
+	}
+	return fmt.Errorf("profile %q is not creatable on any VF (unknown profile or insufficient capacity)", profileName)
 }
 
 func (m *manager) configureClaimedVGPU(ctx context.Context, device *devices.VGPUDevice) error {
