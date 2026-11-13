@@ -57,6 +57,7 @@ func newTagTestCase(t *testing.T) (*paths.Paths, *manager, string) {
 	return p, &manager{
 		paths:          p,
 		layers:         newLayerStore(p, 1),
+		queue:          queue.New(1),
 		tagGenerations: make(map[string]uint64),
 		requestedTags:  make(map[string]string),
 	}, "docker.io/library/alpine"
@@ -557,6 +558,10 @@ func TestDeleteDigestImageCleansPendingTagClaims(t *testing.T) {
 	require.NoError(t, writeMetadataFile(p.ImageContentMetadata(digestB), metaB))
 	m.tagGenerations[tagKey(repository, "latest")] = 2
 	m.requestedTags[tagKey(repository, "latest")] = digestB
+	// A pending build is always queued or active on a running server.
+	block := make(chan struct{})
+	defer close(block)
+	m.queue.Enqueue("sha256:"+digestB, func() { <-block }, nil)
 
 	require.NoError(t, m.deleteDigestImage(repository, digestB))
 
