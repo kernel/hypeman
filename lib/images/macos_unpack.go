@@ -11,10 +11,12 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	gcr "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/layout"
+	"github.com/kernel/hypeman/lib/forkvm"
 )
 
 // machineUnpackChunk is the granularity of hole detection when writing machine files.
@@ -28,11 +30,13 @@ var machineZeroChunk = make([]byte, machineUnpackChunk)
 // lower it.
 var maxMachineUnpackedBytes int64 = 1 << 40
 
-// unpackMachineLayers extracts a macOS machine image's layers into targetDir. Unlike
+// unpackMachineLayers extracts each of a macOS machine image's layers into its own
+// numbered directory under targetDir, since every layer carries a disk. Unlike
 // the rootfs unpack, it writes files sparsely: zero chunks become holes, so a
 // mostly empty boot disk occupies only its data. Machine bundles hold only regular
 // files and directories; any other entry is rejected. Each layer is checked
-// against its config diff ID.
+// against its config diff ID. A layer below the top that a ready image already has,
+// on the same layers beneath it, is cloned from that image instead of unpacked.
 func (c *ociClient) unpackMachineLayers(ctx context.Context, layoutTag, targetDir string) error {
 	path, err := layout.FromPath(c.cacheDir)
 	if err != nil {
@@ -60,13 +64,39 @@ func (c *ociClient) unpackMachineLayers(ctx context.Context, layoutTag, targetDi
 	if err := os.MkdirAll(targetDir, 0700); err != nil {
 		return fmt.Errorf("create target dir: %w", err)
 	}
+	diffIDs := make([]string, len(configFile.RootFS.DiffIDs))
+	for i, diffID := range configFile.RootFS.DiffIDs {
+		diffIDs[i] = diffID.String()
+	}
+	reuse := make([]string, len(layers))
+	if c.reusableMachineLayers != nil {
+		reuse = c.reusableMachineLayers(diffIDs)
+	}
 	remaining := maxMachineUnpackedBytes
 	for i, l := range layers {
-		if err := unpackMachineLayer(ctx, l, configFile.RootFS.DiffIDs[i], targetDir, &remaining); err != nil {
+		dir := filepath.Join(targetDir, strconv.Itoa(i))
+		if reuse[i] != "" && cloneMachineLayer(reuse[i], dir, configFile.Config.Labels[MacOSMachineDiskLabel]) {
+			continue
+		}
+		if err := unpackMachineLayer(ctx, l, configFile.RootFS.DiffIDs[i], dir, &remaining); err != nil {
 			return fmt.Errorf("unpack machine layer %d: %w", i, err)
 		}
 	}
 	return nil
+}
+
+// cloneMachineLayer clones a ready image's disk into dir, where unpacking the layer
+// would put it, and reports whether it did. A failed clone, as when that image is
+// being deleted, leaves dir absent for an unpack.
+func cloneMachineLayer(source, dir, diskName string) bool {
+	target := filepath.Join(dir, diskName)
+	if err := os.MkdirAll(filepath.Dir(target), 0700); err == nil {
+		if err = forkvm.CopyRegularFile(source, target); err == nil {
+			return true
+		}
+	}
+	os.RemoveAll(dir)
+	return false
 }
 
 // unpackMachineLayer extracts one layer, spending its decompressed bytes from the

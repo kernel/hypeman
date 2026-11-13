@@ -4,6 +4,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"github.com/kernel/hypeman/lib/paths"
@@ -56,7 +57,7 @@ func Collect(p *paths.Paths) (Breakdown, error) {
 			return false
 		}
 		name := entry.Name()
-		return name == "rootfs.erofs" || name == "rootfs.ext4" || name == "rootfs.raw"
+		return name == "rootfs.erofs" || name == "rootfs.ext4" || (strings.HasPrefix(name, "disk.") && strings.HasSuffix(name, ".asif"))
 	})
 	if err != nil {
 		return Breakdown{}, err
@@ -88,7 +89,10 @@ func Collect(p *paths.Paths) (Breakdown, error) {
 
 		instanceID := guest.Name()
 
-		breakdown.RootfsOverlays += allocatedBytesForPath(p.InstanceOverlay(instanceID)) + allocatedBytesForPath(p.InstanceMacOSBootDisk(instanceID))
+		// A macOS guest's own writes and files. Its disk.N.asif layers are clones of
+		// its image's, which Images already counts.
+		breakdown.RootfsOverlays += allocatedBytesForPath(p.InstanceOverlay(instanceID)) + allocatedBytesForPath(p.InstanceMacOSBootDisk(instanceID)) +
+			allocatedBytesForPath(p.InstanceMacOSAgentDisk(instanceID)) + allocatedBytesForPath(filepath.Join(p.InstanceDir(instanceID), paths.MacOSAuxStorageFile))
 
 		volumeOverlays, err := sumMatchingFilesAllocatedBytes(p.InstanceVolumeOverlaysDir(instanceID), func(path string, entry fs.DirEntry) bool {
 			return !entry.IsDir() && filepath.Ext(entry.Name()) == ".raw"

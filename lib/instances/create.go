@@ -99,6 +99,7 @@ func (m *manager) createInstance(
 	if err := validateExpiresAt(req.ExpiresAt, m.nowUTC()); err != nil {
 		return nil, err
 	}
+	req.Platform = DefaultPlatform(m.macOSOnly, req.Platform)
 	if req.GPU != nil && req.GPU.Profile != "" && !devices.Capabilities().SupportsVGPU {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidRequest, devices.ErrVGPUNotSupportedOnMacOS)
 	}
@@ -213,7 +214,7 @@ func (m *manager) createInstance(
 	if overlaySize == 0 {
 		overlaySize = 10 * 1024 * 1024 * 1024 // 10GB default
 	}
-	// Validate overlay size against max. A macOS boot disk is sized by its image.
+	// Validate overlay size against max. A macOS guest reserves a fixed allowance instead.
 	if imageInfo.MacOS == nil && overlaySize > m.limits.MaxOverlaySize {
 		return nil, fmt.Errorf("overlay size %d exceeds maximum allowed size %d", overlaySize, m.limits.MaxOverlaySize)
 	}
@@ -421,7 +422,7 @@ func (m *manager) createInstance(
 
 	// 13. Create overlay disk with specified size
 	log.DebugContext(ctx, "creating overlay disk", "instance_id", id, "size_bytes", stored.OverlaySize)
-	if err := m.createBootDisk(stored, imageInfo); err != nil {
+	if err := m.createBootDisk(ctx, stored, imageInfo); err != nil {
 		log.ErrorContext(ctx, "failed to create overlay disk", "instance_id", id, "error", err)
 		return nil, fmt.Errorf("create overlay disk: %w", err)
 	}

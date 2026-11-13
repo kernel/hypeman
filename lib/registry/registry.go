@@ -7,11 +7,15 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -28,6 +32,7 @@ type Registry struct {
 	paths        *paths.Paths
 	imageManager images.Manager
 	blobStore    *BlobStore
+	uploads      *chunkedUploads
 	handler      http.Handler
 
 	// pushedTags tracks pushed (repo, reference) tags to their manifest
@@ -38,7 +43,9 @@ type Registry struct {
 	// the manifest blobs the registry is still serving on tag/digest pulls.
 	// Cleared with the process; tags do not survive restart.
 	pushedTagsMu sync.RWMutex
-	pushedTags   map[string]string
+	// manifestReposMu serializes recording which repositories a manifest was pushed to.
+	manifestReposMu sync.Mutex
+	pushedTags      map[string]string
 }
 
 // manifestPutPattern matches PUT requests to /v2/{name}/manifests/{reference}
@@ -52,6 +59,11 @@ func New(p *paths.Paths, imgManager images.Manager) (*Registry, error) {
 		return nil, err
 	}
 
+	uploads, err := newChunkedUploads(filepath.Join(p.SystemOCICache(), "uploads"), blobStore)
+	if err != nil {
+		return nil, fmt.Errorf("create upload directory: %w", err)
+	}
+
 	// Create registry with custom blob handler
 	regHandler := registry.New(
 		registry.WithBlobHandler(blobStore),
@@ -61,6 +73,7 @@ func New(p *paths.Paths, imgManager images.Manager) (*Registry, error) {
 		paths:        p,
 		imageManager: imgManager,
 		blobStore:    blobStore,
+		uploads:      uploads,
 		handler:      regHandler,
 		pushedTags:   make(map[string]string),
 	}
@@ -111,6 +124,9 @@ func isCacheRepo(repo string) bool {
 // This wraps the underlying registry to intercept manifest PUTs and trigger conversion.
 func (r *Registry) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if r.uploads.serve(w, req) || r.serveManifestByDigest(w, req) {
+			return
+		}
 		// Intercept manifest PUT requests to store in blob store and trigger conversion
 		if req.Method == http.MethodPut {
 			matches := manifestPutPattern.FindStringSubmatch(req.URL.Path)
@@ -142,6 +158,9 @@ func (r *Registry) Handler() http.Handler {
 				r.handler.ServeHTTP(wrapper, req)
 
 				if wrapper.statusCode == http.StatusCreated {
+					if err := r.recordManifestRepo(pathRepo, digest); err != nil {
+						fmt.Fprintf(os.Stderr, "Warning: failed to record manifest repository: %v\n", err)
+					}
 					// Root every pushed manifest: the Docker manifest blob is
 					// served by the registry but not reachable from the OCI
 					// layout (which stores the converted manifest), so GC
@@ -160,6 +179,109 @@ func (r *Registry) Handler() http.Handler {
 		r.handler.ServeHTTP(w, req)
 	})
 }
+
+// serveManifestByDigest answers a manifest read by digest, from the upstream
+// registry or, when it does not know the manifest, from the blob store, where every
+// pushed manifest is kept, if it was pushed to the requested repository. The
+// upstream registry holds manifests in memory, so a manifest pushed before a
+// restart is otherwise unknown by digest. Other requests are not handled.
+func (r *Registry) serveManifestByDigest(w http.ResponseWriter, req *http.Request) bool {
+	matches := manifestPutPattern.FindStringSubmatch(req.URL.Path)
+	if matches == nil || (req.Method != http.MethodGet && req.Method != http.MethodHead) {
+		return false
+	}
+	h, err := v1.NewHash(matches[2])
+	if err != nil {
+		return false
+	}
+	// Manifests are small, so the upstream answer is buffered to fall back on a 404.
+	upstream := &bufferedResponse{header: make(http.Header), status: http.StatusOK}
+	r.handler.ServeHTTP(upstream, req)
+	if upstream.status != http.StatusNotFound || !r.manifestPushedTo(matches[1], h) || !r.serveStoredManifest(w, req, h) {
+		for key, values := range upstream.header {
+			w.Header()[key] = values
+		}
+		w.WriteHeader(upstream.status)
+		w.Write(upstream.body.Bytes())
+	}
+	return true
+}
+
+// bufferedResponse records a response for serveManifestByDigest.
+type bufferedResponse struct {
+	header http.Header
+	status int
+	body   bytes.Buffer
+}
+
+func (b *bufferedResponse) Header() http.Header            { return b.header }
+func (b *bufferedResponse) WriteHeader(status int)         { b.status = status }
+func (b *bufferedResponse) Write(data []byte) (int, error) { return b.body.Write(data) }
+
+// serveStoredManifest writes the manifest h from the blob store and reports
+// whether it had one.
+func (r *Registry) serveStoredManifest(w http.ResponseWriter, req *http.Request, h v1.Hash) bool {
+	path := r.blobStore.blobPath(h.String())
+	if info, err := os.Stat(path); err != nil || info.Size() > maxStoredManifestBytes {
+		return false
+	}
+	data, err := os.ReadFile(path)
+	var manifest struct {
+		MediaType string `json:"mediaType"`
+	}
+	if err != nil || json.Unmarshal(data, &manifest) != nil || manifest.MediaType == "" || computeDigest(data) != h.String() {
+		return false
+	}
+	w.Header().Set("Content-Type", manifest.MediaType)
+	w.Header().Set("Docker-Content-Digest", h.String())
+	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+	w.WriteHeader(http.StatusOK)
+	if req.Method == http.MethodGet {
+		w.Write(data)
+	}
+	return true
+}
+
+// manifestReposPath lists, one per line, the repositories a manifest was pushed to.
+func (r *Registry) manifestReposPath(h v1.Hash) string {
+	return filepath.Join(r.paths.SystemOCICache(), "manifest-repos", h.Hex)
+}
+
+// recordManifestRepo records that the manifest digest was pushed to repo.
+func (r *Registry) recordManifestRepo(repo, digest string) error {
+	h, err := v1.NewHash(digest)
+	if err != nil {
+		return err
+	}
+	r.manifestReposMu.Lock()
+	defer r.manifestReposMu.Unlock()
+	if r.manifestPushedTo(repo, h) {
+		return nil
+	}
+	path := r.manifestReposPath(h)
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0644)
+	if err != nil {
+		return err
+	}
+	_, err = file.WriteString(repo + "\n")
+	if closeErr := file.Close(); err == nil {
+		err = closeErr
+	}
+	return err
+}
+
+// manifestPushedTo reports whether the manifest h was pushed to repo.
+func (r *Registry) manifestPushedTo(repo string, h v1.Hash) bool {
+	data, err := os.ReadFile(r.manifestReposPath(h))
+	return err == nil && slices.Contains(strings.Split(string(data), "\n"), repo)
+}
+
+// maxStoredManifestBytes bounds a stored blob served as a manifest, so a layer
+// requested as one is not read into memory.
+const maxStoredManifestBytes = 4 << 20
 
 // storeManifestBlob stores a manifest in the blob store by its digest.
 func (r *Registry) storeManifestBlob(digest string, data []byte) error {

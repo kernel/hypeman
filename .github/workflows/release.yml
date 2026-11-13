@@ -39,7 +39,8 @@ jobs:
   # cross-compiled from the Linux release job — it builds on a macOS arm64 runner.
   release-darwin:
     needs: release
-    runs-on: macos-14
+    # vz-shim needs the macOS 27 SDK.
+    runs-on: xcode-27
     steps:
       - name: Checkout
         uses: actions/checkout@v4

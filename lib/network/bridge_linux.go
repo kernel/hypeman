@@ -526,7 +526,16 @@ func (m *manager) lastHypemanForwardRulePosition() int {
 }
 
 // createTAPDevice creates TAP device and attaches it to the bridge.
-func (m *manager) createTAPDevice(ctx context.Context, tapName, bridgeName string, isolated bool) error {
+func (m *manager) createTAPDevice(ctx context.Context, tapName, bridgeName, guestMAC string, isolated bool) error {
+	var mac net.HardwareAddr
+	if isolated {
+		var err error
+		mac, err = net.ParseMAC(guestMAC)
+		if err != nil {
+			return fmt.Errorf("parse guest MAC %q: %w", guestMAC, err)
+		}
+	}
+
 	// 1. Check if TAP already exists
 	_, linkLookupEnd := startNetworkStep(ctx, "network.create_tap.link_lookup_existing",
 		attribute.String("operation", "link_lookup_existing"),
@@ -620,8 +629,49 @@ func (m *manager) createTAPDevice(ctx context.Context, tapName, bridgeName strin
 		if err != nil {
 			return fmt.Errorf("set isolation mode: %w", err)
 		}
+
+		// 6. Isolation only stops guest-to-guest forwarding. Frames for a MAC the
+		// bridge has no entry for are still flooded to every port, so a guest
+		// in promiscuous mode can read other guests' inbound traffic. Pin the
+		// guest's MAC to its port, then stop flooding and learning on it.
+		_, hardenEnd := startNetworkStep(ctx, "network.create_tap.harden_port",
+			attribute.String("operation", "harden_port"),
+			attribute.String("tap", tapName),
+		)
+		err = hardenIsolatedPort(tapLink, mac)
+		hardenEnd(err)
+		if err != nil {
+			return err
+		}
 	}
 
+	return nil
+}
+
+// hardenIsolatedPort pins mac to the bridge port as a sticky static FDB entry
+// and turns off unknown-unicast flooding and source-MAC learning on the port.
+func hardenIsolatedPort(port netlink.Link, mac net.HardwareAddr) error {
+	// NUD_NOARP is `bridge fdb add ... static`. NUD_PERMANENT would make the
+	// entry local to the bridge instead of an address behind this port.
+	// Sticky keeps a frame with a spoofed source MAC from moving the entry to
+	// a port that still has learning on, such as a TAP created before this
+	// hardening existed.
+	err := netlink.NeighSet(&netlink.Neigh{
+		LinkIndex:    port.Attrs().Index,
+		Family:       unix.AF_BRIDGE,
+		State:        netlink.NUD_NOARP,
+		Flags:        netlink.NTF_MASTER | netlink.NTF_STICKY,
+		HardwareAddr: mac,
+	})
+	if err != nil {
+		return fmt.Errorf("pin guest MAC in bridge FDB: %w", err)
+	}
+	if err := netlink.LinkSetFlood(port, false); err != nil {
+		return fmt.Errorf("disable unicast flooding: %w", err)
+	}
+	if err := netlink.LinkSetLearning(port, false); err != nil {
+		return fmt.Errorf("disable MAC learning: %w", err)
+	}
 	return nil
 }
 
