@@ -71,6 +71,13 @@ func TestHardenIsolatedPortStopsUnicastLeak(t *testing.T) {
 	sendFrame(t, send, br, macA, []byte("after-spoof"))
 	assert.True(t, receivedFrame(recvA, []byte("after-spoof")), "guest A lost delivery after spoof")
 	assert.False(t, receivedFrame(recvB, []byte("after-spoof")), "spoofing guest captured guest A's frame")
+
+	// Neither may a guest on a port that still learns, like a TAP created
+	// before hardening.
+	sendFrame(t, recvControl, control, net.HardwareAddr{0xff, 0xff, 0xff, 0xff, 0xff, 0xff}, []byte("spoof"), macA)
+	sendFrame(t, send, br, macA, []byte("after-learning-spoof"))
+	assert.True(t, receivedFrame(recvA, []byte("after-learning-spoof")), "guest A lost delivery after spoof from a learning port")
+	assert.False(t, receivedFrame(recvControl, []byte("after-learning-spoof")), "learning port captured guest A's frame")
 }
 
 // addBridgePort creates a veth pair, enslaves one end to br as an isolated port
@@ -98,6 +105,7 @@ func addBridgePort(t *testing.T, br netlink.Link, name string, defaults bool) ne
 		}
 		require.NotNil(t, pinned, "guest MAC not in bridge FDB")
 		assert.Equal(t, netlink.NUD_NOARP, pinned.State, "FDB entry should be static, not local")
+		assert.NotZero(t, pinned.Flags&netlink.NTF_STICKY, "FDB entry should be sticky")
 	}
 	require.NoError(t, netlink.LinkSetUp(port))
 	require.NoError(t, netlink.LinkSetUp(guest))

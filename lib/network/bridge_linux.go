@@ -648,18 +648,19 @@ func (m *manager) createTAPDevice(ctx context.Context, tapName, bridgeName, gues
 	return nil
 }
 
-// hardenIsolatedPort pins mac to the bridge port as a static FDB entry and
-// turns off unknown-unicast flooding and source-MAC learning on the port.
-// Learning must be off too: a frame with a spoofed source MAC moves even a
-// static entry to the sending port.
+// hardenIsolatedPort pins mac to the bridge port as a sticky static FDB entry
+// and turns off unknown-unicast flooding and source-MAC learning on the port.
 func hardenIsolatedPort(port netlink.Link, mac net.HardwareAddr) error {
 	// NUD_NOARP is `bridge fdb add ... static`. NUD_PERMANENT would make the
 	// entry local to the bridge instead of an address behind this port.
+	// Sticky keeps a frame with a spoofed source MAC from moving the entry to
+	// a port that still has learning on, such as a TAP created before this
+	// hardening existed.
 	err := netlink.NeighSet(&netlink.Neigh{
 		LinkIndex:    port.Attrs().Index,
 		Family:       unix.AF_BRIDGE,
 		State:        netlink.NUD_NOARP,
-		Flags:        netlink.NTF_MASTER,
+		Flags:        netlink.NTF_MASTER | netlink.NTF_STICKY,
 		HardwareAddr: mac,
 	})
 	if err != nil {
