@@ -593,6 +593,50 @@ func TestRecoverPendingStandbyCompressionJobsRequeuesDelayedJob(t *testing.T) {
 	require.NoError(t, err)
 }
 
+// An interrupted fork is about to be deleted, so compressing its snapshot
+// first is wasted work.
+func TestRecoverPendingStandbyCompressionJobsSkipsPendingFork(t *testing.T) {
+	t.Parallel()
+
+	mgr := newSnapshotCompressionTestManager(t)
+	now := time.Date(2026, time.April, 6, 12, 0, 0, 0, time.UTC)
+	mgr.now = func() time.Time { return now }
+	// A job that starts stays queued, so whether one started can be read at once.
+	mgr.compressionTimerFactory = func(time.Duration) compressionTimer { return newFakeCompressionTimer() }
+
+	const instanceID = "recover-pending-fork"
+	snapshotDir := mgr.paths.InstanceSnapshotLatest(instanceID)
+	require.NoError(t, mgr.ensureDirectories(instanceID))
+	require.NoError(t, os.MkdirAll(snapshotDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(snapshotDir, "memory"), []byte("interrupted fork snapshot"), 0o644))
+	require.NoError(t, mgr.saveMetadata(&metadata{StoredMetadata: StoredMetadata{
+		Id:             instanceID,
+		Name:           instanceID,
+		DataDir:        mgr.paths.InstanceDir(instanceID),
+		HypervisorType: hypervisor.TypeCloudHypervisor,
+		CreatedAt:      now,
+		StoppedAt:      &now,
+		ForkPending:    currentForkOwner(),
+		PendingStandbyCompression: &PendingStandbyCompression{
+			Policy: snapshotstore.SnapshotCompressionConfig{
+				Enabled:   true,
+				Algorithm: snapshotstore.SnapshotCompressionAlgorithmZstd,
+			},
+			NotBefore: now.Add(time.Minute),
+		},
+	}}))
+
+	require.NoError(t, mgr.recoverPendingStandbyCompressionJobs(context.Background()))
+
+	mgr.compressionMu.Lock()
+	_, started := mgr.compressionJobs[mgr.snapshotJobKeyForInstance(instanceID)]
+	mgr.compressionMu.Unlock()
+	assert.False(t, started)
+	meta, err := mgr.loadMetadata(instanceID)
+	require.NoError(t, err)
+	assert.NotNil(t, meta.PendingStandbyCompression)
+}
+
 func TestRecoverPendingStandbyCompressionJobsStartsImmediateCompression(t *testing.T) {
 	t.Parallel()
 

@@ -348,6 +348,12 @@ func (m *manager) recoverPendingStandbyCompressionJobs(ctx context.Context) erro
 			continue
 		}
 
+		// Startup deletes an interrupted fork, and a fork still being made
+		// belongs to another process.
+		if meta.ForkPending != nil {
+			continue
+		}
+
 		plan := clonePendingStandbyCompression(meta.StoredMetadata.PendingStandbyCompression)
 		if plan == nil {
 			continue
