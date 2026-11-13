@@ -531,7 +531,7 @@ func (m *manager) buildImage(ctx context.Context, ref *ResolvedRef, credentials 
 	if staged.macos == nil {
 		// Use default image format (erofs on Linux, ext4 on Darwin)
 		convertStart := time.Now()
-		staged.sizeBytes, err = ExportRootfs(tempDir, staged.disk, DefaultImageFormat)
+		staged.sizeBytes, err = exportImageRootfs(ctx, tempDir, staged.disk, DefaultImageFormat)
 		m.recordImageBuildPhase(ctx, ref.Digest(), "filesystem_export", time.Since(convertStart), phaseStatus(err), "not_applicable")
 		if err != nil {
 			m.updateStatusByDigest(ref, StatusFailed, fmt.Errorf("convert to %s: %w", DefaultImageFormat, err), buildID)

@@ -540,31 +540,36 @@ func (c *ociClient) unpackLayers(ctx context.Context, layoutTag, targetDir strin
 		return fmt.Errorf("create target dir: %w", err)
 	}
 
-	// Unpack layers using umoci's layer package with rootless mode
-	// Map container UIDs to current user's UID (identity mapping)
-	uid := uint32(os.Getuid())
-	gid := uint32(os.Getgid())
-
-	unpackOpts := &layer.UnpackOptions{
-		OnDiskFormat: layer.DirRootfs{
-			MapOptions: layer.MapOptions{
-				Rootless: true, // Don't fail on chown errors
-				UIDMappings: []rspec.LinuxIDMapping{
-					{HostID: uid, ContainerID: 0, Size: 1}, // Map container root to current user
-				},
-				GIDMappings: []rspec.LinuxIDMapping{
-					{HostID: gid, ContainerID: 0, Size: 1}, // Map container root group to current user group
-				},
-			},
-		},
-	}
-
+	unpackOpts := &layer.UnpackOptions{OnDiskFormat: rootfsOnDiskFormat()}
 	err = layer.UnpackRootfs(ctx, casEngine, targetDir, ociManifest, unpackOpts)
 	if err != nil {
 		return fmt.Errorf("unpack rootfs: %w", err)
 	}
 
 	return nil
+}
+
+// rootfsOnDiskFormat is how unpackLayers lays out an image rootfs. As root,
+// files get the image's owners, device nodes, and file capabilities. Otherwise
+// umoci's rootless mode makes the current user own every file and records the
+// image owner in a "user.rootlesscontainers" xattr, which exportImageRootfs
+// reads back. Rootless mode also replaces device nodes with empty files and
+// drops security.* xattrs such as file capabilities.
+func rootfsOnDiskFormat() layer.DirRootfs {
+	if os.Geteuid() == 0 {
+		return layer.DirRootfs{}
+	}
+	return layer.DirRootfs{
+		MapOptions: layer.MapOptions{
+			Rootless: true,
+			UIDMappings: []rspec.LinuxIDMapping{
+				{HostID: uint32(os.Getuid()), ContainerID: 0, Size: 1},
+			},
+			GIDMappings: []rspec.LinuxIDMapping{
+				{HostID: uint32(os.Getgid()), ContainerID: 0, Size: 1},
+			},
+		},
+	}
 }
 
 // validateConfigFileForUnpack rejects malformed image configs before calling
