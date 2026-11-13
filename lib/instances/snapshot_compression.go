@@ -317,6 +317,22 @@ func (m *manager) clearPendingStandbyCompression(ctx context.Context, instanceID
 	return nil
 }
 
+// clearFinishedStandbyCompression clears the plan of a compression job that
+// has ended, unless the instance is locked. The job cannot wait for the lock:
+// its holder may be waiting for the job to end. Writing without it would put
+// back whatever the holder changes in between, such as a fork's pending mark.
+// Any holder blocks the clear, readers included, so a plan can outlive its
+// job. Nothing acts on a plan except startup recovery, which compresses the
+// snapshot if it is still raw and clears the plan otherwise.
+func (m *manager) clearFinishedStandbyCompression(ctx context.Context, instanceID string) error {
+	lock := m.getInstanceLock(instanceID)
+	if !lock.TryLock() {
+		return nil
+	}
+	defer lock.Unlock()
+	return m.clearPendingStandbyCompression(ctx, instanceID)
+}
+
 func (m *manager) recoverPendingStandbyCompressionJobs(ctx context.Context) error {
 	metaFiles, err := m.listMetadataFiles()
 	if err != nil {
@@ -329,6 +345,12 @@ func (m *manager) recoverPendingStandbyCompressionJobs(ctx context.Context) erro
 		meta, err := m.loadMetadata(instanceID)
 		if err != nil {
 			log.WarnContext(ctx, "failed to load instance metadata during standby compression recovery", "instance_id", instanceID, "metadata_path", metaPath, "error", err)
+			continue
+		}
+
+		// Startup deletes an interrupted fork, and a fork still being made
+		// belongs to another process.
+		if meta.ForkPending != nil {
 			continue
 		}
 
@@ -569,7 +591,7 @@ func (m *manager) startCompressionJob(ctx context.Context, target compressionTar
 		defer func() {
 			m.recordSnapshotCompressionJob(metricsCtx, target, result, compressionStart, uncompressedSize, compressedSize)
 			if target.Source == snapshotCompressionSourceStandby && target.SnapshotID == "" {
-				if err := m.clearPendingStandbyCompression(context.Background(), target.OwnerID); err != nil && !errors.Is(err, ErrNotFound) {
+				if err := m.clearFinishedStandbyCompression(context.Background(), target.OwnerID); err != nil && !errors.Is(err, ErrNotFound) {
 					log.WarnContext(context.Background(), "failed to clear pending standby compression plan after job completion", "instance_id", target.OwnerID, "error", err)
 				}
 			}

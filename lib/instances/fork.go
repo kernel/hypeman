@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"hash/crc32"
 	"os"
+	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/kernel/hypeman/lib/guest"
@@ -19,6 +21,7 @@ import (
 	"github.com/nrednav/cuid2"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
+	"golang.org/x/sync/errgroup"
 	"gvisor.dev/gvisor/pkg/cleanup"
 )
 
@@ -101,24 +104,8 @@ func (m *manager) forkInstance(ctx context.Context, id string, req ForkInstanceR
 		}
 
 		log.InfoContext(ctx, "restoring source instance after running fork", "source_instance_id", id)
-		restoredSource, restoreErr := m.restoreInstance(ctx, id)
-
-		if restoreErr != nil {
-			if forkErr != nil {
-				return nil, "", false, fmt.Errorf("fork failed: %v; additionally failed to restore source instance: %w", forkErr, restoreErr)
-			}
-			return nil, "", false, fmt.Errorf("restore source instance after fork: %w", restoreErr)
-		}
-		if restoredSource != nil && !restoredSource.NetworkEnabled && (restoredSource.State == StateRunning || restoredSource.State == StateInitializing) {
-			if err := ensureGuestAgentReadyForForkPhase(ctx, &restoredSource.StoredMetadata, "after restoring running fork source"); err != nil {
-				if forkErr != nil {
-					return nil, "", false, fmt.Errorf("fork failed: %v; additionally restored source guest agent was not ready: %w", forkErr, err)
-				}
-				return nil, "", false, fmt.Errorf("wait for restored source guest agent readiness: %w", err)
-			}
-		}
-		if forkErr != nil {
-			return nil, "", false, forkErr
+		if err := m.restoreSourceAfterRunningFork(ctx, id, forked, forkErr); err != nil {
+			return nil, "", false, err
 		}
 		return forked, targetState, false, nil
 	case StateStopped, StateStandby:
@@ -130,6 +117,33 @@ func (m *manager) forkInstance(ctx context.Context, id string, req ForkInstanceR
 	default:
 		return nil, "", false, fmt.Errorf("%w: cannot fork from state %s (must be Stopped or Standby, or Running with from_running=true)", ErrInvalidState, source.State)
 	}
+}
+
+// restoreSourceAfterRunningFork brings the source of a running fork back up.
+// If it does not come back the request fails, so the fork it made is deleted
+// instead of staying up under the requested name.
+func (m *manager) restoreSourceAfterRunningFork(ctx context.Context, sourceID string, forked *Instance, forkErr error) error {
+	err := m.restoreRunningForkSource(ctx, sourceID)
+	if err == nil {
+		return forkErr
+	}
+	if forkErr != nil {
+		return fmt.Errorf("fork failed: %v; additionally failed to %w", forkErr, err)
+	}
+	return m.discardFork(ctx, forked.Id, err)
+}
+
+func (m *manager) restoreRunningForkSource(ctx context.Context, sourceID string) error {
+	restoredSource, err := m.restoreInstance(ctx, sourceID)
+	if err != nil {
+		return fmt.Errorf("restore source instance after fork: %w", err)
+	}
+	if restoredSource != nil && !restoredSource.NetworkEnabled && (restoredSource.State == StateRunning || restoredSource.State == StateInitializing) {
+		if err := ensureGuestAgentReadyForForkPhase(ctx, &restoredSource.StoredMetadata, "after restoring running fork source"); err != nil {
+			return fmt.Errorf("wait for restored source guest agent readiness: %w", err)
+		}
+	}
+	return nil
 }
 
 func ensureGuestAgentReadyForRunningFork(ctx context.Context, source *StoredMetadata) error {
@@ -364,6 +378,7 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 		restoreNeedsSourceLock = prepareResult.RequiresSnapshotSourceAlias
 	}
 
+	forkMeta.ForkPending = currentForkOwner()
 	newMeta := &metadata{StoredMetadata: forkMeta}
 	if err := m.saveForkMetadata(ctx, newMeta); err != nil {
 		return nil, false, err
@@ -561,6 +576,118 @@ func forkReturnNeedsGuestAgentReady(inst *Instance, guestReady bool) bool {
 	return inst != nil && (inst.State == StateRunning || inst.State == StateInitializing) && !guestReady
 }
 
+// completeFork clears the pending mark of a fork that reached its target state.
+func (m *manager) completeFork(inst *Instance) error {
+	lock := m.getInstanceLock(inst.Id)
+	lock.Lock()
+	defer lock.Unlock()
+
+	meta, err := m.loadMetadata(inst.Id)
+	if err != nil {
+		return fmt.Errorf("load completed fork metadata: %w", err)
+	}
+	if meta.ForkPending != nil {
+		meta.ForkPending = nil
+		if err := m.saveMetadata(meta); err != nil {
+			return fmt.Errorf("save completed fork metadata: %w", err)
+		}
+	}
+	inst.ForkPending = nil
+	return nil
+}
+
+// ForkOwner identifies the API process that is making a fork, across PID reuse
+// and host reboots.
+type ForkOwner struct {
+	PID       int    `json:"pid"`
+	StartTime uint64 `json:"start_time,omitempty"` // from /proc/<pid>/stat; 0 = unknown
+	BootID    string `json:"boot_id,omitempty"`    // Linux boot ID; empty = unknown
+}
+
+func currentForkOwner() *ForkOwner {
+	pid := os.Getpid()
+	return &ForkOwner{PID: pid, StartTime: processStartTime(pid), BootID: hostBootID()}
+}
+
+// gone reports whether the process that was making the fork no longer exists.
+// When that cannot be told the owner counts as running, so a fork that another
+// live API process is still working on is never deleted.
+func (o ForkOwner) gone() bool {
+	if bootID := hostBootID(); o.BootID != "" && bootID != "" && o.BootID != bootID {
+		return true
+	}
+	if !ProcessExists(o.PID) {
+		return true
+	}
+	// The PID is in use. A different start time means it was recycled.
+	startTime := processStartTime(o.PID)
+	return o.StartTime != 0 && startTime != 0 && o.StartTime != startTime
+}
+
+// interruptedForkMaxConcurrentDeletes bounds how many interrupted forks
+// startup deletes at once.
+const interruptedForkMaxConcurrentDeletes = 8
+
+// RecoverInterruptedForks deletes the forks whose API process died before they
+// reached their target state. Nothing else does: such a fork looks like an
+// ordinary standby or paused instance, and a restore that was cut short keeps
+// its VMM, its memory and its vGPU. Call it once at startup, before requests
+// are served.
+func (m *manager) RecoverInterruptedForks(ctx context.Context) {
+	log := logger.FromContext(ctx)
+	start := time.Now()
+	files, statErrs, err := m.walkMetadataFiles(nil)
+	if err != nil {
+		log.ErrorContext(ctx, "failed to list instances while recovering interrupted forks", "error", err)
+		return
+	}
+	if len(statErrs) > 0 {
+		log.WarnContext(ctx, "cannot tell whether some instances are interrupted forks: their metadata is unreadable", "error", errors.Join(statErrs...))
+	}
+	// Each delete of a fork that was running waits on its guest to shut down.
+	var deletes errgroup.Group
+	deletes.SetLimit(interruptedForkMaxConcurrentDeletes)
+	var deleted, failed atomic.Int64
+	ownerRunning := 0
+	for _, file := range files {
+		id := filepath.Base(filepath.Dir(file))
+		meta, err := m.loadMetadata(id)
+		if err != nil {
+			log.WarnContext(ctx, "cannot tell whether instance is an interrupted fork: its metadata is unreadable", "instance_id", id, "error", err)
+			continue
+		}
+		if meta.ForkPending == nil {
+			continue
+		}
+		if !meta.ForkPending.gone() {
+			log.WarnContext(ctx, "not deleting pending fork: the process making it is still running", "instance_id", id, "instance_name", meta.Name, "owner_pid", meta.ForkPending.PID)
+			ownerRunning++
+			continue
+		}
+		name := meta.Name
+		deletes.Go(func() error {
+			if err := m.cleanupForkInstanceOnError(ctx, id); err != nil {
+				log.ErrorContext(ctx, "failed to delete interrupted fork; it stays until it is deleted", "instance_id", id, "instance_name", name, "error", err)
+				failed.Add(1)
+				return nil
+			}
+			log.WarnContext(ctx, "deleted fork interrupted by a restart", "instance_id", id, "instance_name", name)
+			deleted.Add(1)
+			return nil
+		})
+	}
+	_ = deletes.Wait()
+	log.InfoContext(ctx, "recovered interrupted forks", "deleted", deleted.Load(), "failed", failed.Load(), "owner_running", ownerRunning, "duration", time.Since(start))
+}
+
+// discardFork deletes a fork whose request is failing with cause.
+func (m *manager) discardFork(ctx context.Context, forkID string, cause error) error {
+	if err := m.cleanupForkInstanceOnError(ctx, forkID); err != nil {
+		return fmt.Errorf("%w; additionally failed to cleanup forked instance %s: %v", cause, forkID, err)
+	}
+	return cause
+}
+
 func (m *manager) cleanupForkInstanceOnError(ctx context.Context, forkID string) error {
 	lock := m.getInstanceLock(forkID)
 	lock.Lock()
@@ -648,6 +775,10 @@ func cloneStoredMetadata(src StoredMetadata) StoredMetadata {
 		gpuClaimedAt := *src.GPUClaimedAt
 		dst.GPUClaimedAt = &gpuClaimedAt
 	}
+	if src.ForkPending != nil {
+		forkPending := *src.ForkPending
+		dst.ForkPending = &forkPending
+	}
 	if src.ExitCode != nil {
 		exitCode := *src.ExitCode
 		dst.ExitCode = &exitCode
@@ -666,5 +797,8 @@ func cloneStoredMetadataWithoutPendingStandbyCompression(src StoredMetadata) Sto
 func cloneStoredMetadataForSnapshot(src StoredMetadata) StoredMetadata {
 	dst := cloneStoredMetadataWithoutPendingStandbyCompression(src)
 	dst.ExpiresAt = nil
+	// The mark belongs to the fork request, not to what is later made from
+	// a snapshot of its instance.
+	dst.ForkPending = nil
 	return dst
 }
