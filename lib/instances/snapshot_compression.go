@@ -317,6 +317,20 @@ func (m *manager) clearPendingStandbyCompression(ctx context.Context, instanceID
 	return nil
 }
 
+// clearFinishedStandbyCompression clears the plan of a compression job that
+// has ended, unless the instance is locked. The job cannot wait for the lock:
+// its holder may be waiting for the job to end. Writing without it would put
+// back whatever the holder changes in between, such as a fork's pending mark.
+// A plan left behind is cleared by the holder or at the next start.
+func (m *manager) clearFinishedStandbyCompression(ctx context.Context, instanceID string) error {
+	lock := m.getInstanceLock(instanceID)
+	if !lock.TryLock() {
+		return nil
+	}
+	defer lock.Unlock()
+	return m.clearPendingStandbyCompression(ctx, instanceID)
+}
+
 func (m *manager) recoverPendingStandbyCompressionJobs(ctx context.Context) error {
 	metaFiles, err := m.listMetadataFiles()
 	if err != nil {
@@ -569,7 +583,7 @@ func (m *manager) startCompressionJob(ctx context.Context, target compressionTar
 		defer func() {
 			m.recordSnapshotCompressionJob(metricsCtx, target, result, compressionStart, uncompressedSize, compressedSize)
 			if target.Source == snapshotCompressionSourceStandby && target.SnapshotID == "" {
-				if err := m.clearPendingStandbyCompression(context.Background(), target.OwnerID); err != nil && !errors.Is(err, ErrNotFound) {
+				if err := m.clearFinishedStandbyCompression(context.Background(), target.OwnerID); err != nil && !errors.Is(err, ErrNotFound) {
 					log.WarnContext(context.Background(), "failed to clear pending standby compression plan after job completion", "instance_id", target.OwnerID, "error", err)
 				}
 			}

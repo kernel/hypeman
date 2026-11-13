@@ -629,10 +629,13 @@ const interruptedForkMaxConcurrentDeletes = 8
 // are served.
 func (m *manager) RecoverInterruptedForks(ctx context.Context) {
 	log := logger.FromContext(ctx)
-	files, err := m.listMetadataFiles()
+	files, statErrs, err := m.walkMetadataFiles()
 	if err != nil {
 		log.ErrorContext(ctx, "failed to list instances while recovering interrupted forks", "error", err)
 		return
+	}
+	if len(statErrs) > 0 {
+		log.WarnContext(ctx, "cannot tell whether some instances are interrupted forks: their metadata is unreadable", "error", errors.Join(statErrs...))
 	}
 	// Each delete of a fork that was running waits on its guest to shut down.
 	var deletes errgroup.Group

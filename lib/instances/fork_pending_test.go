@@ -1,14 +1,19 @@
 package instances
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/hypervisor"
+	"github.com/kernel/hypeman/lib/logger"
+	snapshotstore "github.com/kernel/hypeman/lib/snapshot"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -87,8 +92,16 @@ func TestRecoverInterruptedForksDeletesOnlyForksWhoseProcessIsGone(t *testing.T)
 	// Another API process on the same data directory is still making this one.
 	save("fork-recover-in-flight", currentForkOwner())
 	save("fork-recover-finished", nil)
+	// Whether these two are interrupted forks cannot be told. A
+	// self-referential symlink fails stat with ELOOP, for root too.
+	require.NoError(t, mgr.ensureDirectories("fork-recover-no-stat"))
+	noStat := mgr.paths.InstanceMetadata("fork-recover-no-stat")
+	require.NoError(t, os.Symlink(filepath.Base(noStat), noStat))
+	require.NoError(t, mgr.ensureDirectories("fork-recover-corrupt"))
+	require.NoError(t, os.WriteFile(mgr.paths.InstanceMetadata("fork-recover-corrupt"), []byte("{"), 0o644))
 
-	mgr.RecoverInterruptedForks(ctx)
+	var logs bytes.Buffer
+	mgr.RecoverInterruptedForks(logger.AddToContext(ctx, slog.New(slog.NewTextHandler(&logs, nil))))
 
 	_, err := mgr.loadMetadata("fork-recover-interrupted")
 	require.ErrorIs(t, err, ErrNotFound)
@@ -100,6 +113,58 @@ func TestRecoverInterruptedForksDeletesOnlyForksWhoseProcessIsGone(t *testing.T)
 
 	_, err = mgr.loadMetadata("fork-recover-finished")
 	require.NoError(t, err)
+
+	for _, id := range []string{"fork-recover-no-stat", "fork-recover-corrupt"} {
+		assert.DirExists(t, mgr.paths.InstanceDir(id))
+		assert.Contains(t, logs.String(), id, "an instance recovery cannot read must be logged")
+	}
+}
+
+// A compression job that ends just as a fork completes must not save a copy
+// of the metadata it read before the mark was cleared.
+func TestCompressionJobLeavesLockedInstanceMetadataAlone(t *testing.T) {
+	mgr, _ := setupTestManager(t)
+
+	id := "fork-pending-compressing"
+	require.NoError(t, mgr.ensureDirectories(id))
+	now := time.Now()
+	policy := snapshotstore.SnapshotCompressionConfig{Enabled: true, Algorithm: snapshotstore.SnapshotCompressionAlgorithmZstd}
+	require.NoError(t, mgr.saveMetadata(&metadata{StoredMetadata: StoredMetadata{
+		Id:                        id,
+		Name:                      id,
+		CreatedAt:                 now,
+		StoppedAt:                 &now,
+		HypervisorType:            hypervisor.TypeCloudHypervisor,
+		DataDir:                   mgr.paths.InstanceDir(id),
+		ForkPending:               currentForkOwner(),
+		PendingStandbyCompression: &PendingStandbyCompression{Policy: policy, NotBefore: now},
+	}}))
+	target := compressionTarget{
+		Key:         mgr.snapshotJobKeyForInstance(id),
+		OwnerID:     id,
+		SnapshotDir: t.TempDir(), // nothing to compress: the job ends at once
+		Source:      snapshotCompressionSourceStandby,
+		Policy:      policy,
+	}
+	runJob := func() {
+		mgr.startCompressionJob(context.Background(), target)
+		require.NoError(t, mgr.waitCompressionJobContext(context.Background(), target.Key))
+	}
+
+	// completeFork holds this lock while it clears the mark.
+	lock := mgr.getInstanceLock(id)
+	lock.Lock()
+	runJob()
+	stored, err := mgr.loadMetadata(id)
+	lock.Unlock()
+	require.NoError(t, err)
+	assert.NotNil(t, stored.PendingStandbyCompression, "the job wrote metadata while the instance was locked")
+
+	runJob()
+	stored, err = mgr.loadMetadata(id)
+	require.NoError(t, err)
+	assert.Nil(t, stored.PendingStandbyCompression)
+	assert.NotNil(t, stored.ForkPending)
 }
 
 // detachGateDeviceManager holds every device detach until release is closed,
