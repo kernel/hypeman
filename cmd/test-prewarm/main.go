@@ -46,7 +46,8 @@ var defaultImages = []prewarmImage{
 	{Source: "docker.io/library/nginx:alpine"},
 	// Keep in sync with redisEntrypointEnvImage in lib/instances tests.
 	{Source: "docker.io/bitnamilegacy/redis:7.2.5-debian-12-r0"},
-	{Source: "docker.io/jrei/systemd-ubuntu:22.04"},
+	// amd64-only upstream; TestSystemdMode needs /dev/kvm.
+	{Source: "docker.io/jrei/systemd-ubuntu:22.04", LinuxOnly: true},
 	// Keep in sync with nestedDockerImage in integration/nested_docker_test.go.
 	{Source: "docker.io/library/docker:28.5.2-dind", LinuxOnly: true},
 	// amd64-only mirror for the Rosetta x86 image E2E (single-platform manifest;
