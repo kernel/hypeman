@@ -27,6 +27,21 @@ const linuxBootIDPath = "/proc/sys/kernel/random/boot_id"
 // does not unstick it, so the wait is short to keep stop and delete fast.
 const hypervisorSIGKILLWaitTimeout = 2 * time.Second
 
+const (
+	// vfioTeardownQueueAllowance is the extra time a VMM with VFIO devices
+	// gets to exit on SIGTERM for every other such VMM being terminated at
+	// the same time. The device is released on the VMM's way out, and the
+	// host driver is slower at that when many go at once: vGPU guests exited
+	// about a second after SIGTERM when up to 8 were terminated together, but
+	// took up to 10 s when 16 or 26 were. That outlasted the fixed grace, so
+	// they were hard-killed mid-release and their deletes failed about a
+	// second before the VMMs were gone.
+	vfioTeardownQueueAllowance = time.Second
+	// vfioTeardownMaxAllowance caps the allowance for a queue of any length.
+	vfioTeardownMaxAllowance = time.Minute
+	vfioTeardownPollInterval = 200 * time.Millisecond
+)
+
 func (m *manager) vfioTerminationGrace() time.Duration {
 	if m.vfioTermGrace > 0 {
 		return m.vfioTermGrace
@@ -37,13 +52,35 @@ func (m *manager) vfioTerminationGrace() time.Duration {
 // SIGKILL during guest driver init can wedge a VF until the parent GPU is reset.
 func (m *manager) terminateThenKill(ctx context.Context, inst *Instance, pid int) error {
 	if hasVFIODevices(&inst.StoredMetadata) {
-		if syscall.Kill(pid, syscall.SIGTERM) == nil && WaitForProcessExit(pid, m.vfioTerminationGrace()) {
+		m.vfioTeardowns.Add(1)
+		defer m.vfioTeardowns.Add(-1)
+		if syscall.Kill(pid, syscall.SIGTERM) == nil && m.waitForVFIOTeardown(pid, m.vfioTerminationGrace()) {
 			return nil
 		}
 		logger.FromContext(ctx).WarnContext(ctx, "hypervisor with VFIO devices did not exit on SIGTERM; hard-killing, device may wedge if the guest driver was initializing",
 			"instance_id", inst.Id, "device_path", inst.GPUDevicePath)
 	}
 	return killProcessAndWait(pid)
+}
+
+// waitForVFIOTeardown waits for pid to exit for base plus the queue allowance.
+// The allowance follows the largest number of VFIO teardowns seen in flight
+// during the wait: a VMM that started exiting alone is still slowed down by
+// the ones that join it.
+func (m *manager) waitForVFIOTeardown(pid int, base time.Duration) bool {
+	start := time.Now()
+	peak := int32(1)
+	for {
+		peak = max(peak, m.vfioTeardowns.Load())
+		allowance := min(time.Duration(peak-1)*vfioTeardownQueueAllowance, vfioTeardownMaxAllowance)
+		remaining := base + allowance - time.Since(start)
+		if remaining <= 0 {
+			return false
+		}
+		if WaitForProcessExit(pid, min(remaining, vfioTeardownPollInterval)) {
+			return true
+		}
+	}
 }
 
 // killProcessAndWait SIGKILLs pid and waits for it to exit. A process that
