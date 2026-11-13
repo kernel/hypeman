@@ -11,7 +11,8 @@ import (
 )
 
 func TestMacOSStarterConfig(t *testing.T) {
-	cfg := hypervisor.VMConfig{BootMode: hypervisor.BootModeMacOS, VCPUs: 2, MemoryBytes: 4 << 30, MacOS: &hypervisor.MacOSPlatform{HardwareModelData: []byte{1}, MachineIdentifierData: []byte{2}, AuxStoragePath: "/vm/aux.img"}, Disks: []hypervisor.DiskConfig{{Path: "/vm/root.raw"}}}
+	bootDisk := hypervisor.DiskConfig{Path: "/vm/boot.asif", Format: hypervisor.DiskFormatASIF, Parents: []string{"/vm/disk.0.asif"}}
+	cfg := hypervisor.VMConfig{BootMode: hypervisor.BootModeMacOS, VCPUs: 2, MemoryBytes: 4 << 30, MacOS: &hypervisor.MacOSPlatform{HardwareModelData: []byte{1}, MachineIdentifierData: []byte{2}, AuxStoragePath: "/vm/aux.img"}, Disks: []hypervisor.DiskConfig{bootDisk}}
 	require.NoError(t, NewStarter().ValidateConfig(cfg))
 	shim := buildShimConfigFromVMConfig(cfg, "/vm/vz.sock")
 	require.Equal(t, base64.StdEncoding.EncodeToString([]byte{1}), shim.MacHardwareModelData)
@@ -40,6 +41,15 @@ func TestMacOSStarterConfig(t *testing.T) {
 	bad = cfg
 	bad.Disks = []hypervisor.DiskConfig{{Readonly: true}}
 	require.Error(t, NewStarter().ValidateConfig(bad))
+	agent := cfg
+	agent.Disks = []hypervisor.DiskConfig{bootDisk, {Path: "/vm/agent.img", Readonly: true}}
+	require.NoError(t, NewStarter().ValidateConfig(agent), "a read-only disk may follow the boot disk")
+	bad = cfg
+	bad.Disks = []hypervisor.DiskConfig{{Path: "/vm/agent.img", Readonly: true}, bootDisk}
+	require.Error(t, NewStarter().ValidateConfig(bad), "the boot disk comes first")
+	bad = cfg
+	bad.Disks = []hypervisor.DiskConfig{bootDisk, {Path: "/vm/data.img"}}
+	require.Error(t, NewStarter().ValidateConfig(bad), "later disks are read-only")
 	bad = cfg
 	bad.MacOS = nil
 	require.Error(t, NewStarter().ValidateConfig(bad))

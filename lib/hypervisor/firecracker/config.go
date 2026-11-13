@@ -108,6 +108,8 @@ type restoreMetadata struct {
 	NetworkOverrides                 []networkOverride `json:"network_overrides,omitempty"`
 	SnapshotSourceDataDir            string            `json:"snapshot_source_data_dir,omitempty"`
 	RetainSnapshotSourceDataDirAlias bool              `json:"retain_snapshot_source_data_dir_alias,omitempty"`
+	// Jail holds the host paths of a jailed VM, so restore can re-link them.
+	Jail *jailInputs `json:"jail,omitempty"`
 }
 
 func toBootSource(cfg hypervisor.VMConfig) bootSource {

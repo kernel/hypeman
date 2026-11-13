@@ -46,8 +46,9 @@ func setupTestManager(t *testing.T) (*manager, string) {
 	prepareIntegrationTestDataDir(t, tmpDir)
 
 	cfg := &config.Config{
-		DataDir: tmpDir,
-		Network: newParallelTestNetworkConfig(t),
+		DataDir:    tmpDir,
+		Network:    newParallelTestNetworkConfig(t),
+		Hypervisor: config.HypervisorConfig{FirecrackerJailer: testFirecrackerJailer},
 	}
 
 	p := paths.New(tmpDir)

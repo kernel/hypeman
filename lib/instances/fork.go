@@ -629,7 +629,7 @@ const interruptedForkMaxConcurrentDeletes = 8
 // are served.
 func (m *manager) RecoverInterruptedForks(ctx context.Context) {
 	log := logger.FromContext(ctx)
-	files, statErrs, err := m.walkMetadataFiles()
+	files, statErrs, err := m.walkMetadataFiles(nil)
 	if err != nil {
 		log.ErrorContext(ctx, "failed to list instances while recovering interrupted forks", "error", err)
 		return

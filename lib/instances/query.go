@@ -798,11 +798,15 @@ func parseSentinelTimestamp(line, sentinelPrefix string) (time.Time, bool) {
 // a corrupt metadata.json never hides a guest directory from operators.
 func (m *manager) listInstances(ctx context.Context) ([]Instance, error) {
 	ctx, span := m.tracerOrDefault().Start(ctx, "instances.list_metadata")
-	defer span.End()
+	var timings metadataScanTimings
+	defer func() {
+		span.SetAttributes(timings.attributes()...)
+		span.End()
+	}()
 	log := logger.FromContext(ctx)
 	log.DebugContext(ctx, "listing all instances")
 
-	files, err := m.listMetadataFiles()
+	files, _, err := m.walkMetadataFiles(&timings)
 	if err != nil {
 		log.ErrorContext(ctx, "failed to list metadata files", "error", err)
 		return nil, err
@@ -818,7 +822,7 @@ func (m *manager) listInstances(ctx context.Context) ([]Instance, error) {
 		hydrateCtx, hydrateSpan := m.tracerOrDefault().Start(ctx, "instances.list_metadata.hydrate_one",
 			traceWithInstanceID(id),
 		)
-		meta, err := m.loadMetadata(id)
+		meta, err := m.loadMetadataTimed(id, &timings)
 		if errors.Is(err, ErrNotFound) {
 			// Deleted between the directory walk and the read.
 			hydrateSpan.End()
@@ -831,7 +835,9 @@ func (m *manager) listInstances(ctx context.Context) ([]Instance, error) {
 			continue
 		}
 
+		hydrateStart := time.Now()
 		inst := m.toInstance(hydrateCtx, meta)
+		timings.lap(metadataScanStepHydrate, id, hydrateStart)
 		result = append(result, inst)
 		hydrateSpan.End()
 	}
@@ -860,9 +866,13 @@ func (m *manager) findInstanceMetadataByExactName(ctx context.Context, name stri
 	ctx, span := m.tracerOrDefault().Start(ctx, "instances.metadata.find_exact_name",
 		trace.WithAttributes(attribute.String("operation", "find_exact_name")),
 	)
-	defer span.End()
+	var timings metadataScanTimings
+	defer func() {
+		span.SetAttributes(timings.attributes()...)
+		span.End()
+	}()
 
-	files, err := m.listMetadataFiles()
+	files, _, err := m.walkMetadataFiles(&timings)
 	if err != nil {
 		span.RecordError(err)
 		return nil, err
@@ -873,7 +883,7 @@ func (m *manager) findInstanceMetadataByExactName(ctx context.Context, name stri
 	for _, file := range files {
 		id := filepath.Base(filepath.Dir(file))
 		scanned++
-		meta, err := m.loadMetadata(id)
+		meta, err := m.loadMetadataTimed(id, &timings)
 		if err != nil {
 			continue
 		}
@@ -892,11 +902,22 @@ func (m *manager) findInstanceMetadataByExactName(ctx context.Context, name stri
 	return nil, ErrNotFound
 }
 
-func (m *manager) findInstanceMetadataByNameOrIDPrefix(idOrName string, minPrefixLength int) (*metadata, error) {
-	files, err := m.listMetadataFiles()
+func (m *manager) findInstanceMetadataByNameOrIDPrefix(ctx context.Context, idOrName string, minPrefixLength int) (*metadata, error) {
+	_, span := m.tracerOrDefault().Start(ctx, "instances.metadata.find_name_or_id_prefix",
+		trace.WithAttributes(attribute.String("operation", "find_name_or_id_prefix")),
+	)
+	var timings metadataScanTimings
+	defer func() {
+		span.SetAttributes(timings.attributes()...)
+		span.End()
+	}()
+
+	files, _, err := m.walkMetadataFiles(&timings)
 	if err != nil {
+		span.RecordError(err)
 		return nil, err
 	}
+	span.SetAttributes(attribute.Int("metadata_files", len(files)))
 	if minPrefixLength < 1 {
 		minPrefixLength = 1
 	}
@@ -908,7 +929,7 @@ func (m *manager) findInstanceMetadataByNameOrIDPrefix(idOrName string, minPrefi
 
 	for _, file := range files {
 		id := filepath.Base(filepath.Dir(file))
-		meta, err := m.loadMetadata(id)
+		meta, err := m.loadMetadataTimed(id, &timings)
 		if err != nil {
 			continue
 		}

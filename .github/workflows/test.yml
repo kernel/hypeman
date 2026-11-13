@@ -272,6 +272,8 @@ jobs:
           HYPEMAN_TEST_PREWARM_STRICT: "1"
           HYPEMAN_TEST_REFLINK_STRICT: "1"
           HYPEMAN_TEST_REGISTRY: 127.0.0.1:5001
+          # Run the firecracker instance tests under the jailer, the most restrictive mode.
+          HYPEMAN_TEST_FIRECRACKER_JAILER: "1"
           # Fast scratch filesystem provisioned on the runner. Must be reflink-capable
           # (the VM disk fork fast path uses FICLONE) and kept short to stay under the
           # 108-char AF_UNIX sun_path limit for VMM control sockets.
@@ -337,6 +339,8 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - name: Show macOS and SDK versions
+        run: sw_vers && xcrun --sdk macosx --show-sdk-version
       - name: Ensure Docker is running
         run: |
           if docker info >/dev/null 2>&1; then

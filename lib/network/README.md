@@ -115,7 +115,11 @@ Hypeman provides a single default network that all instances can optionally conn
 - Linux creates it from bridge/subnet configuration
 - macOS targets VZ's default `192.168.64.0/24` shared NAT network regardless of Linux bridge/subnet configuration
 - Named "default" (only network in the system)
-- Linux uses bridge_slave isolated mode for VM-to-VM isolation
+- Linux isolates guests from each other on the bridge:
+  - each TAP is a `bridge_slave isolated` port, so guests cannot forward frames to each other
+  - each guest's allocated MAC is pinned to its TAP as a sticky static FDB entry
+  - unknown-unicast flooding and MAC learning are off on each TAP, so a guest never receives frames addressed to another guest's MAC
+  - a guest that uses any MAC other than its allocated one receives no inbound unicast
 
 ### Name Uniqueness
 
@@ -136,7 +140,6 @@ Guests are configured to use external DNS servers directly (no internal DNS serv
 
 **Shell commands:**
 - `iptables` - Complex rule manipulation not well-supported in netlink
-- `ip link set X type bridge_slave isolated on` - Netlink library doesn't expose this flag
 
 ### Prerequisites
 

@@ -90,10 +90,10 @@ func (s integrationAutoStandbyStore) SubscribeInstanceEvents() (<-chan autostand
 	return dst, unsub, nil
 }
 
-func setupAutoStandbyE2EInstance(t *testing.T, ctx context.Context, name string) (*manager, *autostandby.ConntrackSource, *Instance) {
+func setupAutoStandbyE2EInstanceFor(t *testing.T, ctx context.Context, name string, hvType hypervisor.Type) (*manager, *autostandby.ConntrackSource, *Instance) {
 	t.Helper()
 
-	mgr, _ := setupCompressionTestManagerForHypervisor(t, hypervisor.TypeCloudHypervisor)
+	mgr, _ := setupCompressionTestManagerForHypervisor(t, hvType)
 	require.NoError(t, mgr.networkManager.Initialize(ctx, nil))
 	require.NoError(t, mgr.systemManager.EnsureSystemFiles(ctx))
 	createNginxImageAndWait(t, ctx, mgr.paths, mgr.imageManager)
@@ -106,15 +106,19 @@ func setupAutoStandbyE2EInstance(t *testing.T, ctx context.Context, name string)
 		require.NoError(t, err)
 	}
 
+	var hotplugSize int64
+	if hvType == hypervisor.TypeCloudHypervisor {
+		hotplugSize = 512 * 1024 * 1024 // firecracker does not support memory hotplug
+	}
 	inst, err := mgr.CreateInstance(ctx, CreateInstanceRequest{
 		Name:           name,
 		Image:          integrationTestImageRef(t, "docker.io/library/nginx:alpine"),
 		Size:           1024 * 1024 * 1024,
-		HotplugSize:    512 * 1024 * 1024,
+		HotplugSize:    hotplugSize,
 		OverlaySize:    10 * 1024 * 1024 * 1024,
 		Vcpus:          1,
 		NetworkEnabled: true,
-		Hypervisor:     hypervisor.TypeCloudHypervisor,
+		Hypervisor:     hvType,
 		AutoStandby: &autostandby.Policy{
 			Enabled:     true,
 			IdleTimeout: "3s",
@@ -130,7 +134,10 @@ func setupAutoStandbyE2EInstance(t *testing.T, ctx context.Context, name string)
 
 	inst, err = waitForInstanceState(ctx, mgr, instanceID, StateRunning, 30*time.Second)
 	require.NoError(t, err)
-	require.NoError(t, waitForVMReady(ctx, inst.SocketPath, 10*time.Second))
+	if hvType == hypervisor.TypeCloudHypervisor {
+		// The cloud-hypervisor API client; firecracker readiness is covered by the exec agent.
+		require.NoError(t, waitForVMReady(ctx, inst.SocketPath, 10*time.Second))
+	}
 	require.NoError(t, waitForExecAgent(ctx, mgr, inst.Id, 30*time.Second))
 	require.NoError(t, waitForLogMessage(ctx, mgr, inst.Id, "start worker processes", 45*time.Second))
 
@@ -197,13 +204,17 @@ func requireActiveInboundEventually(t *testing.T, ctx context.Context, connSourc
 }
 
 func TestAutoStandbyCloudHypervisorActiveInboundTCP(t *testing.T) {
+	autoStandbyActiveInboundTCPScenario(t, hypervisor.TypeCloudHypervisor)
+}
+
+func autoStandbyActiveInboundTCPScenario(t *testing.T, hvType hypervisor.Type) {
 	requireAutoStandbyE2EManualRun(t)
 	requireKVMAccess(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	mgr, connSource, inst := setupAutoStandbyE2EInstance(t, ctx, "auto-standby-e2e")
+	mgr, connSource, inst := setupAutoStandbyE2EInstanceFor(t, ctx, "auto-standby-e2e", hvType)
 	instanceID := inst.Id
 
 	conn, err := dialGuestPortWithRetry(inst.IP, 80, 15*time.Second)
@@ -240,13 +251,17 @@ func TestAutoStandbyCloudHypervisorActiveInboundTCP(t *testing.T) {
 // mid-handshake and put the VM into standby with the client's request in
 // flight.
 func TestAutoStandbyCloudHypervisorHalfOpenInboundTCP(t *testing.T) {
+	autoStandbyHalfOpenInboundTCPScenario(t, hypervisor.TypeCloudHypervisor)
+}
+
+func autoStandbyHalfOpenInboundTCPScenario(t *testing.T, hvType hypervisor.Type) {
 	requireAutoStandbyE2EManualRun(t)
 	requireKVMAccess(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	mgr, connSource, inst := setupAutoStandbyE2EInstance(t, ctx, "auto-standby-e2e-halfopen")
+	mgr, connSource, inst := setupAutoStandbyE2EInstanceFor(t, ctx, "auto-standby-e2e-halfopen", hvType)
 	instanceID := inst.Id
 
 	// Confirm the guest serves before quiescing.
@@ -329,13 +344,17 @@ func TestAutoStandbyCloudHypervisorHalfOpenInboundTCP(t *testing.T) {
 // moment the countdown would have fired, without touching the persisted
 // countdown, and still let the instance reach standby once the hold expires.
 func TestAutoStandbyCloudHypervisorHoldStandby(t *testing.T) {
+	autoStandbyHoldStandbyScenario(t, hypervisor.TypeCloudHypervisor)
+}
+
+func autoStandbyHoldStandbyScenario(t *testing.T, hvType hypervisor.Type) {
 	requireAutoStandbyE2EManualRun(t)
 	requireKVMAccess(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	mgr, connSource, inst := setupAutoStandbyE2EInstance(t, ctx, "auto-standby-e2e-hold")
+	mgr, connSource, inst := setupAutoStandbyE2EInstanceFor(t, ctx, "auto-standby-e2e-hold", hvType)
 	instanceID := inst.Id
 
 	controller := startAutoStandbyE2EController(t, ctx, mgr, connSource)
@@ -400,6 +419,56 @@ func TestAutoStandbyCloudHypervisorHoldStandby(t *testing.T) {
 	require.Equal(t, StateRunning, current.State, "instance must survive the countdown deadline while held")
 
 	// The hold only delays standby; it must still complete once expired.
+	inst, err = waitForInstanceState(ctx, mgr, instanceID, StateStandby, 45*time.Second)
+	require.NoError(t, err)
+	require.Equal(t, StateStandby, inst.State)
+}
+
+// Firecracker variants of the auto-standby scenarios. They run jailed when the
+// test binary is started with the jailer enabled.
+func TestAutoStandbyFirecrackerActiveInboundTCP(t *testing.T) {
+	autoStandbyActiveInboundTCPScenario(t, hypervisor.TypeFirecracker)
+}
+
+func TestAutoStandbyFirecrackerHalfOpenInboundTCP(t *testing.T) {
+	autoStandbyHalfOpenInboundTCPScenario(t, hypervisor.TypeFirecracker)
+}
+
+func TestAutoStandbyFirecrackerHoldStandby(t *testing.T) {
+	autoStandbyHoldStandbyScenario(t, hypervisor.TypeFirecracker)
+}
+
+// An idle instance whose auto-standby policy is disabled must not go to standby,
+// and re-enabling the policy must bring the standby back.
+func TestAutoStandbyFirecrackerDisabledStaysRunning(t *testing.T) {
+	requireAutoStandbyE2EManualRun(t)
+	requireKVMAccess(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	mgr, connSource, inst := setupAutoStandbyE2EInstanceFor(t, ctx, "auto-standby-e2e-pinned", hypervisor.TypeFirecracker)
+	instanceID := inst.Id
+
+	_, err := mgr.UpdateInstance(ctx, instanceID, UpdateInstanceRequest{
+		AutoStandby: &autostandby.Policy{Enabled: false, IdleTimeout: "3s"},
+	})
+	require.NoError(t, err)
+
+	startAutoStandbyE2EController(t, ctx, mgr, connSource)
+
+	// The idle timeout is 3s and nothing connects, so a live policy would have
+	// put the instance to standby well inside this window.
+	time.Sleep(12 * time.Second)
+	current, err := mgr.GetInstance(ctx, instanceID)
+	require.NoError(t, err)
+	require.Equal(t, StateRunning, current.State, "a pinned instance must not go to standby while idle")
+
+	// Re-enable the policy: the same idle instance must now reach standby.
+	_, err = mgr.UpdateInstance(ctx, instanceID, UpdateInstanceRequest{
+		AutoStandby: &autostandby.Policy{Enabled: true, IdleTimeout: "3s"},
+	})
+	require.NoError(t, err)
 	inst, err = waitForInstanceState(ctx, mgr, instanceID, StateStandby, 45*time.Second)
 	require.NoError(t, err)
 	require.Equal(t, StateStandby, inst.State)

@@ -63,6 +63,7 @@ func startSWTPM(config *hypervisor.TPMConfig, instanceDir string) (*startedProce
 		"--ctrl", "type=unixio,path="+config.SocketPath,
 		"--terminate",
 	)
+	cmd.Env = hypervisor.ProcessEnv()
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
