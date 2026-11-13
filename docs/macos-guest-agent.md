@@ -9,7 +9,9 @@ is unchanged.
 
 ## Build
 
-Build on a macOS development machine with the macOS SDK and cgo enabled:
+`make build-embedded` on macOS builds the agent that hypeman embeds for the agent
+disk. To build it by hand on a macOS development machine with the macOS SDK and
+cgo enabled:
 
 ```sh
 CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 go build \
@@ -22,6 +24,27 @@ refuses to listen with an explicit error. Linux keeps its existing Go vsock
 listener and cgo-disabled build path. The Darwin listener accepts only host
 CID 2, marks descriptors close-on-exec, and provides net.Conn deadlines for
 gRPC. Do not start the executable on the development host to test guest services.
+
+## Agent disk
+
+hypeman carries the macOS agent and attaches it to each macOS guest whose image
+declares `guest_agent: true`, on a read-only disk second after the boot disk. The
+disk is an APFS volume named `HypemanAgent` holding `hypeman-guest-agent` and a
+`VERSION` file, built on the host with `hdiutil` the first time a guest needs it,
+under `system/macos-agent/`. It is named by the agent's hash, so a new hypeman
+builds a new disk.
+
+Each guest keeps its own copy (`agent.img`). Creating a guest and every cold start
+copy the host's current disk, so an updated agent takes effect at the next cold
+start. Standby, restore and snapshots keep the copy the guest was saved with, so
+saved state restores against the same disk.
+
+The image runs the agent from the disk with a small launcher, installed once in the
+base by `lib/system/guest_agent/macos/install-launcher.sh` (as root, for example
+from a Packer provisioner). It removes an agent installed in the image itself and
+adds a LaunchDaemon that waits for the volume, mounts it read-only if macOS has
+not, and runs the agent from it. An image with its own agent and no launcher still
+works; the disk is attached and unused.
 
 ## Provisioning boundary
 

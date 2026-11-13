@@ -104,6 +104,8 @@ type DiskFormat string
 const (
 	DiskFormatRaw   DiskFormat = "raw"
 	DiskFormatQCOW2 DiskFormat = "qcow2"
+	// DiskFormatASIF is an ASIF overlay on its Parents, only for macOS boot disks.
+	DiskFormatASIF DiskFormat = "asif"
 )
 
 // EffectiveFormat preserves raw disks for existing callers.
@@ -119,8 +121,9 @@ type DiskConfig struct {
 	Path       string
 	Format     DiskFormat
 	Readonly   bool
-	IOBps      int64 // Sustained I/O rate limit in bytes/sec (0 = unlimited)
-	IOBurstBps int64 // Burst I/O rate in bytes/sec (0 = same as IOBps)
+	Parents    []string // vz only: read-only images below Path, base first; Path is their ASIF overlay
+	IOBps      int64    // Sustained I/O rate limit in bytes/sec (0 = unlimited)
+	IOBurstBps int64    // Burst I/O rate in bytes/sec (0 = same as IOBps)
 }
 
 // NetworkConfig represents a network interface attached to the VM

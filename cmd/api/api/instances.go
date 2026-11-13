@@ -63,7 +63,8 @@ func (s *ApiService) ListInstances(ctx context.Context, request oapi.ListInstanc
 func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInstanceRequestObject) (oapi.CreateInstanceResponseObject, error) {
 	log := logger.FromContext(ctx)
 
-	macOSCreate, err := s.isMacOSImage(ctx, request.Body.Image)
+	platform := instances.DefaultPlatform(s.Config != nil && s.Config.MacOSOnly, derefString(request.Body.Platform))
+	macOSCreate, err := s.isMacOSImage(ctx, request.Body.Image, platform)
 	if err != nil {
 		log.ErrorContext(ctx, "failed to look up image for create", "error", err, "image", request.Body.Image)
 		return oapi.CreateInstance500JSONResponse{Code: "internal_error", Message: "failed to look up image"}, nil
@@ -337,7 +338,7 @@ func (s *ApiService) CreateInstance(ctx context.Context, request oapi.CreateInst
 		Name:                     request.Body.Name,
 		Image:                    request.Body.Image,
 		Size:                     size,
-		Platform:                 derefString(request.Body.Platform),
+		Platform:                 platform,
 		HotplugSize:              hotplugSize,
 		OverlaySize:              overlaySize,
 		Vcpus:                    vcpus,

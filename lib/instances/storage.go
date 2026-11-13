@@ -26,7 +26,8 @@ const (
 // {dataDir}/guests/{instance-id}/
 //   metadata.json      # Instance metadata
 //   overlay.raw        # Configurable sparse overlay disk (default 10GB)
-//   boot.raw           # macOS guests: complete boot disk, instead of overlay.raw
+//   boot.asif          # macOS guests: writable ASIF overlay, instead of overlay.raw
+//   disk.{n}.asif      # macOS guests: read-only ASIF layers below boot.asif, base first
 //   config.ext4        # Read-only config disk (generated)
 //   ch.sock            # Hypervisor API socket (abbreviated name for SUN_LEN limit)
 //   logs/
