@@ -570,14 +570,11 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 
 	cu.Release()
 	inst, err := m.applyForkTargetState(ctx, forkID, targetState)
-	if err == nil {
-		err = m.completeFork(inst)
-	}
 	if err != nil {
-		if cleanupErr := m.cleanupForkInstanceOnError(ctx, forkID); cleanupErr != nil {
-			return nil, fmt.Errorf("apply snapshot fork target state: %w; additionally failed to cleanup forked instance %s: %v", err, forkID, cleanupErr)
-		}
-		return nil, fmt.Errorf("apply snapshot fork target state: %w", err)
+		return nil, m.discardFork(ctx, forkID, fmt.Errorf("apply snapshot fork target state: %w", err))
+	}
+	if err := m.completeFork(inst); err != nil {
+		return nil, m.discardFork(ctx, forkID, err)
 	}
 	return inst, nil
 }

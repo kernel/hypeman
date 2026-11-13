@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -98,6 +99,99 @@ func TestRecoverInterruptedForksDeletesOnlyForksWhoseProcessIsGone(t *testing.T)
 	assert.NotNil(t, inFlight.ForkPending)
 
 	_, err = mgr.loadMetadata("fork-recover-finished")
+	require.NoError(t, err)
+}
+
+// detachGateDeviceManager holds every device detach until release is closed,
+// reporting each one that arrives.
+type detachGateDeviceManager struct {
+	devices.Manager
+	arrived chan string
+	release chan struct{}
+}
+
+func (m detachGateDeviceManager) MarkDetached(ctx context.Context, deviceID string) error {
+	m.arrived <- deviceID
+	<-m.release
+	return nil
+}
+
+func (m detachGateDeviceManager) UnbindFromVFIO(ctx context.Context, id string) error {
+	return nil
+}
+
+// A restart that interrupts a burst of forks must not delete them one at a
+// time: the API does not listen until recovery returns.
+func TestRecoverInterruptedForksDeletesConcurrently(t *testing.T) {
+	mgr, _ := setupTestManager(t)
+
+	// Each fork names itself as its device, so the gate sees which delete it holds.
+	forks := []string{"fork-recover-burst-1", "fork-recover-burst-2", "fork-recover-burst-3"}
+	gate := detachGateDeviceManager{arrived: make(chan string, len(forks)), release: make(chan struct{})}
+	mgr.deviceManager = gate
+
+	owner := exitedProcessOwner(t)
+	for _, id := range forks {
+		require.NoError(t, mgr.ensureDirectories(id))
+		now := time.Now()
+		require.NoError(t, mgr.saveMetadata(&metadata{StoredMetadata: StoredMetadata{
+			Id:             id,
+			Name:           id,
+			CreatedAt:      now,
+			StoppedAt:      &now,
+			HypervisorType: hypervisor.TypeCloudHypervisor,
+			SocketPath:     mgr.paths.InstanceSocket(id, "cloud-hypervisor.sock"),
+			DataDir:        mgr.paths.InstanceDir(id),
+			Devices:        []string{id},
+			ForkPending:    owner,
+		}}))
+	}
+
+	recovered := make(chan struct{})
+	go func() {
+		defer close(recovered)
+		mgr.RecoverInterruptedForks(context.Background())
+	}()
+
+	var inFlight []string
+	for range forks {
+		select {
+		case id := <-gate.arrived:
+			inFlight = append(inFlight, id)
+		case <-time.After(5 * time.Second):
+			close(gate.release)
+			<-recovered
+			t.Fatalf("deletes of %v did not overlap: only %v started", forks, inFlight)
+		}
+	}
+	close(gate.release)
+	<-recovered
+
+	assert.ElementsMatch(t, forks, inFlight)
+	for _, id := range forks {
+		assert.NoDirExists(t, mgr.paths.InstanceDir(id))
+	}
+}
+
+// The caller of a running fork gets an error when its source does not come
+// back, so the fork must not stay behind under the name it asked for.
+func TestRunningForkIsDeletedWhenItsSourceDoesNotComeBack(t *testing.T) {
+	mgr, _ := setupTestManager(t)
+	ctx := context.Background()
+
+	// A stopped source has nothing to restore from.
+	sourceID := "fork-source-not-restored"
+	createStoppedSnapshotSourceFixture(t, mgr, sourceID, sourceID, mgr.defaultHypervisor)
+	forked, _, err := mgr.forkInstanceFromStoppedOrStandby(ctx, sourceID, ForkInstanceRequest{Name: "fork-source-not-restored-copy"}, false)
+	require.NoError(t, err)
+
+	err = mgr.restoreSourceAfterRunningFork(ctx, sourceID, forked, nil)
+	require.ErrorContains(t, err, "restore source instance after fork")
+
+	_, err = mgr.loadMetadata(forked.Id)
+	require.ErrorIs(t, err, ErrNotFound)
+	assert.NoDirExists(t, mgr.paths.InstanceDir(forked.Id))
+	_, err = mgr.loadMetadata(sourceID)
 	require.NoError(t, err)
 }
 

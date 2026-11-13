@@ -557,14 +557,11 @@ func (m *manager) ForkInstance(ctx context.Context, id string, req ForkInstanceR
 			inst, err = m.applyForkTargetState(ctx, forked.Id, targetState)
 		}
 	}
-	if err == nil {
-		err = m.completeFork(inst)
-	}
 	if err != nil {
-		if cleanupErr := m.cleanupForkInstanceOnError(ctx, forked.Id); cleanupErr != nil {
-			return nil, fmt.Errorf("apply fork target state: %w; additionally failed to cleanup forked instance %s: %v", err, forked.Id, cleanupErr)
-		}
-		return nil, fmt.Errorf("apply fork target state: %w", err)
+		return nil, m.discardFork(ctx, forked.Id, fmt.Errorf("apply fork target state: %w", err))
+	}
+	if err := m.completeFork(inst); err != nil {
+		return nil, m.discardFork(ctx, forked.Id, err)
 	}
 	m.notifyLifecycleEvent(ctx, LifecycleEventFork, inst)
 	return inst, nil

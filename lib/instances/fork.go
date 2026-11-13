@@ -20,6 +20,7 @@ import (
 	"github.com/nrednav/cuid2"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
+	"golang.org/x/sync/errgroup"
 	"gvisor.dev/gvisor/pkg/cleanup"
 )
 
@@ -102,24 +103,8 @@ func (m *manager) forkInstance(ctx context.Context, id string, req ForkInstanceR
 		}
 
 		log.InfoContext(ctx, "restoring source instance after running fork", "source_instance_id", id)
-		restoredSource, restoreErr := m.restoreInstance(ctx, id)
-
-		if restoreErr != nil {
-			if forkErr != nil {
-				return nil, "", false, fmt.Errorf("fork failed: %v; additionally failed to restore source instance: %w", forkErr, restoreErr)
-			}
-			return nil, "", false, fmt.Errorf("restore source instance after fork: %w", restoreErr)
-		}
-		if restoredSource != nil && !restoredSource.NetworkEnabled && (restoredSource.State == StateRunning || restoredSource.State == StateInitializing) {
-			if err := ensureGuestAgentReadyForForkPhase(ctx, &restoredSource.StoredMetadata, "after restoring running fork source"); err != nil {
-				if forkErr != nil {
-					return nil, "", false, fmt.Errorf("fork failed: %v; additionally restored source guest agent was not ready: %w", forkErr, err)
-				}
-				return nil, "", false, fmt.Errorf("wait for restored source guest agent readiness: %w", err)
-			}
-		}
-		if forkErr != nil {
-			return nil, "", false, forkErr
+		if err := m.restoreSourceAfterRunningFork(ctx, id, forked, forkErr); err != nil {
+			return nil, "", false, err
 		}
 		return forked, targetState, false, nil
 	case StateStopped, StateStandby:
@@ -131,6 +116,28 @@ func (m *manager) forkInstance(ctx context.Context, id string, req ForkInstanceR
 	default:
 		return nil, "", false, fmt.Errorf("%w: cannot fork from state %s (must be Stopped or Standby, or Running with from_running=true)", ErrInvalidState, source.State)
 	}
+}
+
+// restoreSourceAfterRunningFork brings the source of a running fork back up.
+// If it does not come back the request fails, so the fork it made is deleted
+// instead of staying up under the requested name.
+func (m *manager) restoreSourceAfterRunningFork(ctx context.Context, sourceID string, forked *Instance, forkErr error) error {
+	restoredSource, err := m.restoreInstance(ctx, sourceID)
+	if err != nil {
+		if forkErr != nil {
+			return fmt.Errorf("fork failed: %v; additionally failed to restore source instance: %w", forkErr, err)
+		}
+		return m.discardFork(ctx, forked.Id, fmt.Errorf("restore source instance after fork: %w", err))
+	}
+	if restoredSource != nil && !restoredSource.NetworkEnabled && (restoredSource.State == StateRunning || restoredSource.State == StateInitializing) {
+		if err := ensureGuestAgentReadyForForkPhase(ctx, &restoredSource.StoredMetadata, "after restoring running fork source"); err != nil {
+			if forkErr != nil {
+				return fmt.Errorf("fork failed: %v; additionally restored source guest agent was not ready: %w", forkErr, err)
+			}
+			return m.discardFork(ctx, forked.Id, fmt.Errorf("wait for restored source guest agent readiness: %w", err))
+		}
+	}
+	return forkErr
 }
 
 func ensureGuestAgentReadyForRunningFork(ctx context.Context, source *StoredMetadata) error {
@@ -611,6 +618,10 @@ func (o ForkOwner) gone() bool {
 	return o.StartTime != 0 && startTime != 0 && o.StartTime != startTime
 }
 
+// interruptedForkMaxConcurrentDeletes bounds how many interrupted forks
+// startup deletes at once.
+const interruptedForkMaxConcurrentDeletes = 8
+
 // RecoverInterruptedForks deletes the forks whose API process died before they
 // reached their target state. Nothing else does: such a fork looks like an
 // ordinary standby or paused instance, and a restore that was cut short keeps
@@ -623,22 +634,42 @@ func (m *manager) RecoverInterruptedForks(ctx context.Context) {
 		log.ErrorContext(ctx, "failed to list instances while recovering interrupted forks", "error", err)
 		return
 	}
+	// Each delete of a fork that was running waits on its guest to shut down.
+	var deletes errgroup.Group
+	deletes.SetLimit(interruptedForkMaxConcurrentDeletes)
 	for _, file := range files {
 		id := filepath.Base(filepath.Dir(file))
 		meta, err := m.loadMetadata(id)
-		if err != nil || meta.ForkPending == nil {
+		if err != nil {
+			log.WarnContext(ctx, "cannot tell whether instance is an interrupted fork: its metadata is unreadable", "instance_id", id, "error", err)
+			continue
+		}
+		if meta.ForkPending == nil {
 			continue
 		}
 		if !meta.ForkPending.gone() {
 			log.WarnContext(ctx, "not deleting pending fork: the process making it is still running", "instance_id", id, "instance_name", meta.Name, "owner_pid", meta.ForkPending.PID)
 			continue
 		}
-		if err := m.cleanupForkInstanceOnError(ctx, id); err != nil {
-			log.ErrorContext(ctx, "failed to delete interrupted fork; it stays until it is deleted", "instance_id", id, "instance_name", meta.Name, "error", err)
-			continue
-		}
-		log.WarnContext(ctx, "deleted fork interrupted by a restart", "instance_id", id, "instance_name", meta.Name)
+		name := meta.Name
+		deletes.Go(func() error {
+			if err := m.cleanupForkInstanceOnError(ctx, id); err != nil {
+				log.ErrorContext(ctx, "failed to delete interrupted fork; it stays until it is deleted", "instance_id", id, "instance_name", name, "error", err)
+				return nil
+			}
+			log.WarnContext(ctx, "deleted fork interrupted by a restart", "instance_id", id, "instance_name", name)
+			return nil
+		})
 	}
+	_ = deletes.Wait()
+}
+
+// discardFork deletes a fork whose request is failing with cause.
+func (m *manager) discardFork(ctx context.Context, forkID string, cause error) error {
+	if err := m.cleanupForkInstanceOnError(ctx, forkID); err != nil {
+		return fmt.Errorf("%w; additionally failed to cleanup forked instance %s: %v", cause, forkID, err)
+	}
+	return cause
 }
 
 func (m *manager) cleanupForkInstanceOnError(ctx context.Context, forkID string) error {
