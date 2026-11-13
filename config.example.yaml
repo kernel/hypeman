@@ -140,6 +140,8 @@ data_dir: /var/lib/hypeman
 #   Optional ACME settings:
 #   ca: ""                        # empty = Let's Encrypt production
 #                                 # Use https://acme-staging-v02.api.letsencrypt.org/directory for testing
+#   fallback_ca: ""               # tried when ca fails to issue (e.g. rate limits); empty = no fallback
+#                                 # ZeroSSL: https://acme.zerossl.com/v2/DV90 (account derived from email)
 #
 #   DNS propagation settings (applies to all providers):
 #   dns_propagation_timeout: 2m   # Max time to wait for DNS propagation

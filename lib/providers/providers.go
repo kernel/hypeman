@@ -370,6 +370,7 @@ func ProvideIngressManager(p *paths.Paths, cfg *config.Config, instanceManager i
 			Email:                 cfg.ACME.Email,
 			DNSProvider:           dnsProvider,
 			CA:                    cfg.ACME.CA,
+			FallbackCA:            cfg.ACME.FallbackCA,
 			DNSPropagationTimeout: cfg.ACME.DNSPropagationTimeout,
 			DNSResolvers:          cfg.ACME.DNSResolvers,
 			AllowedDomains:        cfg.ACME.AllowedDomains,

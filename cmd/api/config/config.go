@@ -87,6 +87,7 @@ type ACMEConfig struct {
 	Email                 string `koanf:"email"`
 	DNSProvider           string `koanf:"dns_provider"`
 	CA                    string `koanf:"ca"`
+	FallbackCA            string `koanf:"fallback_ca"`
 	DNSPropagationTimeout string `koanf:"dns_propagation_timeout"`
 	DNSResolvers          string `koanf:"dns_resolvers"`
 	AllowedDomains        string `koanf:"allowed_domains"`
@@ -363,6 +364,7 @@ func defaultConfig() *Config {
 			Email:                 "",
 			DNSProvider:           "",
 			CA:                    "",
+			FallbackCA:            "",
 			DNSPropagationTimeout: "",
 			DNSResolvers:          "",
 			AllowedDomains:        "",
