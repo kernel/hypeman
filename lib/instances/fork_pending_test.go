@@ -193,6 +193,40 @@ func TestRecoverInterruptedForksLeavesDirectoryHoldingAnotherInstancesMetadata(t
 	assert.Contains(t, logs.String(), "deleted=0 failed=0 owner_running=0")
 }
 
+// The process making a fork can finish it and exit after recovery read its
+// mark. Recovery must go by the mark as it is once that process is gone.
+func TestRecoverInterruptedForksKeepsForkFinishedSinceItsMarkWasRead(t *testing.T) {
+	mgr, _ := setupTestManager(t)
+
+	id := "fork-recover-just-finished"
+	require.NoError(t, mgr.ensureDirectories(id))
+	now := time.Now()
+	require.NoError(t, mgr.saveMetadata(&metadata{StoredMetadata: StoredMetadata{
+		Id:             id,
+		Name:           id,
+		CreatedAt:      now,
+		StoppedAt:      &now,
+		HypervisorType: hypervisor.TypeCloudHypervisor,
+		SocketPath:     mgr.paths.InstanceSocket(id, "cloud-hypervisor.sock"),
+		DataDir:        mgr.paths.InstanceDir(id),
+		ForkPending:    exitedProcessOwner(t),
+	}}))
+	mgr.forkOwnerGoneFn = func(owner ForkOwner) bool {
+		// Recovery has read the mark. The owner now clears it and exits.
+		stored, err := mgr.loadMetadata(id)
+		require.NoError(t, err)
+		stored.ForkPending = nil
+		require.NoError(t, mgr.saveMetadata(stored))
+		return owner.gone()
+	}
+
+	mgr.RecoverInterruptedForks(context.Background())
+
+	stored, err := mgr.loadMetadata(id)
+	require.NoError(t, err, "a fork that finished must not be deleted")
+	assert.Nil(t, stored.ForkPending)
+}
+
 // A compression job that ends just as a fork completes must not save a copy
 // of the metadata it read before the mark was cleared.
 func TestCompressionJobLeavesLockedInstanceMetadataAlone(t *testing.T) {

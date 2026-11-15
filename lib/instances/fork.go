@@ -652,6 +652,10 @@ func (m *manager) RecoverInterruptedForks(ctx context.Context) {
 	deletes.SetLimit(interruptedForkMaxConcurrentDeletes)
 	var deleted, failed atomic.Int64
 	ownerRunning := 0
+	ownerGone := ForkOwner.gone
+	if m.forkOwnerGoneFn != nil {
+		ownerGone = m.forkOwnerGoneFn
+	}
 	for _, file := range files {
 		id := filepath.Base(filepath.Dir(file))
 		meta, err := m.loadMetadata(id)
@@ -668,9 +672,22 @@ func (m *manager) RecoverInterruptedForks(ctx context.Context) {
 			log.WarnContext(ctx, "not deleting pending fork: its directory holds another instance's metadata", "instance_id", id, "metadata_instance_id", meta.Id)
 			continue
 		}
-		if !meta.ForkPending.gone() {
-			log.WarnContext(ctx, "not deleting pending fork: the process making it is still running", "instance_id", id, "instance_name", meta.Name, "owner_pid", meta.ForkPending.PID)
+		owner := *meta.ForkPending
+		if !ownerGone(owner) {
+			log.WarnContext(ctx, "not deleting pending fork: the process making it is still running", "instance_id", id, "instance_name", meta.Name, "owner_pid", owner.PID)
 			ownerRunning++
+			continue
+		}
+		// The owner may have finished the fork and exited since the mark was
+		// read. Now that it is gone the mark cannot change, so read it again.
+		meta, err = m.loadMetadata(id)
+		if err != nil {
+			if !errors.Is(err, ErrNotFound) {
+				log.WarnContext(ctx, "cannot tell whether instance is an interrupted fork: its metadata is unreadable", "instance_id", id, "error", err)
+			}
+			continue
+		}
+		if meta.ForkPending == nil || *meta.ForkPending != owner {
 			continue
 		}
 		name := meta.Name

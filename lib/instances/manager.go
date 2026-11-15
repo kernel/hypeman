@@ -182,6 +182,7 @@ type manager struct {
 	writeFile                 func(string, []byte, os.FileMode) error
 	deleteInstanceFn          func(context.Context, string) error
 	syncDirFn                 func(string) error
+	forkOwnerGoneFn           func(ForkOwner) bool
 	discoverVGPU              func() (devices.VGPUFramework, []devices.VirtualFunction, error)
 	createVGPU                func(context.Context, string, string) (*devices.VGPUDevice, error)
 	configureVGPU             func(context.Context, string, string) error
