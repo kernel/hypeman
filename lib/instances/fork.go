@@ -576,7 +576,10 @@ func forkReturnNeedsGuestAgentReady(inst *Instance, guestReady bool) bool {
 	return inst != nil && (inst.State == StateRunning || inst.State == StateInitializing) && !guestReady
 }
 
-// completeFork clears the pending mark of a fork that reached its target state.
+// completeFork clears the pending mark of a fork that reached its target
+// state. The clear is synced to disk before the request succeeds: if a host
+// crash undid it, the next start would delete a fork whose caller got a
+// success.
 func (m *manager) completeFork(inst *Instance) error {
 	lock := m.getInstanceLock(inst.Id)
 	lock.Lock()
@@ -588,7 +591,7 @@ func (m *manager) completeFork(inst *Instance) error {
 	}
 	if meta.ForkPending != nil {
 		meta.ForkPending = nil
-		if err := m.saveMetadata(meta); err != nil {
+		if err := m.saveMetadataDurably(meta); err != nil {
 			return fmt.Errorf("save completed fork metadata: %w", err)
 		}
 	}

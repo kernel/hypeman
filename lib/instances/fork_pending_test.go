@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -128,6 +129,28 @@ func TestRecoverInterruptedForksDeletesOnlyForksWhoseProcessIsGone(t *testing.T)
 		assert.DirExists(t, mgr.paths.InstanceDir(id))
 		assert.Contains(t, logs.String(), id, "an instance recovery cannot read must be logged")
 	}
+}
+
+// Clearing the mark is synced to disk, so a host crash cannot undo it after
+// the caller got a success. If it cannot be synced the request fails and the
+// fork is deleted.
+func TestForkFailsWhenClearingItsMarkCannotBeSynced(t *testing.T) {
+	mgr, _ := setupTestManager(t)
+	ctx := context.Background()
+
+	sourceID := "fork-sync-source"
+	createStoppedSnapshotSourceFixture(t, mgr, sourceID, sourceID, mgr.defaultHypervisor)
+	var synced string
+	mgr.syncDirFn = func(dir string) error {
+		synced = dir
+		return errors.New("sync failed")
+	}
+
+	_, err := mgr.ForkInstance(ctx, sourceID, ForkInstanceRequest{Name: "fork-sync-copy"})
+	require.ErrorContains(t, err, "save completed fork metadata")
+
+	require.NotEmpty(t, synced, "the fork's directory must be synced")
+	assert.NoDirExists(t, synced)
 }
 
 // A copy cut short before the fork saved its own metadata leaves the source's

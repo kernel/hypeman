@@ -102,6 +102,16 @@ func (m *manager) loadMetadataTimed(id string, timings *metadataScanTimings) (*m
 
 // saveMetadata saves instance metadata to disk
 func (m *manager) saveMetadata(meta *metadata) error {
+	return m.writeMetadata(meta, false)
+}
+
+// saveMetadataDurably is saveMetadata for a write that a host crash must not
+// undo once it has returned: it syncs the file and its directory.
+func (m *manager) saveMetadataDurably(meta *metadata) error {
+	return m.writeMetadata(meta, true)
+}
+
+func (m *manager) writeMetadata(meta *metadata, durable bool) error {
 	if err := paths.ValidatePathComponent(meta.Id); err != nil {
 		return err
 	}
@@ -130,6 +140,12 @@ func (m *manager) saveMetadata(meta *metadata) error {
 		tmp.Close()
 		return fmt.Errorf("chmod temporary metadata: %w", err)
 	}
+	if durable {
+		if err := tmp.Sync(); err != nil {
+			tmp.Close()
+			return fmt.Errorf("sync temporary metadata: %w", err)
+		}
+	}
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("close temporary metadata: %w", err)
 	}
@@ -140,7 +156,27 @@ func (m *manager) saveMetadata(meta *metadata) error {
 
 	m.syncAdmissionAllocation(meta)
 
+	if durable {
+		// The rename lasts only once the directory is synced too.
+		syncDir := syncDir
+		if m.syncDirFn != nil {
+			syncDir = m.syncDirFn
+		}
+		if err := syncDir(filepath.Dir(metaPath)); err != nil {
+			return fmt.Errorf("sync instance directory: %w", err)
+		}
+	}
+
 	return nil
+}
+
+func syncDir(path string) error {
+	dir, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	return dir.Sync()
 }
 
 // createOverlayDisk creates a sparse overlay disk for the instance
