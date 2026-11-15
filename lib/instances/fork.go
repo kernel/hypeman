@@ -589,9 +589,16 @@ func (m *manager) completeFork(inst *Instance) error {
 	if err != nil {
 		return fmt.Errorf("load completed fork metadata: %w", err)
 	}
-	if meta.ForkPending != nil {
+	if pending := meta.ForkPending; pending != nil {
 		meta.ForkPending = nil
 		if err := m.saveMetadataDurably(meta); err != nil {
+			// The cleared metadata can already be in place. The request fails
+			// from here, so mark the fork again: if it cannot be deleted
+			// either, the next start still has to find it.
+			meta.ForkPending = pending
+			if markErr := m.saveMetadata(meta); markErr != nil {
+				return fmt.Errorf("save completed fork metadata: %w; additionally failed to mark the fork pending again: %v", err, markErr)
+			}
 			return fmt.Errorf("save completed fork metadata: %w", err)
 		}
 	}

@@ -133,7 +133,7 @@ func TestRecoverInterruptedForksDeletesOnlyForksWhoseProcessIsGone(t *testing.T)
 
 // Clearing the mark is synced to disk, so a host crash cannot undo it after
 // the caller got a success. If it cannot be synced the request fails and the
-// fork is deleted.
+// fork is deleted. A fork that is not deleted is still marked.
 func TestForkFailsWhenClearingItsMarkCannotBeSynced(t *testing.T) {
 	mgr, _ := setupTestManager(t)
 	ctx := context.Background()
@@ -151,6 +151,14 @@ func TestForkFailsWhenClearingItsMarkCannotBeSynced(t *testing.T) {
 
 	require.NotEmpty(t, synced, "the fork's directory must be synced")
 	assert.NoDirExists(t, synced)
+
+	// The cleared metadata is already in place when the sync fails.
+	kept, _, err := mgr.forkInstanceFromStoppedOrStandby(ctx, sourceID, ForkInstanceRequest{Name: "fork-sync-kept"}, false)
+	require.NoError(t, err)
+	require.ErrorContains(t, mgr.completeFork(kept), "save completed fork metadata")
+	stored, err := mgr.loadMetadata(kept.Id)
+	require.NoError(t, err)
+	assert.Equal(t, currentForkOwner(), stored.ForkPending)
 }
 
 // A copy cut short before the fork saved its own metadata leaves the source's
