@@ -3,6 +3,7 @@ package instances
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/devices"
+	"github.com/kernel/hypeman/lib/forkvm"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/logger"
 	snapshotstore "github.com/kernel/hypeman/lib/snapshot"
@@ -50,6 +52,13 @@ func TestForkIsPendingOnlyUntilItsRequestSucceeds(t *testing.T) {
 	record, err := mgr.loadSnapshotRecord(ofInterrupted.Id)
 	require.NoError(t, err)
 	assert.Nil(t, record.StoredMetadata.ForkPending)
+	// A restore cut short leaves the payload's copy as the instance's metadata.
+	data, err := os.ReadFile(filepath.Join(mgr.paths.SnapshotGuestDir(ofInterrupted.Id), "metadata.json"))
+	require.NoError(t, err)
+	var copied metadata
+	require.NoError(t, json.Unmarshal(data, &copied))
+	assert.Equal(t, interrupted.Id, copied.Id)
+	assert.Nil(t, copied.ForkPending)
 
 	fromInstance, err := mgr.ForkInstance(ctx, sourceID, ForkInstanceRequest{Name: "fork-pending-from-instance"})
 	require.NoError(t, err)
@@ -119,6 +128,46 @@ func TestRecoverInterruptedForksDeletesOnlyForksWhoseProcessIsGone(t *testing.T)
 		assert.DirExists(t, mgr.paths.InstanceDir(id))
 		assert.Contains(t, logs.String(), id, "an instance recovery cannot read must be logged")
 	}
+}
+
+// A copy cut short before the fork saved its own metadata leaves the source's
+// in the fork's directory. Recovery must not delete by it: that metadata names
+// the source's guest and what the source holds.
+func TestRecoverInterruptedForksLeavesDirectoryHoldingAnotherInstancesMetadata(t *testing.T) {
+	mgr, _ := setupTestManager(t)
+
+	// The source names itself as its device, so the gate sees a delete that goes by its metadata.
+	gate := detachGateDeviceManager{arrived: make(chan string, 1), release: make(chan struct{})}
+	close(gate.release)
+	mgr.deviceManager = gate
+
+	sourceID := "fork-recover-copied-source"
+	require.NoError(t, mgr.ensureDirectories(sourceID))
+	now := time.Now()
+	source := &metadata{StoredMetadata: StoredMetadata{
+		Id:             sourceID,
+		Name:           sourceID,
+		CreatedAt:      now,
+		StoppedAt:      &now,
+		HypervisorType: hypervisor.TypeCloudHypervisor,
+		SocketPath:     mgr.paths.InstanceSocket(sourceID, "cloud-hypervisor.sock"),
+		DataDir:        mgr.paths.InstanceDir(sourceID),
+		Devices:        []string{sourceID},
+		ForkPending:    exitedProcessOwner(t),
+	}}
+	require.NoError(t, mgr.saveMetadata(source))
+	// The source was itself a fork still pending when it was copied, and has finished since.
+	copyID := "fork-recover-copied"
+	require.NoError(t, forkvm.CopyGuestDirectory(mgr.paths.InstanceDir(sourceID), mgr.paths.InstanceDir(copyID)))
+	source.ForkPending = nil
+	require.NoError(t, mgr.saveMetadata(source))
+
+	var logs bytes.Buffer
+	mgr.RecoverInterruptedForks(logger.AddToContext(context.Background(), slog.New(slog.NewTextHandler(&logs, nil))))
+
+	assert.Empty(t, gate.arrived, "recovery detached the source's device")
+	assert.DirExists(t, mgr.paths.InstanceDir(copyID))
+	assert.Contains(t, logs.String(), "deleted=0 failed=0 owner_running=0")
 }
 
 // A compression job that ends just as a fork completes must not save a copy

@@ -2,9 +2,11 @@ package instances
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/kernel/hypeman/lib/forkvm"
@@ -586,6 +588,36 @@ func (m *manager) copySnapshotPayload(sourceInstanceID, snapshotGuestDir string)
 			return fmt.Errorf("snapshot requires sparse-capable filesystem (SEEK_DATA/SEEK_HOLE unsupported): %w", err)
 		}
 		return fmt.Errorf("copy guest directory into snapshot: %w", err)
+	}
+	return clearCopiedForkPending(filepath.Join(snapshotGuestDir, filepath.Base(m.paths.InstanceMetadata(sourceInstanceID))))
+}
+
+// clearCopiedForkPending removes the fork-pending mark from the copy of an
+// instance's metadata that its snapshot payload holds. A restore puts that
+// file back as the instance's own until it saves the restored metadata; cut
+// short there, a mark in it would have the next start delete the instance.
+func clearCopiedForkPending(metaPath string) error {
+	data, err := os.ReadFile(metaPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("read snapshot payload metadata: %w", err)
+	}
+	var meta metadata
+	if err := json.Unmarshal(data, &meta); err != nil {
+		return fmt.Errorf("unmarshal snapshot payload metadata: %w", err)
+	}
+	if meta.ForkPending == nil {
+		return nil
+	}
+	meta.ForkPending = nil
+	data, err = json.MarshalIndent(&meta, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal snapshot payload metadata: %w", err)
+	}
+	if err := os.WriteFile(metaPath, data, 0644); err != nil {
+		return fmt.Errorf("write snapshot payload metadata: %w", err)
 	}
 	return nil
 }

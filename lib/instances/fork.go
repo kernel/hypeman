@@ -659,6 +659,12 @@ func (m *manager) RecoverInterruptedForks(ctx context.Context) {
 		if meta.ForkPending == nil {
 			continue
 		}
+		if meta.Id != id {
+			// A copy cut short before the fork saved its own metadata leaves the
+			// source's here. Deleting by it would stop the source's guest.
+			log.WarnContext(ctx, "not deleting pending fork: its directory holds another instance's metadata", "instance_id", id, "metadata_instance_id", meta.Id)
+			continue
+		}
 		if !meta.ForkPending.gone() {
 			log.WarnContext(ctx, "not deleting pending fork: the process making it is still running", "instance_id", id, "instance_name", meta.Name, "owner_pid", meta.ForkPending.PID)
 			ownerRunning++
