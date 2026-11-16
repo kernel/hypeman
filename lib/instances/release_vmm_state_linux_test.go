@@ -20,7 +20,7 @@ func TestFailedKillKeepsVMMState(t *testing.T) {
 	}{
 		{name: "delete", action: func(ctx context.Context, m *manager, id string) error { return m.DeleteInstance(ctx, id) }},
 		{name: "stop", action: func(ctx context.Context, m *manager, id string) error {
-			_, err := m.StopInstance(ctx, id)
+			_, err := m.StopInstance(ctx, id, StopInstanceRequest{})
 			return err
 		}},
 	} {

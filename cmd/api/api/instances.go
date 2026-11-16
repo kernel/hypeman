@@ -797,7 +797,7 @@ func (s *ApiService) ForkInstance(ctx context.Context, request oapi.ForkInstance
 	return oapi.ForkInstance201JSONResponse(instanceToOAPI(*result)), nil
 }
 
-// StopInstance gracefully stops a running instance
+// StopInstance stops a running instance, gracefully unless force is set
 // The id parameter can be an instance ID, name, or ID prefix
 // Note: Resolution is handled by ResolveResource middleware
 func (s *ApiService) StopInstance(ctx context.Context, request oapi.StopInstanceRequestObject) (oapi.StopInstanceResponseObject, error) {
@@ -810,7 +810,12 @@ func (s *ApiService) StopInstance(ctx context.Context, request oapi.StopInstance
 	}
 	log := logger.FromContext(ctx)
 
-	result, err := s.InstanceManager.StopInstance(ctx, inst.Id)
+	stopReq := instances.StopInstanceRequest{}
+	if request.Body != nil && request.Body.Force != nil {
+		stopReq.Force = *request.Body.Force
+	}
+
+	result, err := s.InstanceManager.StopInstance(ctx, inst.Id, stopReq)
 	if err != nil {
 		switch {
 		case errors.Is(err, instances.ErrInvalidState):

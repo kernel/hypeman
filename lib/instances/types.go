@@ -343,6 +343,13 @@ type CreateSnapshotRequest struct {
 	Compression *snapshot.SnapshotCompressionConfig // Optional compression override
 }
 
+// StopInstanceRequest is the domain request for stopping an instance.
+type StopInstanceRequest struct {
+	// Force skips the guest shutdown and powers the VM off. A forced macOS stop is
+	// never graceful.
+	Force bool
+}
+
 // StandbyInstanceRequest is the domain request for putting an instance into standby.
 type StandbyInstanceRequest struct {
 	Compression      *snapshot.SnapshotCompressionConfig // Optional compression override

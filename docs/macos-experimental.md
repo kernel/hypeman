@@ -198,7 +198,9 @@ credential rekeying; this spike is not a multi-tenant image format.
 images, then falls back to VMM shutdown if necessary. Without an enabled Darwin
 guest agent it does **not** guarantee an orderly guest OS/application shutdown. Use a human
 or an authorized guest shutdown workflow before destructive operations when
-application consistency matters. Start cold-boots the instance's existing disk.
+application consistency matters. With `{"force": true}`, stop skips the guest
+shutdown and powers the VM off; the stop is not graceful, so a stopped snapshot
+or fork needs a later graceful stop. Start cold-boots the instance's existing disk.
 Delete removes instance storage, not the imported image. Deleting the imported
 image does not affect existing instances: each owns independent copies and
 starts without the template.
