@@ -851,6 +851,19 @@ components:
           description: Compression settings to use for this snapshot. Overrides instance and server defaults.
           $ref: "#/components/schemas/SnapshotCompressionConfig"
 
+    StopInstanceRequest:
+      type: object
+      properties:
+        force:
+          type: boolean
+          default: false
+          description: |
+            Power the VM off without asking the guest to shut down. Use when the
+            guest state will be discarded, for example before restoring a snapshot.
+            A forced stop of a macOS guest is never graceful, so it cannot be used
+            for a stopped snapshot or fork until the guest is booted and stopped
+            gracefully again.
+
     StandbyInstanceRequest:
       type: object
       properties:
@@ -3560,7 +3573,7 @@ paths:
   
   /instances/{id}/stop:
     post:
-      summary: Stop instance (graceful shutdown)
+      summary: Stop instance (graceful shutdown, or forced power-off)
       operationId: stopInstance
       security:
         - bearerAuth: []
@@ -3571,6 +3584,12 @@ paths:
           schema:
             type: string
           description: Instance ID or name
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StopInstanceRequest"
       responses:
         200:
           description: Instance stopped

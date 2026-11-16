@@ -91,7 +91,7 @@ func TestVGPU(t *testing.T) {
 		if instanceID == "" {
 			return
 		}
-		if _, err := instanceManager.StopInstance(ctx, instanceID); err != nil {
+		if _, err := instanceManager.StopInstance(ctx, instanceID, instances.StopInstanceRequest{}); err != nil {
 			t.Logf("Cleanup: stop instance: %v", err)
 		}
 		t.Log("Cleanup: Deleting instance...")
@@ -250,7 +250,7 @@ func TestVGPU(t *testing.T) {
 	})
 
 	t.Log("Step 10: Stopping instance...")
-	_, err = instanceManager.StopInstance(ctx, inst.Id)
+	_, err = instanceManager.StopInstance(ctx, inst.Id, instances.StopInstanceRequest{})
 	require.NoError(t, err, "stop should succeed")
 
 	t.Run("VGPUReleasedOnStop", func(t *testing.T) {
