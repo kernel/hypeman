@@ -11,6 +11,7 @@ import (
 
 	"github.com/kernel/hypeman/lib/builders"
 	"github.com/kernel/hypeman/lib/builds"
+	"github.com/kernel/hypeman/lib/builds/registryauth"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/logger"
 	"github.com/kernel/hypeman/lib/oapi"
@@ -55,6 +56,7 @@ func (s *ApiService) CreateBuild(ctx context.Context, request oapi.CreateBuildRe
 	var isAdminBuild bool
 	var secrets []builds.SecretRef
 	var resourceTags map[string]string
+	var registryCredentials map[string]registryauth.Credential
 
 	for {
 		part, err := request.Body.NextPart()
@@ -69,6 +71,11 @@ func (s *ApiService) CreateBuild(ctx context.Context, request oapi.CreateBuildRe
 		}
 
 		switch part.FormName() {
+		case "registry_credentials":
+			data, err := io.ReadAll(io.LimitReader(part, registryauth.MaxBytes+1))
+			if err != nil || len(data) > registryauth.MaxBytes || json.Unmarshal(data, &registryCredentials) != nil {
+				return oapi.CreateBuild400JSONResponse{Code: "invalid_request", Message: registryauth.ErrInvalid.Error()}, nil
+			}
 		case "source":
 			sourceData, err = io.ReadAll(part)
 			if err != nil {
@@ -230,15 +237,16 @@ func (s *ApiService) CreateBuild(ctx context.Context, request oapi.CreateBuildRe
 
 	// Build domain request
 	domainReq := builds.CreateBuildRequest{
-		BaseImageDigest: baseImageDigest,
-		BuilderID:       builderID,
-		CacheScope:      cacheScope,
-		Dockerfile:      dockerfile,
-		Secrets:         secrets,
-		IsAdminBuild:    isAdminBuild,
-		GlobalCacheKey:  globalCacheKey,
-		ImageName:       imageName,
-		Tags:            resourceTags,
+		BaseImageDigest:     baseImageDigest,
+		RegistryCredentials: registryCredentials,
+		BuilderID:           builderID,
+		CacheScope:          cacheScope,
+		Dockerfile:          dockerfile,
+		Secrets:             secrets,
+		IsAdminBuild:        isAdminBuild,
+		GlobalCacheKey:      globalCacheKey,
+		ImageName:           imageName,
+		Tags:                resourceTags,
 	}
 
 	// Apply build policy if any field was provided
@@ -259,6 +267,8 @@ func (s *ApiService) CreateBuild(ctx context.Context, request oapi.CreateBuildRe
 	build, err := s.BuildManager.CreateBuild(ctx, domainReq, sourceData)
 	if err != nil {
 		switch {
+		case errors.Is(err, registryauth.ErrInvalid):
+			return oapi.CreateBuild400JSONResponse{Code: "invalid_request", Message: registryauth.ErrInvalid.Error()}, nil
 		case errors.Is(err, tags.ErrInvalidTags):
 			return oapi.CreateBuild400JSONResponse{
 				Code:    "invalid_request",

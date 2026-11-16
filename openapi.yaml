@@ -4683,6 +4683,25 @@ paths:
                 dockerfile:
                   type: string
                   description: Dockerfile content. Required if not included in the source tarball.
+                registry_credentials:
+                  type: string
+                  format: password
+                  maxLength: 65536
+                  writeOnly: true
+                  description: |
+                    JSON object mapping exact registry hosts (no scheme or path) to
+                    objects with required username/password strings and optional RFC3339
+                    expires_at. At most 16 registries; credentials
+                    cannot override Hypeman's local output registry. No CR/LF in values.
+                    Held in host memory for at most 30 minutes from submission, or the
+                    earliest expires_at, including queue time. Passed to the ephemeral
+                    builder's Docker auth config over vsock, never saved in host build
+                    metadata/config, and removed at build completion/cancellation.
+                    Requires an updated builder image. No automatic refresh or restart
+                    recovery: resubmit interrupted/expired builds with fresh credentials.
+                    Credentialed builds pull directly in BuildKit rather than populating
+                    the shared base-image mirror. Omit or use {} for existing behavior.
+                  example: '{"registry.example":{"username":"AWS","password":"<temporary-token>"}}'
                 base_image_digest:
                   type: string
                   description: Optional pinned base image digest

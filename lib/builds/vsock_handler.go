@@ -2,6 +2,8 @@ package builds
 
 import (
 	"context"
+
+	"github.com/kernel/hypeman/lib/builds/registryauth"
 )
 
 const (
@@ -14,6 +16,8 @@ const (
 
 // VsockMessage is the envelope for vsock communication with builder agents
 type VsockMessage struct {
+	RegistryCredentials map[string]registryauth.Credential `json:"registry_credentials,omitempty"`
+
 	Type      string            `json:"type"`
 	Result    *BuildResult      `json:"result,omitempty"`
 	Log       string            `json:"log,omitempty"`
