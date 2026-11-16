@@ -60,7 +60,9 @@ func (s *stubManager) RestoreInstance(context.Context, string) (*Instance, error
 func (s *stubManager) RestoreSnapshot(context.Context, string, string, RestoreSnapshotRequest) (*Instance, error) {
 	return nil, nil
 }
-func (s *stubManager) StopInstance(context.Context, string, StopInstanceRequest) (*Instance, error) { return nil, nil }
+func (s *stubManager) StopInstance(context.Context, string, StopInstanceRequest) (*Instance, error) {
+	return nil, nil
+}
 func (s *stubManager) StartInstance(context.Context, string, StartInstanceRequest) (*Instance, error) {
 	return nil, nil
 }
