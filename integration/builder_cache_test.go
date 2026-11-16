@@ -171,7 +171,7 @@ func builderIntegrationDockerContext(t *testing.T, repoRoot string) string {
 	for _, path := range []string{"go.mod", "go.sum", "lib/guest/guest.pb.go", "lib/guest/guest_grpc.pb.go"} {
 		copyBuilderIntegrationFile(t, repoRoot, contextDir, path)
 	}
-	for _, dir := range []string{"lib/builds/builder_agent", "lib/system/guest_agent"} {
+	for _, dir := range []string{"lib/builds/builder_agent", "lib/builds/registryauth", "lib/system/guest_agent"} {
 		err := filepath.WalkDir(filepath.Join(repoRoot, dir), func(path string, entry os.DirEntry, err error) error {
 			if err != nil {
 				return err
