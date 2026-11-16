@@ -1145,7 +1145,8 @@ func (m *manager) waitForResult(ctx context.Context, buildID string, inst *insta
 			}
 		}
 
-		if requiresRegistryCredentials && !credentialsDelivered && dr.response.Type != "get_registry_credentials" {
+		failedResult := dr.response.Type == "build_result" && dr.response.Result != nil && !dr.response.Result.Success
+		if requiresRegistryCredentials && !credentialsDelivered && dr.response.Type != "get_registry_credentials" && dr.response.Type != "log" && !failedResult {
 			return nil, fmt.Errorf("builder does not support borrowed registry credentials; update the builder image")
 		}
 		dr.response.Log = redact(dr.response.Log)

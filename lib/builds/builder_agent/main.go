@@ -112,7 +112,6 @@ var (
 	secretsOnce     sync.Once
 
 	buildRegistryCredentials map[string]registryauth.Credential
-	buildCredentialsError    error
 
 	// Encoder lock protects concurrent access to json.Encoder
 	// (the goroutine sending build_result and the main loop handling get_status)
@@ -317,7 +316,6 @@ func handleHostConnection(conn net.Conn) {
 			}
 			secretsOnce.Do(func() {
 				buildRegistryCredentials = credentials
-				buildCredentialsError = err
 				close(secretsReady)
 			})
 
@@ -546,7 +544,7 @@ func runBuildProcess() {
 
 	var credentials map[string]registryauth.Credential
 	if config.RegistryCredentialsRequired {
-		if buildCredentialsError != nil || len(buildRegistryCredentials) == 0 {
+		if len(buildRegistryCredentials) == 0 {
 			setResult(BuildResult{Error: "registry credentials unavailable", Logs: logWriter.String()})
 			return
 		}

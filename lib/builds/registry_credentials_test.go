@@ -105,8 +105,9 @@ func (d credentialTestDialer) DialVsock(context.Context, int) (net.Conn, error) 
 func (d credentialTestDialer) Key() string                                      { return "registry-auth-test" }
 
 func TestRegistryCredentialsVsock(t *testing.T) {
-	for _, supported := range []bool{true, false} {
-		t.Run(map[bool]string{true: "handoff", false: "old-builder"}[supported], func(t *testing.T) {
+	for _, scenario := range []string{"handoff", "old-builder", "startup-failure"} {
+		t.Run(scenario, func(t *testing.T) {
+			supported := scenario == "handoff"
 			mgr, instanceMgr, _, dir := setupTestManager(t)
 			defer os.RemoveAll(dir)
 			credentials := map[string]registryauth.Credential{"registry.example": {Username: "AWS", Password: `synthetic-"secret"`}}
@@ -142,16 +143,31 @@ func TestRegistryCredentialsVsock(t *testing.T) {
 						return
 					}
 				}
-				done <- encoder.Encode(VsockMessage{Type: "build_result", Result: &BuildResult{Success: true, Logs: credentials["registry.example"].Password}})
+				if !supported {
+					if err := encoder.Encode(VsockMessage{Type: "log", Log: credentials["registry.example"].Auth()}); err != nil {
+						done <- err
+						return
+					}
+				}
+				result := &BuildResult{Success: true, Logs: credentials["registry.example"].Password}
+				if scenario == "startup-failure" {
+					result.Success = false
+					result.Error = "load config: missing build.json"
+				}
+				done <- encoder.Encode(VsockMessage{Type: "build_result", Result: result})
 			}()
 			result, err := mgr.waitForResult(context.Background(), "build", &instances.Instance{StoredMetadata: instances.StoredMetadata{Id: "vm"}}, true)
 			require.NoError(t, <-done)
-			if !supported {
+			if scenario == "old-builder" {
 				require.ErrorContains(t, err, "update the builder image")
 				return
 			}
 			require.NoError(t, err)
 			require.Equal(t, "[REDACTED]", result.Logs)
+			if scenario == "startup-failure" {
+				require.False(t, result.Success)
+				require.Equal(t, "load config: missing build.json", result.Error)
+			}
 			data, err := os.ReadFile(mgr.paths.BuildLog("build"))
 			require.NoError(t, err)
 			require.False(t, strings.Contains(string(data), credentials["registry.example"].Auth()))

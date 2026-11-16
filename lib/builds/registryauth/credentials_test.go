@@ -3,6 +3,7 @@ package registryauth
 import (
 	"encoding/base64"
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -12,7 +13,7 @@ import (
 
 func TestNormalizeAndRedact(t *testing.T) {
 	expires := time.Now().Add(time.Hour)
-	password := `synthetic-"secret"/+=`
+	password := `synthetic-"secret"/+=<&>`
 	input := map[string]Credential{"REGISTRY.EXAMPLE": {Username: "AWS", Password: password, ExpiresAt: &expires}}
 	got, err := Normalize(input, "http://local.example:4973", time.Now())
 	require.NoError(t, err)
@@ -23,7 +24,7 @@ func TestNormalizeAndRedact(t *testing.T) {
 	redact := Redactor(got)
 	quoted, err := json.Marshal(password)
 	require.NoError(t, err)
-	for _, value := range []string{password, string(quoted), base64.StdEncoding.EncodeToString([]byte("AWS:" + password))} {
+	for _, value := range []string{password, string(quoted), strconv.Quote(password), base64.StdEncoding.EncodeToString([]byte("AWS:" + password))} {
 		require.NotContains(t, redact("before "+value+" after"), value)
 		require.Contains(t, redact(value), "[REDACTED]")
 	}

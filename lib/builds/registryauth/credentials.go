@@ -82,7 +82,12 @@ func Redactor(credentials map[string]Credential) func(string) string {
 	values := make(map[string]bool)
 	for _, c := range credentials {
 		quoted, _ := json.Marshal(c.Password)
-		for _, value := range []string{c.Password, c.Auth(), base64.StdEncoding.EncodeToString([]byte(c.Password)), string(quoted[1 : len(quoted)-1]), url.QueryEscape(c.Password), url.PathEscape(c.Password)} {
+		var plain strings.Builder
+		encoder := json.NewEncoder(&plain)
+		encoder.SetEscapeHTML(false)
+		_ = encoder.Encode(c.Password)
+		plainQuoted := strings.TrimSuffix(plain.String(), "\n")
+		for _, value := range []string{c.Password, c.Auth(), base64.StdEncoding.EncodeToString([]byte(c.Password)), string(quoted[1 : len(quoted)-1]), plainQuoted[1 : len(plainQuoted)-1], url.QueryEscape(c.Password), url.PathEscape(c.Password)} {
 			if value != "" {
 				values[value] = true
 			}
