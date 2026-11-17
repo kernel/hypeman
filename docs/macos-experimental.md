@@ -128,7 +128,9 @@ HYPEMAN_REGISTRY_TOKEN=... go run ./cmd/import-tart \
 
 The `macOS image` workflow (`.github/workflows/macos-image.yml`, run by hand, no
 inputs) does these steps on a self-hosted macOS 27 runner labelled `tart` and
-publishes `builds/macos-chrome`. Both workflows need the `HYPEMAN_REGISTRY_URL`
+publishes `builds/macos-chrome`. The runner must run as the user logged in at the
+console: outside that session, Virtualization.framework cannot create its host key
+and Tart fails to boot the build VM with a security error. Both workflows need the `HYPEMAN_REGISTRY_URL`
 variable. `macOS image` needs the `HYPEMAN_REGISTRY_TOKEN` secret, which can push
 only `builds/macos-chrome` and pull only the base; `macOS base` needs
 `HYPEMAN_BASE_REGISTRY_TOKEN`, which can push only `builds/<BASE_NAME>`. Someone
