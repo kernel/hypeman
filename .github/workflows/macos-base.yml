@@ -1,0 +1,65 @@
+name: macOS base
+
+# Publishes the base in images/macos/base.env to hypeman's registry, once per base.
+# Pin the digest it prints as BASE_DIGEST. See docs/macos-experimental.md#base-image.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-image-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: [self-hosted, macos, arm64, tart]
+    timeout-minutes: 120
+    env:
+      VM: hypeman-base-${{ github.run_id }}
+      TART_VERSION: 2.41.1
+      TART_SHA256: e680a734febccfce7d4e910c1f7f13fc3b00f19a181c945e2d746de3214c32c2
+    steps:
+      - uses: actions/checkout@v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Load the base
+        run: grep -v '^#' images/macos/base.env | grep . >> "$GITHUB_ENV"
+
+      - name: Install Tart
+        run: |
+          bin="$RUNNER_TEMP/bin"
+          mkdir -p "$bin"
+          curl -fsSL -o "$RUNNER_TEMP/tart.tar.gz" "https://github.com/cirruslabs/tart/releases/download/$TART_VERSION/tart.tar.gz"
+          echo "$TART_SHA256  $RUNNER_TEMP/tart.tar.gz" | shasum -a 256 -c
+          tar -xzf "$RUNNER_TEMP/tart.tar.gz" -C "$RUNNER_TEMP"
+          ln -sf "$RUNNER_TEMP/tart.app/Contents/MacOS/tart" "$bin/tart"
+          echo "$bin" >> "$GITHUB_PATH"
+
+      - name: Build import-tart
+        run: go build -o "$RUNNER_TEMP/bin/import-tart" ./cmd/import-tart
+
+      # A plain clone of the cached image shares its disk.img, which is the file a
+      # stacked clone of the same image stacks on.
+      - name: Clone the base
+        run: tart clone "$TART_BASE" "$VM"
+
+      - name: Publish
+        shell: bash
+        env:
+          REGISTRY: ${{ vars.HYPEMAN_REGISTRY_URL }}
+          # Minted by import-tart --mint-token for BASE_NAME, with no base.
+          HYPEMAN_REGISTRY_TOKEN: ${{ secrets.HYPEMAN_BASE_REGISTRY_TOKEN }}
+        run: |
+          import-tart --vm "$HOME/.tart/vms/$VM" --registry "$REGISTRY" --name "$BASE_NAME" | tee "$RUNNER_TEMP/publication.json"
+          echo "Published \`$(jq -r .Reference "$RUNNER_TEMP/publication.json")\`. Pin \`BASE_DIGEST=$(jq -r .Digest "$RUNNER_TEMP/publication.json")\` in images/macos/base.env." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Delete the VM
+        if: always()
+        run: tart delete "$VM" || true

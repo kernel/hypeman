@@ -1,20 +1,10 @@
 name: macOS image
 
-# Builds a macOS browser image with Packer and Tart on a stacked clone of a base,
-# checks it, and publishes it to hypeman's registry over that base. See
-# docs/macos-experimental.md.
+# Builds a macOS browser image with Packer and Tart on a stacked clone of the base in
+# images/macos/base.env, checks it, and publishes it to hypeman's registry over that
+# base as builds/macos-chrome. See docs/macos-experimental.md.
 on:
   workflow_dispatch:
-    inputs:
-      tart_base:
-        description: The base as a Tart image (OCI reference) to clone stacked
-        required: true
-      base:
-        description: The same base in hypeman's registry, pinned by digest
-        required: true
-      name:
-        description: Image name; published as builds/NAME. The registry token must be minted for it.
-        required: true
 
 permissions:
   contents: read
@@ -44,6 +34,11 @@ jobs:
           go-version-file: go.mod
           cache: false
 
+      - name: Load the base
+        run: |
+          grep -v '^#' images/macos/base.env | grep . >> "$GITHUB_ENV"
+          grep -q '^BASE_DIGEST=sha256:' images/macos/base.env || { echo "BASE_DIGEST is not pinned in images/macos/base.env; run the macOS base workflow first" >&2; exit 1; }
+
       - name: Install Tart and Packer
         run: |
           bin="$RUNNER_TEMP/bin"
@@ -61,17 +56,10 @@ jobs:
         run: go build -o "$RUNNER_TEMP/bin/import-tart" ./cmd/import-tart
 
       - name: Clone the base stacked
-        env:
-          TART_BASE: ${{ inputs.tart_base }}
-          TART_REGISTRY_USERNAME: ${{ secrets.TART_REGISTRY_USERNAME }}
-          TART_REGISTRY_PASSWORD: ${{ secrets.TART_REGISTRY_PASSWORD }}
         run: tart clone --stacked "$TART_BASE" "$VM-base"
 
       - name: Build and check the image
         working-directory: images/macos
-        env:
-          PKR_VAR_ssh_username: ${{ vars.MACOS_IMAGE_SSH_USERNAME }}
-          PKR_VAR_ssh_password: ${{ secrets.MACOS_IMAGE_SSH_PASSWORD }}
         run: |
           packer init browser.pkr.hcl
           packer build -var vm_base_name="$VM-base" -var vm_name="$VM" browser.pkr.hcl
@@ -80,14 +68,13 @@ jobs:
         # pipefail, so a failed publish is not hidden by tee.
         shell: bash
         env:
-          BASE: ${{ inputs.base }}
-          NAME: ${{ inputs.name }}
           REGISTRY: ${{ vars.HYPEMAN_REGISTRY_URL }}
-          # Minted by import-tart --mint-token for this name and base; it can publish
-          # nothing else.
+          # Minted by import-tart --mint-token for macos-chrome over the base; it can
+          # publish nothing else.
           HYPEMAN_REGISTRY_TOKEN: ${{ secrets.HYPEMAN_REGISTRY_TOKEN }}
         run: |
-          import-tart --vm "$HOME/.tart/vms/$VM" --registry "$REGISTRY" --name "$NAME" --base "$BASE" --guest-agent | tee "$RUNNER_TEMP/publication.json"
+          host=${REGISTRY#*://}
+          import-tart --vm "$HOME/.tart/vms/$VM" --registry "$REGISTRY" --name macos-chrome --base "${host%/}/builds/$BASE_NAME@$BASE_DIGEST" --guest-agent | tee "$RUNNER_TEMP/publication.json"
           echo "Published \`$(jq -r .Reference "$RUNNER_TEMP/publication.json")\`" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Delete the build VMs

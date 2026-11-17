@@ -21,12 +21,15 @@ variable "vm_name" {
   description = "Tart VM the build writes, which import-tart publishes."
 }
 
+# The base's account. Cirrus Labs' vanilla images publish admin/admin.
 variable "ssh_username" {
-  type = string
+  type    = string
+  default = "admin"
 }
 
 variable "ssh_password" {
   type      = string
+  default   = "admin"
   sensitive = true
 }
 

@@ -75,52 +75,72 @@ on a macOS 27 host, as stacked Tart VMs, then publish the result with
 `overlay.asif`, so a build on a base already in the registry uploads only that
 overlay.
 
-1. Publish the base once from a standalone Tart VM whose `disk.img` is ASIF
-   (`diskFormat: asif`). Every layer is uploaded.
-2. Get the base as a Tart image (`tart push` to any OCI registry) and create the
-   build VM with `tart clone --stacked`. The Packer Tart plugin cannot clone
-   stacked itself, so point its `vm_base_name` at that local clone.
-3. Build with `images/macos/browser.pkr.hcl`. It installs Chrome (from Google's
-   stable DMG, checked by its code signature and Gatekeeper), runs any
-   `extra_scripts`, installs hypeman's agent launcher (hypeman supplies the agent
-   on its own disk; see [macos-guest-agent.md](macos-guest-agent.md#agent-disk)),
+### Base image
+
+Every image is built on the one base pinned in `images/macos/base.env`:
+
+- `TART_BASE`: Cirrus Labs' vanilla macOS image, pinned by digest. Cirrus Labs
+  names macOS 27 "Golden Gate", so the 27.2 image is
+  `ghcr.io/cirruslabs/macos-golden-gate-vanilla:27.2`. It has an ASIF disk, an
+  `admin` user (password `admin`) with passwordless sudo and SSH, and logs `admin`
+  in at the console automatically. Its template is `templates/vanilla-golden-gate.pkr.hcl`
+  in `cirruslabs/macos-image-templates`.
+- `BASE_NAME` and `BASE_DIGEST`: the same disk in hypeman's registry, as
+  `builds/<BASE_NAME>@<BASE_DIGEST>`.
+
+To move to a new macOS release, update `TART_BASE` and `BASE_NAME`, clear
+`BASE_DIGEST`, run the `macOS base` workflow (`.github/workflows/macos-base.yml`),
+and pin the digest it prints. That workflow clones `TART_BASE` and publishes it with
+`import-tart` and no base, uploading the whole disk once. A plain clone shares the
+cached image's `disk.img`, which is the file `tart clone --stacked` stacks on, so
+the published base's disk digest is the one later builds check against.
+
+### Builds
+
+1. Create the build VM with `tart clone --stacked "$TART_BASE" base-clone`. Tart
+   pulls the image itself. The Packer Tart plugin cannot clone stacked, so point
+   its `vm_base_name` at that local clone.
+2. Build with `images/macos/browser.pkr.hcl`. It installs Chrome (from Google's
+   stable DMG, checked by its code signature and Gatekeeper; the vanilla base turns
+   Gatekeeper's assessments off, so the signature check is the one that counts),
+   runs any `extra_scripts`, installs hypeman's agent launcher (hypeman supplies the
+   agent on its own disk; see [macos-guest-agent.md](macos-guest-agent.md#agent-disk)),
    checks the image with `images/macos/smoke-test.sh` (launcher present, no baked
    agent, headless Chrome answers CDP), regenerates the SSH host keys and shuts the
    guest down from inside. It keeps the recovery partition; Packer's default
-   deletes it and rewrites the whole disk. The base must have an SSH user with sudo
-   for Packer.
+   deletes it and rewrites the whole disk. It logs in as the base's `admin`.
 
    ```sh
    cd images/macos && packer init browser.pkr.hcl
-   packer build -var vm_base_name=base-clone -var vm_name=my-build \
-     -var ssh_username=admin -var ssh_password=... browser.pkr.hcl
+   packer build -var vm_base_name=base-clone -var vm_name=my-build browser.pkr.hcl
    ```
 
-4. Publish the stopped VM over the base:
+3. Publish the stopped VM over the base:
 
 ```sh
 HYPEMAN_REGISTRY_TOKEN=... go run ./cmd/import-tart \
   --vm ~/.tart/vms/my-build \
   --registry https://hypeman.example \
   --name my-build \
-  --base hypeman.example/builds/my-base@sha256:... \
+  --base hypeman.example/builds/macos-27-2@sha256:... \
   --guest-agent
 ```
 
-The `macOS image` workflow (`.github/workflows/macos-image.yml`, run by hand) does
-steps 2 to 4 on a self-hosted macOS 27 runner labelled `tart`. It needs the
-`HYPEMAN_REGISTRY_URL` and `MACOS_IMAGE_SSH_USERNAME` variables and the
-`HYPEMAN_REGISTRY_TOKEN`, `MACOS_IMAGE_SSH_PASSWORD`, `TART_REGISTRY_USERNAME` and
-`TART_REGISTRY_PASSWORD` secrets.
-
-`HYPEMAN_REGISTRY_TOKEN` can push only `builds/<name>` and pull only the base.
-Someone with the registry's JWT secret mints it once, and mints a new one when the
-name, the base or its expiry changes:
+The `macOS image` workflow (`.github/workflows/macos-image.yml`, run by hand, no
+inputs) does these steps on a self-hosted macOS 27 runner labelled `tart` and
+publishes `builds/macos-chrome`. Both workflows need the `HYPEMAN_REGISTRY_URL`
+variable. `macOS image` needs the `HYPEMAN_REGISTRY_TOKEN` secret, which can push
+only `builds/macos-chrome` and pull only the base; `macOS base` needs
+`HYPEMAN_BASE_REGISTRY_TOKEN`, which can push only `builds/<BASE_NAME>`. Someone
+with the registry's JWT secret mints each, and mints new ones when the base or
+their expiry changes:
 
 ```sh
 HYPEMAN_JWT_SECRET=... go run ./cmd/import-tart --mint-token \
-  --registry https://hypeman.example --name my-build \
-  --base hypeman.example/builds/my-base@sha256:... --token-ttl 720h
+  --registry https://hypeman.example --name macos-27-2 --token-ttl 720h
+HYPEMAN_JWT_SECRET=... go run ./cmd/import-tart --mint-token \
+  --registry https://hypeman.example --name macos-chrome \
+  --base hypeman.example/builds/macos-27-2@sha256:... --token-ttl 720h
 ```
 
 `import-tart` also accepts `HYPEMAN_JWT_SECRET` in place of a token, minting one for
