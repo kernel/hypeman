@@ -24,6 +24,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/empty"
+	"github.com/google/go-containerregistry/pkg/v1/layout"
 	"github.com/google/go-containerregistry/pkg/v1/mutate"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/google/go-containerregistry/pkg/v1/tarball"
@@ -129,13 +130,7 @@ func (p *Publisher) Publish(ctx context.Context, id string, storage Storage, bas
 	if err != nil {
 		return Publication{}, err
 	}
-	if err := storage.validate(); err != nil {
-		return Publication{}, err
-	}
-	if storage.Platform.MachineIdentifier, err = p.NewMachineIdentifier(); err != nil {
-		return Publication{}, fmt.Errorf("new machine identifier: %w", err)
-	}
-	if storage.Platform.MAC, err = randomMAC(); err != nil {
+	if storage, err = withFreshIdentity(storage, p.NewMachineIdentifier); err != nil {
 		return Publication{}, err
 	}
 	repo := "builds/" + id
@@ -172,6 +167,56 @@ func (p *Publisher) Publish(ctx context.Context, id string, storage Storage, bas
 		return Publication{}, err
 	}
 	return Publication{Reference: registry.Host + "/" + repo + "@" + digest.String(), Digest: digest.String()}, nil
+}
+
+// WriteLayout writes storage as a machine image to a new OCI image layout at dir,
+// with a fresh machine identifier and MAC, for a registry the publisher does not
+// target. Every layer is written; a registry that already holds a layer, such as
+// the base disk of an earlier build, skips it when the layout is pushed.
+func WriteLayout(ctx context.Context, dir string, storage Storage, newMachineIdentifier func() ([]byte, error)) (Publication, error) {
+	if newMachineIdentifier == nil {
+		return Publication{}, fmt.Errorf("machine identifier source required")
+	}
+	if entries, err := os.ReadDir(dir); err == nil && len(entries) > 0 {
+		return Publication{}, fmt.Errorf("OCI layout %s is not empty", dir)
+	} else if err != nil && !os.IsNotExist(err) {
+		return Publication{}, err
+	}
+	storage, err := withFreshIdentity(storage, newMachineIdentifier)
+	if err != nil {
+		return Publication{}, err
+	}
+	img, err := machineImage(ctx, "", storage, nil, nil, nil)
+	if err != nil {
+		return Publication{}, err
+	}
+	path, err := layout.Write(dir, empty.Index)
+	if err != nil {
+		return Publication{}, err
+	}
+	if err := path.AppendImage(img); err != nil {
+		return Publication{}, fmt.Errorf("write machine image: %w", err)
+	}
+	digest, err := img.Digest()
+	if err != nil {
+		return Publication{}, err
+	}
+	return Publication{Reference: dir + "@" + digest.String(), Digest: digest.String()}, nil
+}
+
+// withFreshIdentity validates storage and gives it a new machine identifier and MAC.
+func withFreshIdentity(storage Storage, newMachineIdentifier func() ([]byte, error)) (Storage, error) {
+	if err := storage.validate(); err != nil {
+		return Storage{}, err
+	}
+	var err error
+	if storage.Platform.MachineIdentifier, err = newMachineIdentifier(); err != nil {
+		return Storage{}, fmt.Errorf("new machine identifier: %w", err)
+	}
+	if storage.Platform.MAC, err = randomMAC(); err != nil {
+		return Storage{}, err
+	}
+	return storage, nil
 }
 
 // MintToken returns a registry token that can publish the image name, over base
