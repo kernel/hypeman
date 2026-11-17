@@ -33,7 +33,7 @@ func main() {
 	name := flag.String("name", "", "image name; the image is published as builds/NAME")
 	baseRef := flag.String("base", "", "digest-pinned registry image the VM's stacked disk is built on")
 	guestAgent := flag.Bool("guest-agent", false, "the image runs hypeman's guest agent")
-	timeout := flag.Duration("timeout", 2*time.Hour, "publication timeout")
+	timeout := flag.Duration("timeout", 2*time.Hour, "publication or layout write timeout")
 	mint := flag.Bool("mint-token", false, "print a registry token that can publish --name over --base, instead of publishing")
 	tokenTTL := flag.Duration("token-ttl", 30*24*time.Hour, "lifetime of a token from --mint-token")
 	ociLayout := flag.String("oci-layout", "", "write the image to a new OCI image layout at this directory instead of publishing it")
@@ -45,6 +45,8 @@ func main() {
 		}
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
+		ctx, cancelTimeout := context.WithTimeout(ctx, *timeout)
+		defer cancelTimeout()
 		storage, err := readClosedVM(ctx, *vm, *guestAgent)
 		if err == nil {
 			var publication machineimage.Publication

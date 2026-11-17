@@ -181,10 +181,27 @@ func TestMintedTokenPublishesOnlyItsImage(t *testing.T) {
 	require.Error(t, e, "the token cannot publish another image")
 }
 
+// canceledOnceExists is canceled once path exists, so a write fails partway through.
+type canceledOnceExists struct {
+	context.Context
+	path string
+}
+
+func (c canceledOnceExists) Err() error {
+	if _, err := os.Stat(c.path); err == nil {
+		return context.Canceled
+	}
+	return c.Context.Err()
+}
+
 func TestWriteLayoutWritesMachineImage(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	dir := filepath.Join(t.TempDir(), "layout")
+	_, e := machineimage.WriteLayout(canceledOnceExists{ctx, filepath.Join(dir, "oci-layout")}, dir, machinePublisherStorage(t), testMachineIdentifier)
+	require.ErrorIs(t, e, context.Canceled)
+	require.NoDirExists(t, dir)
+
 	result, e := machineimage.WriteLayout(ctx, dir, machinePublisherStorage(t), testMachineIdentifier)
 	require.NoError(t, e)
 	index, e := layout.ImageIndexFromPath(dir)

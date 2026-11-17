@@ -173,16 +173,27 @@ func (p *Publisher) Publish(ctx context.Context, id string, storage Storage, bas
 // with a fresh machine identifier and MAC, for a registry the publisher does not
 // target. Every layer is written; a registry that already holds a layer, such as
 // the base disk of an earlier build, skips it when the layout is pushed.
-func WriteLayout(ctx context.Context, dir string, storage Storage, newMachineIdentifier func() ([]byte, error)) (Publication, error) {
+func WriteLayout(ctx context.Context, dir string, storage Storage, newMachineIdentifier func() ([]byte, error)) (_ Publication, err error) {
 	if newMachineIdentifier == nil {
 		return Publication{}, fmt.Errorf("machine identifier source required")
 	}
-	if entries, err := os.ReadDir(dir); err == nil && len(entries) > 0 {
+	entries, err := os.ReadDir(dir)
+	existed := err == nil
+	if existed && len(entries) > 0 {
 		return Publication{}, fmt.Errorf("OCI layout %s is not empty", dir)
 	} else if err != nil && !os.IsNotExist(err) {
 		return Publication{}, err
 	}
-	storage, err := withFreshIdentity(storage, newMachineIdentifier)
+	// A failed or interrupted write leaves dir as it found it, so it can be retried.
+	defer func() {
+		if err != nil {
+			os.RemoveAll(dir)
+			if existed {
+				os.Mkdir(dir, 0o755)
+			}
+		}
+	}()
+	storage, err = withFreshIdentity(storage, newMachineIdentifier)
 	if err != nil {
 		return Publication{}, err
 	}
