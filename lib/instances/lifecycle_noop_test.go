@@ -356,20 +356,14 @@ func TestStopStoppedInstanceLeavesVGPUForReconcile(t *testing.T) {
 type recordingDeviceManager struct {
 	devices.Manager
 	detached       []string
-	unbound        []string
 	onMarkDetached func()
 }
 
-func (m *recordingDeviceManager) MarkDetached(ctx context.Context, deviceID string) error {
+func (m *recordingDeviceManager) ReleaseInstanceDevice(ctx context.Context, deviceID, instanceID string) error {
 	m.detached = append(m.detached, deviceID)
 	if m.onMarkDetached != nil {
 		m.onMarkDetached()
 	}
-	return nil
-}
-
-func (m *recordingDeviceManager) UnbindFromVFIO(ctx context.Context, id string) error {
-	m.unbound = append(m.unbound, id)
 	return nil
 }
 

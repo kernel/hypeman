@@ -182,6 +182,21 @@ func TestDeviceLookupAndDeleteRejectPathTraversal(t *testing.T) {
 	require.FileExists(t, marker)
 }
 
+func TestReleaseInstanceDeviceClearsItsOwnAttachment(t *testing.T) {
+	p := paths.New(t.TempDir())
+	m := NewManager(p).(*manager)
+	owner := "fork"
+	device := &Device{Id: "dev-1", PCIAddress: "test-device", AttachedTo: &owner}
+	require.NoError(t, os.MkdirAll(p.DeviceDir(device.Id), 0755))
+	require.NoError(t, m.saveDevice(device))
+
+	// There is no hardware to unbind. Detachment must still persist.
+	require.Error(t, m.ReleaseInstanceDevice(t.Context(), device.Id, owner))
+	got, err := m.loadDevice(device.Id)
+	require.NoError(t, err)
+	require.Nil(t, got.AttachedTo)
+}
+
 func TestSaveLoadDevice_MetadataRoundTrip(t *testing.T) {
 	p := paths.New(t.TempDir())
 	mgr := &manager{

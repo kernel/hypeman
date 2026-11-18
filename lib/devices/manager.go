@@ -65,6 +65,9 @@ type Manager interface {
 	// MarkDetached marks a device as detached from an instance
 	MarkDetached(ctx context.Context, deviceID string) error
 
+	// ReleaseInstanceDevice detaches and unbinds a passthrough device only if this instance owns it.
+	ReleaseInstanceDevice(ctx context.Context, deviceID, instanceID string) error
+
 	// ReconcileDevices cleans up stale device state on startup.
 	// It detects devices with AttachedTo referencing non-existent instances
 	// and clears the orphaned attachment state.
@@ -322,8 +325,6 @@ func (m *manager) BindToVFIO(ctx context.Context, id string) error {
 }
 
 func (m *manager) UnbindFromVFIO(ctx context.Context, id string) error {
-	log := logger.FromContext(ctx)
-
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -341,7 +342,11 @@ func (m *manager) UnbindFromVFIO(ctx context.Context, id string) error {
 		return ErrInUse
 	}
 
-	// Unbind from VFIO
+	return m.unbindFromVFIOLocked(ctx, device)
+}
+
+func (m *manager) unbindFromVFIOLocked(ctx context.Context, device *Device) error {
+	log := logger.FromContext(ctx)
 	if err := m.vfioBinder.UnbindFromVFIO(device.PCIAddress); err != nil {
 		return err
 	}
@@ -395,6 +400,25 @@ func (m *manager) MarkDetached(ctx context.Context, deviceID string) error {
 
 	device.AttachedTo = nil
 	return m.saveDevice(device)
+}
+
+// ReleaseInstanceDevice checks the recorded owner under the same lock as the unbind.
+// A fork's device list can name a passthrough device still owned by its source.
+func (m *manager) ReleaseInstanceDevice(ctx context.Context, deviceID, instanceID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	device, err := m.loadDevice(deviceID)
+	if err != nil {
+		return err
+	}
+	if device.AttachedTo == nil || *device.AttachedTo != instanceID {
+		return nil
+	}
+	device.AttachedTo = nil
+	if err := m.saveDevice(device); err != nil {
+		return err
+	}
+	return m.unbindFromVFIOLocked(ctx, device)
 }
 
 // ReconcileDevices cleans up stale device state on startup.

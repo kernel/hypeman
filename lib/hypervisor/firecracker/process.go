@@ -216,6 +216,18 @@ func cleanupFailedRestore(pid int, socketPath string) {
 	_ = os.Remove(socketPath)
 }
 
+// ForkBackupSeparator separates a parked snapshot source from its UnixNano suffix.
+const ForkBackupSeparator = ".fork-bak."
+
+// SnapshotSourceAlias returns the source path recorded for the fallback, if any.
+func SnapshotSourceAlias(instanceDir string) (string, error) {
+	meta, err := loadRestoreMetadata(instanceDir)
+	if err != nil {
+		return "", err
+	}
+	return meta.SnapshotSourceDataDir, nil
+}
+
 func withSnapshotSourceDirAlias(meta *restoreMetadata, targetDataDir string, run func() error) error {
 	if meta == nil || meta.SnapshotSourceDataDir == "" {
 		return run()
@@ -239,7 +251,7 @@ func withSnapshotSourceDirAlias(meta *restoreMetadata, targetDataDir string, run
 
 	backupDataDir := ""
 	if _, err := os.Stat(sourceDataDir); err == nil {
-		backupDataDir = fmt.Sprintf("%s.fork-bak.%d", sourceDataDir, time.Now().UnixNano())
+		backupDataDir = fmt.Sprintf("%s%s%d", sourceDataDir, ForkBackupSeparator, time.Now().UnixNano())
 		if err := os.Rename(sourceDataDir, backupDataDir); err != nil {
 			return fmt.Errorf("backup snapshot source data dir: %w", err)
 		}

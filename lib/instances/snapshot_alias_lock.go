@@ -35,12 +35,6 @@ func prepareForkWithAliasReadLock(ctx context.Context, starter hypervisor.VMStar
 	return result, retErr
 }
 
-func copyGuestDirectoryWithAliasReadLock(srcDir, dstDir string) error {
-	return withSnapshotSourceAliasReadLock(func() error {
-		return forkvm.CopyGuestDirectory(srcDir, dstDir)
-	})
-}
-
 func (m *manager) copyForkSourceGuestDirectory(ctx context.Context, sourceState State, sourceID string, stored *StoredMetadata, srcDir, dstDir string, shareMemFile bool) error {
 	ctx, span := m.tracerOrDefault().Start(ctx, "instances.fork.copy_guest_directory",
 		trace.WithAttributes(

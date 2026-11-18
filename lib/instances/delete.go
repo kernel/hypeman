@@ -173,15 +173,8 @@ func (m *manager) deleteInstanceWithOptions(
 	if len(inst.Devices) > 0 && m.deviceManager != nil {
 		for _, deviceID := range inst.Devices {
 			log.DebugContext(ctx, "detaching device", "id", id, "device", deviceID)
-			// Mark device as detached
-			if err := m.deviceManager.MarkDetached(ctx, deviceID); err != nil {
-				log.WarnContext(ctx, "failed to mark device as detached", "id", id, "device", deviceID, "error", err)
-			}
-			// Auto-unbind from VFIO so native driver can reclaim it
-			log.InfoContext(ctx, "auto-unbinding device from VFIO", "id", id, "device", deviceID)
-			if err := m.deviceManager.UnbindFromVFIO(ctx, deviceID); err != nil {
-				// Log but continue - device might already be unbound or in use by another instance
-				log.WarnContext(ctx, "failed to unbind device from VFIO", "id", id, "device", deviceID, "error", err)
+			if err := m.deviceManager.ReleaseInstanceDevice(ctx, deviceID, id); err != nil {
+				log.WarnContext(ctx, "failed to release passthrough device", "instance_id", id, "device", deviceID, "error", err)
 			}
 		}
 	}

@@ -8,6 +8,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/c2h5oh/datasize"
@@ -58,17 +59,24 @@ func ProvideContext(log *slog.Logger) context.Context {
 	return logger.AddToContext(context.Background(), log)
 }
 
-// ProvideConfig provides the application configuration.
-// Panics if configuration is invalid (prevents startup with bad config).
-// Config path can be specified via CONFIG_PATH env var or defaults to platform-specific locations.
-func ProvideConfig() *config.Config {
-	configPath := os.Getenv("CONFIG_PATH")
-	cfg, err := config.Load(configPath)
+// ServerConfig loads the configuration once so dependency initialization uses
+// the same data directory the API locked before startup.
+var ServerConfig = sync.OnceValues(func() (*config.Config, error) {
+	cfg, err := config.Load(os.Getenv("CONFIG_PATH"))
 	if err != nil {
-		panic(fmt.Sprintf("failed to load configuration: %v", err))
+		return nil, fmt.Errorf("load configuration: %w", err)
 	}
 	if err := cfg.Validate(); err != nil {
-		panic(fmt.Sprintf("invalid configuration: %v", err))
+		return nil, fmt.Errorf("invalid configuration: %w", err)
+	}
+	return cfg, nil
+})
+
+// ProvideConfig supplies the validated configuration to the dependency graph.
+func ProvideConfig() *config.Config {
+	cfg, err := ServerConfig()
+	if err != nil {
+		panic(err)
 	}
 	return cfg
 }

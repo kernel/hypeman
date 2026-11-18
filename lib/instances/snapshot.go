@@ -289,6 +289,9 @@ func (m *manager) restoreSnapshot(ctx context.Context, id string, snapshotID str
 	if err != nil {
 		return nil, err
 	}
+	if sourceMeta.ForkPending != nil {
+		return nil, fmt.Errorf("%w: cannot restore a snapshot onto a pending fork", ErrInvalidState)
+	}
 	if err := validateMacOSSnapshotRestore(sourceMeta, rec); err != nil {
 		return nil, err
 	}
@@ -581,45 +584,42 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 	return inst, nil
 }
 
-func (m *manager) copySnapshotPayload(sourceInstanceID, snapshotGuestDir string) error {
-	err := copyGuestDirectoryWithAliasReadLock(m.paths.InstanceDir(sourceInstanceID), snapshotGuestDir)
+func (m *manager) copySnapshotPayload(sourceID, snapshotGuestDir string) error {
+	// Never put a pending mark in the payload, even partway through a copy.
+	name := filepath.Base(m.paths.InstanceMetadata(sourceID))
+	opts := forkvm.CopyOptions{SkipRelativePaths: map[string]struct{}{name: {}}}
+	err := withSnapshotSourceAliasReadLock(func() error {
+		if err := forkvm.CopyGuestDirectoryWithOptions(m.paths.InstanceDir(sourceID), snapshotGuestDir, opts); err != nil {
+			return err
+		}
+		return copySnapshotMetadata(m.paths.InstanceMetadata(sourceID), filepath.Join(snapshotGuestDir, name))
+	})
 	if err != nil {
 		if errors.Is(err, forkvm.ErrSparseCopyUnsupported) {
 			return fmt.Errorf("snapshot requires sparse-capable filesystem (SEEK_DATA/SEEK_HOLE unsupported): %w", err)
 		}
 		return fmt.Errorf("copy guest directory into snapshot: %w", err)
 	}
-	return clearCopiedForkPending(filepath.Join(snapshotGuestDir, filepath.Base(m.paths.InstanceMetadata(sourceInstanceID))))
+	return nil
 }
 
-// clearCopiedForkPending removes the fork-pending mark from the copy of an
-// instance's metadata that its snapshot payload holds. A restore puts that
-// file back as the instance's own until it saves the restored metadata; cut
-// short there, a mark in it would have the next start delete the instance.
-func clearCopiedForkPending(metaPath string) error {
-	data, err := os.ReadFile(metaPath)
+func copySnapshotMetadata(src, dst string) error {
+	data, err := os.ReadFile(src)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	if _, marked := fields["fork_pending"]; marked {
+		delete(fields, "fork_pending")
+		data, err = json.MarshalIndent(fields, "", "  ")
+		if err != nil {
+			return err
 		}
-		return fmt.Errorf("read snapshot payload metadata: %w", err)
 	}
-	var meta metadata
-	if err := json.Unmarshal(data, &meta); err != nil {
-		return fmt.Errorf("unmarshal snapshot payload metadata: %w", err)
-	}
-	if meta.ForkPending == nil {
-		return nil
-	}
-	meta.ForkPending = nil
-	data, err = json.MarshalIndent(&meta, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal snapshot payload metadata: %w", err)
-	}
-	if err := os.WriteFile(metaPath, data, 0644); err != nil {
-		return fmt.Errorf("write snapshot payload metadata: %w", err)
-	}
-	return nil
+	return os.WriteFile(dst, data, 0644)
 }
 
 func (m *manager) replaceInstanceWithSnapshotPayload(snapshotID, instanceID string) error {

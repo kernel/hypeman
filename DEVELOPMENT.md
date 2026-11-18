@@ -271,6 +271,7 @@ The server will start on port 4973 (configurable via `port` in config.yaml).
 ### Shared-Machine Local Config
 
 When developing on a shared host, avoid global paths like `/etc/hypeman` and `/var/lib/hypeman`.
+Only one API process can use a data directory at a time. Stop the old process before upgrading or downgrading; older versions do not take the directory lock.
 Use a workspace-local config and data directory instead:
 
 ```bash
