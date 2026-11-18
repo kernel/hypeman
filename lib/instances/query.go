@@ -565,6 +565,7 @@ func (m *manager) toInstanceWithStateDerivation(ctx context.Context, meta *metad
 		StateError:          result.Error,
 		HasSnapshot:         m.hasSnapshot(meta.StoredMetadata.DataDir),
 		BootMarkersHydrated: result.BootMarkersHydrated,
+		stopCleanupPending:  meta.StopCleanupPending,
 		HealthCheckRuntime:  healthcheck.CloneRuntime(meta.HealthCheckRuntime),
 	}
 	refreshHypervisorPID(&inst.StoredMetadata, result.State)

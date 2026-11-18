@@ -322,6 +322,67 @@ func (concurrentForkPrepareTestStarter) PrepareFork(context.Context, hypervisor.
 	return hypervisor.ForkPrepareResult{}, nil
 }
 
+type cancelForkRestoreStarter struct {
+	concurrentForkPrepareTestStarter
+	cancel context.CancelFunc
+	source string
+}
+
+func (s cancelForkRestoreStarter) RestoreVM(ctx context.Context, p *paths.Paths, version, socket, snapshot string) (int, hypervisor.Hypervisor, error) {
+	if socket != s.source {
+		s.cancel()
+		return 0, nil, ctx.Err()
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, nil, err
+	}
+	if _, ok := ctx.Deadline(); !ok {
+		return 0, nil, errors.New("source recovery has no deadline")
+	}
+	_, hv, err := s.concurrentForkPrepareTestStarter.RestoreVM(ctx, p, version, socket, snapshot)
+	return 0, hv, err
+}
+
+type forkSnapshotTestHypervisor struct{ lifecycleNoopHypervisor }
+
+func (forkSnapshotTestHypervisor) Capabilities() hypervisor.Capabilities {
+	return hypervisor.Capabilities{SupportsSnapshot: true}
+}
+
+func (forkSnapshotTestHypervisor) Snapshot(_ context.Context, dir string) error {
+	return os.WriteFile(filepath.Join(dir, "state"), []byte("snapshot"), 0600)
+}
+
+func TestCanceledRunningForkRestoresSource(t *testing.T) {
+	m := &manager{paths: paths.New(t.TempDir()), vmStarters: make(map[hypervisor.Type]hypervisor.VMStarter), lifecycleEvents: newLifecycleSubscribers()}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	const hvType = hypervisor.Type("cancel-running-fork")
+	hypervisor.RegisterClientFactory(hvType, func(string) (hypervisor.Hypervisor, error) {
+		return forkSnapshotTestHypervisor{lifecycleNoopHypervisor{state: hypervisor.StateRunning}}, nil
+	})
+	const id = "fork-source"
+	socket := m.paths.InstanceSocket(id, concurrentForkPrepareTestStarter{}.SocketName())
+	m.vmStarters[hvType] = cancelForkRestoreStarter{cancel: cancel, source: socket}
+	createStoppedSnapshotSourceFixture(t, m, id, id, hvType)
+	meta, err := m.loadMetadata(id)
+	require.NoError(t, err)
+	meta.SkipGuestAgent = true
+	meta.StartedAt = new(time.Now().UTC())
+	meta.ProgramStartedAt = meta.StartedAt
+	meta.StoppedAt = nil
+	require.NoError(t, m.saveMetadata(meta))
+	require.NoError(t, os.WriteFile(socket, nil, 0600))
+
+	_, err = m.ForkInstance(ctx, id, ForkInstanceRequest{Name: "canceled-fork", FromRunning: true, TargetState: StateRunning})
+	require.ErrorIs(t, err, context.Canceled)
+	insts, err := m.ListInstances(t.Context(), nil)
+	require.NoError(t, err)
+	require.Len(t, insts, 1, "the failed child must be removed")
+	require.Equal(t, id, insts[0].Id)
+	require.Equal(t, StateRunning, insts[0].State)
+}
+
 func TestForkInstanceStandbyRunningTargetSkipsSourceWriteLockWithoutAlias(t *testing.T) {
 	manager, _ := setupTestManager(t)
 	ctx := context.Background()

@@ -53,7 +53,7 @@ Health checks are a separate feature. They report workload health without changi
 
 When health status reaches `unhealthy`, restart policy treats that as a failure signal for `on_failure` and `always`. `never` still reports health without restarting.
 
-Health-triggered restart uses the same attempt counter, backoff, max-attempt limit, manual-stop suppression, and stable-window reset as exit-triggered restart. If Hypeman restarts during a VFIO stop for a health check, the controller finishes cleanup and resumes the same attempt. An attempt already recorded as failed still observes its backoff or limit.
+Health-triggered restart uses the same attempt counter, backoff, max-attempt limit, manual-stop suppression, and stable-window reset as exit-triggered restart. If Hypeman restarts during a VFIO stop for a health check, the controller finishes cleanup and uses the already-counted start, even if the stop was committed before the interruption. An attempt already recorded as failed still observes its backoff or limit. Updating the restart policy during this recovery returns `409 invalid_state`; retry after recovery or issue a manual stop to suppress the restart.
 
 ## Lifecycle Behavior
 

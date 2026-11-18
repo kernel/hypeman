@@ -66,6 +66,10 @@ func TestInterruptedVFIODeleteKeepsLegacySocketOwner(t *testing.T) {
 	require.ErrorIs(t, m.DeleteInstance(ctx, id), context.Canceled)
 
 	restarted := &manager{paths: m.paths, deviceManager: dev, lifecycleEvents: newLifecycleSubscribers()}
+	all, err := restarted.ListInstances(t.Context(), nil)
+	require.NoError(t, err)
+	assert.Contains(t, TAPPreserveIDs(all), id, "startup TAP cleanup must preserve the live owner's TAP")
+	assert.True(t, NewLivenessChecker(restarted).IsInstanceRunning(t.Context(), id), "startup PCI cleanup must preserve its attachment")
 	require.ErrorIs(t, restarted.DeleteInstance(ctx, id), context.Canceled)
 	require.Empty(t, dev.detached)
 	require.DirExists(t, meta.DataDir)
@@ -149,6 +153,8 @@ func TestStopRetryFinishesAfterVFIOGuestExits(t *testing.T) {
 	inst, err := restarted.StopInstance(t.Context(), id, StopInstanceRequest{})
 	require.NoError(t, err)
 	assert.Equal(t, StateStopped, inst.State)
+	assert.Empty(t, TAPPreserveIDs([]Instance{*inst}))
+	assert.False(t, NewLivenessChecker(restarted).IsInstanceRunning(t.Context(), id))
 	stored, err := m.loadMetadata(id)
 	require.NoError(t, err)
 	assert.NotNil(t, stored.StoppedAt)

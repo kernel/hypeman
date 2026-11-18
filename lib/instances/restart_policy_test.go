@@ -323,6 +323,72 @@ func TestReconcileInterruptedHealthCheckStop(t *testing.T) {
 	}
 }
 
+func TestHealthRestartSurvivesCrashAfterStop(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		wantErr      error
+		wantAttempts int
+		wantBlock    restartpolicy.BlockedReason
+	}{
+		{"before start", images.ErrNotFound, 1, restartpolicy.BlockedReasonMaxAttemptsExceeded},
+		{"after boot", nil, 1, ""},
+		{"manual stop", nil, 0, restartpolicy.BlockedReasonManualStop},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			now := time.Now().UTC()
+			m, id := newLifecycleNoopManagerWithInstance(t, StateRunning, now)
+			meta, err := m.loadMetadata(id)
+			require.NoError(t, err)
+			meta.Devices = []string{"pci-device"}
+			meta.RestartPolicy = &restartpolicy.Policy{Policy: restartpolicy.PolicyAlways, MaxAttempts: 1}
+			meta.RestartStatus = restartpolicy.Status{Attempts: 1, LastAttemptAt: &now, LastReason: restartpolicy.RestartReasonHealthCheckFailed}
+			require.NoError(t, m.saveMetadata(meta))
+
+			// Only the stop made it to disk. The next server owns recovery.
+			_, err = m.stopInstance(t.Context(), id, StopInstanceRequest{})
+			require.NoError(t, err)
+			restarted := &manager{paths: m.paths, lifecycleEvents: newLifecycleSubscribers(), imageManager: readyFixtureImageManager{}}
+			switch tc.name {
+			case "after boot":
+				writeLifecycleNoopSocket(t, meta.SocketPath, hypervisor.StateRunning)
+			case "manual stop":
+				_, err = restarted.StopInstance(t.Context(), id, StopInstanceRequest{})
+				require.NoError(t, err)
+			}
+			err = restarted.reconcileRestartPolicyInstanceID(t.Context(), id, slog.Default())
+			require.ErrorIs(t, err, tc.wantErr)
+			require.NoError(t, restarted.reconcileRestartPolicyInstanceID(t.Context(), id, slog.Default()))
+			meta, err = restarted.loadMetadata(id)
+			require.NoError(t, err)
+			require.False(t, meta.HealthStartPending)
+			require.Equal(t, tc.wantAttempts, meta.RestartStatus.Attempts)
+			require.Equal(t, tc.wantBlock, meta.RestartStatus.BlockedReason)
+		})
+	}
+}
+
+func TestRestartPolicyUpdateDuringFailedHealthStop(t *testing.T) {
+	m, id := newLifecycleNoopManagerWithInstance(t, StateRunning, time.Now().UTC())
+	meta, err := m.loadMetadata(id)
+	require.NoError(t, err)
+	meta.GPUDevicePath = "/sys/bus/pci/devices/0000:82:00.4"
+	meta.RestartPolicy = &restartpolicy.Policy{Policy: restartpolicy.PolicyAlways, MaxAttempts: 1}
+	require.NoError(t, m.saveMetadata(meta))
+	resetErr := errors.New("reset failed")
+	m.destroyVGPU = func(context.Context, devices.VGPUAssignment) error { return resetErr }
+	require.ErrorIs(t, m.HandleHealthCheckUnhealthy(t.Context(), id), resetErr)
+
+	_, err = m.UpdateInstance(t.Context(), id, UpdateInstanceRequest{RestartPolicySet: true, RestartPolicy: meta.RestartPolicy})
+	assert.ErrorIs(t, err, ErrInvalidState)
+	m.destroyVGPU = func(context.Context, devices.VGPUAssignment) error { return nil }
+	require.NoError(t, m.reconcileRestartPolicyInstanceID(t.Context(), id, slog.Default()))
+	meta, err = m.loadMetadata(id)
+	require.NoError(t, err)
+	assert.False(t, meta.StopCleanupPending)
+	assert.Empty(t, meta.GPUDevicePath)
+	assert.Equal(t, restartpolicy.BlockedReasonMaxAttemptsExceeded, meta.RestartStatus.BlockedReason)
+}
+
 func TestReconcileRestartPolicyInstanceIDUsesCurrentState(t *testing.T) {
 	manager, _ := setupTestManager(t)
 	id := "restart-current-state"

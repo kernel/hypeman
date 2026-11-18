@@ -339,7 +339,11 @@ func (m *manager) stopInstance(
 	stored.GuestAgent = nil
 	stored.Phases.Record(phasetracking.PhaseStopped, now)
 
-	meta = &metadata{StoredMetadata: *stored}
+	meta = &metadata{
+		StoredMetadata: *stored,
+		HealthStartPending: pendingHealthCheckRestart(meta) &&
+			meta.RestartStatus.NextAttemptAt == nil && meta.RestartStatus.BlockedReason == "",
+	}
 	if err := m.saveMetadata(meta); err != nil {
 		log.ErrorContext(ctx, "failed to save metadata", "instance_id", id, "error", err)
 		return nil, fmt.Errorf("save metadata: %w", err)

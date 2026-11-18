@@ -56,6 +56,7 @@ func (m *manager) markRestartManualStopLocked(ctx context.Context, id string) er
 		return nil
 	}
 	meta.RestartStatus = status
+	meta.HealthStartPending = false
 	if err := m.saveMetadata(meta); err != nil {
 		logger.FromContext(ctx).WarnContext(ctx, "failed to mark restart policy manual stop", "instance_id", id, "error", err)
 		return err
@@ -76,6 +77,7 @@ func (m *manager) clearRestartStatusLocked(ctx context.Context, id string) error
 		return nil
 	}
 	meta.RestartStatus = restartpolicy.Status{}
+	meta.HealthStartPending = false
 	if err := m.saveMetadata(meta); err != nil {
 		logger.FromContext(ctx).WarnContext(ctx, "failed to clear restart policy status", "instance_id", id, "error", err)
 		return err
@@ -89,6 +91,7 @@ func (m *manager) updateRestartStatusLocked(id string, status restartpolicy.Stat
 		return err
 	}
 	meta.RestartStatus = status
+	meta.HealthStartPending = false
 	return m.saveMetadata(meta)
 }
 
@@ -106,6 +109,9 @@ func (m *manager) setRestartStatusIf(ctx context.Context, id string, status rest
 	meta, err := m.loadMetadata(id)
 	if err != nil {
 		return false, err
+	}
+	if pendingHealthCheckRestart(meta) {
+		return false, nil
 	}
 	if meta.RestartStatus.BlockedReason == restartpolicy.BlockedReasonManualStop &&
 		status.BlockedReason != restartpolicy.BlockedReasonManualStop {
@@ -142,7 +148,11 @@ func (m *manager) HandleHealthCheckUnhealthy(ctx context.Context, id string) err
 	if err != nil {
 		return err
 	}
-	if meta.StopCleanupPending || m.toInstanceWithoutHydration(ctx, meta).State != StateRunning {
+	if meta.StopCleanupPending || meta.HealthStartPending {
+		return nil
+	}
+	current := m.toInstanceWithoutHydration(ctx, meta)
+	if current.State != StateRunning {
 		return nil
 	}
 
@@ -168,23 +178,33 @@ func (m *manager) HandleHealthCheckUnhealthy(ctx context.Context, id string) err
 		return nil
 	}
 
-	if err := m.updateRestartStatusLocked(id, nextStatus); err != nil {
+	// Reserve the attempt and record the VFIO stop in one metadata write.
+	meta.RestartStatus = nextStatus
+	if hasVFIODevices(&meta.StoredMetadata) {
+		err = m.beginVFIOStop(meta, &current)
+	} else {
+		err = m.saveMetadata(meta)
+	}
+	if err != nil {
 		return err
 	}
-
-	return m.finishHealthCheckRestartLocked(ctx, id, policy, nextStatus)
+	return m.finishHealthCheckRestartLocked(ctx, meta, policy)
 }
 
-func (m *manager) finishHealthCheckRestartLocked(ctx context.Context, id string, policy *restartpolicy.Policy, status restartpolicy.Status) error {
+func (m *manager) finishHealthCheckRestartLocked(ctx context.Context, meta *metadata, policy *restartpolicy.Policy) error {
 	now := time.Now().UTC()
-	stopped, err := m.stopInstance(ctx, id, StopInstanceRequest{})
-	if err == nil {
-		m.notifyLifecycleEvent(ctx, LifecycleEventStop, stopped)
-	}
-	// An attempt already recorded as failed only owes cleanup. Once stopped,
-	// normal policy reconciliation respects its backoff or attempt limit.
-	if status.NextAttemptAt != nil || status.BlockedReason != "" {
-		return err
+	id, status := meta.Id, meta.RestartStatus
+	var err error
+	if !meta.HealthStartPending {
+		var stopped *Instance
+		stopped, err = m.stopInstance(ctx, id, StopInstanceRequest{})
+		if err == nil {
+			m.notifyLifecycleEvent(ctx, LifecycleEventStop, stopped)
+		}
+		// A failed attempt still owes cleanup, not another start.
+		if status.NextAttemptAt != nil || status.BlockedReason != "" {
+			return err
+		}
 	}
 	if err == nil {
 		var started *Instance
@@ -194,8 +214,7 @@ func (m *manager) finishHealthCheckRestartLocked(ctx context.Context, id string,
 			return nil
 		}
 	}
-	_ = m.updateRestartStatusLocked(id, restartpolicy.AfterFailedAttempt(policy, status, now))
-	return err
+	return errors.Join(err, m.updateRestartStatusLocked(id, restartpolicy.AfterFailedAttempt(policy, status, now)))
 }
 
 func (m *manager) StartRestartPolicyController(ctx context.Context) error {
@@ -271,7 +290,7 @@ func (m *manager) reconcileRestartPolicyInstanceID(ctx context.Context, id strin
 }
 
 func pendingHealthCheckRestart(meta *metadata) bool {
-	return meta.StopCleanupPending && meta.RestartPolicy != nil &&
+	return (meta.StopCleanupPending || meta.HealthStartPending) && meta.RestartPolicy != nil &&
 		meta.RestartStatus.LastReason == restartpolicy.RestartReasonHealthCheckFailed &&
 		meta.RestartStatus.BlockedReason != restartpolicy.BlockedReasonManualStop
 }
@@ -293,17 +312,25 @@ func (m *manager) resumeHealthCheckRestart(ctx context.Context, id string) error
 	if err != nil || policy == nil {
 		return err
 	}
-	return m.finishHealthCheckRestartLocked(ctx, id, policy, meta.RestartStatus)
+	if meta.HealthStartPending {
+		state := m.toInstanceWithoutHydration(ctx, meta).State
+		if state == StateRunning || state == StateInitializing {
+			// The VMM started before the server committed its metadata.
+			meta.HealthStartPending = false
+			return m.saveMetadata(meta)
+		}
+		if state != StateStopped {
+			return nil // wait for a definitive state before starting
+		}
+	}
+	return m.finishHealthCheckRestartLocked(ctx, meta, policy)
 }
 
 func (m *manager) reconcileRestartPolicyInstance(ctx context.Context, meta *metadata, log *slog.Logger) error {
-	if meta.RestartPolicy == nil {
-		return nil
+	if pendingHealthCheckRestart(meta) {
+		return m.resumeHealthCheckRestart(ctx, meta.Id)
 	}
-	if meta.StopCleanupPending {
-		if pendingHealthCheckRestart(meta) {
-			return m.resumeHealthCheckRestart(ctx, meta.Id)
-		}
+	if meta.RestartPolicy == nil || meta.StopCleanupPending {
 		return nil
 	}
 	inst := m.toInstanceWithoutHydration(ctx, meta)

@@ -308,12 +308,9 @@ func cleanupFailedStart(ctx context.Context, proc *startedProcess, termGrace tim
 		teardown := hypervisor.BeginVFIOTeardown()
 		defer teardown.Done()
 		if syscall.Kill(proc.pid, syscall.SIGTERM) == nil {
-			start := time.Now()
-			if _, err := teardown.Wait(ctx, termGrace, 0, proc.waitFor); err != nil {
-				// Rollback must reap the child even after cancellation, but
-				// don't cut its base grace short to do so.
-				proc.waitFor(termGrace - time.Since(start))
-			}
+			// Rollback owns this child. Wait enforces its own bounded grace
+			// even when the failed startup's deadline has already expired.
+			_, _ = teardown.Wait(context.WithoutCancel(ctx), termGrace, 0, proc.waitFor)
 		}
 	}
 	proc.cleanup()

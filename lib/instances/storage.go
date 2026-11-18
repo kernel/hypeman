@@ -44,7 +44,9 @@ type metadata struct {
 	StoredMetadata
 	// Stop and delete set this before signaling a VFIO guest. A missing
 	// socket does not mean it is safe to reuse the instance or its devices.
-	StopCleanupPending bool                 `json:"stop_cleanup_pending,omitempty"`
+	StopCleanupPending bool `json:"stop_cleanup_pending,omitempty"`
+	// Committed with StoppedAt when the reserved health-check attempt still owes a start.
+	HealthStartPending bool                 `json:"health_start_pending,omitempty"`
 	AutoStandbyRuntime *autostandby.Runtime `json:"auto_standby_runtime,omitempty"`
 	HealthCheckRuntime *healthcheck.Runtime `json:"health_check_runtime,omitempty"`
 }

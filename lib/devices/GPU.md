@@ -110,6 +110,17 @@ If a stop or delete is interrupted, retry the same operation. The control socket
 can disappear before the VMM releases its devices. Hypeman keeps the process
 identity and confirms exit on retry; it rejects starts and snapshot restores
 while cleanup is pending. A failed vGPU reset also leaves the stop pending.
+Startup PCI reconciliation and TAP garbage collection leave these resources
+to the pending stop or delete.
+
+Before downgrading to a build without this recovery logic, drain the host of
+new lifecycle requests and let in-flight operations finish. Check the guest
+`metadata.json` files for `stop_cleanup_pending: true` or
+`health_start_pending: true`. Retry the original manual stop/delete
+or let the restart controller finish its reserved attempt on the current build.
+Stop the server and check once more before starting the older build; a
+controller may have begun another stop during the drain. If a marker remains,
+restart the current build to finish recovery rather than clearing it by hand.
 
 Hypeman reconciles metadata claims once at startup and every minute afterward, skipping hosts without GPUs. A claim whose VMM is confirmed dead is reset before the claim is removed. An ambiguous hypervisor ownership check preserves the claim, logs a warning, and increments `hypeman_instances_vgpu_liveness_uncertain_total`; the create and start cleanup paths preserve and count the same way. mdev hosts also sweep orphaned device-level assignments. Vendor VFIO hosts reset unclaimed dirty VFs on every reconcile pass, which covers a restart between a claim writing the type and saving the claim, or a failed claim whose reset also failed, but also clears a type written to `current_vgpu_type` by hand unless the VF has an open VFIO handle. A reset that is refused is retried on the next pass and increments `hypeman_instances_vgpu_reconcile_failures_total{stage="reset_unclaimed_vfs"}`. The allocator also repairs an unclaimed dirty VF when it next selects it; repair checks for open VFIO handles before resetting `current_vgpu_type`. The allocator prefers VFs that are already clean, and a dirty VF that refuses its reset is skipped in favor of another candidate.
 

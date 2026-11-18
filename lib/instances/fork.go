@@ -101,7 +101,10 @@ func (m *manager) forkInstance(ctx context.Context, id string, req ForkInstanceR
 		}
 
 		log.InfoContext(ctx, "restoring source instance after running fork", "source_instance_id", id)
-		restoredSource, restoreErr := m.restoreInstance(ctx, id)
+		// Putting the source back is required even if the fork request timed out.
+		restoreCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
+		defer cancel()
+		restoredSource, restoreErr := m.restoreInstance(restoreCtx, id)
 
 		if restoreErr != nil {
 			if forkErr != nil {
@@ -110,7 +113,7 @@ func (m *manager) forkInstance(ctx context.Context, id string, req ForkInstanceR
 			return nil, "", false, fmt.Errorf("restore source instance after fork: %w", restoreErr)
 		}
 		if restoredSource != nil && !restoredSource.NetworkEnabled && (restoredSource.State == StateRunning || restoredSource.State == StateInitializing) {
-			if err := ensureGuestAgentReadyForForkPhase(ctx, &restoredSource.StoredMetadata, "after restoring running fork source"); err != nil {
+			if err := ensureGuestAgentReadyForForkPhase(restoreCtx, &restoredSource.StoredMetadata, "after restoring running fork source"); err != nil {
 				if forkErr != nil {
 					return nil, "", false, fmt.Errorf("fork failed: %v; additionally restored source guest agent was not ready: %w", forkErr, err)
 				}

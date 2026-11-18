@@ -512,6 +512,16 @@ func TestCleanupEscalatesToSIGKILLAfterTermGrace(t *testing.T) {
 	require.NoFileExists(t, proc.socketPath)
 }
 
+func TestCanceledCleanupSharesVFIOGrace(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	peer := hypervisor.BeginVFIOTeardown()
+	defer peer.Done()
+	proc, cmd := startCleanupProcess(t, "sleep 0.5; exit 0")
+	cleanupFailedStart(ctx, proc, 100*time.Millisecond)
+	require.True(t, cmd.ProcessState.Success(), "cancellation must not cut rollback back to the base grace")
+}
+
 func TestCleanupSharesVFIOGraceWithLifecycleTeardown(t *testing.T) {
 	started := filepath.Join(t.TempDir(), "terminating")
 	proc, cmd := startCleanupProcess(t, fmt.Sprintf("touch %q; sleep 0.8; exit 0", started))
