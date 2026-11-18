@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/kernel/hypeman/lib/builds/registryauth"
 	"github.com/kernel/hypeman/lib/tags"
 )
 
@@ -39,6 +40,11 @@ type Build struct {
 
 // CreateBuildRequest represents a request to create a new build
 type CreateBuildRequest struct {
+	// RegistryCredentials are borrowed for this build and never serialized to disk.
+	RegistryCredentials map[string]registryauth.Credential `json:"-"`
+	// RequiresRegistryCredentials makes interrupted builds fail closed on recovery.
+	RequiresRegistryCredentials bool `json:"requires_registry_credentials,omitempty"`
+
 	// Dockerfile content. Required if not included in the source tarball.
 	// The Dockerfile specifies the runtime (e.g., FROM node:20-alpine).
 	Dockerfile string `json:"dockerfile,omitempty"`
@@ -133,6 +139,8 @@ type BuildProvenance struct {
 // BuildConfig is the configuration passed to the builder VM via config disk
 // This is read by the builder agent inside the guest
 type BuildConfig struct {
+	RegistryCredentialsRequired bool `json:"registry_credentials_required,omitempty"`
+
 	// JobID is the build job identifier
 	JobID string `json:"job_id"`
 
