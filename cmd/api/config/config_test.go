@@ -221,6 +221,41 @@ func TestValidateRejectsInvalidMetricsPort(t *testing.T) {
 	}
 }
 
+func TestValidateFallbackEAB(t *testing.T) {
+	const zeroSSL = "https://acme.zerossl.com/v2/DV90"
+	tests := []struct {
+		name              string
+		ca, kid, mac      string
+		wantErrorContains string
+	}{
+		{name: "unset"},
+		{name: "fallback without EAB", ca: zeroSSL},
+		{name: "fallback with EAB", ca: zeroSSL, kid: "kid", mac: "mac"},
+		{name: "key ID only", ca: zeroSSL, kid: "kid", wantErrorContains: "must be set together"},
+		{name: "MAC key only", ca: zeroSSL, mac: "mac", wantErrorContains: "must be set together"},
+		{name: "EAB without fallback", kid: "kid", mac: "mac", wantErrorContains: "requires acme.fallback_ca"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := defaultConfig()
+			cfg.ACME.FallbackCA = tt.ca
+			cfg.ACME.FallbackEABKeyID = tt.kid
+			cfg.ACME.FallbackEABMACKey = tt.mac
+
+			err := cfg.Validate()
+			if tt.wantErrorContains == "" {
+				if err != nil {
+					t.Fatalf("unexpected validation error: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErrorContains) {
+				t.Fatalf("expected error containing %q, got %v", tt.wantErrorContains, err)
+			}
+		})
+	}
+}
+
 func TestValidateRejectsInvalidVFQuarantineThreshold(t *testing.T) {
 	for _, threshold := range []int{0, -1} {
 		cfg := defaultConfig()

@@ -371,6 +371,8 @@ func ProvideIngressManager(p *paths.Paths, cfg *config.Config, instanceManager i
 			DNSProvider:           dnsProvider,
 			CA:                    cfg.ACME.CA,
 			FallbackCA:            cfg.ACME.FallbackCA,
+			FallbackEABKeyID:      cfg.ACME.FallbackEABKeyID,
+			FallbackEABMACKey:     cfg.ACME.FallbackEABMACKey,
 			DNSPropagationTimeout: cfg.ACME.DNSPropagationTimeout,
 			DNSResolvers:          cfg.ACME.DNSResolvers,
 			AllowedDomains:        cfg.ACME.AllowedDomains,

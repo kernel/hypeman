@@ -214,6 +214,7 @@ DELETE /ingresses/{id} - Delete ingress
 | `ACME_DNS_PROVIDER` | DNS provider: `cloudflare` | |
 | `ACME_CA` | ACME CA URL (for staging, etc.) | Let's Encrypt production |
 | `ACME__FALLBACK_CA` | ACME CA URL tried when `ACME_CA` fails to issue, e.g. `https://acme.zerossl.com/v2/DV90` | none |
+| `ACME__FALLBACK_EAB_KEY_ID`, `ACME__FALLBACK_EAB_MAC_KEY` | External account binding for the fallback CA; set both or neither | none |
 | `TLS_ALLOWED_DOMAINS` | Comma-separated domain patterns allowed for TLS (required for TLS ingresses) | |
 | `DNS_PROPAGATION_TIMEOUT` | Max time to wait for DNS propagation (e.g., `2m`, `120s`) | |
 | `DNS_RESOLVERS` | Comma-separated DNS resolvers for propagation checking | |
