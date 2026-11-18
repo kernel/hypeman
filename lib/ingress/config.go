@@ -63,9 +63,14 @@ type ACMEConfig struct {
 
 	// FallbackCA is an ACME CA URL tried when CA fails to issue, for example
 	// when it rate limits. Empty disables the fallback. For ZeroSSL
-	// (https://acme.zerossl.com/v2/DV90), Caddy derives the external account
-	// binding from Email.
+	// (https://acme.zerossl.com/v2/DV90) without an EAB, Caddy derives the
+	// external account binding from Email.
 	FallbackCA string
+
+	// FallbackEABKeyID and FallbackEABMACKey are the fallback CA's external
+	// account binding. Empty uses no EAB.
+	FallbackEABKeyID  string
+	FallbackEABMACKey string
 
 	// DNS propagation settings (applies to all providers)
 	DNSPropagationTimeout string // Max time to wait for DNS propagation (e.g., "2m")
@@ -540,7 +545,14 @@ func (g *CaddyConfigGenerator) buildTLSConfig(hostnames []string) map[string]int
 	// An empty CA uses Let's Encrypt production.
 	issuers := []interface{}{g.buildACMEIssuer(g.acme.CA)}
 	if g.acme.FallbackCA != "" {
-		issuers = append(issuers, g.buildACMEIssuer(g.acme.FallbackCA))
+		fallback := g.buildACMEIssuer(g.acme.FallbackCA)
+		if g.acme.FallbackEABKeyID != "" {
+			fallback["external_account"] = map[string]interface{}{
+				"key_id":  g.acme.FallbackEABKeyID,
+				"mac_key": g.acme.FallbackEABMACKey,
+			}
+		}
+		issuers = append(issuers, fallback)
 	}
 
 	return map[string]interface{}{

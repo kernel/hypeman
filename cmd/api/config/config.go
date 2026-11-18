@@ -88,6 +88,8 @@ type ACMEConfig struct {
 	DNSProvider           string `koanf:"dns_provider"`
 	CA                    string `koanf:"ca"`
 	FallbackCA            string `koanf:"fallback_ca"`
+	FallbackEABKeyID      string `koanf:"fallback_eab_key_id"`
+	FallbackEABMACKey     string `koanf:"fallback_eab_mac_key"`
 	DNSPropagationTimeout string `koanf:"dns_propagation_timeout"`
 	DNSResolvers          string `koanf:"dns_resolvers"`
 	AllowedDomains        string `koanf:"allowed_domains"`
@@ -365,6 +367,8 @@ func defaultConfig() *Config {
 			DNSProvider:           "",
 			CA:                    "",
 			FallbackCA:            "",
+			FallbackEABKeyID:      "",
+			FallbackEABMACKey:     "",
 			DNSPropagationTimeout: "",
 			DNSResolvers:          "",
 			AllowedDomains:        "",
@@ -624,6 +628,12 @@ func (c *Config) Validate() error {
 	}
 	if strings.TrimSpace(c.Metrics.ListenAddress) == "" {
 		return fmt.Errorf("metrics.listen_address must not be empty")
+	}
+	if (c.ACME.FallbackEABKeyID == "") != (c.ACME.FallbackEABMACKey == "") {
+		return fmt.Errorf("acme.fallback_eab_key_id and acme.fallback_eab_mac_key must be set together")
+	}
+	if c.ACME.FallbackEABKeyID != "" && c.ACME.FallbackCA == "" {
+		return fmt.Errorf("acme.fallback_eab_key_id requires acme.fallback_ca")
 	}
 	if c.Metrics.Port < 1 || c.Metrics.Port > 65535 {
 		return fmt.Errorf("metrics.port must be between 1 and 65535, got %d", c.Metrics.Port)

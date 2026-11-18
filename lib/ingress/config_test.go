@@ -1104,7 +1104,7 @@ func TestGenerateConfig_TLSIssuers(t *testing.T) {
 		}},
 	}}
 
-	issuerCAs := func(t *testing.T, acme ACMEConfig) []interface{} {
+	generatedIssuers := func(t *testing.T, acme ACMEConfig) []map[string]interface{} {
 		t.Helper()
 		p := paths.New(t.TempDir())
 		require.NoError(t, os.MkdirAll(p.CaddyDataDir(), 0755))
@@ -1126,9 +1126,13 @@ func TestGenerateConfig_TLSIssuers(t *testing.T) {
 		}
 		require.NoError(t, json.Unmarshal(data, &config))
 		require.Len(t, config.Apps.TLS.Automation.Policies, 1)
+		return config.Apps.TLS.Automation.Policies[0].Issuers
+	}
 
+	issuerCAs := func(t *testing.T, acme ACMEConfig) []interface{} {
+		t.Helper()
 		var cas []interface{}
-		for _, issuer := range config.Apps.TLS.Automation.Policies[0].Issuers {
+		for _, issuer := range generatedIssuers(t, acme) {
 			assert.Equal(t, "acme", issuer["module"])
 			assert.Equal(t, "admin@example.com", issuer["email"])
 			assert.Contains(t, issuer, "challenges")
@@ -1151,6 +1155,20 @@ func TestGenerateConfig_TLSIssuers(t *testing.T) {
 		acme := base
 		acme.FallbackCA = "https://acme.zerossl.com/v2/DV90"
 		assert.Equal(t, []interface{}{nil, "https://acme.zerossl.com/v2/DV90"}, issuerCAs(t, acme))
+		for _, issuer := range generatedIssuers(t, acme) {
+			assert.NotContains(t, issuer, "external_account")
+		}
+	})
+
+	t.Run("with fallback EAB", func(t *testing.T) {
+		acme := base
+		acme.FallbackCA = "https://acme.zerossl.com/v2/DV90"
+		acme.FallbackEABKeyID = "test-kid"
+		acme.FallbackEABMACKey = "test-mac"
+		issuers := generatedIssuers(t, acme)
+		require.Len(t, issuers, 2)
+		assert.NotContains(t, issuers[0], "external_account")
+		assert.Equal(t, map[string]interface{}{"key_id": "test-kid", "mac_key": "test-mac"}, issuers[1]["external_account"])
 	})
 
 	t.Run("with primary CA and fallback", func(t *testing.T) {
