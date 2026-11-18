@@ -738,7 +738,7 @@ func TestKillHypervisorWaitsLongerWhileOtherVFIOTeardownsAreInFlight(t *testing.
 		released bool
 	}{
 		{name: "behind two others", others: 2, released: true},
-		{name: "queued but deadline limits grace", others: 2, budget: vfioEscalationReserve + 300*time.Millisecond},
+		{name: "queued but deadline limits grace", others: 2, budget: vfioKillWait + time.Second + 300*time.Millisecond},
 		{name: "alone"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -788,7 +788,7 @@ func TestKillHypervisorRetainsVFIOProcessWhenDeadlineCannotFitBaseGrace(t *testi
 	pid, id := startTrapProcess(t, "")
 	inst := vfioTestInstance(t, id)
 	require.NoError(t, os.WriteFile(inst.SocketPath, nil, 0600))
-	ctx, cancel := context.WithTimeout(t.Context(), vfioEscalationReserve+100*time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second+100*time.Millisecond)
 	defer cancel()
 
 	m := &manager{}

@@ -27,8 +27,7 @@ const linuxBootIDPath = "/proc/sys/kernel/random/boot_id"
 // does not unstick it, so the wait is short to keep stop and delete fast.
 const hypervisorSIGKILLWaitTimeout = 2 * time.Second
 
-// Leave both SIGKILL waits and time for resource cleanup inside the caller's deadline.
-const vfioEscalationReserve = 2*hypervisorSIGKILLWaitTimeout + time.Second
+const vfioKillWait = 2 * hypervisorSIGKILLWaitTimeout
 
 func (m *manager) vfioTerminationGrace() time.Duration {
 	if m.vfioTermGrace > 0 {
@@ -47,7 +46,7 @@ func (m *manager) terminateThenKill(ctx context.Context, inst *Instance, pid int
 		teardown := hypervisor.BeginVFIOTeardown()
 		defer teardown.Done()
 		if syscall.Kill(pid, syscall.SIGTERM) == nil {
-			exited, err := teardown.Wait(ctx, grace, vfioEscalationReserve, func(d time.Duration) bool {
+			exited, err := teardown.Wait(ctx, grace, vfioKillWait, func(d time.Duration) bool {
 				return WaitForProcessExit(pid, d)
 			})
 			if exited || err != nil {

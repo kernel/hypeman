@@ -566,7 +566,10 @@ func (m *manager) cleanupForkInstanceOnError(ctx context.Context, forkID string)
 	lock.Lock()
 	defer lock.Unlock()
 
-	err := m.deleteInstance(ctx, forkID)
+	// A readiness timeout can leave a running fork that was never returned to the caller.
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
+	defer cancel()
+	err := m.deleteInstance(cleanupCtx, forkID)
 	if err == nil || errors.Is(err, ErrNotFound) {
 		m.instanceLocks.Delete(forkID)
 		return nil

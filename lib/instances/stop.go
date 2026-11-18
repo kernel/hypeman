@@ -120,6 +120,21 @@ func (m *manager) tryGracefulGuestShutdown(ctx context.Context, inst *Instance, 
 	return false
 }
 
+// beginVFIOStop saves the confirmed owner while its socket is still available.
+// A retry cannot recover a legacy PID from a listener already closed by SIGTERM.
+func (m *manager) beginVFIOStop(meta *metadata, inst *Instance) error {
+	pid, err := resolveLiveHypervisorPID(meta.HypervisorProcessIdentity, meta.SocketPath)
+	if err != nil {
+		return err
+	}
+	if pid > 0 {
+		inst.HypervisorProcessIdentity.Set(pid)
+		meta.HypervisorProcessIdentity = inst.HypervisorProcessIdentity
+	}
+	meta.StopCleanupPending = true
+	return m.saveMetadata(meta)
+}
+
 // stopInstance stops an active instance.
 // Flow: send Shutdown RPC -> wait for VM to power off ->
 // fall back to hypervisor shutdown -> final SIGKILL if still alive.
@@ -153,10 +168,18 @@ func (m *manager) stopInstance(
 	ctx = enrichInstancesTrace(ctx, attribute.String("hypervisor", string(stored.HypervisorType)))
 	log.DebugContext(ctx, "loaded instance", "instance_id", id, "state", inst.State)
 
-	// 2. Validate state transition (must be active to stop)
-	if inst.State != StateRunning && inst.State != StateInitializing {
+	// A pending stop still has to confirm VMM exit and finish cleanup even
+	// when the missing control socket already makes the guest look stopped.
+	active := inst.State == StateRunning || inst.State == StateInitializing
+	if !active && !meta.StopCleanupPending {
 		log.ErrorContext(ctx, "invalid state for stop", "instance_id", id, "state", inst.State)
 		return nil, fmt.Errorf("%w: cannot stop from state %s, must be Running or Initializing", ErrInvalidState, inst.State)
+	}
+
+	if hasVFIODevices(stored) && !meta.StopCleanupPending {
+		if err := m.beginVFIOStop(meta, &inst); err != nil {
+			return nil, fmt.Errorf("record pending VFIO stop: %w", err)
+		}
 	}
 
 	// 3. Get network allocation BEFORE killing VMM (while we can still query it)
@@ -173,7 +196,7 @@ func (m *manager) stopInstance(
 	// 4. Graceful shutdown: send signal to guest init via Shutdown RPC,
 	// then wait for VM to power off cleanly. Fall back to hypervisor shutdown on timeout.
 	gracefulShutdown := false
-	if !req.Force {
+	if active && !req.Force {
 		stopTimeout := resolveStopTimeout(stored)
 		if inst.MacOS != nil {
 			// macOS power-off can outlast the ordinary short stop default.

@@ -42,6 +42,9 @@ const (
 // metadata wraps StoredMetadata for JSON serialization
 type metadata struct {
 	StoredMetadata
+	// A VFIO stop may outlive its caller. Keep it distinct from an ordinary
+	// stopped instance until the stop has released resources and saved StoppedAt.
+	StopCleanupPending bool                 `json:"stop_cleanup_pending,omitempty"`
 	AutoStandbyRuntime *autostandby.Runtime `json:"auto_standby_runtime,omitempty"`
 	HealthCheckRuntime *healthcheck.Runtime `json:"health_check_runtime,omitempty"`
 }

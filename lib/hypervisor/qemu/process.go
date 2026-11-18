@@ -309,7 +309,7 @@ func cleanupFailedStart(ctx context.Context, proc *startedProcess, termGrace tim
 		defer teardown.Done()
 		if syscall.Kill(proc.pid, syscall.SIGTERM) == nil {
 			start := time.Now()
-			if _, err := teardown.Wait(ctx, termGrace, time.Second, proc.waitFor); err != nil {
+			if _, err := teardown.Wait(ctx, termGrace, 0, proc.waitFor); err != nil {
 				// Rollback must reap the child even after cancellation, but
 				// don't cut its base grace short to do so.
 				proc.waitFor(termGrace - time.Since(start))

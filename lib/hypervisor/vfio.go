@@ -26,14 +26,21 @@ func (VFIOTeardown) Done() { activeVFIOTeardowns.Add(-1) }
 
 // Wait allows one extra second per overlapping teardown, up to a minute:
 // 16 simultaneous vGPU deletes can take 10s in the driver after SIGTERM.
-// It leaves reserve before the caller's deadline for escalation and cleanup.
+// It leaves one second for cleanup, and reserves killWait for escalation only
+// when the base grace and both reserves fit before the caller's deadline.
 // False with no error means the caller may escalate; cancellation or a budget
 // too short for the base grace is not a reason to hard-kill.
-func (t VFIOTeardown) Wait(ctx context.Context, base, reserve time.Duration, waitForExit func(time.Duration) bool) (bool, error) {
+func (t VFIOTeardown) Wait(ctx context.Context, base, killWait time.Duration, waitForExit func(time.Duration) bool) (bool, error) {
 	start := time.Now()
 	limit := base + time.Minute
+	canEscalate := true
 	if deadline, ok := ctx.Deadline(); ok {
-		limit = min(limit, deadline.Sub(start)-reserve)
+		budget := deadline.Sub(start) - time.Second // cleanup after exit
+		canEscalate = budget >= base+killWait
+		if canEscalate {
+			budget -= killWait
+		}
+		limit = min(limit, budget)
 	}
 	peak := t.atStart
 	for {
@@ -44,7 +51,7 @@ func (t VFIOTeardown) Wait(ctx context.Context, base, reserve time.Duration, wai
 		grace := min(base+time.Duration(peak-1)*time.Second, limit)
 		remaining := grace - time.Since(start)
 		if remaining <= 0 {
-			if limit < base {
+			if !canEscalate {
 				return false, context.DeadlineExceeded
 			}
 			return false, nil
