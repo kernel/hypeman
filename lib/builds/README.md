@@ -316,7 +316,17 @@ Builder images must include:
 
 ### Build and Push
 
-See [`images/README.md`](./images/README.md) for detailed build instructions.
+The **Publish builder image** workflow publishes changes to this builder on
+`main`, or can be dispatched manually. It uses the existing AWS OIDC asset
+publisher identity and pushes `kernel/builder-generic:git-<full commit SHA>` to
+ECR. Reruns reuse an existing version; the job summary prints its digest for
+the infra image pin. Publishing does not deploy hosts.
+
+The ECR publishing grant must be applied before this workflow runs. After the
+first publication, pin the reported digest in infra and use the existing
+Hypeman deployment workflow for staging and production.
+
+For local/custom builds, see [`images/README.md`](./images/README.md).
 
 ```bash
 # Build and push the builder image (must use OCI mediatypes)
