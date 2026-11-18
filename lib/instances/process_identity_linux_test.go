@@ -260,8 +260,8 @@ func TestGracefulShutdownWaitsForSocketOwnerInsteadOfExitedStoredPID(t *testing.
 	assert.True(t, ProcessExists(owner.Process.Pid))
 }
 
-func TestGracefulShutdownFallbackKillsCapturedPIDAfterListenerCloses(t *testing.T) {
-	socketPath := filepath.Join(t.TempDir(), "test.sock")
+func startClosingSocketOwner(t *testing.T, socketPath string) (int, func() error) {
+	t.Helper()
 	owner := exec.Command(os.Args[0], "-test.run=^TestSocketListenerHelper$")
 	owner.Env = append(os.Environ(),
 		"HYPERVISOR_SOCKET_HELPER=1",
@@ -282,24 +282,30 @@ func TestGracefulShutdownFallbackKillsCapturedPIDAfterListenerCloses(t *testing.
 	_, err = output.ReadString('\n')
 	require.NoError(t, err)
 
-	m := &manager{shutdownGuestFn: func(context.Context, hypervisor.VsockDialer, int32) error {
+	return owner.Process.Pid, func() error {
 		if _, err := stdin.Write([]byte{1}); err != nil {
 			return err
 		}
 		_, err := output.ReadString('\n')
 		return err
-	}}
+	}
+}
+
+func TestGracefulShutdownFallbackKillsCapturedPIDAfterListenerCloses(t *testing.T) {
+	socketPath := filepath.Join(t.TempDir(), "test.sock")
+	pid, closeListener := startClosingSocketOwner(t, socketPath)
+	m := &manager{shutdownGuestFn: func(context.Context, hypervisor.VsockDialer, int32) error { return closeListener() }}
 	inst := &Instance{StoredMetadata: StoredMetadata{
 		Id:                        "graceful-listener-close",
 		HypervisorType:            hypervisor.TypeCloudHypervisor,
-		HypervisorProcessIdentity: HypervisorProcessIdentity{HypervisorPID: &owner.Process.Pid},
+		HypervisorProcessIdentity: HypervisorProcessIdentity{HypervisorPID: &pid},
 		SocketPath:                socketPath,
 		VsockSocket:               filepath.Join(t.TempDir(), "missing-vsock.sock"),
 	}}
 
 	assert.False(t, m.tryGracefulGuestShutdown(context.Background(), inst, 0))
 	require.NoError(t, m.killHypervisor(context.Background(), inst))
-	assert.False(t, ProcessExists(owner.Process.Pid))
+	assert.False(t, ProcessExists(pid))
 }
 
 func TestShutdownHypervisorSparesReusedPIDWhenNoProcessOwnsSocket(t *testing.T) {

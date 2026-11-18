@@ -69,6 +69,9 @@ func (m *manager) clearRestartStatusLocked(ctx context.Context, id string) error
 		logger.FromContext(ctx).WarnContext(ctx, "failed to clear restart policy status", "instance_id", id, "error", err)
 		return err
 	}
+	if meta.StopCleanupPending {
+		return fmt.Errorf("%w: cannot start while stop cleanup is pending", ErrInvalidState)
+	}
 	if meta.RestartStatus.IsZero() {
 		return nil
 	}
@@ -87,10 +90,6 @@ func (m *manager) updateRestartStatusLocked(id string, status restartpolicy.Stat
 	}
 	meta.RestartStatus = status
 	return m.saveMetadata(meta)
-}
-
-func (m *manager) setRestartStatus(ctx context.Context, id string, status restartpolicy.Status) (bool, error) {
-	return m.setRestartStatusIf(ctx, id, status, nil)
 }
 
 func (m *manager) setRestartStatusIfStopped(ctx context.Context, id string, status restartpolicy.Status) (bool, error) {
@@ -139,31 +138,31 @@ func (m *manager) HandleHealthCheckUnhealthy(ctx context.Context, id string) err
 	lock.Lock()
 	defer lock.Unlock()
 
-	current, err := m.currentInstanceWithoutHydration(ctx, id)
+	meta, err := m.loadMetadata(id)
 	if err != nil {
 		return err
 	}
-	if current.State != StateRunning {
+	if meta.StopCleanupPending || m.toInstanceWithoutHydration(ctx, meta).State != StateRunning {
 		return nil
 	}
 
-	policy, err := restartpolicy.NormalizePolicy(current.RestartPolicy)
+	policy, err := restartpolicy.NormalizePolicy(meta.RestartPolicy)
 	if err != nil {
 		return err
 	}
 	if !restartpolicy.ShouldRestart(policy, nil) {
 		return nil
 	}
-	if current.RestartStatus.BlockedReason != "" {
+	if meta.RestartStatus.BlockedReason != "" {
 		return nil
 	}
 
 	now := time.Now().UTC()
-	status := current.RestartStatus
+	status := meta.RestartStatus
 	status.LastReason = restartpolicy.RestartReasonHealthCheckFailed
-	nextStatus, reason, shouldAttempt := prepareRestartAttempt(policy, status, now)
+	nextStatus, shouldAttempt := restartpolicy.PrepareAttempt(policy, status, now)
 	if !shouldAttempt {
-		if !restartpolicy.EqualStatus(current.RestartStatus, nextStatus) {
+		if !restartpolicy.EqualStatus(meta.RestartStatus, nextStatus) {
 			return m.updateRestartStatusLocked(id, nextStatus)
 		}
 		return nil
@@ -173,20 +172,30 @@ func (m *manager) HandleHealthCheckUnhealthy(ctx context.Context, id string) err
 		return err
 	}
 
-	stopped, err := m.stopInstance(ctx, id, StopInstanceRequest{})
-	if err != nil {
-		_ = m.updateRestartStatusLocked(id, restartStatusAfterFailedAttempt(policy, nextStatus, reason, now))
-		return err
-	}
-	m.notifyLifecycleEvent(ctx, LifecycleEventStop, stopped)
+	return m.finishHealthCheckRestartLocked(ctx, id, policy, nextStatus)
+}
 
-	started, err := m.startInstance(ctx, id, StartInstanceRequest{})
-	if err != nil {
-		_ = m.updateRestartStatusLocked(id, restartStatusAfterFailedAttempt(policy, nextStatus, reason, now))
+func (m *manager) finishHealthCheckRestartLocked(ctx context.Context, id string, policy *restartpolicy.Policy, status restartpolicy.Status) error {
+	now := time.Now().UTC()
+	stopped, err := m.stopInstance(ctx, id, StopInstanceRequest{})
+	if err == nil {
+		m.notifyLifecycleEvent(ctx, LifecycleEventStop, stopped)
+	}
+	// An attempt already recorded as failed only owes cleanup. Once stopped,
+	// normal policy reconciliation respects its backoff or attempt limit.
+	if status.NextAttemptAt != nil || status.BlockedReason != "" {
 		return err
 	}
-	m.notifyLifecycleEvent(ctx, LifecycleEventStart, started)
-	return nil
+	if err == nil {
+		var started *Instance
+		started, err = m.startInstance(ctx, id, StartInstanceRequest{})
+		if err == nil {
+			m.notifyLifecycleEvent(ctx, LifecycleEventStart, started)
+			return nil
+		}
+	}
+	_ = m.updateRestartStatusLocked(id, restartpolicy.AfterFailedAttempt(policy, status, now))
+	return err
 }
 
 func (m *manager) StartRestartPolicyController(ctx context.Context) error {
@@ -243,32 +252,61 @@ func (m *manager) reconcileRestartPolicies(ctx context.Context, log *slog.Logger
 			log.WarnContext(ctx, "skipping restart policy reconcile for invalid instance metadata", "instance_id", id, "error", err)
 			continue
 		}
-		if meta.RestartPolicy == nil {
-			continue
-		}
-		inst := m.toInstanceWithoutHydration(ctx, meta)
-		if err := m.reconcileRestartPolicyInstance(ctx, &inst, log); err != nil {
-			log.WarnContext(ctx, "restart policy reconcile failed for instance", "instance_id", inst.Id, "error", err)
+		if err := m.reconcileRestartPolicyInstance(ctx, meta, log); err != nil {
+			log.WarnContext(ctx, "restart policy reconcile failed for instance", "instance_id", id, "error", err)
 		}
 	}
 	return nil
 }
 
 func (m *manager) reconcileRestartPolicyInstanceID(ctx context.Context, id string, log *slog.Logger) error {
-	inst, err := m.currentInstanceWithoutHydration(ctx, id)
+	meta, err := m.loadMetadata(id)
 	if errors.Is(err, ErrNotFound) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	return m.reconcileRestartPolicyInstance(ctx, inst, log)
+	return m.reconcileRestartPolicyInstance(ctx, meta, log)
 }
 
-func (m *manager) reconcileRestartPolicyInstance(ctx context.Context, inst *Instance, log *slog.Logger) error {
-	if inst == nil {
+func pendingHealthCheckRestart(meta *metadata) bool {
+	return meta.StopCleanupPending && meta.RestartPolicy != nil &&
+		meta.RestartStatus.LastReason == restartpolicy.RestartReasonHealthCheckFailed &&
+		meta.RestartStatus.BlockedReason != restartpolicy.BlockedReasonManualStop
+}
+
+func (m *manager) resumeHealthCheckRestart(ctx context.Context, id string) error {
+	lock := m.getInstanceLock(id)
+	if !lock.TryLock() {
+		return nil // an active lifecycle operation takes precedence
+	}
+	defer lock.Unlock()
+	meta, err := m.loadMetadata(id)
+	if errors.Is(err, ErrNotFound) {
 		return nil
 	}
+	if err != nil || !pendingHealthCheckRestart(meta) {
+		return err
+	}
+	policy, err := restartpolicy.NormalizePolicy(meta.RestartPolicy)
+	if err != nil || policy == nil {
+		return err
+	}
+	return m.finishHealthCheckRestartLocked(ctx, id, policy, meta.RestartStatus)
+}
+
+func (m *manager) reconcileRestartPolicyInstance(ctx context.Context, meta *metadata, log *slog.Logger) error {
+	if meta.RestartPolicy == nil {
+		return nil
+	}
+	if meta.StopCleanupPending {
+		if pendingHealthCheckRestart(meta) {
+			return m.resumeHealthCheckRestart(ctx, meta.Id)
+		}
+		return nil
+	}
+	inst := m.toInstanceWithoutHydration(ctx, meta)
 	policy, err := restartpolicy.NormalizePolicy(inst.RestartPolicy)
 	if err != nil {
 		return err
@@ -279,9 +317,11 @@ func (m *manager) reconcileRestartPolicyInstance(ctx context.Context, inst *Inst
 
 	status := inst.RestartStatus
 	now := time.Now().UTC()
-	if shouldResetRestartAttempts(policy, status, inst, now) {
+	if shouldResetRestartAttempts(policy, status, &inst, now) {
 		log.InfoContext(ctx, "restart policy stable window reached", "instance_id", inst.Id, "attempts", status.Attempts)
-		_, err := m.setRestartStatus(ctx, inst.Id, restartpolicy.Status{})
+		_, err := m.setRestartStatusIf(ctx, inst.Id, restartpolicy.Status{}, func(current *metadata) bool {
+			return !current.StopCleanupPending && restartpolicy.EqualStatus(current.RestartStatus, status)
+		})
 		return err
 	}
 	if inst.State != StateStopped || status.BlockedReason != "" {

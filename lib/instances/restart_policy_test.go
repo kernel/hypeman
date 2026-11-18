@@ -8,7 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/hypervisor"
+	"github.com/kernel/hypeman/lib/images"
 	restartpolicy "github.com/kernel/hypeman/lib/restart-policy"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -267,6 +269,58 @@ func TestStartInstanceForRestartPolicySkipsConcurrentStart(t *testing.T) {
 	loaded, err := manager.loadMetadata(id)
 	require.NoError(t, err)
 	assert.True(t, loaded.RestartStatus.IsZero())
+}
+
+func TestReconcileInterruptedHealthCheckStop(t *testing.T) {
+	now := time.Now().UTC()
+	for _, tc := range []struct {
+		name                   string
+		block                  restartpolicy.BlockedReason
+		next                   *time.Time
+		wantCleanup, wantStart bool
+	}{
+		{name: "resume reserved attempt", wantCleanup: true, wantStart: true},
+		{name: "manual stop", block: restartpolicy.BlockedReasonManualStop},
+		{name: "exhausted attempts", block: restartpolicy.BlockedReasonMaxAttemptsExceeded, wantCleanup: true},
+		{name: "retry scheduled", next: new(now.Add(time.Hour)), wantCleanup: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, id := newLifecycleNoopManagerWithInstance(t, StateStopped, now)
+			meta, err := m.loadMetadata(id)
+			require.NoError(t, err)
+			meta.StopCleanupPending = true
+			meta.GPUDevicePath = "/sys/bus/pci/devices/0000:82:00.4"
+			meta.RestartPolicy = &restartpolicy.Policy{Policy: restartpolicy.PolicyAlways, MaxAttempts: 1}
+			meta.RestartStatus = restartpolicy.Status{
+				Attempts: 1, LastAttemptAt: &now, LastReason: restartpolicy.RestartReasonHealthCheckFailed,
+				BlockedReason: tc.block, NextAttemptAt: tc.next,
+			}
+			require.NoError(t, m.saveMetadata(meta))
+
+			// A rejected manual start must not erase the controller's pending attempt or manual-stop block.
+			_, err = m.StartInstance(t.Context(), id, StartInstanceRequest{})
+			require.ErrorIs(t, err, ErrInvalidState)
+			m.destroyVGPU = func(context.Context, devices.VGPUAssignment) error { return nil }
+			m.imageManager = readyFixtureImageManager{} // a cold start reaches image lookup and fails
+			err = m.reconcileRestartPolicyInstanceID(t.Context(), id, slog.Default())
+			if tc.wantStart {
+				require.ErrorIs(t, err, images.ErrNotFound)
+			} else {
+				require.NoError(t, err)
+			}
+			stored, err := m.loadMetadata(id)
+			require.NoError(t, err)
+			require.Equal(t, tc.wantCleanup, stored.StoppedAt != nil)
+			require.Equal(t, !tc.wantCleanup, stored.StopCleanupPending)
+			require.Equal(t, tc.wantCleanup, stored.GPUDevicePath == "")
+			require.Equal(t, 1, stored.RestartStatus.Attempts)
+			if tc.wantStart {
+				require.Equal(t, restartpolicy.BlockedReasonMaxAttemptsExceeded, stored.RestartStatus.BlockedReason)
+			} else {
+				require.True(t, restartpolicy.EqualStatus(meta.RestartStatus, stored.RestartStatus))
+			}
+		})
+	}
 }
 
 func TestReconcileRestartPolicyInstanceIDUsesCurrentState(t *testing.T) {

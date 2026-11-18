@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/kernel/hypeman/lib/devices"
+	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/network"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -40,6 +41,44 @@ func TestCanceledForkRollbackRemovesRunningVFIOGuest(t *testing.T) {
 	assert.False(t, ProcessExists(pid))
 	assert.True(t, released)
 	assert.NoDirExists(t, meta.DataDir)
+}
+
+func TestInterruptedVFIODeleteKeepsLegacySocketOwner(t *testing.T) {
+	m, id := newLifecycleNoopManagerWithInstance(t, StateRunning, time.Now().UTC())
+	meta, err := m.loadMetadata(id)
+	require.NoError(t, err)
+	meta.SocketPath = filepath.Join(t.TempDir(), "vmm.sock")
+	pid, closeListener := startClosingSocketOwner(t, meta.SocketPath)
+	meta.HypervisorPID = &pid // legacy metadata without a boot-scoped identity
+	meta.Devices = []string{"dev-1"}
+	meta.StopTimeout = 1
+	require.NoError(t, m.saveMetadata(meta))
+	m.storeCachedHypervisorState(id, hypervisor.StateRunning)
+	dev := &recordingDeviceManager{}
+	m.deviceManager = dev
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	m.shutdownGuestFn = func(context.Context, hypervisor.VsockDialer, int32) error {
+		require.NoError(t, closeListener())
+		cancel()
+		return nil
+	}
+	require.ErrorIs(t, m.DeleteInstance(ctx, id), context.Canceled)
+
+	restarted := &manager{paths: m.paths, deviceManager: dev, lifecycleEvents: newLifecycleSubscribers()}
+	require.ErrorIs(t, restarted.DeleteInstance(ctx, id), context.Canceled)
+	require.Empty(t, dev.detached)
+	require.DirExists(t, meta.DataDir)
+	stored, err := restarted.loadMetadata(id)
+	require.NoError(t, err)
+	require.Equal(t, processStartTime(pid), stored.HypervisorStartTime)
+	require.NotZero(t, stored.HypervisorStartTime)
+	require.Equal(t, hostBootID(), stored.HypervisorBootID)
+
+	dev.onMarkDetached = func() { assert.False(t, ProcessExists(pid), "device detached before its owner exited") }
+	require.NoError(t, restarted.DeleteInstance(t.Context(), id))
+	require.Equal(t, []string{"dev-1"}, dev.detached)
+	require.NoDirExists(t, meta.DataDir)
 }
 
 type stopRetryNetwork struct {
@@ -96,6 +135,10 @@ func TestStopRetryFinishesAfterVFIOGuestExits(t *testing.T) {
 	pending, err := restarted.currentInstanceWithoutHydration(t.Context(), id)
 	require.NoError(t, err)
 	require.Equal(t, StateShutdown, pending.State)
+	ttl := time.Hour
+	updated, err := restarted.UpdateInstance(t.Context(), id, UpdateInstanceRequest{TTL: &ttl})
+	require.NoError(t, err)
+	require.Equal(t, StateShutdown, updated.State, "a TTL update must preserve the pending stop")
 	require.ErrorIs(t, restarted.DeleteInstance(ctx, id), context.Canceled)
 	require.True(t, ProcessExists(pid))
 	require.Empty(t, net.released)

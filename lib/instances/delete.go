@@ -103,6 +103,9 @@ func (m *manager) deleteInstanceWithOptions(
 		return fmt.Errorf("reload metadata after blocking restart policy: %w", err)
 	}
 	stored = &meta.StoredMetadata
+	if err := m.beginVFIOStop(meta, &inst); err != nil {
+		return fmt.Errorf("record pending VFIO stop: %w", err)
+	}
 
 	// 4. If active, try graceful guest shutdown before force kill.
 	gracefulShutdown := false
@@ -125,7 +128,7 @@ func (m *manager) deleteInstanceWithOptions(
 
 	// 5. If hypervisor might be running, force kill it
 	// Also attempt kill for StateUnknown since we can't be sure if hypervisor is running
-	if !gracefulShutdown && (inst.State.RequiresVMM() || inst.State == StateUnknown) {
+	if !gracefulShutdown && (meta.StopCleanupPending || inst.State.RequiresVMM() || inst.State == StateUnknown) {
 		log.DebugContext(ctx, "stopping hypervisor", "instance_id", id, "state", inst.State)
 		killCtx, killSpanEnd := m.startLifecycleStep(ctx, "force_kill_hypervisor",
 			attribute.String("instance_id", id),

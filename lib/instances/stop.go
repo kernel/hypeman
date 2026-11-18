@@ -123,6 +123,9 @@ func (m *manager) tryGracefulGuestShutdown(ctx context.Context, inst *Instance, 
 // beginVFIOStop saves the confirmed owner while its socket is still available.
 // A retry cannot recover a legacy PID from a listener already closed by SIGTERM.
 func (m *manager) beginVFIOStop(meta *metadata, inst *Instance) error {
+	if meta.StopCleanupPending || !hasVFIODevices(&meta.StoredMetadata) {
+		return nil
+	}
 	pid, err := resolveLiveHypervisorPID(meta.HypervisorProcessIdentity, meta.SocketPath)
 	if err != nil {
 		return err
@@ -130,6 +133,8 @@ func (m *manager) beginVFIOStop(meta *metadata, inst *Instance) error {
 	if pid > 0 {
 		inst.HypervisorProcessIdentity.Set(pid)
 		meta.HypervisorProcessIdentity = inst.HypervisorProcessIdentity
+	} else if inst.State == StateStopped || inst.State == StateStandby {
+		return nil // deleting an already inactive guest needs no pending stop
 	}
 	meta.StopCleanupPending = true
 	return m.saveMetadata(meta)
@@ -176,10 +181,8 @@ func (m *manager) stopInstance(
 		return nil, fmt.Errorf("%w: cannot stop from state %s, must be Running or Initializing", ErrInvalidState, inst.State)
 	}
 
-	if hasVFIODevices(stored) && !meta.StopCleanupPending {
-		if err := m.beginVFIOStop(meta, &inst); err != nil {
-			return nil, fmt.Errorf("record pending VFIO stop: %w", err)
-		}
+	if err := m.beginVFIOStop(meta, &inst); err != nil {
+		return nil, fmt.Errorf("record pending VFIO stop: %w", err)
 	}
 
 	// 3. Get network allocation BEFORE killing VMM (while we can still query it)
@@ -247,7 +250,16 @@ func (m *manager) stopInstance(
 		}
 	}
 
-	// 6. Release network allocation (delete TAP device)
+	// 6. Release the vGPU first so a failed reset can be retried without
+	// repeating the network teardown. The on-disk stop is still pending.
+	if path := storedVGPUDevicePath(stored); path != "" {
+		log.InfoContext(ctx, "destroying vGPU on stop", "instance_id", id, "device_path", path)
+		if err := m.releaseStoredVGPU(ctx, stored); err != nil {
+			return nil, fmt.Errorf("release vGPU: %w", err)
+		}
+	}
+
+	// 7. Release network allocation (delete TAP device)
 	if inst.NetworkEnabled {
 		m.unregisterEgressProxyInstance(ctx, id)
 	}
@@ -279,14 +291,6 @@ func (m *manager) stopInstance(
 			log.WarnContext(ctx, "failed to release network by id, continuing", "instance_id", id, "error", err)
 		} else {
 			releaseNetworkSpanEnd(nil)
-		}
-	}
-
-	// 7. Release the vGPU assignment if present (frees the vGPU slot for other VMs).
-	if path := storedVGPUDevicePath(stored); path != "" {
-		log.InfoContext(ctx, "destroying vGPU on stop", "instance_id", id, "device_path", path)
-		if err := m.releaseStoredVGPU(ctx, stored); err != nil {
-			log.WarnContext(ctx, "failed to destroy vGPU on stop; retaining assignment metadata", "instance_id", id, "device_path", path, "error", err)
 		}
 	}
 
