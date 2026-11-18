@@ -4,22 +4,23 @@ import (
 	"archive/tar"
 	"compress/gzip"
 	"context"
-	"crypto/sha256"
 	"encoding/json"
-	"fmt"
 	"io"
 	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/Code-Hex/vz/v4/diskimagekit"
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/registry"
+	gcr "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/empty"
 	"github.com/google/go-containerregistry/pkg/v1/mutate"
 	"github.com/google/go-containerregistry/pkg/v1/random"
@@ -30,26 +31,48 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// macOSFixtureChain writes a small ASIF chain to dir: a base with data at two
+// offsets and an overlay that replaces the second. It returns their paths.
+func macOSFixtureChain(t *testing.T, dir string) (string, string) {
+	t.Helper()
+	base, overlay := filepath.Join(dir, "base.asif"), filepath.Join(dir, "overlay.asif")
+	img, err := diskimagekit.CreateASIF(base, (64<<20)/512)
+	require.NoError(t, err)
+	_, err = img.WriteAt([]byte("base data"), 0)
+	require.NoError(t, err)
+	_, err = img.WriteAt([]byte("replaced in overlay"), 32<<20)
+	require.NoError(t, err)
+	require.NoError(t, img.CreateLayer(overlay, diskimagekit.Overlay))
+	_, err = img.WriteAt([]byte("overlay data"), 32<<20)
+	require.NoError(t, err)
+	require.NoError(t, img.Close())
+	return base, overlay
+}
+
+func macOSFixturePlatform(t *testing.T) []byte {
+	t.Helper()
+	b, err := json.Marshal(MacOSImage{HardwareModel: []byte{1}, MachineIdentifier: []byte{2}, MAC: "02:00:00:00:00:01", CPUs: 4, Memory: 8 << 30})
+	require.NoError(t, err)
+	return b
+}
+
+// macOSFixture writes an unpacked one-layer image: root/0 holds the disk, the
+// auxiliary storage and the platform.
 func macOSFixture(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
-	c := MacOSImage{HardwareModel: []byte{1}, MachineIdentifier: []byte{2}, MAC: "02:00:00:00:00:01", CPUs: 4, Memory: 8 << 30}
-	b, err := json.Marshal(c)
-	require.NoError(t, err)
-	// A mostly empty disk, like a real one, so transport can be checked for sparseness.
-	disk := make([]byte, 64<<20)
-	copy(disk, "not a real boot disk: synthetic OCI transport fixture")
-	copy(disk[len(disk)-4:], "tail")
-	for f, data := range map[string][]byte{"config.json": b, "disk.img": disk, "aux.img": []byte("synthetic aux")} {
-		require.NoError(t, os.WriteFile(filepath.Join(root, f), data, 0600))
+	layer := filepath.Join(root, "0")
+	require.NoError(t, os.MkdirAll(layer, 0700))
+	for f, data := range map[string][]byte{"config.json": macOSFixturePlatform(t), "disk.asif": []byte("disk"), "aux.img": []byte("synthetic aux")} {
+		require.NoError(t, os.WriteFile(filepath.Join(layer, f), data, 0600))
 	}
 	return root
 }
 
 func macOSFixtureMetadata() *containerMetadata {
 	return &containerMetadata{OS: "darwin", Architecture: "arm64", Labels: map[string]string{
-		MacOSMachineVersionLabel: "1", MacOSMachineKindLabel: "macos-image", MacOSMachineFormatLabel: "raw",
-		MacOSMachineDiskLabel: "disk.img", MacOSMachineAuxLabel: "aux.img", MacOSMachinePlatformLabel: "config.json",
+		MacOSMachineVersionLabel: "2", MacOSMachineKindLabel: "macos-image", MacOSMachineFormatLabel: "asif",
+		MacOSMachineDiskLabel: "disk.asif", MacOSMachineAuxLabel: "aux.img", MacOSMachinePlatformLabel: "config.json",
 	}}
 }
 
@@ -69,10 +92,10 @@ func TestMacOSMachineValidation(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, payload)
 	for _, tc := range []struct{ name, key, value string }{
-		{"unsupported version", MacOSMachineVersionLabel, "2"}, {"container not machine", MacOSMachineKindLabel, ""},
-		{"wrong format", MacOSMachineFormatLabel, "qcow2"}, {"absolute path", MacOSMachineDiskLabel, "/etc/passwd"},
-		{"traversal", MacOSMachineDiskLabel, "../disk.img"}, {"missing aux", MacOSMachineAuxLabel, "missing.img"},
-		{"duplicate file", MacOSMachineAuxLabel, "disk.img"},
+		{"unsupported version", MacOSMachineVersionLabel, "1"}, {"container not machine", MacOSMachineKindLabel, ""},
+		{"raw format", MacOSMachineFormatLabel, "raw"}, {"absolute path", MacOSMachineDiskLabel, "/etc/passwd"},
+		{"traversal", MacOSMachineDiskLabel, "../disk.asif"}, {"missing aux", MacOSMachineAuxLabel, "missing.img"},
+		{"duplicate file", MacOSMachineAuxLabel, "disk.asif"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			meta := macOSFixtureMetadata()
@@ -89,7 +112,7 @@ func TestMacOSMachineValidation(t *testing.T) {
 		require.NoError(t, err, alias)
 		require.NotNil(t, payload, alias)
 	}
-	require.NoError(t, os.WriteFile(filepath.Join(root, "config.json"), []byte(`{}`), 0600))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "0", "config.json"), []byte(`{}`), 0600))
 	_, err = parseMacOSMachine(root, macOSFixtureMetadata())
 	require.Error(t, err)
 
@@ -97,49 +120,54 @@ func TestMacOSMachineValidation(t *testing.T) {
 	for _, mac := range []string{"02:00:00:00:00:00:00:01", strings.Repeat("00:", 19) + "01"} {
 		b, err := json.Marshal(MacOSImage{HardwareModel: []byte{1}, MachineIdentifier: []byte{2}, MAC: mac, CPUs: 4, Memory: 8 << 30})
 		require.NoError(t, err)
-		require.NoError(t, os.WriteFile(filepath.Join(root, "config.json"), b, 0600))
+		require.NoError(t, os.WriteFile(filepath.Join(root, "0", "config.json"), b, 0600))
 		_, err = parseMacOSMachine(root, macOSFixtureMetadata())
 		require.Error(t, err, mac)
 	}
 
 }
 
-// TestMacOSMachineOCIRoundTrip pushes a machine bundle to a registry and pulls it
-// through the image manager. It is not a VZ boot.
-func TestMacOSMachineOCIRoundTrip(t *testing.T) {
-	allowMacOSMachines(t)
-	source := macOSFixture(t)
-	work := t.TempDir()
-	layerPath := filepath.Join(work, "bundle.tar.gz")
-	file, err := os.OpenFile(layerPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
+// machineFixtureLayer writes files into a gzipped tar layer and returns it.
+func machineFixtureLayer(t *testing.T, dir, name string, files map[string]string) gcr.Layer {
+	t.Helper()
+	path := filepath.Join(dir, name+".tar.gz")
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
 	require.NoError(t, err)
 	gz, err := gzip.NewWriterLevel(file, gzip.BestSpeed)
 	require.NoError(t, err)
 	tw := tar.NewWriter(gz)
-	hashes := map[string]string{}
-	for _, f := range []string{"disk.img", "aux.img", "config.json"} {
-		input, err := os.Open(filepath.Join(source, f))
+	for _, entry := range slices.Sorted(maps.Keys(files)) {
+		input, err := os.Open(files[entry])
 		require.NoError(t, err)
 		info, err := input.Stat()
 		require.NoError(t, err)
-		// The registry controls modes; a permissive disk must not become the canonical image mode.
-		mode := int64(0600)
-		if f == "disk.img" {
-			mode = 0666
-		}
-		require.NoError(t, tw.WriteHeader(&tar.Header{Name: f, Mode: mode, Size: info.Size(), Typeflag: tar.TypeReg}))
-		h := sha256.New()
-		_, err = io.Copy(io.MultiWriter(tw, h), input)
+		// The registry controls modes; a permissive file must not become the canonical image mode.
+		require.NoError(t, tw.WriteHeader(&tar.Header{Name: entry, Mode: 0666, Size: info.Size(), Typeflag: tar.TypeReg}))
+		_, err = io.Copy(tw, input)
 		require.NoError(t, err)
 		require.NoError(t, input.Close())
-		hashes[f] = fmt.Sprintf("%x", h.Sum(nil))
 	}
 	require.NoError(t, tw.Close())
 	require.NoError(t, gz.Close())
 	require.NoError(t, file.Close())
-	layer, err := tarball.LayerFromFile(layerPath)
+	layer, err := tarball.LayerFromFile(path)
 	require.NoError(t, err)
-	image, err := mutate.AppendLayers(empty.Image, layer)
+	return layer
+}
+
+// TestMacOSMachineOCIRoundTrip pushes a two-layer machine image, a base disk and an
+// overlay with the auxiliary storage and platform, and pulls it through the image
+// manager. It is not a VZ boot.
+func TestMacOSMachineOCIRoundTrip(t *testing.T) {
+	allowMacOSMachines(t)
+	work := t.TempDir()
+	base, overlay := macOSFixtureChain(t, work)
+	aux, config := filepath.Join(work, "aux.img"), filepath.Join(work, "config.json")
+	require.NoError(t, os.WriteFile(aux, []byte("synthetic aux"), 0600))
+	require.NoError(t, os.WriteFile(config, macOSFixturePlatform(t), 0600))
+	image, err := mutate.AppendLayers(empty.Image,
+		machineFixtureLayer(t, work, "base", map[string]string{"disk.asif": base}),
+		machineFixtureLayer(t, work, "top", map[string]string{"disk.asif": overlay, "aux.img": aux, "config.json": config}))
 	require.NoError(t, err)
 	cfg, err := image.ConfigFile()
 	require.NoError(t, err)
@@ -166,26 +194,37 @@ func TestMacOSMachineOCIRoundTrip(t *testing.T) {
 	require.Equal(t, StatusReady, pulled.Status)
 	require.Equal(t, "darwin/arm64", pulled.Platform)
 	require.NotNil(t, pulled.MacOS)
-	disk, err := GetDiskPath(p, pulled.Name, pulled.Digest)
+	require.Equal(t, int64(64<<20), *pulled.SizeBytes, "the recorded size is the chain's logical size")
+
+	chain, err := MacOSDiskChain(p, pulled.Name, pulled.Digest)
 	require.NoError(t, err)
-	require.Equal(t, machineDiskFile, filepath.Base(disk), "a raw machine disk is not named as a filesystem")
-	for f, path := range map[string]string{"disk.img": disk, "aux.img": filepath.Join(filepath.Dir(disk), "aux.img")} {
-		sum, err := fileSHA256(ctx, path)
+	require.Len(t, chain, 2)
+	for i, want := range []string{base, overlay} {
+		got, err := fileSHA256(ctx, chain[i])
 		require.NoError(t, err)
-		require.Equal(t, "sha256:"+hashes[f], sum, f)
-		info, err := os.Stat(path)
+		expected, err := fileSHA256(ctx, want)
 		require.NoError(t, err)
-		require.Equal(t, os.FileMode(0600), info.Mode().Perm(), f)
-		if f == "disk.img" {
-			control := sparseControlBytes(t, filepath.Dir(path), info.Size())
-			require.LessOrEqual(t, allocatedBytes(t, path), control+2*machineUnpackChunk, "the pulled disk stays sparse")
-		}
+		require.Equal(t, expected, got, "layer %d is installed byte for byte", i)
+		info, err := os.Stat(chain[i])
+		require.NoError(t, err)
+		require.Equal(t, os.FileMode(0600), info.Mode().Perm())
 	}
-	expected, err := os.ReadFile(filepath.Join(source, "config.json"))
+	stacked, err := OpenMacOSDiskChain(chain)
 	require.NoError(t, err)
-	var config MacOSImage
-	require.NoError(t, json.Unmarshal(expected, &config))
-	require.Equal(t, config, *pulled.MacOS)
+	for offset, want := range map[int64]string{0: "base data", 32 << 20: "overlay data"} {
+		buf := make([]byte, len(want))
+		_, err := stacked.ReadAt(buf, offset)
+		require.NoError(t, err)
+		require.Equal(t, want, string(buf))
+	}
+	require.NoError(t, stacked.Close())
+	installedAux, err := os.ReadFile(filepath.Join(filepath.Dir(chain[0]), "aux.img"))
+	require.NoError(t, err)
+	require.Equal(t, "synthetic aux", string(installedAux))
+	var platform MacOSImage
+	require.NoError(t, json.Unmarshal(macOSFixturePlatform(t), &platform))
+	require.Equal(t, platform, *pulled.MacOS)
+
 	digest, err := image.Digest()
 	require.NoError(t, err)
 	require.Equal(t, digest.String(), pulled.Digest)
@@ -196,20 +235,125 @@ func TestMacOSMachineOCIRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, pulled.Digest, tagged.Digest)
 	require.Equal(t, pulled.MacOS, tagged.MacOS)
-	tagDisk, err := GetDiskPath(p, tagged.Name, tagged.Digest)
+	tagChain, err := MacOSDiskChain(p, tagged.Name, tagged.Digest)
 	require.NoError(t, err)
-	require.Equal(t, disk, tagDisk)
+	require.Equal(t, chain, tagChain)
 	_, err = manager.TagImage(ctx, ref.Name(), strings.TrimPrefix(server.URL, "http://")+"/other:stable")
 	require.ErrorIs(t, err, ErrInvalidPlatform)
 	_, err = manager.CreateImage(ctx, CreateImageRequest{Name: ref.Name(), Platform: "linux/arm64"})
 	require.ErrorIs(t, err, ErrInvalidPlatform)
-	t.Log("round-trip verified", pulled.Digest)
+}
+
+// TestMacOSMachinePullReusesReadyLayers pulls two images that share a base layer
+// and expects the second to clone the first's installed base disk, not unpack it.
+func TestMacOSMachinePullReusesReadyLayers(t *testing.T) {
+	allowMacOSMachines(t)
+	work := t.TempDir()
+	base, overlay := macOSFixtureChain(t, work)
+	aux, config := filepath.Join(work, "aux.img"), filepath.Join(work, "config.json")
+	require.NoError(t, os.WriteFile(aux, []byte("synthetic aux"), 0600))
+	require.NoError(t, os.WriteFile(config, macOSFixturePlatform(t), 0600))
+	baseLayer := machineFixtureLayer(t, work, "base", map[string]string{"disk.asif": base})
+	server := httptest.NewServer(registry.New())
+	defer server.Close()
+	p := paths.New(filepath.Join(work, "hypeman-data"))
+	mgr, err := NewManager(p, 1, nil)
+	require.NoError(t, err)
+	client := mgr.(*manager).ociClient
+	lookup := client.reusableMachineLayers
+	var reused []string
+	client.reusableMachineLayers = func(diffIDs []string) []string {
+		paths := lookup(diffIDs)
+		for _, path := range paths {
+			if path != "" {
+				reused = append(reused, path)
+			}
+		}
+		return paths
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	pull := func(repo string, top gcr.Layer) []string {
+		image, err := mutate.AppendLayers(empty.Image, baseLayer, top)
+		require.NoError(t, err)
+		cfg, err := image.ConfigFile()
+		require.NoError(t, err)
+		cfg.OS, cfg.Architecture = "darwin", "arm64"
+		cfg.Config.Labels = macOSFixtureMetadata().Labels
+		image, err = mutate.ConfigFile(image, cfg)
+		require.NoError(t, err)
+		ref, err := name.ParseReference(strings.TrimPrefix(server.URL, "http://") + "/" + repo + ":latest")
+		require.NoError(t, err)
+		require.NoError(t, remote.Write(ref, image))
+		pulled, err := mgr.CreateImage(ctx, CreateImageRequest{Name: ref.Name(), Platform: "darwin/arm64"})
+		require.NoError(t, err)
+		require.NoError(t, mgr.WaitForReady(ctx, pulled.Name))
+		pulled, err = mgr.GetImage(ctx, pulled.Name)
+		require.NoError(t, err)
+		chain, err := MacOSDiskChain(p, pulled.Name, pulled.Digest)
+		require.NoError(t, err)
+		return chain
+	}
+	first := pull("first", machineFixtureLayer(t, work, "first", map[string]string{"disk.asif": overlay, "aux.img": aux, "config.json": config}))
+	require.Empty(t, reused, "no ready image has the base layer yet")
+
+	img, err := diskimagekit.Open(base, diskimagekit.WithOpenMode(diskimagekit.ReadOnly))
+	require.NoError(t, err)
+	second := filepath.Join(work, "second.asif")
+	require.NoError(t, img.CreateLayer(second, diskimagekit.Overlay))
+	require.NoError(t, img.Close())
+	chain := pull("second", machineFixtureLayer(t, work, "second", map[string]string{"disk.asif": second, "aux.img": aux, "config.json": config}))
+	require.Equal(t, []string{first[0]}, reused, "the shared base layer is cloned from the first image; the top layer is unpacked")
+	want, err := fileSHA256(ctx, base)
+	require.NoError(t, err)
+	got, err := fileSHA256(ctx, chain[0])
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+	stacked, err := OpenMacOSDiskChain(chain)
+	require.NoError(t, err)
+	require.NoError(t, stacked.Close())
+}
+
+// TestMacOSMachinePullRejectsBrokenChain pulls an image whose overlay layer does not
+// belong to its base, and expects the pull to fail.
+func TestMacOSMachinePullRejectsBrokenChain(t *testing.T) {
+	allowMacOSMachines(t)
+	work := t.TempDir()
+	_, overlay := macOSFixtureChain(t, work)
+	otherBase, _ := macOSFixtureChain(t, t.TempDir())
+	aux, config := filepath.Join(work, "aux.img"), filepath.Join(work, "config.json")
+	require.NoError(t, os.WriteFile(aux, []byte("synthetic aux"), 0600))
+	require.NoError(t, os.WriteFile(config, macOSFixturePlatform(t), 0600))
+	image, err := mutate.AppendLayers(empty.Image,
+		machineFixtureLayer(t, work, "base", map[string]string{"disk.asif": otherBase}),
+		machineFixtureLayer(t, work, "top", map[string]string{"disk.asif": overlay, "aux.img": aux, "config.json": config}))
+	require.NoError(t, err)
+	cfg, err := image.ConfigFile()
+	require.NoError(t, err)
+	cfg.OS, cfg.Architecture, cfg.Config.Labels = "darwin", "arm64", macOSFixtureMetadata().Labels
+	image, err = mutate.ConfigFile(image, cfg)
+	require.NoError(t, err)
+	server := httptest.NewServer(registry.New())
+	defer server.Close()
+	ref, err := name.ParseReference(strings.TrimPrefix(server.URL, "http://") + "/macos:broken")
+	require.NoError(t, err)
+	require.NoError(t, remote.Write(ref, image))
+	manager, err := NewManager(paths.New(filepath.Join(work, "hypeman-data")), 1, nil)
+	require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	pulled, err := manager.CreateImage(ctx, CreateImageRequest{Name: ref.Name(), Platform: "darwin/arm64"})
+	require.NoError(t, err)
+	require.Error(t, manager.WaitForReady(ctx, pulled.Name))
+	pulled, err = manager.GetImage(ctx, pulled.Name)
+	require.NoError(t, err)
+	require.Equal(t, StatusFailed, pulled.Status)
 }
 
 func TestValidateMacOSMachineRejectsBeforeUnpack(t *testing.T) {
 	allowMacOSMachines(t)
-	valid := map[string]string{MacOSMachineVersionLabel: "1", MacOSMachineKindLabel: "macos-image", MacOSMachineFormatLabel: "raw",
-		MacOSMachineDiskLabel: "disk.img", MacOSMachineAuxLabel: "aux.img", MacOSMachinePlatformLabel: "platform.json"}
+	valid := map[string]string{MacOSMachineVersionLabel: "2", MacOSMachineKindLabel: "macos-image", MacOSMachineFormatLabel: "asif",
+		MacOSMachineDiskLabel: "disk.asif", MacOSMachineAuxLabel: "aux.img", MacOSMachinePlatformLabel: "platform.json"}
 	require.False(t, isMacOSMachine(&containerMetadata{OS: "linux", Architecture: "amd64"}))
 	require.True(t, isMacOSMachine(&containerMetadata{OS: "Darwin", Architecture: "aarch64"}))
 	require.NoError(t, validateMacOSMachine(&containerMetadata{OS: "darwin", Architecture: "arm64", Labels: valid}))
@@ -220,9 +364,9 @@ func TestValidateMacOSMachineRejectsBeforeUnpack(t *testing.T) {
 		"missing disk path":     func(l map[string]string) { delete(l, MacOSMachineDiskLabel) },
 		"missing aux path":      func(l map[string]string) { delete(l, MacOSMachineAuxLabel) },
 		"missing platform path": func(l map[string]string) { delete(l, MacOSMachinePlatformLabel) },
-		"absolute path":         func(l map[string]string) { l[MacOSMachineDiskLabel] = "/disk.img" },
+		"absolute path":         func(l map[string]string) { l[MacOSMachineDiskLabel] = "/disk.asif" },
 		"escaping path":         func(l map[string]string) { l[MacOSMachineAuxLabel] = "../aux.img" },
-		"duplicate path":        func(l map[string]string) { l[MacOSMachineAuxLabel] = "./disk.img" },
+		"duplicate path":        func(l map[string]string) { l[MacOSMachineAuxLabel] = "./disk.asif" },
 	} {
 		labels := maps.Clone(valid)
 		change(labels)

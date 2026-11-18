@@ -166,7 +166,7 @@ jobs:
       # The build manifest comment on the PR.
       pull-requests: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.4.0
         with:
           persist-credentials: false
 
@@ -178,7 +178,7 @@ jobs:
         # Pull-requests:write for the integration-test draft PRs (action inputs
         # can't be conditional, so it is always requested).
         id: sdk-token
-        uses: actions/create-github-app-token@v1
+        uses: actions/create-github-app-token@v1.12.0
         with:
           app-id: ${{ secrets.ADMIN_APP_ID }}
           private-key: ${{ secrets.ADMIN_APP_PRIVATE_KEY }}
@@ -189,7 +189,7 @@ jobs:
           permission-pull-requests: write
 
       - name: Setup stlc
-        uses: ./.github/actions/setup-stlc
+        uses: $/.github/actions/setup-stlc
         with:
           stlc-read-token: ${{ secrets.STLC_READ_TOKEN }}
 
@@ -383,7 +383,7 @@ jobs:
       - name: Mint app token for the seal-back PR
         if: success() && github.event_name != 'pull_request' && !inputs.integration_test
         id: seal-token
-        uses: actions/create-github-app-token@v1
+        uses: actions/create-github-app-token@v1.12.0
         with:
           app-id: ${{ secrets.ADMIN_APP_ID }}
           private-key: ${{ secrets.ADMIN_APP_PRIVATE_KEY }}
@@ -428,7 +428,7 @@ jobs:
     steps:
       - name: Mint app token for the SDK repos
         id: sdk-token
-        uses: actions/create-github-app-token@v1
+        uses: actions/create-github-app-token@v1.12.0
         with:
           app-id: ${{ secrets.ADMIN_APP_ID }}
           private-key: ${{ secrets.ADMIN_APP_PRIVATE_KEY }}

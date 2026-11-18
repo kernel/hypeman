@@ -32,6 +32,9 @@ data_dir: ~/Library/Application Support/hypeman
 # Server configuration
 port: "4973"
 
+# Native macOS guests are opt-in; this default retains Linux guests on VZ.
+macos_only: false
+
 # =============================================================================
 # Hypervisor Configuration (IMPORTANT FOR MACOS)
 # =============================================================================

@@ -174,7 +174,7 @@ func copyRegularFile(state *copyState, srcPath, dstPath string, perms fs.FileMod
 }
 
 func shouldSkipDirectory(relPath string) bool {
-	return relPath == "logs" || relPath == paths.RestoreStagingDir
+	return relPath == "logs" || relPath == paths.RestoreStagingDir || relPath == paths.InstanceJailDirName
 }
 
 func shouldSkipRegularFile(relPath string) bool {

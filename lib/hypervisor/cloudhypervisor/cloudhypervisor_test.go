@@ -3,6 +3,7 @@ package cloudhypervisor
 import (
 	"testing"
 
+	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/vmm"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -32,6 +33,21 @@ func TestAssignedGuestMemoryBytes(t *testing.T) {
 
 		assert.Equal(t, int64(768), assignedGuestMemoryBytes(info))
 	})
+}
+
+func TestReleaseVMMStateForgetsBalloonTarget(t *testing.T) {
+	t.Parallel()
+
+	socketPath := t.TempDir() + "/cloud-hypervisor.sock"
+	balloonTargetCache.Store(socketPath, int64(384))
+	t.Cleanup(func() {
+		clearBalloonTargetCache(socketPath)
+	})
+
+	hypervisor.ReleaseVMMState(hypervisor.TypeCloudHypervisor, socketPath)
+
+	_, cached := balloonTargetCache.Load(socketPath)
+	assert.False(t, cached)
 }
 
 func TestGetTargetGuestMemoryBytesUsesWarmCacheBeforeVMInfo(t *testing.T) {

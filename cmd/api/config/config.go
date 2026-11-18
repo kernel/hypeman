@@ -87,6 +87,9 @@ type ACMEConfig struct {
 	Email                 string `koanf:"email"`
 	DNSProvider           string `koanf:"dns_provider"`
 	CA                    string `koanf:"ca"`
+	FallbackCA            string `koanf:"fallback_ca"`
+	FallbackEABKeyID      string `koanf:"fallback_eab_key_id"`
+	FallbackEABMACKey     string `koanf:"fallback_eab_mac_key"`
 	DNSPropagationTimeout string `koanf:"dns_propagation_timeout"`
 	DNSResolvers          string `koanf:"dns_resolvers"`
 	AllowedDomains        string `koanf:"allowed_domains"`
@@ -218,11 +221,23 @@ type CapacityConfig struct {
 
 // HypervisorConfig holds hypervisor settings.
 type HypervisorConfig struct {
-	Default                          string                 `koanf:"default"`
-	CloudHypervisorDefaultVersion    string                 `koanf:"cloud_hypervisor_default_version"`
-	FirecrackerBinaryPath            string                 `koanf:"firecracker_binary_path"`
-	FirecrackerMaxConcurrentRestores int                    `koanf:"firecracker_max_concurrent_restores"`
-	Memory                           HypervisorMemoryConfig `koanf:"memory"`
+	Default                          string                  `koanf:"default"`
+	CloudHypervisorDefaultVersion    string                  `koanf:"cloud_hypervisor_default_version"`
+	FirecrackerBinaryPath            string                  `koanf:"firecracker_binary_path"`
+	FirecrackerMaxConcurrentRestores int                     `koanf:"firecracker_max_concurrent_restores"`
+	FirecrackerJailer                FirecrackerJailerConfig `koanf:"firecracker_jailer"`
+	Memory                           HypervisorMemoryConfig  `koanf:"memory"`
+}
+
+// FirecrackerJailerConfig runs firecracker VMs under the firecracker jailer as a
+// dedicated uid/gid. Off by default.
+type FirecrackerJailerConfig struct {
+	Enabled bool `koanf:"enabled"`
+	// BinaryPath overrides the jailer embedded with each firecracker version.
+	// Required when firecracker_binary_path is set.
+	BinaryPath string `koanf:"binary_path"`
+	UID        int    `koanf:"uid"`
+	GID        int    `koanf:"gid"`
 }
 
 // HypervisorMemoryConfig holds guest memory management settings.
@@ -351,6 +366,9 @@ func defaultConfig() *Config {
 			Email:                 "",
 			DNSProvider:           "",
 			CA:                    "",
+			FallbackCA:            "",
+			FallbackEABKeyID:      "",
+			FallbackEABMACKey:     "",
 			DNSPropagationTimeout: "",
 			DNSResolvers:          "",
 			AllowedDomains:        "",
@@ -573,6 +591,7 @@ func (c *Config) expandPathFields() {
 	c.Build.DockerSocket = expandHomePath(c.Build.DockerSocket)
 	c.Registry.CACertFile = expandHomePath(c.Registry.CACertFile)
 	c.Hypervisor.FirecrackerBinaryPath = expandHomePath(c.Hypervisor.FirecrackerBinaryPath)
+	c.Hypervisor.FirecrackerJailer.BinaryPath = expandHomePath(c.Hypervisor.FirecrackerJailer.BinaryPath)
 }
 
 func expandHomePath(path string) string {
@@ -609,6 +628,12 @@ func (c *Config) Validate() error {
 	}
 	if strings.TrimSpace(c.Metrics.ListenAddress) == "" {
 		return fmt.Errorf("metrics.listen_address must not be empty")
+	}
+	if (c.ACME.FallbackEABKeyID == "") != (c.ACME.FallbackEABMACKey == "") {
+		return fmt.Errorf("acme.fallback_eab_key_id and acme.fallback_eab_mac_key must be set together")
+	}
+	if c.ACME.FallbackEABKeyID != "" && c.ACME.FallbackCA == "" {
+		return fmt.Errorf("acme.fallback_eab_key_id requires acme.fallback_ca")
 	}
 	if c.Metrics.Port < 1 || c.Metrics.Port > 65535 {
 		return fmt.Errorf("metrics.port must be between 1 and 65535, got %d", c.Metrics.Port)
@@ -717,6 +742,14 @@ func (c *Config) Validate() error {
 	}
 	if c.Hypervisor.FirecrackerMaxConcurrentRestores < 0 {
 		return fmt.Errorf("hypervisor.firecracker_max_concurrent_restores must be >= 0, got %d", c.Hypervisor.FirecrackerMaxConcurrentRestores)
+	}
+	if jc := c.Hypervisor.FirecrackerJailer; jc.Enabled {
+		if jc.BinaryPath == "" && c.Hypervisor.FirecrackerBinaryPath != "" {
+			return fmt.Errorf("hypervisor.firecracker_jailer.binary_path is required when hypervisor.firecracker_binary_path is set")
+		}
+		if jc.UID <= 0 || jc.GID <= 0 {
+			return fmt.Errorf("hypervisor.firecracker_jailer.uid and gid must be > 0 when the jailer is enabled, got uid=%d gid=%d", jc.UID, jc.GID)
+		}
 	}
 	if c.Instances.LifecycleEventBufferSize <= 0 {
 		return fmt.Errorf("instances.lifecycle_event_buffer_size must be positive, got %d", c.Instances.LifecycleEventBufferSize)

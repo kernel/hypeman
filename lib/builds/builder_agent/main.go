@@ -13,7 +13,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -27,6 +26,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kernel/hypeman/lib/builds/registryauth"
 	"github.com/mdlayher/vsock"
 )
 
@@ -37,6 +37,8 @@ const (
 
 // BuildConfig matches the BuildConfig type from lib/builds/types.go
 type BuildConfig struct {
+	RegistryCredentialsRequired bool `json:"registry_credentials_required,omitempty"`
+
 	JobID            string            `json:"job_id"`
 	BaseImageDigest  string            `json:"base_image_digest,omitempty"`
 	RegistryURL      string            `json:"registry_url"`
@@ -88,6 +90,8 @@ type BuildProvenance struct {
 
 // VsockMessage is the envelope for vsock communication
 type VsockMessage struct {
+	RegistryCredentials map[string]registryauth.Credential `json:"registry_credentials,omitempty"`
+
 	Type      string            `json:"type"`
 	Result    *BuildResult      `json:"result,omitempty"`
 	Log       string            `json:"log,omitempty"`
@@ -107,6 +111,8 @@ var (
 	secretsReady    = make(chan struct{})
 	secretsOnce     sync.Once
 
+	buildRegistryCredentials map[string]registryauth.Credential
+
 	// Encoder lock protects concurrent access to json.Encoder
 	// (the goroutine sending build_result and the main loop handling get_status)
 	encoderLock sync.Mutex
@@ -120,6 +126,8 @@ var (
 // It also writes to a buffer to include all logs in the final result.
 type streamingLogWriter struct {
 	buffer   *bytes.Buffer
+	pending  []byte
+	redact   func(string) string
 	mu       sync.Mutex
 	closed   bool
 	closedMu sync.RWMutex
@@ -133,9 +141,23 @@ func newStreamingLogWriter() *streamingLogWriter {
 
 func (w *streamingLogWriter) Write(p []byte) (n int, err error) {
 	w.mu.Lock()
-	w.buffer.Write(p)
-	w.mu.Unlock()
+	defer w.mu.Unlock()
+	n = len(p)
+	if w.redact != nil {
+		w.pending = append(w.pending, p...)
+		end := bytes.LastIndexByte(w.pending, '\n')
+		if end < 0 {
+			return n, nil
+		}
+		p = []byte(w.redact(string(w.pending[:end+1])))
+		w.pending = append(w.pending[:0], w.pending[end+1:]...)
+	}
+	w.emit(p)
+	return n, nil
+}
 
+func (w *streamingLogWriter) emit(p []byte) {
+	w.buffer.Write(p)
 	// Hold RLock through the send to prevent markClosed()+close(logChan)
 	// from racing between the check and the channel send.
 	w.closedMu.RLock()
@@ -151,11 +173,15 @@ func (w *streamingLogWriter) Write(p []byte) (n int, err error) {
 
 	// Also write to stdout for local debugging
 	os.Stdout.Write(p)
-
-	return len(p), nil
 }
 
 func (w *streamingLogWriter) markClosed() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if len(w.pending) > 0 {
+		w.emit([]byte(w.redact(string(w.pending))))
+		w.pending = nil
+	}
 	w.closedMu.Lock()
 	w.closed = true
 	w.closedMu.Unlock()
@@ -164,7 +190,25 @@ func (w *streamingLogWriter) markClosed() {
 func (w *streamingLogWriter) String() string {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if w.redact != nil {
+		return w.buffer.String() + w.redact(string(w.pending))
+	}
 	return w.buffer.String()
+}
+
+func (w *streamingLogWriter) setRedactor(redact func(string) string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.redact = redact
+}
+
+func (w *streamingLogWriter) redactText(value string) string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.redact != nil {
+		return w.redact(value)
+	}
+	return value
 }
 
 func main() {
@@ -266,11 +310,12 @@ func handleHostConnection(conn net.Conn) {
 		case "host_ready":
 			// Host is ready to handle requests
 			// Request secrets if we have any configured
-			if err := handleSecretsRequest(encoder, decoder); err != nil {
-				log.Printf("Failed to fetch secrets: %v", err)
+			credentials, err := handleSecretsRequest(encoder, decoder)
+			if err != nil {
+				log.Printf("Failed to fetch build credentials or secrets: %s", registryauth.Redactor(credentials)(err.Error()))
 			}
-			// Signal that secrets are ready (even if failed, build can proceed)
 			secretsOnce.Do(func() {
+				buildRegistryCredentials = credentials
 				close(secretsReady)
 			})
 
@@ -349,7 +394,8 @@ func handleHostConnection(conn net.Conn) {
 }
 
 // handleSecretsRequest requests secrets from the host and writes them to /run/secrets/
-func handleSecretsRequest(encoder *json.Encoder, decoder *json.Decoder) error {
+func handleSecretsRequest(encoder *json.Encoder, decoder *json.Decoder) (map[string]registryauth.Credential, error) {
+	var credentials map[string]registryauth.Credential
 	// Wait for config to be loaded
 	var config *BuildConfig
 	for i := 0; i < 30; i++ {
@@ -364,12 +410,19 @@ func handleSecretsRequest(encoder *json.Encoder, decoder *json.Decoder) error {
 
 	if config == nil {
 		log.Printf("Config not loaded yet, skipping secrets")
-		return nil
+		return credentials, nil
 	}
 
+	if config.RegistryCredentialsRequired {
+		var err error
+		credentials, err = fetchRegistryCredentials(encoder, decoder, config.RegistryURL)
+		if err != nil {
+			return nil, err
+		}
+	}
 	if len(config.Secrets) == 0 {
 		log.Printf("No secrets configured")
-		return nil
+		return credentials, nil
 	}
 
 	// Extract secret IDs
@@ -389,34 +442,34 @@ func handleSecretsRequest(encoder *json.Encoder, decoder *json.Decoder) error {
 	err := encoder.Encode(req)
 	encoderLock.Unlock()
 	if err != nil {
-		return fmt.Errorf("send get_secrets: %w", err)
+		return credentials, fmt.Errorf("send get_secrets: %w", err)
 	}
 
 	// Wait for secrets_response
 	var resp VsockMessage
 	if err := decoder.Decode(&resp); err != nil {
-		return fmt.Errorf("receive secrets_response: %w", err)
+		return credentials, fmt.Errorf("receive secrets_response: %w", err)
 	}
 
 	if resp.Type != "secrets_response" {
-		return fmt.Errorf("unexpected response type: %s", resp.Type)
+		return credentials, fmt.Errorf("unexpected response type: %s", resp.Type)
 	}
 
 	// Write secrets to /run/secrets/
 	if err := os.MkdirAll("/run/secrets", 0700); err != nil {
-		return fmt.Errorf("create secrets dir: %w", err)
+		return credentials, fmt.Errorf("create secrets dir: %w", err)
 	}
 
 	for id, value := range resp.Secrets {
 		secretPath := fmt.Sprintf("/run/secrets/%s", id)
 		if err := os.WriteFile(secretPath, []byte(value), 0600); err != nil {
-			return fmt.Errorf("write secret %s: %w", id, err)
+			return credentials, fmt.Errorf("write secret %s: %w", id, err)
 		}
 		log.Printf("Wrote secret: %s", id)
 	}
 
 	log.Printf("Received %d secrets", len(resp.Secrets))
-	return nil
+	return credentials, nil
 }
 
 // runBuildProcess runs the actual build and stores the result
@@ -454,17 +507,6 @@ func runBuildProcess() {
 	buildConfig = config
 	buildConfigLock.Unlock()
 
-	// Setup registry authentication before running the build
-	if err := setupRegistryAuth(config); err != nil {
-		setResult(BuildResult{
-			Success:    false,
-			Error:      fmt.Sprintf("setup registry auth: %v", err),
-			Logs:       logWriter.String(),
-			DurationMS: time.Since(start).Milliseconds(),
-		})
-		return
-	}
-
 	// Setup timeout context
 	ctx := context.Background()
 	if config.TimeoutSeconds > 0 {
@@ -473,13 +515,17 @@ func runBuildProcess() {
 		defer cancel()
 	}
 
-	// Wait for secrets if any are configured
-	if len(config.Secrets) > 0 {
+	// Borrowed registry credentials must arrive before BuildKit can start.
+	if len(config.Secrets) > 0 || config.RegistryCredentialsRequired {
 		log.Printf("Waiting for secrets from host...")
 		select {
 		case <-secretsReady:
 			log.Printf("Secrets ready, proceeding with build")
 		case <-time.After(30 * time.Second):
+			if config.RegistryCredentialsRequired {
+				setResult(BuildResult{Error: "timed out waiting for registry credentials", Logs: logWriter.String()})
+				return
+			}
 			log.Printf("Warning: Timeout waiting for secrets, proceeding anyway")
 			// Signal secrets ready to avoid blocking other goroutines
 			secretsOnce.Do(func() {
@@ -494,6 +540,28 @@ func runBuildProcess() {
 			})
 			return
 		}
+	}
+
+	var credentials map[string]registryauth.Credential
+	if config.RegistryCredentialsRequired {
+		if len(buildRegistryCredentials) == 0 {
+			setResult(BuildResult{Error: "registry credentials unavailable", Logs: logWriter.String()})
+			return
+		}
+		credentials = buildRegistryCredentials
+		for _, credential := range credentials {
+			if credential.ExpiresAt != nil {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithDeadline(ctx, *credential.ExpiresAt)
+				defer cancel()
+			}
+		}
+		logWriter.setRedactor(registryauth.Redactor(credentials))
+		defer cleanupRegistryAuth("/home/builder/.docker", "/root/.docker")
+	}
+	if err := setupRegistryAuth(config, credentials); err != nil {
+		setResult(BuildResult{Error: "setup registry auth: " + logWriter.redactText(err.Error()), Logs: logWriter.String()})
+		return
 	}
 
 	// Ensure Dockerfile exists (either in source or provided via config)
@@ -536,7 +604,7 @@ func runBuildProcess() {
 	if err != nil {
 		setResult(BuildResult{
 			Success:    false,
-			Error:      err.Error(),
+			Error:      logWriter.redactText(err.Error()),
 			Logs:       logWriter.String(),
 			Provenance: provenance,
 			DurationMS: duration,
@@ -579,7 +647,7 @@ func loadConfig() (*BuildConfig, error) {
 // setupRegistryAuth creates a Docker config.json with the registry token for authentication,
 // and a buildkitd.toml for TLS configuration.
 // BuildKit uses these files to authenticate and configure TLS when pushing images.
-func setupRegistryAuth(config *BuildConfig) error {
+func setupRegistryAuth(config *BuildConfig, credentials map[string]registryauth.Credential) error {
 	// Parse registry host (strip any scheme prefix for backwards compatibility)
 	registryHost := config.RegistryURL
 	if strings.HasPrefix(registryHost, "https://") {
@@ -591,60 +659,32 @@ func setupRegistryAuth(config *BuildConfig) error {
 	token := config.RegistryToken
 
 	if token == "" {
+		if config.RegistryCredentialsRequired {
+			return fmt.Errorf("local registry token is missing")
+		}
 		log.Println("No registry token provided, skipping auth setup")
 		return nil
 	}
 
-	// Docker config format expects base64-encoded "username:password" or just the token
-	// For bearer tokens, we use the token directly as the "auth" value
-	// Format: base64(token + ":") - empty password
-	authValue := base64.StdEncoding.EncodeToString([]byte(token + ":"))
-
-	// Create the Docker config structure
-	// Note: Docker config uses host without scheme (e.g., "10.102.0.1:8443")
-	// We use both auth (Basic) and identitytoken (JWT) to support different BuildKit versions
 	dockerConfig := map[string]interface{}{
-		"auths": map[string]interface{}{
-			registryHost: map[string]string{
-				"auth":          authValue, // Basic auth: base64(jwt:)
-				"identitytoken": token,     // JWT directly for OAuth2-style auth
-			},
-		},
+		"auths":       registryAuthEntries(registryHost, token, credentials),
 		"credsStore":  "",
 		"credHelpers": map[string]string{},
 	}
-
 	configData, err := json.MarshalIndent(dockerConfig, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal docker config: %w", err)
 	}
-
-	// Ensure ~/.docker directory exists
-	dockerDir := "/home/builder/.docker"
-	if err := os.MkdirAll(dockerDir, 0700); err != nil {
-		return fmt.Errorf("create docker config dir: %w", err)
-	}
-
-	// Write config.json
-	configPath := filepath.Join(dockerDir, "config.json")
-	if err := os.WriteFile(configPath, configData, 0600); err != nil {
+	if err := writeRegistryConfig("/home/builder/.docker", configData); err != nil {
 		return fmt.Errorf("write docker config: %w", err)
 	}
-
-	log.Printf("Docker config created for registry %s (auth length: %d)", registryHost, len(authValue))
-
-	// Also write to /root/.docker for rootless buildkit that may run as root
-	rootDockerDir := "/root/.docker"
-	if err := os.MkdirAll(rootDockerDir, 0700); err == nil {
-		rootConfigPath := filepath.Join(rootDockerDir, "config.json")
-		if err := os.WriteFile(rootConfigPath, configData, 0600); err != nil {
-			log.Printf("Warning: failed to write root docker config: %v", err)
-		} else {
-			log.Printf("Registry auth configured at %s", rootConfigPath)
+	if err := writeRegistryConfig("/root/.docker", configData); err != nil {
+		if config.RegistryCredentialsRequired {
+			return fmt.Errorf("write root docker config: %w", err)
 		}
+		log.Printf("Warning: failed to write root docker config: %v", err)
 	}
-
-	log.Printf("Registry auth configured at %s", configPath)
+	log.Printf("Registry auth configured for %s", registryHost)
 
 	// Setup buildkitd.toml for TLS configuration
 	if err := setupBuildkitdConfig(config); err != nil {
@@ -737,9 +777,11 @@ func setupBuildkitdConfig(config *BuildConfig) error {
 	// BuildKit will try the mirror first for FROM pulls. Since base images
 	// are pre-cached server-side via mirrorBaseImagesForBuild(), the mirror
 	// will have them and serve them directly without pulling from Docker Hub.
-	tomlContent.WriteString("\n")
-	tomlContent.WriteString("[registry.\"docker.io\"]\n")
-	tomlContent.WriteString(fmt.Sprintf("  mirrors = [\"%s\"]\n", registryHost))
+	if !config.RegistryCredentialsRequired {
+		tomlContent.WriteString("\n")
+		tomlContent.WriteString("[registry.\"docker.io\"]\n")
+		tomlContent.WriteString(fmt.Sprintf("  mirrors = [\"%s\"]\n", registryHost))
+	}
 
 	tomlContent.WriteString(gcConfig)
 

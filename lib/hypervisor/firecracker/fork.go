@@ -48,7 +48,16 @@ func (s *Starter) PrepareFork(ctx context.Context, req hypervisor.ForkPrepareReq
 			}
 		}
 	}
-	if req.SourceDataDir != "" && req.TargetDataDir != "" && req.SourceDataDir != req.TargetDataDir {
+	crossesDataDirs := req.SourceDataDir != "" && req.TargetDataDir != "" && req.SourceDataDir != req.TargetDataDir
+	switch {
+	case meta.Jail != nil:
+		// A jailed snapshot names its drives and vsock socket inside the jail, the
+		// same in every instance, so the state file needs no rewrite and no source
+		// alias. Only the copied jail inputs point at the source directory.
+		if crossesDataDirs {
+			changed = rebaseJailInputs(meta.Jail, req.SourceDataDir, req.TargetDataDir) || changed
+		}
+	case crossesDataDirs:
 		updated, err := prepareSnapshotDataDirForFork(req.SnapshotConfigPath, meta, req.SourceDataDir, req.TargetDataDir)
 		if err != nil {
 			return hypervisor.ForkPrepareResult{}, err

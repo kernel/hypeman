@@ -94,6 +94,9 @@ type StoredMetadata struct {
 	// Read-only; echoed on the instance API.
 	Platform string
 	MacOS    *images.MacOSImage `json:"MacOS,omitempty"` // Non-nil for experimental local macOS disk guests.
+	// MacOSDiskLayers is the number of read-only image layers below a macOS guest's
+	// boot overlay, cloned into its data directory.
+	MacOSDiskLayers int `json:"macos_disk_layers,omitempty"`
 	// IdentityRekeyPending marks a macOS clone whose SSH host keys still come from its
 	// source. The next start rekeys them and clears the flag.
 	IdentityRekeyPending bool `json:"identity_rekey_pending,omitempty"`
@@ -338,6 +341,13 @@ type CreateSnapshotRequest struct {
 	Name        string                              // Optional: unique per source instance
 	Tags        tags.Tags                           // Optional user-defined key-value tags
 	Compression *snapshot.SnapshotCompressionConfig // Optional compression override
+}
+
+// StopInstanceRequest is the domain request for stopping an instance.
+type StopInstanceRequest struct {
+	// Force skips the guest shutdown and powers the VM off. A forced macOS stop is
+	// never graceful.
+	Force bool
 }
 
 // StandbyInstanceRequest is the domain request for putting an instance into standby.

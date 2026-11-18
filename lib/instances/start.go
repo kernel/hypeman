@@ -97,6 +97,12 @@ func (m *manager) startInstance(
 		}()
 	}
 
+	// A cold start takes the host's current guest agent.
+	if err := m.installMacOSAgentDisk(ctx, stored); err != nil {
+		log.ErrorContext(ctx, "failed to refresh macOS agent disk", "instance_id", id, "error", err)
+		return nil, fmt.Errorf("refresh macOS agent disk: %w", err)
+	}
+
 	// 3. Get image info (needed for buildHypervisorConfig).
 	imageInfo, err := m.resolveBootImage(ctx, stored)
 	if err != nil {

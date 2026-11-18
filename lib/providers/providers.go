@@ -103,6 +103,7 @@ func ProvideDeviceManager(p *paths.Paths) devices.Manager {
 // ProvideInstanceManager provides the instance manager
 func ProvideInstanceManager(p *paths.Paths, cfg *config.Config, imageManager images.Manager, systemManager system.Manager, networkManager network.Manager, deviceManager devices.Manager, volumeManager volumes.Manager) (instances.Manager, error) {
 	firecracker.SetCustomBinaryPath(cfg.Hypervisor.FirecrackerBinaryPath)
+	firecracker.SetJailerConfig(firecracker.JailerConfig(cfg.Hypervisor.FirecrackerJailer))
 	if err := cloudhypervisor.SetDefaultVersion(cfg.Hypervisor.CloudHypervisorDefaultVersion); err != nil {
 		return nil, fmt.Errorf("invalid cloud-hypervisor default version: %w", err)
 	}
@@ -369,6 +370,9 @@ func ProvideIngressManager(p *paths.Paths, cfg *config.Config, instanceManager i
 			Email:                 cfg.ACME.Email,
 			DNSProvider:           dnsProvider,
 			CA:                    cfg.ACME.CA,
+			FallbackCA:            cfg.ACME.FallbackCA,
+			FallbackEABKeyID:      cfg.ACME.FallbackEABKeyID,
+			FallbackEABMACKey:     cfg.ACME.FallbackEABMACKey,
 			DNSPropagationTimeout: cfg.ACME.DNSPropagationTimeout,
 			DNSResolvers:          cfg.ACME.DNSResolvers,
 			AllowedDomains:        cfg.ACME.AllowedDomains,

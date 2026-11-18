@@ -468,3 +468,25 @@ func NewClient(hvType Type, socketPath string) (Hypervisor, error) {
 	}
 	return WrapHypervisor(hvType, client), nil
 }
+
+// VMMStateReleaser drops what a hypervisor type caches for a socket whose VMM
+// has exited, such as a pooled client or the last balloon target.
+type VMMStateReleaser func(socketPath string)
+
+// vmmStateReleasers maps hypervisor types that cache per-socket state to their releasers.
+var vmmStateReleasers = make(map[Type]VMMStateReleaser)
+
+// RegisterVMMStateReleaser registers the releaser for a hypervisor type that
+// caches state per socket.
+func RegisterVMMStateReleaser(t Type, releaser VMMStateReleaser) {
+	vmmStateReleasers[t] = releaser
+}
+
+// ReleaseVMMState drops any state cached for socketPath, closing a cached
+// client. Call it only once the VMM behind socketPath is confirmed gone.
+// Hypervisor types that cache nothing ignore it.
+func ReleaseVMMState(hvType Type, socketPath string) {
+	if release, ok := vmmStateReleasers[hvType]; ok {
+		release(socketPath)
+	}
+}

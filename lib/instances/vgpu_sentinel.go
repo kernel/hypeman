@@ -308,7 +308,7 @@ func (c *VGPUSentinelController) handleSuccess(ctx context.Context, target vgpuS
 }
 
 func (m *manager) listVGPUSentinelTargets(ctx context.Context) ([]vgpuSentinelTarget, error) {
-	files, statErrs, err := m.walkMetadataFiles()
+	files, statErrs, err := m.walkMetadataFiles(nil)
 	if err != nil {
 		return nil, err
 	}

@@ -230,6 +230,50 @@ Builder VMs authenticate to the registry using short-lived JWT tokens:
 3. **Token TTL**: Matches build timeout (minimum 30 minutes)
 4. **Authentication**: Builder agent sends token via Basic auth (`token:` format)
 
+### Borrowed upstream credentials
+
+`POST /builds` accepts an optional `registry_credentials` multipart string:
+a JSON object keyed by exact registry host, with `username`, `password`, and
+optional RFC3339 `expires_at`. This supports private `FROM` images without
+installing a shared upstream credential on the host.
+
+```json
+{"registry.example":{"username":"AWS","password":"<temporary-token>","expires_at":"2030-01-01T12:00:00Z"}}
+```
+
+Submit the JSON from a protected file rather than exposing the token in process arguments:
+
+```sh
+curl -H "Authorization: Bearer $HYPEMAN_TOKEN" \
+  -F "source=@source.tar.gz" \
+  -F "registry_credentials=<$REGISTRY_CREDENTIALS_FILE" \
+  "$HYPEMAN_URL/builds"
+```
+
+- Use pull-only credentials limited to the needed repositories. The registry/IAM
+  policy grants permissions; this field does not narrow the token itself.
+- The API accepts at most 16 registry hosts and 64 KiB of JSON. Schemes, paths,
+  duplicate normalized hosts, local-output-registry overrides, CR/LF in
+  credentials, and expired credentials are rejected. Only username/password
+  authentication is supported for builds; do not pass `registry_token`.
+- Hypeman keeps these credentials in memory, not metadata or the config disk.
+  They are sent only to that build's VM over vsock. The guest adds them beside
+  local-registry auth in its existing mode-0600 Docker config files, outside
+  the source context and persistent BuildKit cache, and deletes them afterward.
+- Credentialed builds skip host base-image prefetching and the guest's Docker Hub
+  mirror, preventing private bases from entering the shared host mirror.
+- Borrowing is bounded to **30 minutes from submission**, including queue time,
+  or the earliest caller expiry. Active builds are bounded by the same deadline.
+  Completion/cancellation/expiry releases host references. This does not revoke
+  the token at the upstream registry.
+- There is no refresh or durable replay. After a restart, credentialed builds fail
+  and their old builder VM is deleted; resubmit with fresh credentials.
+- Rebuild and deploy the generic builder image before enabling callers.
+  Older builders are rejected rather than accepting a credentialed build silently.
+  CLI/SDK caller wiring is a separate change; no new CLI flags exist yet.
+
+Omitting the field (or sending `{}`) preserves existing behavior.
+
 ## Build Status Flow
 
 ```

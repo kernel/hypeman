@@ -115,6 +115,13 @@ func (f *Firecracker) Resume(ctx context.Context) error {
 }
 
 func (f *Firecracker) Snapshot(ctx context.Context, destPath string) error {
+	meta, err := loadRestoreMetadata(filepath.Dir(f.socketPath))
+	if err != nil {
+		return err
+	}
+	if meta.Jail != nil {
+		return f.snapshotJailed(ctx, destPath)
+	}
 	if err := os.MkdirAll(destPath, 0755); err != nil {
 		return fmt.Errorf("create snapshot directory: %w", err)
 	}

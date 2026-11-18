@@ -2,6 +2,7 @@ package firecracker
 
 import (
 	"embed"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -90,7 +91,29 @@ func resolveBinaryPath(p *paths.Paths, version string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return extractBinary(p, parsedVersion)
+	return extractBinary(p, parsedVersion, "firecracker")
+}
+
+// resolveJailerPath returns the jailer for a firecracker version: the configured
+// override if set, otherwise the jailer embedded alongside that version.
+func resolveJailerPath(p *paths.Paths, version string, jc JailerConfig) (string, error) {
+	if jc.BinaryPath != "" {
+		if err := validateExecutable(jc.BinaryPath); err != nil {
+			return "", fmt.Errorf("invalid jailer binary path %q: %w", jc.BinaryPath, err)
+		}
+		return jc.BinaryPath, nil
+	}
+	if getCustomBinaryPath() != "" {
+		return "", errors.New("a custom firecracker binary needs a jailer binary path")
+	}
+	if p == nil {
+		return "", fmt.Errorf("paths are required when using embedded jailer binaries")
+	}
+	parsedVersion, err := parseVersion(version)
+	if err != nil {
+		return "", err
+	}
+	return extractBinary(p, parsedVersion, "jailer")
 }
 
 func parseVersion(version string) (Version, error) {
@@ -105,14 +128,16 @@ func parseVersion(version string) (Version, error) {
 	return "", fmt.Errorf("unsupported firecracker version %q", version)
 }
 
-func extractBinary(p *paths.Paths, version Version) (string, error) {
+// extractBinary extracts the embedded binary name ("firecracker" or "jailer")
+// shipped with version.
+func extractBinary(p *paths.Paths, version Version, name string) (string, error) {
 	arch, err := normalizeArch()
 	if err != nil {
 		return "", err
 	}
 
-	embeddedPath := filepath.ToSlash(filepath.Join("binaries", "firecracker", string(version), arch, "firecracker"))
-	extractPath := p.FirecrackerBinary(string(version), arch)
+	embeddedPath := filepath.ToSlash(filepath.Join("binaries", "firecracker", string(version), arch, name))
+	extractPath := filepath.Join(filepath.Dir(p.FirecrackerBinary(string(version), arch)), name)
 
 	if err := validateExecutable(extractPath); err == nil {
 		return extractPath, nil
@@ -128,14 +153,14 @@ func extractBinary(p *paths.Paths, version Version) (string, error) {
 
 	data, err := binaryFS.ReadFile(embeddedPath)
 	if err != nil {
-		return "", fmt.Errorf("embedded firecracker binary not found at %s (run `make download-firecracker-binaries` or set hypervisor.firecracker_binary_path): %w", embeddedPath, err)
+		return "", fmt.Errorf("embedded %s binary not found at %s (run `make download-firecracker-binaries` or set hypervisor.firecracker_binary_path): %w", name, embeddedPath, err)
 	}
 
 	if err := os.MkdirAll(filepath.Dir(extractPath), 0755); err != nil {
 		return "", fmt.Errorf("create firecracker binary directory: %w", err)
 	}
 
-	tmpFile, err := os.CreateTemp(filepath.Dir(extractPath), "firecracker-*")
+	tmpFile, err := os.CreateTemp(filepath.Dir(extractPath), name+"-*")
 	if err != nil {
 		return "", fmt.Errorf("create firecracker temp binary: %w", err)
 	}

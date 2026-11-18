@@ -26,6 +26,7 @@ func walkWithContext(ctx context.Context, root string, walkFn filepath.WalkFunc)
 func totalReadyImageBytesFromMetadataWithContext(ctx context.Context, imagesDir string) (int64, error) {
 	var total int64
 	seenRootfs := make(map[rootfsIdentity]struct{})
+	seenMacOSLayers := make(map[string]struct{})
 	layersDir := filepath.Join(imagesDir, "layers")
 
 	err := walkWithContext(ctx, imagesDir, func(path string, info os.FileInfo, err error) error {
@@ -69,6 +70,10 @@ func totalReadyImageBytesFromMetadataWithContext(ctx context.Context, imagesDir 
 				return ctxErr
 			}
 			return fmt.Errorf("unmarshal image metadata %s: %w", path, err)
+		}
+		if meta.Status == StatusReady && meta.MacOS != nil {
+			total += macOSImageAllocatedBytes(filepath.Dir(path), &meta, seenMacOSLayers)
+			return nil
 		}
 		if meta.Status == StatusReady {
 			rootfsPaths, globErr := filepath.Glob(filepath.Join(filepath.Dir(path), "rootfs.*"))
@@ -271,6 +276,45 @@ func totalRootfsBytesInDigestDirWithContext(ctx context.Context, digestDir strin
 		return 0, os.ErrNotExist
 	}
 	return total, nil
+}
+
+// macOSImageAllocatedBytes returns the disk a macOS image holds: its chain files'
+// allocated blocks, not their logical size, and its auxiliary storage. A layer seen
+// in an earlier image is not counted again: images that share a base clone its
+// disk, keyed by diff ID, or by inode for a local import, which has none.
+func macOSImageAllocatedBytes(dir string, meta *imageMetadata, seen map[string]struct{}) int64 {
+	var total int64
+	for i := range meta.MacOSDiskLayers {
+		path := filepath.Join(dir, MacOSDiskLayerFile(i))
+		info, err := os.Stat(path)
+		if err != nil {
+			continue
+		}
+		key := path
+		if stat, ok := info.Sys().(*syscall.Stat_t); ok {
+			key = fmt.Sprintf("inode:%d:%d", stat.Dev, stat.Ino)
+		}
+		if i < len(meta.MacOSDiskDiffIDs) {
+			key = meta.MacOSDiskDiffIDs[i]
+		}
+		if _, counted := seen[key]; counted {
+			continue
+		}
+		seen[key] = struct{}{}
+		total += fileAllocatedBytes(info)
+	}
+	if info, err := os.Stat(filepath.Join(dir, MacOSMachineAuxFile)); err == nil {
+		total += fileAllocatedBytes(info)
+	}
+	return total
+}
+
+// fileAllocatedBytes is a file's allocated blocks, or its size where those are unknown.
+func fileAllocatedBytes(info os.FileInfo) int64 {
+	if stat, ok := info.Sys().(*syscall.Stat_t); ok {
+		return stat.Blocks * 512
+	}
+	return info.Size()
 }
 
 type rootfsIdentity struct {

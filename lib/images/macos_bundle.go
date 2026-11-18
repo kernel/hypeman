@@ -2,34 +2,42 @@ package images
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 )
 
 const maxMacOSMetadataBytes = 64 << 10
 
-// macOSMachinePayload is a complete cold-boot bundle, not a container rootfs.
-// Admission of live storage and export sanitation belong to the caller.
+// macOSMachinePayload is a complete cold-boot bundle, not a container rootfs: an
+// ASIF boot disk chain, base first, with the auxiliary storage and platform of its
+// top layer. Admission of live storage and export sanitation belong to the caller.
 type macOSMachinePayload struct {
-	Disk     string
+	Disks    []string
 	Aux      string
 	Platform *MacOSImage
 }
 
-// ValidateMacOSBundle validates a fixed-layout export, rejecting unknown metadata
-// fields so an accidental credential field cannot become part of an image.
-func ValidateMacOSBundle(root string) (*MacOSImage, error) {
-	bundle, err := readMacOSMachineBundle(root, "disk.img", "aux.img", "config.json", true)
-	if err != nil {
-		return nil, err
+// RequireClosedFile fails unless no process holds path open. lsof exits 1 when
+// nothing holds the file; any other failure leaves the storage unverified.
+func RequireClosedFile(ctx context.Context, path string) error {
+	err := exec.CommandContext(ctx, "/usr/sbin/lsof", "-t", path).Run()
+	if err == nil {
+		return fmt.Errorf("storage is open: stop its VM first")
 	}
-	return bundle.Platform, nil
+	if exit, ok := err.(*exec.ExitError); !ok || exit.ExitCode() != 1 {
+		return fmt.Errorf("cannot verify storage is closed: %w", err)
+	}
+	return nil
 }
 
-func readMacOSMachineBundle(root, diskName, auxName, configName string, strict bool) (*macOSMachinePayload, error) {
+func readMacOSMachineBundle(root, diskName, auxName, configName string) (*macOSMachinePayload, error) {
 	disk, err := machineBundleFile(root, diskName)
 	if err != nil {
 		return nil, err
@@ -42,10 +50,60 @@ func readMacOSMachineBundle(root, diskName, auxName, configName string, strict b
 	if err != nil {
 		return nil, err
 	}
-	// Compare inodes: different hardlink names do not establish distinctness.
-	if sameFile(disk, aux) || sameFile(disk, config) || sameFile(aux, config) {
-		return nil, fmt.Errorf("machine bundle files must be distinct")
+	if err := CheckMachineFiles(disk, aux, config); err != nil {
+		return nil, err
 	}
+	platform, err := readMacOSPlatform(config)
+	if err != nil {
+		return nil, err
+	}
+	return &macOSMachinePayload{Disks: []string{disk}, Aux: aux, Platform: platform}, nil
+}
+
+// readMacOSMachineLayers reads a pulled image unpacked one layer per numbered
+// directory. Every layer holds a disk; the auxiliary storage and platform come from
+// the highest layer that has them.
+func readMacOSMachineLayers(root, diskName, auxName, configName string) (*macOSMachinePayload, error) {
+	var payload macOSMachinePayload
+	var top string
+	for i := 0; ; i++ {
+		dir := filepath.Join(root, strconv.Itoa(i))
+		if _, err := os.Stat(dir); errors.Is(err, os.ErrNotExist) {
+			break
+		}
+		disk, err := machineBundleFile(dir, diskName)
+		if err != nil {
+			return nil, fmt.Errorf("machine layer %d: %w", i, err)
+		}
+		payload.Disks = append(payload.Disks, disk)
+		top = dir
+	}
+	if len(payload.Disks) == 0 {
+		return nil, fmt.Errorf("machine image needs a disk in every layer")
+	}
+	// Only the top layer's auxiliary storage and platform count, so a lower layer
+	// can be reused from another image without unpacking it.
+	aux, err := machineBundleFile(top, auxName)
+	if err != nil {
+		return nil, fmt.Errorf("machine image top layer: %w", err)
+	}
+	payload.Aux = aux
+	config, err := machineBundleFile(top, configName)
+	if err != nil {
+		return nil, fmt.Errorf("machine image top layer: %w", err)
+	}
+	if err := CheckMachineFiles(append([]string{aux, config}, payload.Disks...)...); err != nil {
+		return nil, err
+	}
+	platform, err := readMacOSPlatform(config)
+	if err != nil {
+		return nil, err
+	}
+	payload.Platform = platform
+	return &payload, nil
+}
+
+func readMacOSPlatform(config string) (*MacOSImage, error) {
 	file, err := os.Open(config)
 	if err != nil {
 		return nil, err
@@ -59,9 +117,6 @@ func readMacOSMachineBundle(root, diskName, auxName, configName string, strict b
 		return nil, fmt.Errorf("machine platform metadata is too large")
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
-	if strict {
-		decoder.DisallowUnknownFields()
-	}
 	var platform MacOSImage
 	if err := decoder.Decode(&platform); err != nil {
 		return nil, err
@@ -72,7 +127,7 @@ func readMacOSMachineBundle(root, diskName, auxName, configName string, strict b
 	if err := platform.Validate(); err != nil {
 		return nil, err
 	}
-	return &macOSMachinePayload{Disk: disk, Aux: aux, Platform: &platform}, nil
+	return &platform, nil
 }
 
 func machineBundleFile(root, relative string) (string, error) {
@@ -101,8 +156,25 @@ func machineBundleFile(root, relative string) (string, error) {
 	return path, nil
 }
 
-func sameFile(a, b string) bool {
-	ai, errA := os.Stat(a)
-	bi, errB := os.Stat(b)
-	return errA == nil && errB == nil && os.SameFile(ai, bi)
+// CheckMachineFiles requires each path to be a nonempty regular file, not a
+// symlink, and no two to be the same file. Inodes are compared: different hardlink
+// names do not establish distinctness.
+func CheckMachineFiles(paths ...string) error {
+	seen := make([]os.FileInfo, 0, len(paths))
+	for _, path := range paths {
+		info, err := os.Lstat(path)
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() || info.Size() == 0 {
+			return fmt.Errorf("machine storage must be nonempty regular files")
+		}
+		for _, other := range seen {
+			if os.SameFile(other, info) {
+				return fmt.Errorf("machine storage files must be distinct")
+			}
+		}
+		seen = append(seen, info)
+	}
+	return nil
 }

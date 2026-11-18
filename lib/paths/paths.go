@@ -226,12 +226,30 @@ func (p *Paths) InstanceOverlay(id string) string {
 	return filepath.Join(p.InstanceDir(id), "overlay.raw")
 }
 
-// MacOSBootDiskFile is a macOS guest's complete raw boot disk, cloned from its image.
-const MacOSBootDiskFile = "boot.raw"
+// MacOSBootDiskFile is a macOS guest's writable ASIF overlay, the top of its boot
+// disk chain. The read-only layers below it are cloned from its image.
+const MacOSBootDiskFile = "boot.asif"
 
 // InstanceMacOSBootDisk returns the path to a macOS guest's boot disk.
 func (p *Paths) InstanceMacOSBootDisk(id string) string {
 	return filepath.Join(p.InstanceDir(id), MacOSBootDiskFile)
+}
+
+// MacOSAuxStorageFile is a macOS guest's copy of its image's auxiliary storage.
+const MacOSAuxStorageFile = "mac-aux.img"
+
+// MacOSAgentDiskFile is a macOS guest's copy of the read-only guest agent disk.
+const MacOSAgentDiskFile = "agent.img"
+
+// InstanceMacOSAgentDisk returns the path to a macOS guest's guest agent disk.
+func (p *Paths) InstanceMacOSAgentDisk(id string) string {
+	return filepath.Join(p.InstanceDir(id), MacOSAgentDiskFile)
+}
+
+// SystemMacOSAgentDisk returns the path to the guest agent disk built for an agent
+// version, from which macOS guests take their copies.
+func (p *Paths) SystemMacOSAgentDisk(version string) string {
+	return filepath.Join(p.DataDir(), "system", "macos-agent", version+".img")
 }
 
 // RestoreStagingDir holds a macOS restore in progress inside its instance directory,
@@ -269,6 +287,11 @@ func (p *Paths) InstanceSocket(id string, socketName string) string {
 func (p *Paths) InstanceVsockSocket(id string) string {
 	return filepath.Join(p.InstanceDir(id), "vsock.sock")
 }
+
+// InstanceJailDirName is the per-instance directory a jailed VMM's chroot lives
+// under. It is a runtime artifact: snapshot and fork copies skip it, and restore
+// rebuilds it from the instance's own files.
+const InstanceJailDirName = "jail"
 
 // InstanceLogs returns the path to instance logs directory.
 func (p *Paths) InstanceLogs(id string) string {

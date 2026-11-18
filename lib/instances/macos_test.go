@@ -28,7 +28,7 @@ func TestMacOSRequestDefaultsAndRejections(t *testing.T) {
 	require.NoError(t, prepareMacOSCreate(&req, testMacImage(), caps))
 	require.Equal(t, int64(8<<30), req.Size)
 	require.Equal(t, 4, req.Vcpus)
-	require.Equal(t, int64(64<<30), req.OverlaySize)
+	require.Equal(t, int64(macOSBootDiskAllowance), req.OverlaySize)
 	require.True(t, req.SkipGuestAgent)
 	for _, r := range []CreateInstanceRequest{
 		{Env: map[string]string{"X": "Y"}}, {Cmd: []string{"sh"}}, {HotplugSize: 1}, {OverlaySize: 1}, {DiskIOBps: 1}, {Size: 1 << 30}, {Size: (4 << 30) + 1}, {Vcpus: 1}, {Volumes: []VolumeAttachment{{VolumeID: "v"}}},

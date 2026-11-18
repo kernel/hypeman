@@ -11,6 +11,7 @@ import (
 
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/hypervisor/vz/shimconfig"
+	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/instances/phasetracking"
 	"github.com/kernel/hypeman/lib/paths"
 	restartpolicy "github.com/kernel/hypeman/lib/restart-policy"
@@ -34,8 +35,10 @@ func macOSMemorySnapshotFixture(t *testing.T) (*manager, *metadata) {
 	meta.MAC, meta.NetworkEnabled = meta.MacOS.MAC, true
 	meta.SkipGuestAgent = true
 	meta.StopGraceful = true
+	meta.MacOSDiskLayers = 1
 	require.NoError(t, m.saveMetadata(meta))
 	require.NoError(t, os.Rename(m.paths.InstanceOverlay(id), m.paths.InstanceMacOSBootDisk(id)))
+	require.NoError(t, os.WriteFile(filepath.Join(meta.DataDir, images.MacOSDiskLayerFile(0)), []byte("image layer"), 0400))
 	require.NoError(t, os.WriteFile(filepath.Join(meta.DataDir, macOSAuxStorageFile), []byte("aux-at-checkpoint"), 0600))
 	return m, meta
 }
@@ -49,8 +52,10 @@ func writeMacOSMemorySnapshotPayload(t *testing.T, m *manager, guestDir string, 
 		VCPUs: stored.Vcpus, MemoryBytes: stored.Size,
 		MacHardwareModelData: base64.StdEncoding.EncodeToString(stored.MacOS.HardwareModel), MacMachineIdentifierData: base64.StdEncoding.EncodeToString(stored.MacOS.MachineIdentifier),
 		MacAuxStoragePath: filepath.Join(m.paths.InstanceDir(stored.Id), macOSAuxStorageFile),
-		Disks:             []shimconfig.DiskConfig{{Path: m.paths.InstanceMacOSBootDisk(stored.Id)}},
 	}}
+	for _, disk := range macOSDisks(m.paths, stored) {
+		manifest.ShimConfig.Disks = append(manifest.ShimConfig.Disks, shimconfig.DiskConfig{Path: disk.Path, Readonly: disk.Readonly, Parents: disk.Parents})
+	}
 	if stored.NetworkEnabled {
 		manifest.ShimConfig.Networks = []shimconfig.NetworkConfig{{MAC: stored.MAC}}
 		if stored.IP != "" {
@@ -112,13 +117,13 @@ func TestMacOSMemorySnapshotCaptureRestoreAndIsolation(t *testing.T) {
 	require.Equal(t, current.Phases.Cumulative[phasetracking.PhaseRunning], restored.Phases.Cumulative[phasetracking.PhaseRunning], "same-instance restore must not rewind host phase accounting")
 	require.NotNil(t, restored.ExpiresAt)
 	require.True(t, expiresAt.Equal(*restored.ExpiresAt))
-	for name, want := range map[string]string{"boot.raw": "overlay", macOSAuxStorageFile: "aux-at-checkpoint", "snapshots/snapshot-latest/" + shimconfig.SnapshotMachineStateFile: "saved-memory"} {
+	for name, want := range map[string]string{paths.MacOSBootDiskFile: "overlay", macOSAuxStorageFile: "aux-at-checkpoint", "snapshots/snapshot-latest/" + shimconfig.SnapshotMachineStateFile: "saved-memory"} {
 		data, err := os.ReadFile(filepath.Join(meta.DataDir, name))
 		require.NoError(t, err)
 		require.Equal(t, want, string(data))
 	}
 	require.NoError(t, os.WriteFile(m.paths.InstanceMacOSBootDisk(meta.Id), []byte("restored-write"), 0600))
-	data, err := os.ReadFile(filepath.Join(m.paths.SnapshotGuestDir(snapshot.Id), "boot.raw"))
+	data, err := os.ReadFile(filepath.Join(m.paths.SnapshotGuestDir(snapshot.Id), paths.MacOSBootDiskFile))
 	require.NoError(t, err)
 	require.Equal(t, "overlay", string(data), "restoring must not alias the persistent snapshot")
 
@@ -142,6 +147,9 @@ func TestMacOSMemorySnapshotRejectsInvalidPayloadBeforeStorageSwap(t *testing.T)
 		{"hardware", func(m *shimconfig.SnapshotManifest) { m.ShimConfig.MacHardwareModelData = "different" }},
 		{"disk", func(m *shimconfig.SnapshotManifest) { m.ShimConfig.Disks[0].Path = "/wrong-disk" }},
 		{"aux", func(m *shimconfig.SnapshotManifest) { m.ShimConfig.MacAuxStoragePath = "/wrong-aux" }},
+		{"extra-disk", func(m *shimconfig.SnapshotManifest) {
+			m.ShimConfig.Disks = append(m.ShimConfig.Disks, shimconfig.DiskConfig{Path: "/agent.img", Readonly: true})
+		}},
 		{"network", func(m *shimconfig.SnapshotManifest) { m.ShimConfig.Networks[0].MAC = "02:00:00:00:00:02" }},
 		{"network-address", func(m *shimconfig.SnapshotManifest) {
 			m.ShimConfig.Networks[0].IPv4Address, m.ShimConfig.Networks[0].IPv4Subnet = "192.168.128.2", "192.168.128.0/29"

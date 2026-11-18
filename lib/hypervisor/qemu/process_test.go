@@ -394,6 +394,57 @@ func TestStartManagedProcessCleanupRemovesSocketAndReapsExitedProcess(t *testing
 	assert.True(t, cmd.ProcessState.Exited())
 }
 
+func TestCleanupFailedStartDropsPooledClient(t *testing.T) {
+	socketPath := filepath.Join(t.TempDir(), "qemu.sock")
+	clientPool.Lock()
+	clientPool.clients[socketPath] = &QEMU{socketPath: socketPath, profile: StandardProfile{}}
+	clientPool.Unlock()
+	t.Cleanup(func() {
+		clientPool.Lock()
+		delete(clientPool.clients, socketPath)
+		clientPool.Unlock()
+	})
+
+	proc, err := startManagedProcess(exec.Command("sleep", "30"), socketPath)
+	require.NoError(t, err)
+
+	cleanupFailedStart(proc)
+
+	clientPool.RLock()
+	_, pooled := clientPool.clients[socketPath]
+	clientPool.RUnlock()
+	require.False(t, pooled)
+}
+
+// A QEMU that exits on its own never goes through stop or delete, so the next
+// start on the same socket path has to drop what the old process left cached.
+func TestStartQEMUProcessDropsStaleBalloonTarget(t *testing.T) {
+	starter := NewStarter()
+	if _, err := starter.GetBinaryPath(nil, ""); err != nil {
+		t.Skipf("QEMU not available: %v", err)
+	}
+
+	// t.TempDir() overflows the unix socket path limit on macOS.
+	dir, err := os.MkdirTemp("/tmp", "qmp")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	socketPath := filepath.Join(dir, "qemu.sock")
+	balloonTargetCache.Store(socketPath, 512<<20)
+	t.Cleanup(func() { clearBalloonTargetCache(socketPath) })
+
+	args := append(buildQMPArgs(socketPath), "-machine", "none", "-nodefaults", "-display", "none")
+	_, _, cu, err := starter.startQEMUProcess(t.Context(), paths.New(dir), "", socketPath, args, 0)
+	require.NoError(t, err)
+	t.Cleanup(cu.Clean)
+
+	// Whether a leftover target is still reachable through the new socket
+	// depends on the filesystem reusing its inode. With the socket file gone
+	// the lookup is by path alone, so it finds a leftover on any filesystem.
+	require.NoError(t, os.Remove(socketPath))
+	_, cached := balloonTargetCache.Load(socketPath)
+	require.False(t, cached)
+}
+
 func TestWaitForSocketOrExitReturnsEarlyWhenProcessDies(t *testing.T) {
 	socketPath := filepath.Join(t.TempDir(), "qemu.sock")
 

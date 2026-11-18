@@ -9,12 +9,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/kernel/hypeman/lib/forkvm"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/hypervisor/vz/shimconfig"
+	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/instances/phasetracking"
 	"github.com/kernel/hypeman/lib/paths"
 	restartpolicy "github.com/kernel/hypeman/lib/restart-policy"
@@ -162,7 +164,9 @@ func (m *manager) validateMacOSMemorySnapshotPayload(guestDir string, stored *St
 	if cfg.VCPUs != stored.Vcpus || cfg.MemoryBytes != stored.Size || cfg.MacHardwareModelData != base64.StdEncoding.EncodeToString(stored.MacOS.HardwareModel) || cfg.MacMachineIdentifierData != base64.StdEncoding.EncodeToString(stored.MacOS.MachineIdentifier) {
 		return fmt.Errorf("%w: macOS snapshot configuration does not match its metadata", ErrInvalidRequest)
 	}
-	if len(cfg.Disks) != 1 || cfg.Disks[0].Readonly || cfg.Disks[0].Path != m.paths.InstanceMacOSBootDisk(stored.Id) || cfg.MacAuxStoragePath != filepath.Join(origin, macOSAuxStorageFile) {
+	if !slices.EqualFunc(cfg.Disks, macOSDisks(m.paths, stored), func(saved shimconfig.DiskConfig, want hypervisor.DiskConfig) bool {
+		return saved.Path == want.Path && saved.Readonly == want.Readonly && slices.Equal(saved.Parents, want.Parents)
+	}) || cfg.MacAuxStoragePath != filepath.Join(origin, macOSAuxStorageFile) {
 		return fmt.Errorf("%w: macOS snapshot storage configuration does not match its instance", ErrInvalidRequest)
 	}
 	if cfg.KernelPath != "" || cfg.InitrdPath != "" || cfg.EnableMemoryBalloon || cfg.RequireMemoryBalloon || cfg.EnableRosetta {
@@ -185,7 +189,14 @@ func (m *manager) validateMacOSMemorySnapshotPayload(guestDir string, stored *St
 	} else if len(cfg.Networks) != 0 {
 		return fmt.Errorf("%w: macOS snapshot unexpectedly enables networking", ErrInvalidRequest)
 	}
-	for _, path := range []string{filepath.Join(guestDir, paths.MacOSBootDiskFile), filepath.Join(guestDir, macOSAuxStorageFile), filepath.Join(snapshotDir, shimconfig.SnapshotMachineStateFile)} {
+	payload := []string{filepath.Join(guestDir, paths.MacOSBootDiskFile), filepath.Join(guestDir, macOSAuxStorageFile), filepath.Join(snapshotDir, shimconfig.SnapshotMachineStateFile)}
+	for i := range stored.MacOSDiskLayers {
+		payload = append(payload, filepath.Join(guestDir, images.MacOSDiskLayerFile(i)))
+	}
+	if stored.GuestAgentEnabled() {
+		payload = append(payload, filepath.Join(guestDir, paths.MacOSAgentDiskFile))
+	}
+	for _, path := range payload {
 		info, err := os.Stat(path)
 		if err != nil || !info.Mode().IsRegular() || info.Size() == 0 {
 			return fmt.Errorf("%w: missing or invalid macOS snapshot payload %s", ErrInvalidRequest, filepath.Base(path))

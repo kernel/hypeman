@@ -120,21 +120,24 @@ func (m *manager) tryGracefulGuestShutdown(ctx context.Context, inst *Instance, 
 	return false
 }
 
-// stopInstance gracefully stops an active instance.
+// stopInstance stops an active instance.
 // Flow: send Shutdown RPC -> wait for VM to power off ->
 // fall back to hypervisor shutdown -> final SIGKILL if still alive.
+// A forced stop skips the Shutdown RPC and starts at the hypervisor shutdown.
 // Multi-hop orchestration: Running/Initializing → Shutdown → Stopped
 func (m *manager) stopInstance(
 	ctx context.Context,
 	id string,
+	req StopInstanceRequest,
 ) (_ *Instance, retErr error) {
 	start := time.Now()
 	log := logger.FromContext(ctx)
-	log.InfoContext(ctx, "stopping instance", "instance_id", id)
+	log.InfoContext(ctx, "stopping instance", "instance_id", id, "force", req.Force)
 
 	ctx, span := m.startLifecycleSpan(ctx, "instances.stop",
 		attribute.String("instance_id", id),
 		attribute.String("operation", "stop"),
+		attribute.Bool("force", req.Force),
 	)
 	defer func() { finishInstancesSpan(span, retErr) }()
 
@@ -169,27 +172,30 @@ func (m *manager) stopInstance(
 
 	// 4. Graceful shutdown: send signal to guest init via Shutdown RPC,
 	// then wait for VM to power off cleanly. Fall back to hypervisor shutdown on timeout.
-	stopTimeout := resolveStopTimeout(stored)
-	if inst.MacOS != nil {
-		// macOS power-off can outlast the ordinary short stop default.
-		stopTimeout = max(stopTimeout, macOSMinStopTimeout)
-	}
-	gracefulCtx, gracefulSpanEnd := m.startLifecycleStep(ctx, "graceful_guest_shutdown",
-		attribute.String("instance_id", id),
-		attribute.String("hypervisor", string(stored.HypervisorType)),
-		attribute.String("operation", "graceful_guest_shutdown"),
-		attribute.Int("stop_timeout_seconds", stopTimeout),
-	)
-	gracefulShutdown := m.tryGracefulGuestShutdown(gracefulCtx, &inst, stopTimeout)
-	if gracefulShutdown {
-		gracefulSpanEnd(nil)
-	} else {
-		gracefulSpanEnd(errGracefulShutdownFailed)
+	gracefulShutdown := false
+	if !req.Force {
+		stopTimeout := resolveStopTimeout(stored)
+		if inst.MacOS != nil {
+			// macOS power-off can outlast the ordinary short stop default.
+			stopTimeout = max(stopTimeout, macOSMinStopTimeout)
+		}
+		gracefulCtx, gracefulSpanEnd := m.startLifecycleStep(ctx, "graceful_guest_shutdown",
+			attribute.String("instance_id", id),
+			attribute.String("hypervisor", string(stored.HypervisorType)),
+			attribute.String("operation", "graceful_guest_shutdown"),
+			attribute.Int("stop_timeout_seconds", stopTimeout),
+		)
+		gracefulShutdown = m.tryGracefulGuestShutdown(gracefulCtx, &inst, stopTimeout)
+		if gracefulShutdown {
+			gracefulSpanEnd(nil)
+		} else {
+			gracefulSpanEnd(errGracefulShutdownFailed)
+		}
 	}
 
-	// 5. Fallback hypervisor shutdown if guest graceful shutdown didn't work
+	// 5. Hypervisor shutdown when forced or when guest graceful shutdown didn't work
 	if !gracefulShutdown {
-		log.DebugContext(ctx, "shutting down hypervisor (fallback)", "instance_id", id)
+		log.DebugContext(ctx, "shutting down hypervisor", "instance_id", id, "force", req.Force)
 		shutdownCtx, shutdownSpanEnd := m.startLifecycleStep(ctx, "shutdown_hypervisor",
 			attribute.String("instance_id", id),
 			attribute.String("hypervisor", string(stored.HypervisorType)),
@@ -261,13 +267,14 @@ func (m *manager) stopInstance(
 		}
 	}
 
-	// 8. Drop the guest-agent connection for this VM incarnation and remove
-	// stale runtime sockets after process exit. The hypervisor shutdown closes
-	// the live peer, but the keyed gRPC ClientConn must not survive into a later
-	// start that reuses the same per-instance socket path.
+	// 8. Drop the guest-agent and hypervisor connections for this VM incarnation
+	// and remove stale runtime sockets after process exit. The hypervisor
+	// shutdown closes the live peer, but the keyed gRPC ClientConn must not
+	// survive into a later start that reuses the same per-instance socket path.
 	if dialer, err := hypervisor.NewVsockDialer(inst.HypervisorType, inst.VsockSocket, inst.VsockCID); err == nil {
 		guest.CloseConn(dialer.Key())
 	}
+	hypervisor.ReleaseVMMState(inst.HypervisorType, inst.SocketPath)
 	// If graceful guest shutdown exits before shutdownHypervisor() is called, these
 	// files may still exist and cause state derivation as Unknown or bind conflicts.
 	_ = os.Remove(inst.SocketPath)

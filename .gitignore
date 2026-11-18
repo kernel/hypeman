@@ -21,6 +21,7 @@ cloud-hypervisor
 cloud-hypervisor/**
 lib/system/exec_agent/exec-agent
 lib/system/guest_agent/guest-agent
+lib/system/guest_agent/guest-agent-darwin
 lib/system/init/init
 lib/hypervisor/vz/vz-shim/vz-shim
 

@@ -19,6 +19,7 @@ import (
 
 	"github.com/google/go-containerregistry/pkg/v1/tarball"
 	"github.com/kernel/hypeman/lib/builders"
+	"github.com/kernel/hypeman/lib/builds/registryauth"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/instances"
 	"github.com/kernel/hypeman/lib/ocicache"
@@ -143,6 +144,9 @@ func stripRegistryScheme(registryURL string) string {
 }
 
 type manager struct {
+	credentialsMu       sync.Mutex
+	registryCredentials map[string]*borrowedBuildCredentials
+
 	config          Config
 	paths           *paths.Paths
 	queue           *BuildQueue
@@ -451,6 +455,12 @@ func (m *manager) CreateBuild(ctx context.Context, req CreateBuildRequest, sourc
 		return nil, err
 	}
 	req.Tags = tags.Clone(req.Tags)
+	credentials, err := registryauth.Normalize(req.RegistryCredentials, m.config.RegistryURL, time.Now())
+	if err != nil {
+		return nil, err
+	}
+	req.RequiresRegistryCredentials = len(credentials) > 0
+	req.RegistryCredentials = nil
 
 	// Apply defaults to build policy
 	policy := req.BuildPolicy
@@ -585,7 +595,9 @@ func (m *manager) CreateBuild(ctx context.Context, req CreateBuildRequest, sourc
 
 	// Write build config for the builder agent
 	buildConfig := &BuildConfig{
-		JobID:            id,
+		JobID:                       id,
+		RegistryCredentialsRequired: req.RequiresRegistryCredentials,
+
 		BaseImageDigest:  req.BaseImageDigest,
 		RegistryURL:      m.config.RegistryURL,
 		RegistryToken:    registryToken,
@@ -608,6 +620,10 @@ func (m *manager) CreateBuild(ctx context.Context, req CreateBuildRequest, sourc
 	if err := writeBuildConfig(m.paths, id, buildConfig); err != nil {
 		deleteBuild(m.paths, id)
 		return nil, fmt.Errorf("write build config: %w", err)
+	}
+
+	if req.RequiresRegistryCredentials {
+		m.holdRegistryCredentials(id, credentials)
 	}
 
 	// Enqueue the build. Builds sharing a builder are serialized by builder
@@ -740,6 +756,7 @@ func (m *manager) gcFinishedBuilds() {
 // runBuild executes a build in a builder VM
 func (m *manager) runBuild(ctx context.Context, id string, req CreateBuildRequest, policy *BuildPolicy) {
 	start := time.Now()
+	defer m.releaseRegistryCredentials(id)
 	m.logger.Info("starting build", "id", id)
 
 	// Update status to building
@@ -749,15 +766,33 @@ func (m *manager) runBuild(ctx context.Context, id string, req CreateBuildReques
 	buildCtx, cancel := context.WithTimeout(ctx, time.Duration(policy.TimeoutSeconds)*time.Second)
 	defer cancel()
 
-	// Mirror base images to the local registry before launching the VM.
-	// BuildKit is configured with our registry as a mirror for docker.io,
-	// so pre-cached images will be served locally without pulling from Docker Hub.
-	if err := m.mirrorBaseImagesForBuild(buildCtx, id, req); err != nil {
-		m.logger.Warn("failed to mirror base images", "id", id, "error", err)
+	redact := func(value string) string { return value }
+	var err error
+	if req.RequiresRegistryCredentials {
+		var credentials map[string]registryauth.Credential
+		var expires time.Time
+		credentials, expires, err = m.borrowRegistryCredentials(id)
+		if err == nil {
+			redact = registryauth.Redactor(credentials)
+			var deadlineCancel context.CancelFunc
+			buildCtx, deadlineCancel = context.WithDeadline(buildCtx, expires)
+			defer deadlineCancel()
+		}
+	} else if mirrorErr := m.mirrorBaseImagesForBuild(buildCtx, id, req); mirrorErr != nil {
+		m.logger.Warn("failed to mirror base images", "id", id, "error", mirrorErr)
 	}
-
-	// Run the build in a builder VM
-	result, err := m.executeBuild(buildCtx, id, req, policy)
+	// Private bases stay inside this build rather than entering the shared mirror.
+	var result *BuildResult
+	if err == nil {
+		result, err = m.executeBuild(buildCtx, id, req, policy)
+	}
+	if err != nil {
+		err = errors.New(redact(err.Error()))
+	}
+	if result != nil {
+		result.Logs = redact(result.Logs)
+		result.Error = redact(result.Error)
+	}
 
 	// executeBuild's defers release the builder acquisition when it returns,
 	// so same-builder builds may start while this build waits for image
@@ -1002,7 +1037,7 @@ func (m *manager) executeBuild(ctx context.Context, id string, req CreateBuildRe
 
 	// Wait for build result via vsock
 	// The builder agent will send the result when complete
-	result, err := m.waitForResult(ctx, id, inst)
+	result, err := m.waitForResult(ctx, id, inst, req.RequiresRegistryCredentials)
 	if err != nil {
 		return nil, fmt.Errorf("wait for result: %w", err)
 	}
@@ -1011,7 +1046,7 @@ func (m *manager) executeBuild(ctx context.Context, id string, req CreateBuildRe
 }
 
 // waitForResult waits for the build result from the builder agent via vsock
-func (m *manager) waitForResult(ctx context.Context, buildID string, inst *instances.Instance) (*BuildResult, error) {
+func (m *manager) waitForResult(ctx context.Context, buildID string, inst *instances.Instance, requiresRegistryCredentials bool) (*BuildResult, error) {
 	// Wait a bit for the VM to start and the builder agent to listen on vsock
 	time.Sleep(3 * time.Second)
 
@@ -1073,6 +1108,15 @@ func (m *manager) waitForResult(ctx context.Context, buildID string, inst *insta
 	}
 	m.logger.Debug("host_ready sent, waiting for agent messages", "instance", inst.Id)
 
+	credentialsDelivered := false
+	redact := func(value string) string { return value }
+	if requiresRegistryCredentials {
+		credentials, _, err := m.borrowRegistryCredentials(buildID)
+		if err != nil {
+			return nil, err
+		}
+		redact = registryauth.Redactor(credentials)
+	}
 	// Handle messages from agent until we get the build result
 	for {
 		// Use a goroutine for decoding so we can respect context cancellation.
@@ -1101,9 +1145,27 @@ func (m *manager) waitForResult(ctx context.Context, buildID string, inst *insta
 			}
 		}
 
+		failedResult := dr.response.Type == "build_result" && dr.response.Result != nil && !dr.response.Result.Success
+		if requiresRegistryCredentials && !credentialsDelivered && dr.response.Type != "get_registry_credentials" && dr.response.Type != "log" && !failedResult {
+			return nil, fmt.Errorf("builder does not support borrowed registry credentials; update the builder image")
+		}
+		dr.response.Log = redact(dr.response.Log)
+		if dr.response.Result != nil {
+			dr.response.Result.Logs = redact(dr.response.Result.Logs)
+			dr.response.Result.Error = redact(dr.response.Result.Error)
+		}
 		// Handle message based on type
-		m.logger.Debug("received message from agent", "type", dr.response.Type, "instance", inst.Id)
+		m.logger.Debug("received message from agent", "type", redact(dr.response.Type), "instance", inst.Id)
 		switch dr.response.Type {
+		case "get_registry_credentials":
+			credentials, _, err := m.borrowRegistryCredentials(buildID)
+			if err != nil {
+				return nil, err
+			}
+			if err := encoder.Encode(VsockMessage{Type: "registry_credentials", RegistryCredentials: credentials}); err != nil {
+				return nil, fmt.Errorf("send registry credentials: %w", err)
+			}
+			credentialsDelivered = true
 		case "get_secrets":
 			// Agent is requesting secrets
 			m.logger.Debug("agent requesting secrets", "instance", inst.Id, "secret_ids", dr.response.SecretIDs)
@@ -1137,7 +1199,7 @@ func (m *manager) waitForResult(ctx context.Context, buildID string, inst *insta
 			return dr.response.Result, nil
 
 		default:
-			m.logger.Warn("unexpected message type from agent", "type", dr.response.Type)
+			m.logger.Warn("unexpected message type from agent", "type", redact(dr.response.Type))
 		}
 	}
 }
@@ -1179,6 +1241,7 @@ func (m *manager) updateStatus(id string, status string, err error) error {
 
 // updateBuildComplete updates the build with final results
 func (m *manager) updateBuildComplete(id string, status string, digest *string, errMsg *string, provenance *BuildProvenance, durationMS *int64) {
+	m.releaseRegistryCredentials(id)
 	meta, readErr := readMetadata(m.paths, id)
 	if readErr != nil {
 		m.logger.Error("read metadata for completion", "id", id, "error", readErr)
@@ -1328,6 +1391,7 @@ func (m *manager) CancelBuild(ctx context.Context, id string) error {
 		if !cancelled {
 			return ErrBuildInProgress // Was already picked up
 		}
+		m.releaseRegistryCredentials(id)
 		return nil
 
 	case StatusBuilding, StatusPushing:
@@ -1336,7 +1400,11 @@ func (m *manager) CancelBuild(ctx context.Context, id string) error {
 		if meta.BuilderInstance != nil {
 			m.instanceManager.DeleteInstance(ctx, *meta.BuilderInstance)
 		}
-		return m.updateStatus(id, StatusCancelled, nil)
+		err := m.updateStatus(id, StatusCancelled, nil)
+		if err == nil {
+			m.releaseRegistryCredentials(id)
+		}
+		return err
 
 	case StatusReady, StatusFailed, StatusCancelled:
 		return fmt.Errorf("build already completed with status: %s", meta.Status)
@@ -1536,6 +1604,19 @@ func (m *manager) RecoverPendingBuilds() {
 	for _, meta := range pending {
 		meta := meta // Shadow loop variable for closure capture
 		m.logger.Info("recovering build", "id", meta.ID, "status", meta.Status)
+		if meta.Request != nil && meta.Request.RequiresRegistryCredentials {
+			if _, _, err := m.borrowRegistryCredentials(meta.ID); err == nil {
+				continue // Already queued in this process with live credentials.
+			}
+			if meta.BuilderInstance != nil {
+				if err := m.instanceManager.DeleteInstance(context.Background(), *meta.BuilderInstance); err != nil {
+					m.logger.Error("delete interrupted credentialed builder", "id", meta.ID, "error", err)
+				}
+			}
+			errMsg := errRegistryCredentialsUnavailable.Error()
+			m.updateBuildComplete(meta.ID, StatusFailed, nil, &errMsg, nil, nil)
+			continue
+		}
 
 		// Re-enqueue the build
 		if meta.Request != nil {

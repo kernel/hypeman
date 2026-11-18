@@ -16,6 +16,7 @@ RUN go mod download
 
 # Copy the builder_agent and guest_agent sources
 COPY lib/builds/builder_agent/ ./lib/builds/builder_agent/
+COPY lib/builds/registryauth/ ./lib/builds/registryauth/
 COPY lib/system/guest_agent/ ./lib/system/guest_agent/
 # Only copy proto files for guest-agent (not client.go which has host-side deps)
 COPY lib/guest/guest.pb.go lib/guest/guest_grpc.pb.go ./lib/guest/

@@ -20,16 +20,19 @@ type createImageResolver interface {
 func resolveImageForCreate(ctx context.Context, imageManager createImageResolver, imageName, platform string, log *slog.Logger) (*images.Image, error) {
 	if p, err := images.ParsePlatform(platform); err == nil && p.OS == "darwin" {
 		img, err := imageManager.GetImage(ctx, imageName)
-		if err != nil {
-			return nil, fmt.Errorf("get imported macOS image: %w", err)
+		if err != nil && !errors.Is(err, images.ErrNotFound) {
+			return nil, fmt.Errorf("get macOS image: %w", err)
 		}
-		if img.MacOS == nil {
-			return nil, fmt.Errorf("%w: image is not a macOS disk bundle", images.ErrInvalidPlatform)
+		if err != nil || img.MacOS == nil {
+			if img, err = imageManager.CreateImage(ctx, images.CreateImageRequest{Name: imageName, Platform: platform}); err != nil {
+				return nil, fmt.Errorf("pull macOS image: %w", err)
+			}
 		}
-		if err := validateResolvedImagePlatform(img, platform); err != nil {
-			return nil, err
+		img, err = awaitResolvedImage(ctx, imageManager, img, imageName, platform, log)
+		if err == nil && img.MacOS == nil {
+			err = fmt.Errorf("%w: image is not a macOS disk bundle", images.ErrInvalidPlatform)
 		}
-		return img, nil
+		return img, err
 	}
 	// An empty platform means the host platform: a no-platform run must boot a
 	// host-native guest and never silently emulate, so we resolve the host variant
@@ -58,6 +61,12 @@ func resolveImageForCreate(ctx context.Context, imageManager createImageResolver
 	if err != nil {
 		return nil, fmt.Errorf("resolve image %s for platform %s: %w", imageName, resolvePlatform, err)
 	}
+	return awaitResolvedImage(ctx, imageManager, img, imageName, resolvePlatform, log)
+}
+
+// awaitResolvedImage pins img by digest, waits for it to be ready and checks it
+// is for platform.
+func awaitResolvedImage(ctx context.Context, imageManager createImageResolver, img *images.Image, imageName, platform string, log *slog.Logger) (*images.Image, error) {
 	pinned, err := pinnedImageName(imageName, img.Digest)
 	if err != nil {
 		return nil, err
@@ -66,7 +75,7 @@ func resolveImageForCreate(ctx context.Context, imageManager createImageResolver
 	if err != nil {
 		return nil, err
 	}
-	if err := validateResolvedImagePlatform(img, resolvePlatform); err != nil {
+	if err := validateResolvedImagePlatform(img, platform); err != nil {
 		return nil, err
 	}
 	return img, nil

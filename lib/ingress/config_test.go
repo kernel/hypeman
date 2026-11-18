@@ -1092,3 +1092,92 @@ func TestGenerateConfig_DynamicUpstreams(t *testing.T) {
 	assert.Contains(t, configStr, "resolver")
 	assert.Contains(t, configStr, "127.0.0.1:5353")
 }
+
+func TestGenerateConfig_TLSIssuers(t *testing.T) {
+	ingresses := []Ingress{{
+		ID:   "ing-123",
+		Name: "tls-ingress",
+		Rules: []IngressRule{{
+			Match:  IngressMatch{Hostname: "secure.example.com", Port: 443},
+			Target: IngressTarget{Instance: "my-api", Port: 8080},
+			TLS:    true,
+		}},
+	}}
+
+	generatedIssuers := func(t *testing.T, acme ACMEConfig) []map[string]interface{} {
+		t.Helper()
+		p := paths.New(t.TempDir())
+		require.NoError(t, os.MkdirAll(p.CaddyDataDir(), 0755))
+		generator := NewCaddyConfigGenerator(p, "0.0.0.0", "127.0.0.1", 2019, acme, APIIngressConfig{}, 5353)
+
+		data, err := generator.GenerateConfig(context.Background(), ingresses)
+		require.NoError(t, err)
+
+		var config struct {
+			Apps struct {
+				TLS struct {
+					Automation struct {
+						Policies []struct {
+							Issuers []map[string]interface{} `json:"issuers"`
+						} `json:"policies"`
+					} `json:"automation"`
+				} `json:"tls"`
+			} `json:"apps"`
+		}
+		require.NoError(t, json.Unmarshal(data, &config))
+		require.Len(t, config.Apps.TLS.Automation.Policies, 1)
+		return config.Apps.TLS.Automation.Policies[0].Issuers
+	}
+
+	issuerCAs := func(t *testing.T, acme ACMEConfig) []interface{} {
+		t.Helper()
+		var cas []interface{}
+		for _, issuer := range generatedIssuers(t, acme) {
+			assert.Equal(t, "acme", issuer["module"])
+			assert.Equal(t, "admin@example.com", issuer["email"])
+			assert.Contains(t, issuer, "challenges")
+			cas = append(cas, issuer["ca"])
+		}
+		return cas
+	}
+
+	base := ACMEConfig{
+		Email:              "admin@example.com",
+		DNSProvider:        DNSProviderCloudflare,
+		CloudflareAPIToken: "test-token",
+	}
+
+	t.Run("without fallback", func(t *testing.T) {
+		assert.Equal(t, []interface{}{nil}, issuerCAs(t, base))
+	})
+
+	t.Run("with fallback", func(t *testing.T) {
+		acme := base
+		acme.FallbackCA = "https://acme.zerossl.com/v2/DV90"
+		assert.Equal(t, []interface{}{nil, "https://acme.zerossl.com/v2/DV90"}, issuerCAs(t, acme))
+		for _, issuer := range generatedIssuers(t, acme) {
+			assert.NotContains(t, issuer, "external_account")
+		}
+	})
+
+	t.Run("with fallback EAB", func(t *testing.T) {
+		acme := base
+		acme.FallbackCA = "https://acme.zerossl.com/v2/DV90"
+		acme.FallbackEABKeyID = "test-kid"
+		acme.FallbackEABMACKey = "test-mac"
+		issuers := generatedIssuers(t, acme)
+		require.Len(t, issuers, 2)
+		assert.NotContains(t, issuers[0], "external_account")
+		assert.Equal(t, map[string]interface{}{"key_id": "test-kid", "mac_key": "test-mac"}, issuers[1]["external_account"])
+	})
+
+	t.Run("with primary CA and fallback", func(t *testing.T) {
+		acme := base
+		acme.CA = "https://acme-staging-v02.api.letsencrypt.org/directory"
+		acme.FallbackCA = "https://acme.zerossl.com/v2/DV90"
+		assert.Equal(t, []interface{}{
+			"https://acme-staging-v02.api.letsencrypt.org/directory",
+			"https://acme.zerossl.com/v2/DV90",
+		}, issuerCAs(t, acme))
+	})
+}

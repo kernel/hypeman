@@ -115,7 +115,13 @@ Hypeman provides a single default network that all instances can optionally conn
 - Linux creates it from bridge/subnet configuration
 - macOS targets VZ's default `192.168.64.0/24` shared NAT network regardless of Linux bridge/subnet configuration
 - Named "default" (only network in the system)
-- Linux uses bridge_slave isolated mode for VM-to-VM isolation
+- Linux isolates guests from each other on the bridge:
+  - each TAP is a `bridge_slave isolated` port, so guests cannot forward frames to each other
+  - each guest's allocated MAC is pinned to its TAP as a sticky static FDB entry
+  - unknown-unicast flooding and MAC learning are off on each TAP, so a guest never receives frames addressed to another guest's MAC
+  - a guest that uses any MAC other than its allocated one receives no inbound unicast
+  - each TAP has a `clsact` qdisc whose ingress filters pass ARP and IPv4 from the guest only when the Ethernet source, ARP sender and IPv4 source are the guest's allocated MAC and address, and drop every other frame, including IPv6
+  - the host's neighbor entry for each guest address is permanent on the bridge, pointing at the guest's MAC, so ARP from another guest cannot redirect the host's traffic for it. Deleting a TAP removes the permanent entries that still point at its guest's MAC; an address that has since been handed to another guest keeps that guest's entry. The kernel flushes a bridge's neighbor entries, permanent ones included, when the bridge MAC changes, so the bridge should have a fixed MAC (systemd's default `MACAddressPolicy=persistent` gives it one)
 
 ### Name Uniqueness
 
@@ -136,7 +142,6 @@ Guests are configured to use external DNS servers directly (no internal DNS serv
 
 **Shell commands:**
 - `iptables` - Complex rule manipulation not well-supported in netlink
-- `ip link set X type bridge_slave isolated on` - Netlink library doesn't expose this flag
 
 ### Prerequisites
 
@@ -213,8 +218,9 @@ root spans show only the blocking network work.
 
 ### ReleaseAllocation (for shutdown/delete)
 1. Derive current allocation
-2. Remove HTB class from bridge (if upload limiting enabled)
-3. Delete TAP device
+2. Remove the host's permanent neighbor entry for the guest, if it still points at the guest's MAC
+3. Remove HTB class from bridge (if upload limiting enabled)
+4. Delete TAP device
 
 ## Bidirectional Rate Limiting
 

@@ -530,7 +530,7 @@ func run() error {
 		// Mount API routes (authentication now handled by validation middleware)
 		oapi.HandlerWithOptions(strictHandler, oapi.ChiServerOptions{
 			BaseRouter:  r,
-			Middlewares: []oapi.MiddlewareFunc{api.NormalizeOptionalStandbyBody},
+			Middlewares: []oapi.MiddlewareFunc{api.NormalizeOptionalBody},
 		})
 	})
 

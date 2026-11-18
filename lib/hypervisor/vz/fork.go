@@ -94,9 +94,17 @@ func rewriteShimConfigPaths(cfg shimconfig.ShimConfig, sourceDir, targetDir stri
 	cfg.VsockSocket = replace(cfg.VsockSocket)
 	cfg.LogPath = replace(cfg.LogPath)
 	cfg.RestoreMachineStatePath = replace(cfg.RestoreMachineStatePath)
+	cfg.MacAuxStoragePath = replace(cfg.MacAuxStoragePath)
 
 	for i := range cfg.Disks {
 		cfg.Disks[i].Path = replace(cfg.Disks[i].Path)
+		parents := make([]string, len(cfg.Disks[i].Parents))
+		for j, parent := range cfg.Disks[i].Parents {
+			parents[j] = replace(parent)
+		}
+		if len(parents) > 0 {
+			cfg.Disks[i].Parents = parents
+		}
 	}
 
 	return cfg
