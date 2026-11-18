@@ -61,6 +61,12 @@ type ACMEConfig struct {
 	// CA is the ACME CA URL. Empty means Let's Encrypt production.
 	CA string
 
+	// FallbackCA is an ACME CA URL tried when CA fails to issue, for example
+	// when it rate limits. Empty disables the fallback. For ZeroSSL
+	// (https://acme.zerossl.com/v2/DV90), Caddy derives the external account
+	// binding from Email.
+	FallbackCA string
+
 	// DNS propagation settings (applies to all providers)
 	DNSPropagationTimeout string // Max time to wait for DNS propagation (e.g., "2m")
 	DNSResolvers          string // Comma-separated DNS resolvers to use for checking propagation
@@ -530,19 +536,11 @@ func requestHeaderDenialRoute(hostname string) map[string]interface{} {
 
 // buildTLSConfig builds the TLS automation configuration.
 func (g *CaddyConfigGenerator) buildTLSConfig(hostnames []string) map[string]interface{} {
-	issuer := map[string]interface{}{
-		"module": "acme",
-		"email":  g.acme.Email,
-	}
-
-	// Set CA if specified (otherwise uses Let's Encrypt production)
-	if g.acme.CA != "" {
-		issuer["ca"] = g.acme.CA
-	}
-
-	// Configure DNS challenge based on provider
-	issuer["challenges"] = map[string]interface{}{
-		"dns": g.buildDNSChallengeConfig(),
+	// Caddy tries issuers in order and only fails once every issuer has failed.
+	// An empty CA uses Let's Encrypt production.
+	issuers := []interface{}{g.buildACMEIssuer(g.acme.CA)}
+	if g.acme.FallbackCA != "" {
+		issuers = append(issuers, g.buildACMEIssuer(g.acme.FallbackCA))
 	}
 
 	return map[string]interface{}{
@@ -550,11 +548,25 @@ func (g *CaddyConfigGenerator) buildTLSConfig(hostnames []string) map[string]int
 			"policies": []interface{}{
 				map[string]interface{}{
 					"subjects": hostnames,
-					"issuers":  []interface{}{issuer},
+					"issuers":  issuers,
 				},
 			},
 		},
 	}
+}
+
+func (g *CaddyConfigGenerator) buildACMEIssuer(ca string) map[string]interface{} {
+	issuer := map[string]interface{}{
+		"module": "acme",
+		"email":  g.acme.Email,
+		"challenges": map[string]interface{}{
+			"dns": g.buildDNSChallengeConfig(),
+		},
+	}
+	if ca != "" {
+		issuer["ca"] = ca
+	}
+	return issuer
 }
 
 // buildDNSChallengeConfig builds the DNS challenge configuration.
