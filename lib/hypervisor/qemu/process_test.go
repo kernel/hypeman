@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -408,7 +409,7 @@ func TestCleanupFailedStartDropsPooledClient(t *testing.T) {
 	proc, err := startManagedProcess(exec.Command("sleep", "30"), socketPath)
 	require.NoError(t, err)
 
-	cleanupFailedStart(proc)
+	cleanupFailedStart(t.Context(), proc, 0)
 
 	clientPool.RLock()
 	_, pooled := clientPool.clients[socketPath]
@@ -479,40 +480,59 @@ func TestVFIOTermGraceFor(t *testing.T) {
 	}
 }
 
-func TestCleanupSIGTERMsProcessWithTermGrace(t *testing.T) {
-	socketPath := filepath.Join(t.TempDir(), "qemu.sock")
-	markerPath := filepath.Join(t.TempDir(), "terminated")
-
-	cmd := exec.Command("sh", "-c", "trap 'touch "+markerPath+"; exit 0' TERM; echo ready; sleep 30 & wait")
+func startCleanupProcess(t *testing.T, onTerm string) (*startedProcess, *exec.Cmd) {
+	t.Helper()
+	cmd := exec.Command("sh", "-c", "trap '"+onTerm+"' TERM; echo ready; read -r line")
+	stdin, err := cmd.StdinPipe()
+	require.NoError(t, err)
 	stdout, err := cmd.StdoutPipe()
 	require.NoError(t, err)
-	proc, err := startManagedProcess(cmd, socketPath)
+	proc, err := startManagedProcess(cmd, filepath.Join(t.TempDir(), "qemu.sock"))
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = stdin.Close() })
 	_, err = bufio.NewReader(stdout).ReadString('\n')
 	require.NoError(t, err)
-	proc.termGrace = 5 * time.Second
+	return proc, cmd
+}
 
-	proc.cleanup()
-
-	assert.FileExists(t, markerPath, "process must get SIGTERM, not SIGKILL, when termGrace is set")
-	require.NoFileExists(t, socketPath)
-	require.NotNil(t, cmd.ProcessState)
+func TestCleanupSIGTERMsProcessWithTermGrace(t *testing.T) {
+	// Even rollback of a canceled startup owes the child the base SIGTERM grace.
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	proc, cmd := startCleanupProcess(t, "sleep 0.1; exit 0")
+	cleanupFailedStart(ctx, proc, time.Second)
+	require.True(t, cmd.ProcessState.Success())
+	require.NoFileExists(t, proc.socketPath)
 }
 
 func TestCleanupEscalatesToSIGKILLAfterTermGrace(t *testing.T) {
-	socketPath := filepath.Join(t.TempDir(), "qemu.sock")
+	proc, _ := startCleanupProcess(t, "")
+	cleanupFailedStart(t.Context(), proc, 50*time.Millisecond)
+	assert.ErrorIs(t, syscall.Kill(proc.pid, 0), syscall.ESRCH)
+	require.NoFileExists(t, proc.socketPath)
+}
 
-	cmd := exec.Command("sh", "-c", "trap '' TERM; echo ready; sleep 30 & wait")
-	stdout, err := cmd.StdoutPipe()
-	require.NoError(t, err)
-	proc, err := startManagedProcess(cmd, socketPath)
-	require.NoError(t, err)
-	_, err = bufio.NewReader(stdout).ReadString('\n')
-	require.NoError(t, err)
-	proc.termGrace = 50 * time.Millisecond
+func TestCleanupSharesVFIOGraceWithLifecycleTeardown(t *testing.T) {
+	started := filepath.Join(t.TempDir(), "terminating")
+	proc, cmd := startCleanupProcess(t, fmt.Sprintf("touch %q; sleep 0.8; exit 0", started))
+	done := make(chan struct{})
+	go func() { cleanupFailedStart(t.Context(), proc, 400*time.Millisecond); close(done) }()
+	defer func() { <-done }()
+	require.Eventually(t, func() bool { _, err := os.Stat(started); return err == nil }, 5*time.Second, time.Millisecond)
 
-	proc.cleanup()
-
-	assert.ErrorIs(t, syscall.Kill(proc.pid, 0), syscall.ESRCH, "SIGTERM-ignoring process must still be hard-killed")
-	require.NoFileExists(t, socketPath)
+	peer := hypervisor.BeginVFIOTeardown()
+	defer peer.Done()
+	release := time.After(600 * time.Millisecond)
+	exited, err := peer.Wait(t.Context(), 300*time.Millisecond, 0, func(d time.Duration) bool {
+		select {
+		case <-release:
+			return true
+		case <-time.After(d):
+			return false
+		}
+	})
+	require.NoError(t, err)
+	assert.True(t, exited, "the lifecycle teardown must count the rollback")
+	<-done
+	assert.True(t, cmd.ProcessState.Success(), "rollback must gain grace when a lifecycle teardown joins")
 }

@@ -721,78 +721,80 @@ func TestKillHypervisorEscalatesToSIGKILLWhenSIGTERMIgnored(t *testing.T) {
 	assert.ErrorIs(t, syscall.Kill(pid, 0), syscall.ESRCH, "SIGTERM-ignoring hypervisor must still be hard-killed")
 }
 
-// A VMM with VFIO devices exits only after the host driver has released its
-// device, and the driver is slower at that when many guests go down together.
-// The wait has to grow with their number, or a mass delete hard-kills and
-// then gives up on VMMs that were about to exit.
+func vfioTestInstance(t *testing.T, identity HypervisorProcessIdentity) *Instance {
+	t.Helper()
+	return &Instance{State: StateRunning, StoredMetadata: StoredMetadata{
+		GPUDevicePath:             "/sys/bus/pci/devices/0000:82:00.4",
+		HypervisorProcessIdentity: identity,
+		SocketPath:                filepath.Join(t.TempDir(), "vmm.sock"),
+	}}
+}
+
 func TestKillHypervisorWaitsLongerWhileOtherVFIOTeardownsAreInFlight(t *testing.T) {
 	for _, tc := range []struct {
-		name          string
-		othersInQueue int32
-		exitsCleanly  bool
+		name     string
+		others   int
+		budget   time.Duration
+		released bool
 	}{
-		{name: "alone", othersInQueue: 0, exitsCleanly: false},
-		{name: "behind two others", othersInQueue: 2, exitsCleanly: true},
+		{name: "behind two others", others: 2, released: true},
+		{name: "queued but deadline limits grace", others: 2, budget: vfioEscalationReserve + 300*time.Millisecond},
+		{name: "alone"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			markerPath := filepath.Join(t.TempDir(), "released")
-			// Stands in for a VMM whose device release takes 0.6 s after SIGTERM.
-			pid, identity := startTrapProcess(t, "sleep 0.6; touch "+markerPath+"; exit 0")
-
+			for range tc.others {
+				t.Cleanup(hypervisor.BeginVFIOTeardown().Done)
+			}
+			released := filepath.Join(t.TempDir(), "released")
+			pid, id := startTrapProcess(t, fmt.Sprintf("sleep 0.6; touch %q; exit 0", released))
 			m := &manager{vfioTermGrace: 100 * time.Millisecond}
-			m.vfioTeardowns.Store(tc.othersInQueue)
-			require.NoError(t, m.killHypervisor(context.Background(), &Instance{
-				State: StateRunning,
-				StoredMetadata: StoredMetadata{
-					Id:                        "kill-test",
-					GPUProfile:                "NVIDIA L40S-1Q",
-					GPUFramework:              devices.VGPUFrameworkVendorVFIO,
-					GPUDevicePath:             "/sys/bus/pci/devices/0000:82:00.4",
-					HypervisorProcessIdentity: identity,
-					SocketPath:                filepath.Join(t.TempDir(), "missing.sock"),
-				},
-			}))
-
+			ctx := t.Context()
+			if tc.budget > 0 {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithTimeout(ctx, tc.budget)
+				defer cancel()
+			}
+			require.NoError(t, m.killHypervisor(ctx, vfioTestInstance(t, id)))
+			assert.NoError(t, ctx.Err())
 			assert.ErrorIs(t, syscall.Kill(pid, 0), syscall.ESRCH)
-			assert.Equal(t, tc.othersInQueue, m.vfioTeardowns.Load(), "the teardown must leave the queue when it returns")
-			if tc.exitsCleanly {
-				assert.FileExists(t, markerPath, "a queued VMM must be allowed to finish releasing its device")
+			if tc.released {
+				assert.FileExists(t, released)
 			} else {
-				assert.NoFileExists(t, markerPath, "without a queue the short grace still applies")
+				assert.NoFileExists(t, released)
 			}
 		})
 	}
 }
 
-// The queue is made of the teardowns themselves: one that is in flight has to
-// count for the next one that starts.
 func TestKillHypervisorCountsVFIOTeardownsInFlight(t *testing.T) {
-	m := &manager{vfioTermGrace: 250 * time.Millisecond}
-	kill := func(identity HypervisorProcessIdentity) error {
-		return m.killHypervisor(context.Background(), &Instance{
-			State: StateRunning,
-			StoredMetadata: StoredMetadata{
-				Id:                        "kill-test",
-				GPUProfile:                "NVIDIA L40S-1Q",
-				GPUFramework:              devices.VGPUFrameworkVendorVFIO,
-				GPUDevicePath:             "/sys/bus/pci/devices/0000:82:00.4",
-				HypervisorProcessIdentity: identity,
-				SocketPath:                filepath.Join(t.TempDir(), "missing.sock"),
-			},
-		})
-	}
-	markerPath := filepath.Join(t.TempDir(), "released")
-	_, first := startTrapProcess(t, "sleep 0.6; exit 0")
-	_, second := startTrapProcess(t, "sleep 0.6; touch "+markerPath+"; exit 0")
+	dir := t.TempDir()
+	started := filepath.Join(dir, "started")
+	firstExit, secondExit := filepath.Join(dir, "first"), filepath.Join(dir, "second")
+	_, first := startTrapProcess(t, fmt.Sprintf("touch %q; sleep 0.9; touch %q; exit 0", started, firstExit))
+	_, second := startTrapProcess(t, fmt.Sprintf("sleep 0.7; touch %q; exit 0", secondExit))
+	firstInst := vfioTestInstance(t, first)
+	m := &manager{vfioTermGrace: 400 * time.Millisecond}
 
-	firstDone := make(chan error, 1)
-	go func() { firstDone <- kill(first) }()
-	require.Eventually(t, func() bool { return m.vfioTeardowns.Load() == 1 }, 5*time.Second, time.Millisecond)
+	done := make(chan error, 1)
+	go func() { done <- m.killHypervisor(t.Context(), firstInst) }()
+	require.Eventually(t, func() bool { _, err := os.Stat(started); return err == nil }, 5*time.Second, time.Millisecond)
+	require.NoError(t, m.killHypervisor(t.Context(), vfioTestInstance(t, second)))
+	require.NoError(t, <-done)
+	assert.FileExists(t, firstExit, "the first VMM must gain grace when the second joins")
+	assert.FileExists(t, secondExit, "the second VMM must count the first")
+}
 
-	require.NoError(t, kill(second))
-	assert.FileExists(t, markerPath, "a teardown in flight must lengthen the wait of one that starts meanwhile")
-	require.NoError(t, <-firstDone)
-	assert.Zero(t, m.vfioTeardowns.Load())
+func TestKillHypervisorRetainsVFIOProcessWhenDeadlineCannotFitBaseGrace(t *testing.T) {
+	pid, id := startTrapProcess(t, "")
+	inst := vfioTestInstance(t, id)
+	require.NoError(t, os.WriteFile(inst.SocketPath, nil, 0600))
+	ctx, cancel := context.WithTimeout(t.Context(), vfioEscalationReserve+100*time.Millisecond)
+	defer cancel()
+
+	m := &manager{}
+	require.ErrorIs(t, m.killHypervisor(ctx, inst), context.DeadlineExceeded)
+	assert.NoError(t, syscall.Kill(pid, 0), "a short caller deadline must not force an early SIGKILL")
+	assert.FileExists(t, inst.SocketPath)
 }
 
 func TestKillHypervisorHardKillsNonVGPUHypervisor(t *testing.T) {

@@ -229,7 +229,6 @@ func buildQMPArgs(socketPath string) []string {
 type startedProcess struct {
 	pid          int
 	socketPath   string
-	termGrace    time.Duration
 	waitDone     chan error
 	waitConsumed bool
 	waitErr      error
@@ -296,23 +295,27 @@ func (p *startedProcess) waitFor(d time.Duration) bool {
 
 func (p *startedProcess) cleanup() {
 	if _, exited := p.checkExited(); !exited {
-		terminated := false
-		if p.termGrace > 0 {
-			if syscall.Kill(p.pid, syscall.SIGTERM) == nil {
-				terminated = p.waitFor(p.termGrace)
-			}
-		}
-		if !terminated {
-			_ = syscall.Kill(p.pid, syscall.SIGKILL)
-			_ = p.wait()
-		}
+		_ = syscall.Kill(p.pid, syscall.SIGKILL)
+		_ = p.wait()
 	}
 	_ = os.Remove(p.socketPath)
 }
 
 // cleanupFailedStart kills a QEMU process whose start failed. The failure can
 // come after the QMP client is pooled, so the client is dropped with it.
-func cleanupFailedStart(proc *startedProcess) {
+func cleanupFailedStart(ctx context.Context, proc *startedProcess, termGrace time.Duration) {
+	if _, exited := proc.checkExited(); !exited && termGrace > 0 {
+		teardown := hypervisor.BeginVFIOTeardown()
+		defer teardown.Done()
+		if syscall.Kill(proc.pid, syscall.SIGTERM) == nil {
+			start := time.Now()
+			if _, err := teardown.Wait(ctx, termGrace, time.Second, proc.waitFor); err != nil {
+				// Rollback must reap the child even after cancellation, but
+				// don't cut its base grace short to do so.
+				proc.waitFor(termGrace - time.Since(start))
+			}
+		}
+	}
 	proc.cleanup()
 	releaseVMMState(proc.socketPath)
 }
@@ -398,11 +401,10 @@ func (s *Starter) startQEMUProcess(ctx context.Context, p *paths.Paths, version 
 	}
 
 	pid := proc.pid
-	proc.termGrace = termGrace
 	log.DebugContext(processCtx, "QEMU process started", "pid", pid, "duration_ms", time.Since(processStartTime).Milliseconds())
 
 	// Setup cleanup to kill, reap, and remove the socket if subsequent steps fail.
-	cu := cleanup.Make(func() { cleanupFailedStart(proc) })
+	cu := cleanup.Make(func() { cleanupFailedStart(ctx, proc, termGrace) })
 
 	// Wait for socket to be ready
 	socketWaitStart := time.Now()
