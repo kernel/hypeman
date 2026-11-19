@@ -4,6 +4,11 @@
 version: 'v0.0.3'
 workflows:
     '.github/workflows/breakglass.yml': []
+    '.github/workflows/builder-image.yml':
+        - 'actions/checkout@v4.4.0'
+        - 'actions/setup-go@v6.5.0'
+        - 'aws-actions/configure-aws-credentials@v4.3.1'
+        - 'docker/setup-buildx-action@v3.12.0'
     '.github/workflows/deploy-staging.yml':
         - 'actions/create-github-app-token@v1.12.0'
     '.github/workflows/deploy.yml':
@@ -68,6 +73,11 @@ dependencies:
         commit: 'sha1-c94ce9fb468520275223c153574b00df6fe4bcc9'
         owner_id: 5429470
         repo_id: 287743349
+    'docker/setup-buildx-action@v3.12.0':
+        ref: 'v3.12.0'
+        commit: 'sha1-8d2750c68a42422c14e847fe6c8ac0403b4cbd6f'
+        owner_id: 5429470
+        repo_id: 288485773
     'goreleaser/goreleaser-action@v6.4.0':
         ref: 'v6.4.0'
         commit: 'sha1-e435ccd777264be153ace6237001ef4d979d3a7a'
