@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Code-Hex/vz/v4/diskimagekit"
+	"github.com/google/go-containerregistry/pkg/v1/layout"
 	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/jwtauth"
 	"github.com/kernel/hypeman/lib/machineimage"
@@ -178,4 +179,47 @@ func TestMintedTokenPublishesOnlyItsImage(t *testing.T) {
 	require.NoError(t, e)
 	_, e = publisher.Publish(ctx, "qa-other", machinePublisherStorage(t), nil)
 	require.Error(t, e, "the token cannot publish another image")
+}
+
+// canceledOnceExists is canceled once path exists, so a write fails partway through.
+type canceledOnceExists struct {
+	context.Context
+	path string
+}
+
+func (c canceledOnceExists) Err() error {
+	if _, err := os.Stat(c.path); err == nil {
+		return context.Canceled
+	}
+	return c.Context.Err()
+}
+
+func TestWriteLayoutWritesMachineImage(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	dir := filepath.Join(t.TempDir(), "layout")
+	_, e := machineimage.WriteLayout(canceledOnceExists{ctx, filepath.Join(dir, "oci-layout")}, dir, machinePublisherStorage(t), testMachineIdentifier)
+	require.ErrorIs(t, e, context.Canceled)
+	require.NoDirExists(t, dir)
+
+	result, e := machineimage.WriteLayout(ctx, dir, machinePublisherStorage(t), testMachineIdentifier)
+	require.NoError(t, e)
+	index, e := layout.ImageIndexFromPath(dir)
+	require.NoError(t, e)
+	manifest, e := index.IndexManifest()
+	require.NoError(t, e)
+	require.Len(t, manifest.Manifests, 1)
+	require.Equal(t, result.Digest, manifest.Manifests[0].Digest.String())
+	img, e := index.Image(manifest.Manifests[0].Digest)
+	require.NoError(t, e)
+	config, e := img.ConfigFile()
+	require.NoError(t, e)
+	require.Equal(t, "darwin", config.OS)
+	require.Equal(t, "arm64", config.Architecture)
+	for label, want := range images.MacOSMachineLabels() {
+		require.Equal(t, want, config.Config.Labels[label])
+	}
+
+	_, e = machineimage.WriteLayout(ctx, dir, machinePublisherStorage(t), testMachineIdentifier)
+	require.ErrorContains(t, e, "is not empty")
 }
