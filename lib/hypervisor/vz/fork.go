@@ -62,9 +62,13 @@ func rewriteSnapshotManifestForFork(manifestPath string, req hypervisor.ForkPrep
 		manifest.ShimConfig.SerialLogPath = req.SerialLogPath
 	}
 
-	// VZ machine-state restore requires device configuration compatibility.
-	// Rewriting network identity fields in the serialized config can cause
-	// restore to fail with "invalid argument", so keep NIC identity unchanged.
+	// VZ machine-state restore fails with "invalid argument" when the NIC MAC
+	// differs from the saved one, so a fork keeps the MAC and moves to its own
+	// vmnet network instead.
+	if req.Network != nil && req.Network.IP != "" && len(manifest.ShimConfig.Networks) == 1 {
+		manifest.ShimConfig.Networks[0].IPv4Address = req.Network.IP
+		manifest.ShimConfig.Networks[0].IPv4Subnet = guestSubnet(req.Network.IP, req.Network.Netmask)
+	}
 
 	// Runtime-only field; restore path is provided by the caller.
 	manifest.ShimConfig.RestoreMachineStatePath = ""

@@ -44,7 +44,7 @@ func macOSGuestSubnet(ip string) (netip.Prefix, error) {
 // guest address in the pool. A guest that has one keeps it. Addresses held by other
 // instances, by creates in progress, or released within the reuse hold are skipped.
 func (m *manager) assignMacOSAddress(stored *StoredMetadata) error {
-	if stored.MacOS == nil || !stored.NetworkEnabled || stored.IP != "" {
+	if !stored.usesVmnetNetwork() || stored.IP != "" {
 		return nil
 	}
 	m.macOSAddressMu.Lock()

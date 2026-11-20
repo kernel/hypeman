@@ -615,6 +615,7 @@ func TestVZForkFromRunningNetwork(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 0, exitCode)
 	assert.Equal(t, "source-before-fork", strings.TrimSpace(output))
+	requireVZGatewayReachable(t, ctx, source)
 
 	// Running fork requires explicit opt-in.
 	_, err = mgr.ForkInstance(ctx, sourceID, ForkInstanceRequest{Name: "test-vz-fork-no-flag"})
@@ -659,9 +660,10 @@ func TestVZForkFromRunningNetwork(t *testing.T) {
 	require.NotEmpty(t, forked.MAC)
 	require.False(t, forked.HasSnapshot)
 
-	// Fork gets a fresh network identity.
+	// A vz machine state restores only with its saved NIC MAC, so the fork keeps the
+	// source MAC and gets its own address on its own vmnet network.
 	assert.NotEqual(t, sourceAfterFork.IP, forked.IP)
-	assert.NotEqual(t, sourceAfterFork.MAC, forked.MAC)
+	assert.Equal(t, sourceAfterFork.MAC, forked.MAC)
 
 	err = waitForExecAgent(ctx, mgr, sourceID, 30*time.Second)
 	require.NoError(t, err, "source guest agent should recover after restore")
@@ -677,6 +679,19 @@ func TestVZForkFromRunningNetwork(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 0, exitCode)
 	assert.Equal(t, "fork-after-restore", strings.TrimSpace(output))
+
+	requireVZGatewayReachable(t, ctx, sourceAfterFork)
+	requireVZGatewayReachable(t, ctx, forked)
+}
+
+func requireVZGatewayReachable(t *testing.T, ctx context.Context, inst *Instance) {
+	t.Helper()
+	// The host may drop ICMP (firewall stealth mode), so the check is that the guest
+	// resolves its gateway's link-layer address, which fails when vmnet drops its frames.
+	output, exitCode, err := vzExecCommand(ctx, inst, "sh", "-c", "gw=$(ip route | awk '/^default/ {print $3}'); ip -4 addr show dev eth0; ping -c 1 -W 2 \"$gw\" >/dev/null 2>&1; ip neigh show \"$gw\" | grep lladdr")
+	require.NoError(t, err)
+	require.Equal(t, 0, exitCode, "%s should resolve its gateway: %s", inst.Name, output)
+	assert.Contains(t, output, inst.IP+"/")
 }
 
 // dumpVZShimLogs logs any vz-shim log files found under tmpDir for debugging CI failures.

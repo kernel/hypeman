@@ -245,7 +245,7 @@ func buildShimConfigFromVMConfig(config hypervisor.VMConfig, socketPath string) 
 	}
 	for _, n := range config.Networks {
 		nc := shimconfig.NetworkConfig{MAC: n.MAC}
-		if config.MacOS != nil && n.IP != "" {
+		if n.IP != "" {
 			nc.IPv4Address = n.IP
 			nc.IPv4Subnet = guestSubnet(n.IP, n.Netmask)
 		}

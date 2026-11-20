@@ -323,9 +323,13 @@ func (m *manager) forkInstanceFromStoppedOrStandby(ctx context.Context, id strin
 
 	if forkMeta.NetworkEnabled {
 		// Clear inherited network identity. For stopped instances this is regenerated on start,
-		// and for standby instances restore allocates if identity is empty.
+		// and for standby instances restore allocates if identity is empty. A vz machine
+		// state restores only with the NIC MAC it was saved with, so a vz standby fork
+		// keeps the MAC and gets its own vmnet network instead.
 		forkMeta.IP = ""
-		forkMeta.MAC = ""
+		if !(source.State == StateStandby && forkMeta.usesVmnetNetwork()) {
+			forkMeta.MAC = ""
+		}
 	}
 	if err := prepareMacOSClone(&forkMeta); err != nil {
 		return nil, false, err

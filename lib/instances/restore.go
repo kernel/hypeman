@@ -134,6 +134,10 @@ func (m *manager) restoreInstance(
 			m.unregisterEgressProxyInstance(ctx, id)
 			proxyRegistered = false
 		}
+		if stored.usesVmnetNetwork() {
+			m.forgetMacOSAddress(id)
+			return
+		}
 		if allocatedNet != nil {
 			if err := m.networkManager.ReleaseAllocation(ctx, allocatedNet); err != nil {
 				log.WarnContext(ctx, "failed to release allocated network", "instance_id", id, "error", err)
@@ -146,8 +150,34 @@ func (m *manager) restoreInstance(
 		}
 	}
 
-	// 4. Recreate or allocate network if network enabled. A macOS guest keeps the MAC
-	// in its saved configuration, and vmnet supplies the address, so no TAP is allocated.
+	// 4. Recreate or allocate network if network enabled. A vmnet guest keeps the MAC
+	// in its saved configuration and its own vmnet network, so no TAP is allocated. A
+	// Linux vz fork has no address yet: it gets one, its snapshot config is pointed at
+	// the new network, and its guest is reconfigured after resume.
+	if stored.usesVmnetNetwork() && stored.MacOS == nil && stored.IP == "" {
+		netConfig, err := m.applyVmnetNetwork(stored)
+		if err != nil {
+			return nil, fmt.Errorf("assign vmnet guest network: %w", err)
+		}
+		if _, err := starter.PrepareFork(ctx, hypervisor.ForkPrepareRequest{
+			SnapshotConfigPath: m.paths.InstanceSnapshotConfig(id),
+			VsockCID:           stored.VsockCID,
+			VsockSocket:        stored.VsockSocket,
+			Network:            &hypervisor.ForkNetworkConfig{IP: netConfig.IP, MAC: netConfig.MAC, Netmask: netConfig.Netmask},
+		}); err != nil {
+			releaseNetwork()
+			return nil, fmt.Errorf("rewrite snapshot config: %w", err)
+		}
+		allocatedNet = &network.Allocation{
+			InstanceID:   id,
+			InstanceName: stored.Name,
+			IP:           netConfig.IP,
+			MAC:          netConfig.MAC,
+			Gateway:      netConfig.Gateway,
+			Netmask:      netConfig.Netmask,
+			DNS:          netConfig.DNS,
+		}
+	}
 	if stored.usesLinuxNetwork() {
 		networkCtx, networkSpanEnd := m.startLifecycleStep(ctx, "restore_network",
 			attribute.String("instance_id", id),
