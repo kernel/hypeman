@@ -103,6 +103,7 @@ type Metrics struct {
 	lifecycleEventsDroppedTotal          metric.Int64Counter
 	forkMemFileShareFallbacksTotal       metric.Int64Counter
 	ttlReaperDeletionsTotal              metric.Int64Counter
+	interruptedForksTotal                metric.Int64Counter
 	vgpuReconcileFailuresTotal           metric.Int64Counter
 	vgpuStaleReleaseFailuresTotal        metric.Int64Counter
 	vgpuLivenessUncertainTotal           metric.Int64Counter
@@ -277,6 +278,14 @@ func newInstanceMetrics(meter metric.Meter, tracer trace.Tracer, m *manager) (*M
 	ttlReaperDeletionsTotal, err := meter.Int64Counter(
 		"hypeman_instances_ttl_reaper_deletions_total",
 		metric.WithDescription("Total number of instance TTL reaper deletion attempts"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	interruptedForksTotal, err := meter.Int64Counter(
+		"hypeman_instances_interrupted_forks_total",
+		metric.WithDescription("Total number of interrupted forks found at startup, by what was done with them"),
 	)
 	if err != nil {
 		return nil, err
@@ -533,6 +542,7 @@ func newInstanceMetrics(meter metric.Meter, tracer trace.Tracer, m *manager) (*M
 		lifecycleEventsDroppedTotal:          lifecycleEventsDroppedTotal,
 		forkMemFileShareFallbacksTotal:       forkMemFileShareFallbacksTotal,
 		ttlReaperDeletionsTotal:              ttlReaperDeletionsTotal,
+		interruptedForksTotal:                interruptedForksTotal,
 		vgpuReconcileFailuresTotal:           vgpuReconcileFailuresTotal,
 		vgpuStaleReleaseFailuresTotal:        vgpuStaleReleaseFailuresTotal,
 		vgpuLivenessUncertainTotal:           vgpuLivenessUncertainTotal,
@@ -642,6 +652,15 @@ func (m *manager) recordVGPUReconcileFailure(ctx context.Context, stage vgpuReco
 	m.metrics.vgpuReconcileFailuresTotal.Add(ctx, 1, metric.WithAttributes(
 		attribute.String("stage", string(stage)),
 	))
+}
+
+// recordInterruptedFork counts a fork that startup found still marked pending.
+// Any status but "deleted" means the fork is still holding its resources.
+func (m *manager) recordInterruptedFork(ctx context.Context, status string) {
+	if m.metrics == nil {
+		return
+	}
+	m.metrics.interruptedForksTotal.Add(ctx, 1, metric.WithAttributes(attribute.String("status", status)))
 }
 
 func (m *manager) recordVGPUStaleReleaseFailure(ctx context.Context) {

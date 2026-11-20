@@ -19,6 +19,8 @@ import (
 	snapshotstore "github.com/kernel/hypeman/lib/snapshot"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	otelmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 )
 
 // exitedProcessOwner names a process that has already exited, the way a fork
@@ -110,10 +112,15 @@ func TestRecoverInterruptedForksDeletesOnlyForksWhoseProcessIsGone(t *testing.T)
 	require.NoError(t, mgr.ensureDirectories("fork-recover-corrupt"))
 	require.NoError(t, os.WriteFile(mgr.paths.InstanceMetadata("fork-recover-corrupt"), []byte("{"), 0o644))
 
+	reader := otelmetric.NewManualReader()
+	metrics, err := newInstanceMetrics(otelmetric.NewMeterProvider(otelmetric.WithReader(reader)).Meter("test"), nil, mgr)
+	require.NoError(t, err)
+	mgr.metrics = metrics
+
 	var logs bytes.Buffer
 	mgr.RecoverInterruptedForks(logger.AddToContext(ctx, slog.New(slog.NewTextHandler(&logs, nil))))
 
-	_, err := mgr.loadMetadata("fork-recover-interrupted")
+	_, err = mgr.loadMetadata("fork-recover-interrupted")
 	require.ErrorIs(t, err, ErrNotFound)
 	assert.NoDirExists(t, mgr.paths.InstanceDir("fork-recover-interrupted"))
 
@@ -129,6 +136,16 @@ func TestRecoverInterruptedForksDeletesOnlyForksWhoseProcessIsGone(t *testing.T)
 		assert.DirExists(t, mgr.paths.InstanceDir(id))
 		assert.Contains(t, logs.String(), id, "an instance recovery cannot read must be logged")
 	}
+
+	var rm metricdata.ResourceMetrics
+	require.NoError(t, reader.Collect(ctx, &rm))
+	counted, ok := findMetric(t, rm, "hypeman_instances_interrupted_forks_total").Data.(metricdata.Sum[int64])
+	require.True(t, ok)
+	byStatus := map[string]int64{}
+	for _, point := range counted.DataPoints {
+		byStatus[metricLabel(t, point.Attributes, "status")] = point.Value
+	}
+	assert.Equal(t, map[string]int64{"deleted": 1, "owner_running": 1}, byStatus)
 }
 
 // A directory sync can take as long as the disk does. A restore waiting to

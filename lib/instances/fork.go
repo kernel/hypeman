@@ -683,6 +683,7 @@ func (m *manager) RecoverInterruptedForks(ctx context.Context) {
 		if !ownerGone(owner) {
 			log.WarnContext(ctx, "not deleting pending fork: the process making it is still running", "instance_id", id, "instance_name", meta.Name, "owner_pid", owner.PID)
 			ownerRunning++
+			m.recordInterruptedFork(ctx, "owner_running")
 			continue
 		}
 		// The owner may have finished the fork and exited since the mark was
@@ -702,10 +703,12 @@ func (m *manager) RecoverInterruptedForks(ctx context.Context) {
 			if err := m.cleanupForkInstanceOnError(ctx, id); err != nil {
 				log.ErrorContext(ctx, "failed to delete interrupted fork; it stays until it is deleted", "instance_id", id, "instance_name", name, "error", err)
 				failed.Add(1)
+				m.recordInterruptedFork(ctx, "delete_failed")
 				return nil
 			}
 			log.WarnContext(ctx, "deleted fork interrupted by a restart", "instance_id", id, "instance_name", name)
 			deleted.Add(1)
+			m.recordInterruptedFork(ctx, "deleted")
 			return nil
 		})
 	}
