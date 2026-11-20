@@ -157,3 +157,37 @@ func TestVmnetNetworkFollowsHypervisorCapabilities(t *testing.T) {
 	guest.NetworkEnabled = false
 	require.False(t, guest.usesVmnetNetwork())
 }
+
+func TestLegacyVmnetAddressOnStart(t *testing.T) {
+	now := time.Now()
+	m := macOSNetworkTestManager(t, "192.168.128.0/27", &now)
+	typ := hypervisor.Type("legacy-vmnet-start-test")
+	hypervisor.RegisterCapabilities(typ, hypervisor.Capabilities{RequiresPerGuestVmnet: true})
+	stored := &StoredMetadata{Id: "legacy-linux", HypervisorType: typ, NetworkEnabled: true, IP: "192.168.64.85", MAC: "02:00:00:00:00:01"}
+	cfg, err := m.applyVmnetNetwork(stored)
+	require.NoError(t, err)
+	require.Equal(t, "192.168.128.2", stored.IP)
+	require.Equal(t, stored.IP, cfg.IP)
+	require.NoError(t, m.assignMacOSAddress(stored))
+	require.Equal(t, "192.168.128.2", stored.IP)
+	mac := networkedMacOSGuest("legacy-mac")
+	mac.IP = "192.168.64.85"
+	require.NoError(t, m.assignMacOSAddress(mac))
+	require.Equal(t, "192.168.64.85", mac.IP)
+}
+
+func TestRestoreRejectsLegacyVmnetAddress(t *testing.T) {
+	mgr, tmpDir := setupTestManager(t)
+	typ := hypervisor.Type("legacy-vmnet-restore-test")
+	hypervisor.RegisterCapabilities(typ, hypervisor.Capabilities{RequiresPerGuestVmnet: true})
+	id := "legacy-vmnet-restore"
+	stored := &StoredMetadata{Id: id, Name: id, Image: "docker.io/library/missing:latest", HypervisorType: typ, NetworkEnabled: true, IP: "192.168.64.85", SocketPath: filepath.Join(tmpDir, id, "nonexistent.sock"), DataDir: mgr.paths.InstanceDir(id)}
+	require.NoError(t, mgr.ensureDirectories(id))
+	snapshotDir := mgr.paths.InstanceSnapshotLatest(id)
+	require.NoError(t, os.MkdirAll(snapshotDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(snapshotDir, "config.json"), []byte("{}"), 0644))
+	require.NoError(t, mgr.saveMetadata(&metadata{StoredMetadata: *stored}))
+	_, err := mgr.restoreInstance(context.Background(), id)
+	require.ErrorContains(t, err, "legacy vmnet address")
+	require.DirExists(t, snapshotDir)
+}

@@ -67,6 +67,10 @@ func (m *manager) restoreInstance(
 		return nil, fmt.Errorf("no snapshot available for instance %s", id)
 	}
 
+	if m.hasLegacyVmnetAddress(stored) {
+		return nil, fmt.Errorf("cannot restore legacy vmnet address %s outside guest pool %s; cold start required", stored.IP, m.vmnetGuestPool())
+	}
+
 	// 2a. Validate the instance's image (rootfs) still exists before reserving
 	// resources or invoking the hypervisor shim. A deleted image otherwise fails
 	// deep in storage configuration ("disk image not found"), retrying for ~60s
