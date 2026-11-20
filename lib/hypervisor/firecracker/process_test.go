@@ -82,6 +82,30 @@ func TestWithSnapshotSourceDirAlias_RestoresSourceDirOnRunError(t *testing.T) {
 	require.NoError(t, statErr)
 }
 
+func TestWithSnapshotSourceDirAlias_ReplacesDanglingAlias(t *testing.T) {
+	tmp := t.TempDir()
+	sourceDir := filepath.Join(tmp, "source")
+	targetDir := filepath.Join(tmp, "target")
+
+	require.NoError(t, os.MkdirAll(targetDir, 0755))
+	// Left by a restore that was killed. The fork it pointed at has been deleted.
+	require.NoError(t, os.Symlink(filepath.Join(tmp, "deleted-fork"), sourceDir))
+
+	ran := false
+	err := withSnapshotSourceDirAlias(&restoreMetadata{SnapshotSourceDataDir: sourceDir}, targetDir, func() error {
+		ran = true
+		linkTarget, err := os.Readlink(sourceDir)
+		require.NoError(t, err)
+		assert.Equal(t, targetDir, linkTarget)
+		return nil
+	})
+	require.NoError(t, err)
+	assert.True(t, ran)
+
+	_, err = os.Lstat(sourceDir)
+	assert.ErrorIs(t, err, os.ErrNotExist)
+}
+
 func TestWithSnapshotSourceDirAlias_RejectsNestedPaths(t *testing.T) {
 	tmp := t.TempDir()
 	sourceDir := filepath.Join(tmp, "source")

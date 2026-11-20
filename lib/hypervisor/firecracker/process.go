@@ -257,6 +257,13 @@ func withSnapshotSourceDirAlias(meta *restoreMetadata, targetDataDir string, run
 		}
 	} else if !os.IsNotExist(err) {
 		return fmt.Errorf("stat snapshot source data dir: %w", err)
+	} else {
+		// A restore killed while its source directory did not exist leaves its
+		// link here, and the link dangles once that fork is deleted. Stat
+		// follows links, so anything still at this path is such a link.
+		if err := os.Remove(sourceDataDir); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove dangling snapshot source alias: %w", err)
+		}
 	}
 
 	if err := os.Symlink(targetDataDir, sourceDataDir); err != nil {

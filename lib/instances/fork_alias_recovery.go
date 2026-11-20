@@ -73,7 +73,8 @@ func restoreParkedForkSource(p *paths.Paths, id, backup string) error {
 	case os.IsNotExist(err):
 		// A kill before creating the link or after removing it leaves only the backup.
 	default:
-		return err // Never replace an ordinary source directory.
+		// Never replace an ordinary source directory.
+		return fmt.Errorf("source path exists but is not an alias link: %w", err)
 	}
 	return os.Rename(p.InstanceDir(backup), source)
 }

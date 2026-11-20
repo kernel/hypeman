@@ -113,6 +113,7 @@ func TestRecoveryRestoresParkedFirecrackerSource(t *testing.T) {
 				require.DirExists(t, backup)
 				require.DirExists(t, forkDir)
 				if layout == "existing-directory" {
+					require.ErrorContains(t, err, "is not an alias link")
 					require.NoFileExists(t, m.paths.InstanceMetadata(source))
 				} else {
 					link, err := os.Readlink(sourceDir)
