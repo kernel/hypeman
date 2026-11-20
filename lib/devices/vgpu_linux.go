@@ -89,6 +89,12 @@ func ListVendorVFIOProfileTypes(vfs []VirtualFunction) (map[string][]VGPUProfile
 	return hostVendorVFIO.profileTypes(vfs)
 }
 
+// SupportedVGPUProfileNames returns the name of every profile the parent GPUs
+// of vfs support, whether or not one could be created now.
+func SupportedVGPUProfileNames(vfs []VirtualFunction) (map[string]struct{}, error) {
+	return hostVendorVFIO.supportedProfileNames(vfs)
+}
+
 // ConfigureVGPU idempotently configures a claimed vendor VFIO VF. A failed
 // configure may still have written the type, so the cached placements are
 // refreshed either way.
