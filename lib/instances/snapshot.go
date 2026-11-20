@@ -287,6 +287,9 @@ func (m *manager) restoreSnapshot(ctx context.Context, id string, snapshotID str
 	if err != nil {
 		return nil, err
 	}
+	if sourceMeta.StopCleanupPending {
+		return nil, fmt.Errorf("%w: cannot restore snapshot while stop cleanup is pending", ErrInvalidState)
+	}
 	if err := validateMacOSSnapshotRestore(sourceMeta, rec); err != nil {
 		return nil, err
 	}

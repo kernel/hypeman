@@ -260,8 +260,8 @@ func TestGracefulShutdownWaitsForSocketOwnerInsteadOfExitedStoredPID(t *testing.
 	assert.True(t, ProcessExists(owner.Process.Pid))
 }
 
-func TestGracefulShutdownFallbackKillsCapturedPIDAfterListenerCloses(t *testing.T) {
-	socketPath := filepath.Join(t.TempDir(), "test.sock")
+func startClosingSocketOwner(t *testing.T, socketPath string) (int, func() error) {
+	t.Helper()
 	owner := exec.Command(os.Args[0], "-test.run=^TestSocketListenerHelper$")
 	owner.Env = append(os.Environ(),
 		"HYPERVISOR_SOCKET_HELPER=1",
@@ -282,24 +282,30 @@ func TestGracefulShutdownFallbackKillsCapturedPIDAfterListenerCloses(t *testing.
 	_, err = output.ReadString('\n')
 	require.NoError(t, err)
 
-	m := &manager{shutdownGuestFn: func(context.Context, hypervisor.VsockDialer, int32) error {
+	return owner.Process.Pid, func() error {
 		if _, err := stdin.Write([]byte{1}); err != nil {
 			return err
 		}
 		_, err := output.ReadString('\n')
 		return err
-	}}
+	}
+}
+
+func TestGracefulShutdownFallbackKillsCapturedPIDAfterListenerCloses(t *testing.T) {
+	socketPath := filepath.Join(t.TempDir(), "test.sock")
+	pid, closeListener := startClosingSocketOwner(t, socketPath)
+	m := &manager{shutdownGuestFn: func(context.Context, hypervisor.VsockDialer, int32) error { return closeListener() }}
 	inst := &Instance{StoredMetadata: StoredMetadata{
 		Id:                        "graceful-listener-close",
 		HypervisorType:            hypervisor.TypeCloudHypervisor,
-		HypervisorProcessIdentity: HypervisorProcessIdentity{HypervisorPID: &owner.Process.Pid},
+		HypervisorProcessIdentity: HypervisorProcessIdentity{HypervisorPID: &pid},
 		SocketPath:                socketPath,
 		VsockSocket:               filepath.Join(t.TempDir(), "missing-vsock.sock"),
 	}}
 
 	assert.False(t, m.tryGracefulGuestShutdown(context.Background(), inst, 0))
 	require.NoError(t, m.killHypervisor(context.Background(), inst))
-	assert.False(t, ProcessExists(owner.Process.Pid))
+	assert.False(t, ProcessExists(pid))
 }
 
 func TestShutdownHypervisorSparesReusedPIDWhenNoProcessOwnsSocket(t *testing.T) {
@@ -719,6 +725,82 @@ func TestKillHypervisorEscalatesToSIGKILLWhenSIGTERMIgnored(t *testing.T) {
 	}))
 
 	assert.ErrorIs(t, syscall.Kill(pid, 0), syscall.ESRCH, "SIGTERM-ignoring hypervisor must still be hard-killed")
+}
+
+func vfioTestInstance(t *testing.T, identity HypervisorProcessIdentity) *Instance {
+	t.Helper()
+	return &Instance{State: StateRunning, StoredMetadata: StoredMetadata{
+		GPUDevicePath:             "/sys/bus/pci/devices/0000:82:00.4",
+		HypervisorProcessIdentity: identity,
+		SocketPath:                filepath.Join(t.TempDir(), "vmm.sock"),
+	}}
+}
+
+func TestKillHypervisorWaitsLongerWhileOtherVFIOTeardownsAreInFlight(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		others   int
+		budget   time.Duration
+		released bool
+	}{
+		{name: "behind two others", others: 2, released: true},
+		{name: "queued but deadline limits grace", others: 2, budget: vfioKillWait + time.Second + 300*time.Millisecond},
+		{name: "alone"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for range tc.others {
+				t.Cleanup(hypervisor.BeginVFIOTeardown().Done)
+			}
+			released := filepath.Join(t.TempDir(), "released")
+			pid, id := startTrapProcess(t, fmt.Sprintf("sleep 0.6; touch %q; exit 0", released))
+			m := &manager{vfioTermGrace: 100 * time.Millisecond}
+			ctx := t.Context()
+			if tc.budget > 0 {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithTimeout(ctx, tc.budget)
+				defer cancel()
+			}
+			require.NoError(t, m.killHypervisor(ctx, vfioTestInstance(t, id)))
+			assert.NoError(t, ctx.Err())
+			assert.ErrorIs(t, syscall.Kill(pid, 0), syscall.ESRCH)
+			if tc.released {
+				assert.FileExists(t, released)
+			} else {
+				assert.NoFileExists(t, released)
+			}
+		})
+	}
+}
+
+func TestKillHypervisorCountsVFIOTeardownsInFlight(t *testing.T) {
+	dir := t.TempDir()
+	started := filepath.Join(dir, "started")
+	firstExit, secondExit := filepath.Join(dir, "first"), filepath.Join(dir, "second")
+	_, first := startTrapProcess(t, fmt.Sprintf("touch %q; sleep 0.9; touch %q; exit 0", started, firstExit))
+	_, second := startTrapProcess(t, fmt.Sprintf("sleep 0.7; touch %q; exit 0", secondExit))
+	firstInst := vfioTestInstance(t, first)
+	m := &manager{vfioTermGrace: 400 * time.Millisecond}
+
+	done := make(chan error, 1)
+	go func() { done <- m.killHypervisor(t.Context(), firstInst) }()
+	require.Eventually(t, func() bool { _, err := os.Stat(started); return err == nil }, 5*time.Second, time.Millisecond)
+	require.NoError(t, m.killHypervisor(t.Context(), vfioTestInstance(t, second)))
+	require.NoError(t, <-done)
+	assert.FileExists(t, firstExit, "the first VMM must gain grace when the second joins")
+	assert.FileExists(t, secondExit, "the second VMM must count the first")
+}
+
+func TestKillHypervisorRetainsVFIOProcessWhenDeadlineCannotFitBaseGrace(t *testing.T) {
+	pid, id := startTrapProcess(t, "")
+	inst := vfioTestInstance(t, id)
+	require.NoError(t, os.WriteFile(inst.SocketPath, nil, 0600))
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second+100*time.Millisecond)
+	defer cancel()
+
+	m := &manager{}
+	require.ErrorIs(t, m.killHypervisor(ctx, inst), context.DeadlineExceeded)
+	assert.NoError(t, syscall.Kill(pid, 0), "a short caller deadline must not force an early SIGKILL")
+	assert.FileExists(t, inst.SocketPath)
 }
 
 func TestKillHypervisorHardKillsNonVGPUHypervisor(t *testing.T) {

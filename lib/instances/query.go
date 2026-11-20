@@ -554,6 +554,10 @@ func (m *manager) toInstanceWithStateDerivation(ctx context.Context, meta *metad
 	} else {
 		result = m.deriveStateWithoutHydration(ctx, &meta.StoredMetadata)
 	}
+	// Losing the control socket during stop does not mean the VMM or its resources are gone.
+	if meta.StopCleanupPending && (result.State == StateStopped || result.State == StateStandby) {
+		result.State = StateShutdown
+	}
 
 	inst := Instance{
 		StoredMetadata:      meta.StoredMetadata,
@@ -561,6 +565,7 @@ func (m *manager) toInstanceWithStateDerivation(ctx context.Context, meta *metad
 		StateError:          result.Error,
 		HasSnapshot:         m.hasSnapshot(meta.StoredMetadata.DataDir),
 		BootMarkersHydrated: result.BootMarkersHydrated,
+		stopCleanupPending:  meta.StopCleanupPending,
 		HealthCheckRuntime:  healthcheck.CloneRuntime(meta.HealthCheckRuntime),
 	}
 	refreshHypervisorPID(&inst.StoredMetadata, result.State)
