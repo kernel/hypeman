@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"time"
 )
 
@@ -17,7 +18,7 @@ import (
 // mount it. Disk Arbitration can take several seconds after the agent starts.
 const configMountWait = 2 * time.Minute
 
-var wholeDisk = regexp.MustCompile(`^/dev/disk[0-9]+$`)
+var rawWholeDisk = regexp.MustCompile(`^/dev/rdisk[0-9]+$`)
 
 // deliverInstanceEnv copies the env hypeman attached to this boot to guestEnvPath.
 // Image services wait for a file written since boot, so a stale one is removed
@@ -45,14 +46,15 @@ func deliverInstanceEnv() {
 // findConfigDisk returns the device of the config disk, found by reading each disk's
 // ISO volume descriptor rather than through Disk Arbitration, which may not have
 // seen it yet. The kernel has the disks hypeman attached before launchd starts the
-// agent, so no disk means the guest has no env.
+// agent, so no disk means the guest has no env. The raw device is read because the
+// block device of a mounted volume is busy.
 func findConfigDisk() string {
-	devs, _ := filepath.Glob("/dev/disk*")
-	for _, dev := range devs {
-		if !wholeDisk.MatchString(dev) {
+	devs, _ := filepath.Glob("/dev/rdisk*")
+	for _, raw := range devs {
+		if !rawWholeDisk.MatchString(raw) {
 			continue
 		}
-		f, err := os.Open(dev)
+		f, err := os.Open(raw)
 		if err != nil {
 			continue
 		}
@@ -60,7 +62,7 @@ func findConfigDisk() string {
 		_, err = f.ReadAt(pvd, isoVolumeDescriptorOffset)
 		f.Close()
 		if err == nil && isConfigISO(pvd) {
-			return dev
+			return "/dev/" + strings.TrimPrefix(raw, "/dev/r")
 		}
 	}
 	return ""
