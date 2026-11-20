@@ -191,6 +191,50 @@ func TestForkFailsWhenClearingItsMarkCannotBeSynced(t *testing.T) {
 	assert.Equal(t, currentForkOwner(), stored.ForkPending)
 }
 
+// contextRecordingDeviceManager records whether the context a device release
+// ran with had been cancelled.
+type contextRecordingDeviceManager struct {
+	devices.Manager
+	released chan error
+}
+
+func (m contextRecordingDeviceManager) ReleaseInstanceDevice(ctx context.Context, deviceID, instanceID string) error {
+	m.released <- ctx.Err()
+	return nil
+}
+
+// A fork request often fails because its caller went away, which cancels its
+// context. The fork must be deleted all the same.
+func TestFailedForkIsDeletedAfterItsRequestIsCancelled(t *testing.T) {
+	mgr, _ := setupTestManager(t)
+
+	recorder := contextRecordingDeviceManager{released: make(chan error, 1)}
+	mgr.deviceManager = recorder
+
+	id := "fork-cancelled-request"
+	require.NoError(t, mgr.ensureDirectories(id))
+	now := time.Now()
+	require.NoError(t, mgr.saveMetadata(&metadata{StoredMetadata: StoredMetadata{
+		Id:             id,
+		Name:           id,
+		CreatedAt:      now,
+		StoppedAt:      &now,
+		HypervisorType: hypervisor.TypeCloudHypervisor,
+		SocketPath:     mgr.paths.InstanceSocket(id, "cloud-hypervisor.sock"),
+		DataDir:        mgr.paths.InstanceDir(id),
+		Devices:        []string{id},
+		ForkPending:    currentForkOwner(),
+	}}))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	cause := errors.New("caller went away")
+	require.Equal(t, cause, mgr.discardFork(ctx, id, cause))
+
+	require.NoError(t, <-recorder.released, "the delete ran with the cancelled request context")
+	assert.NoDirExists(t, mgr.paths.InstanceDir(id))
+}
+
 // A copy cut short before the fork saved its own metadata leaves the source's
 // in the fork's directory. Recovery must not delete by it: that metadata names
 // the source's guest and what the source holds.

@@ -722,6 +722,9 @@ func (m *manager) discardFork(ctx context.Context, forkID string, cause error) e
 }
 
 func (m *manager) cleanupForkInstanceOnError(ctx context.Context, forkID string) error {
+	// The request may be failing because its caller went away. The fork must
+	// still be deleted, or it stays up marked until the next start.
+	ctx = context.WithoutCancel(ctx)
 	lock := m.getInstanceLock(forkID)
 	lock.Lock()
 	defer lock.Unlock()
