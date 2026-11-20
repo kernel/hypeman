@@ -133,6 +133,21 @@ func (q *Queue) GetPosition(key string) *int {
 	return nil
 }
 
+// Tracked reports whether key is active or pending.
+func (q *Queue) Tracked(key string) bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.active[key] {
+		return true
+	}
+	for _, j := range q.pending {
+		if j.key == key {
+			return true
+		}
+	}
+	return false
+}
+
 // QueueLength returns the number of tracked jobs (active + pending).
 func (q *Queue) QueueLength() int {
 	q.mu.Lock()
