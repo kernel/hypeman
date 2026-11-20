@@ -15,6 +15,18 @@ func TestCheckConfigDiskRefusesDiskImages(t *testing.T) {
 	require.Error(t, checkConfigDisk(info), "a disk image a guest user attached under the volume name is refused")
 }
 
+func TestIsConfigISO(t *testing.T) {
+	pvd := func(label string) []byte {
+		b := make([]byte, 2048)
+		b[0] = 1
+		copy(b[1:], "CD001")
+		copy(b[40:], label)
+		return b
+	}
+	require.True(t, isConfigISO(pvd("HYPEMANCONFIG")))
+	require.False(t, isConfigISO(pvd("HYPEMANAGENT")))
+}
+
 func TestWriteGuestEnvIsRootOnly(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "hypeman", "env.json")
 	env, err := parseEnv([]byte(`{"HTTP_PROXY":"http://10.0.0.1:3128"}`))

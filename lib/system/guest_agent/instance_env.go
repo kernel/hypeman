@@ -17,6 +17,19 @@ const (
 	guestEnvPath  = "/var/run/hypeman/env.json"
 )
 
+// isoVolumeDescriptorOffset is where an ISO 9660 volume's primary volume descriptor
+// starts: sector 16 of 2048 bytes.
+const isoVolumeDescriptorOffset = 16 * 2048
+
+// isConfigISO reports whether a primary volume descriptor names hypeman's config
+// volume. ISO 9660 stores the name in upper case.
+func isConfigISO(pvd []byte) bool {
+	if len(pvd) < 72 || pvd[0] != 1 || string(pvd[1:6]) != "CD001" {
+		return false
+	}
+	return strings.EqualFold(strings.TrimRight(string(pvd[40:72]), " \x00"), configVolume)
+}
+
 // parseDiskInfo reads the "Key: Value" lines of `diskutil info`.
 func parseDiskInfo(out string) map[string]string {
 	info := map[string]string{}

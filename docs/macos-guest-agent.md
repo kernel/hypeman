@@ -57,12 +57,13 @@ image's own services as a file:
    read-only, third after the agent disk. ISO is used because `hdiutil makehybrid`
    builds one in milliseconds; an APFS image takes seconds. A guest without env has
    no config disk.
-2. On every boot the agent finds the volume, refuses it unless it is a fixed internal
-   device (as the launcher does for the agent disk), mounts it read-only if macOS has
-   not, copies `env.json` to `/var/run/hypeman/env.json` (root:wheel, 0600) and
-   unmounts the volume. If no volume appears within 10 seconds it writes `{}`. It
-   removes the previous boot's file first and writes nothing if the disk cannot be
-   read. Values are not logged.
+2. On every boot the agent finds the disk by reading each disk's ISO volume
+   descriptor (Disk Arbitration can take seconds longer to report it), refuses it
+   unless it is a fixed internal device (as the launcher does for the agent disk),
+   mounts it read-only if macOS has not, copies `env.json` to
+   `/var/run/hypeman/env.json` (root:wheel, 0600) and unmounts the volume. A guest
+   without the disk gets `{}`. The agent removes the previous boot's file first and
+   writes nothing if the disk cannot be read. Values are not logged.
 3. Image services wait for a `/var/run/hypeman/env.json` modified since boot and read
    the names they honor. Readiness does not wait for the file.
 
