@@ -110,8 +110,7 @@ func BuildMacOSConfigDisk(ctx context.Context, env map[string]string, path strin
 	if err := os.WriteFile(filepath.Join(src, "env.json"), data, 0400); err != nil {
 		return err
 	}
-	out := path + ".tmp"
-	os.Remove(out)
+	out := src + ".iso" // hdiutil appends .iso to any other name.
 	defer os.Remove(out)
 	if output, err := exec.CommandContext(ctx, "/usr/bin/hdiutil", "makehybrid", "-quiet", "-iso", "-joliet", "-default-volume-name", "HypemanConfig", "-o", out, src).CombinedOutput(); err != nil {
 		return fmt.Errorf("build macOS config disk: %w: %s", err, output)
