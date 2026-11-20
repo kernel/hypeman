@@ -1127,8 +1127,11 @@ func deriveClassID(tapName string) string {
 func (m *manager) deleteTAPDevice(ctx context.Context, tapName string) error {
 	link, err := netlink.LinkByName(tapName)
 	if err != nil {
-		// TAP doesn't exist, nothing to do
-		return nil
+		var notFound netlink.LinkNotFoundError
+		if errors.As(err, &notFound) {
+			return nil
+		}
+		return err
 	}
 
 	// Remove HTB class from bridge before deleting TAP

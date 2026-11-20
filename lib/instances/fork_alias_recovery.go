@@ -3,6 +3,7 @@ package instances
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -14,8 +15,8 @@ import (
 )
 
 // RecoverParkedForkSources puts back directories renamed by Firecracker's
-// snapshot alias fallback. Call under the data directory lock, before even
-// listing instances: a lookup by source ID would otherwise read the fork.
+// snapshot alias fallback and removes verified aliases whose sources no longer
+// exist. Call under the data directory lock, before listing instances.
 func RecoverParkedForkSources(p *paths.Paths) error {
 	entries, err := os.ReadDir(p.GuestsDir())
 	if os.IsNotExist(err) {
@@ -46,10 +47,35 @@ func RecoverParkedForkSources(p *paths.Paths) error {
 			return fmt.Errorf("restore %s from %s: %w", id, backup, err)
 		}
 	}
-	if len(backups) > 0 {
+	changed := len(backups) > 0
+	for _, entry := range entries {
+		if entry.Type()&os.ModeSymlink == 0 || backups[entry.Name()] != "" {
+			continue
+		}
+		removed, err := removeUnparkedForkAlias(p, p.InstanceDir(entry.Name()))
+		if err != nil {
+			return err
+		}
+		changed = changed || removed
+	}
+	if changed {
 		return syncDir(p.GuestsDir())
 	}
 	return nil
+}
+
+func removeUnparkedForkAlias(p *paths.Paths, source string) (bool, error) {
+	link, err := os.Readlink(source)
+	if err != nil {
+		return false, err
+	}
+	// Without a backup we need the target itself to prove this is a restore alias.
+	if err := verifyForkAlias(p, source, link, false); err != nil {
+		slog.Warn("leaving unverified source alias", "path", source, "error", err)
+		return false, nil
+	}
+	err = os.Remove(source)
+	return err == nil, err
 }
 
 func restoreParkedForkSource(p *paths.Paths, id, backup string) error {
@@ -64,7 +90,7 @@ func restoreParkedForkSource(p *paths.Paths, id, backup string) error {
 	link, err := os.Readlink(source)
 	switch {
 	case err == nil:
-		if err := verifyForkAlias(p, source, link); err != nil {
+		if err := verifyForkAlias(p, source, link, true); err != nil {
 			return err
 		}
 		if err := os.Remove(source); err != nil {
@@ -79,7 +105,7 @@ func restoreParkedForkSource(p *paths.Paths, id, backup string) error {
 	return os.Rename(p.InstanceDir(backup), source)
 }
 
-func verifyForkAlias(p *paths.Paths, source, link string) error {
+func verifyForkAlias(p *paths.Paths, source, link string, allowDangling bool) error {
 	if !filepath.IsAbs(link) {
 		link = filepath.Join(p.GuestsDir(), link)
 	}
@@ -88,7 +114,7 @@ func verifyForkAlias(p *paths.Paths, source, link string) error {
 		return fmt.Errorf("unexpected source alias target %q", link)
 	}
 	info, err := os.Lstat(link)
-	if os.IsNotExist(err) {
+	if allowDangling && os.IsNotExist(err) {
 		// The fork the link pointed at has been deleted, which an older
 		// binary allows. Nothing can be read through a link that dangles.
 		return nil

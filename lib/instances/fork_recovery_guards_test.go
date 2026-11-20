@@ -1,14 +1,19 @@
 package instances
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/kernel/hypeman/lib/devices"
+	"github.com/kernel/hypeman/lib/forkvm"
 	"github.com/kernel/hypeman/lib/hypervisor"
+	"github.com/kernel/hypeman/lib/network"
 	"github.com/stretchr/testify/require"
 )
 
@@ -32,6 +37,136 @@ func TestRecoveryLeavesInheritedPCIDeviceWithOwner(t *testing.T) {
 	after, err := os.ReadFile(m.paths.DeviceMetadata(dev))
 	require.NoError(t, err)
 	require.JSONEq(t, string(data), string(after))
+}
+
+type busyForkDevice struct{ devices.Manager }
+
+func (busyForkDevice) ReleaseInstanceDevice(context.Context, string, string) error {
+	return errors.New("device busy")
+}
+
+func TestRecoveryKeepsForkWhenPCIReleaseFails(t *testing.T) {
+	m, _ := setupTestManager(t)
+	const id = "pending-pci"
+	createStoppedSnapshotSourceFixture(t, m, id, id, m.defaultHypervisor)
+	meta, err := m.loadMetadata(id)
+	require.NoError(t, err)
+	meta.ForkPending = exitedProcessOwner(t)
+	meta.Devices = []string{"dev-1"}
+	require.NoError(t, m.saveMetadata(meta))
+	m.deviceManager = busyForkDevice{m.deviceManager}
+
+	m.RecoverInterruptedForks(t.Context())
+	got, err := m.loadMetadata(id)
+	require.NoError(t, err)
+	require.Equal(t, meta.ForkPending, got.ForkPending)
+}
+
+func TestRecoveryRemovesOnlyVerifiedAliasesWithoutBackup(t *testing.T) {
+	m, _ := setupTestManager(t)
+	const source, fork = "deleted-source", "completed-fork"
+	createStoppedSnapshotSourceFixture(t, m, fork, fork, m.defaultHypervisor)
+	meta, err := m.loadMetadata(fork)
+	require.NoError(t, err)
+	meta.HypervisorType = hypervisor.TypeFirecracker
+	require.NoError(t, m.saveMetadata(meta))
+	sourceDir, forkDir := m.paths.InstanceDir(source), m.paths.InstanceDir(fork)
+	data, err := json.Marshal(map[string]string{"snapshot_source_data_dir": sourceDir})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(forkDir, "firecracker-config.json"), data, 0644))
+	require.NoError(t, os.Symlink(forkDir, sourceDir))
+	// This unverified link is also an ID prefix of the fork. The exact lookup
+	// must not fall through to prefix resolution.
+	other := m.paths.InstanceDir("completed")
+	require.NoError(t, os.Symlink(forkDir, other))
+	require.NoError(t, RecoverParkedForkSources(m.paths))
+	require.NoError(t, RecoverParkedForkSources(m.paths))
+	_, err = os.Lstat(sourceDir)
+	require.ErrorIs(t, err, os.ErrNotExist)
+	target, err := os.Readlink(other)
+	require.NoError(t, err)
+	require.Equal(t, forkDir, target)
+	for _, id := range []string{source, "completed"} {
+		_, err := m.GetInstance(t.Context(), id)
+		require.ErrorIs(t, err, ErrNotFound)
+	}
+	got, err := m.GetInstance(t.Context(), fork)
+	require.NoError(t, err)
+	require.Equal(t, fork, got.Id)
+}
+
+func TestForkCopyOmitsSourceMetadata(t *testing.T) {
+	m, _ := setupTestManager(t)
+	const source, fork = "source", "fork"
+	createStoppedSnapshotSourceFixture(t, m, source, source, m.defaultHypervisor)
+	require.NoError(t, m.cloneGuestDirectoryForFork(t.Context(), m.paths.InstanceDir(source), m.paths.InstanceDir(fork), false))
+	require.FileExists(t, m.paths.InstanceOverlay(fork))
+	require.NoFileExists(t, m.paths.InstanceMetadata(fork))
+}
+
+func TestTTLReaperSkipsForeignMetadata(t *testing.T) {
+	m, _ := setupTestManager(t)
+	const source, fork = "source", "partial-copy"
+	past, future := time.Now().Add(-time.Hour), time.Now().Add(time.Hour)
+	meta := &metadata{StoredMetadata: StoredMetadata{Id: source, ExpiresAt: &past}}
+	require.NoError(t, m.ensureDirectories(source))
+	require.NoError(t, m.saveMetadata(meta))
+	// Older fork copies can still contain the source's previous TTL.
+	require.NoError(t, forkvm.CopyGuestDirectory(m.paths.InstanceDir(source), m.paths.InstanceDir(fork)))
+	meta.ExpiresAt = &future
+	require.NoError(t, m.saveMetadata(meta))
+
+	var deletes []string
+	m.deleteInstanceFn = func(_ context.Context, id string) error {
+		deletes = append(deletes, id)
+		return nil
+	}
+	m.reapExpiredInstances(t.Context())
+	require.Empty(t, deletes)
+}
+
+type forkTAPRelease struct {
+	network.Manager
+	ids []string
+	err error
+}
+
+func (r *forkTAPRelease) ReleaseByInstanceID(_ context.Context, id string) error {
+	r.ids = append(r.ids, id)
+	return r.err
+}
+
+func createPendingForkWithoutAllocation(t *testing.T, m *manager, fork string) *metadata {
+	t.Helper()
+	createStoppedSnapshotSourceFixture(t, m, fork, fork, m.defaultHypervisor)
+	meta, err := m.loadMetadata(fork)
+	require.NoError(t, err)
+	meta.NetworkEnabled = true
+	meta.ForkPending = exitedProcessOwner(t)
+	require.NoError(t, m.saveMetadata(meta))
+	alloc, err := m.networkManager.GetAllocation(t.Context(), fork)
+	require.NoError(t, err)
+	require.Nil(t, alloc)
+	return meta
+}
+
+func TestRecoveryRetriesTAPReleaseWithoutAllocation(t *testing.T) {
+	m, _ := setupTestManager(t)
+	const fork = "fork-no-allocation"
+	meta := createPendingForkWithoutAllocation(t, m, fork)
+	release := &forkTAPRelease{Manager: m.networkManager, err: errors.New("TAP busy")}
+	m.networkManager = release
+
+	m.RecoverInterruptedForks(t.Context())
+	require.Equal(t, []string{fork}, release.ids)
+	stored, err := m.loadMetadata(fork)
+	require.NoError(t, err)
+	require.Equal(t, meta.ForkPending, stored.ForkPending)
+
+	release.err = nil
+	m.RecoverInterruptedForks(t.Context())
+	require.Equal(t, []string{fork, fork}, release.ids)
+	require.NoDirExists(t, m.paths.InstanceDir(fork))
 }
 
 func TestRestoreSnapshotCannotReplacePendingFork(t *testing.T) {

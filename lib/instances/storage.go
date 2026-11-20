@@ -63,6 +63,8 @@ func (m *manager) ensureDirectories(id string) error {
 	return nil
 }
 
+var errMetadataIDMismatch = errors.New("instance metadata ID mismatch")
+
 // loadMetadata loads instance metadata from disk
 func (m *manager) loadMetadata(id string) (*metadata, error) {
 	return m.loadMetadataTimed(id, nil)
@@ -97,6 +99,9 @@ func (m *manager) loadMetadataTimed(id string, timings *metadataScanTimings) (*m
 		return nil, fmt.Errorf("unmarshal metadata: %w", err)
 	}
 
+	if meta.Id != id {
+		return nil, fmt.Errorf("%w: directory %q contains metadata for %q", errMetadataIDMismatch, id, meta.Id)
+	}
 	return &meta, nil
 }
 

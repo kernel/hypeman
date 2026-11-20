@@ -858,6 +858,11 @@ func (m *manager) getInstanceWithMinIDPrefix(ctx context.Context, idOrName strin
 		return inst, nil
 	}
 
+	// An alias or partial copy is not a name/prefix lookup.
+	if errors.Is(err, errMetadataIDMismatch) {
+		return nil, ErrNotFound
+	}
+
 	// 2. Resolve exact name or ID prefix from metadata only, then hydrate the
 	// single matched instance.
 	meta, err := m.findInstanceMetadataByNameOrIDPrefix(ctx, idOrName, minPrefixLength)

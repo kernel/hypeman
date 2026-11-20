@@ -376,11 +376,41 @@ func (m *manager) applyRateLimitAsync(ctx context.Context, req rateLimitRequest)
 // It deletes the TAP device using the deterministic name from the instance ID and
 // the persisted class ID if available.
 func (m *manager) ReleaseByInstanceID(ctx context.Context, instanceID string) error {
+	tap := GenerateTAPName(instanceID)
+	// TAP names use only the first eight ID characters. Don't guess which
+	// guest owns the link when cleaning up without an allocation.
+	guests, err := os.ReadDir(m.paths.GuestsDir())
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	for _, guest := range guests {
+		if guest.IsDir() && guest.Name() != instanceID && GenerateTAPName(guest.Name()) == tap {
+			return m.releaseAmbiguousTAP(instanceID, tap, guest.Name())
+		}
+	}
 	return m.ReleaseAllocation(ctx, &Allocation{
 		InstanceID: instanceID,
-		TAPDevice:  GenerateTAPName(instanceID),
+		TAPDevice:  tap,
 		ClassID:    m.loadClassID(instanceID),
 	})
+}
+
+// A missing TAP is already released, even when two guest IDs share its name.
+func (m *manager) releaseAmbiguousTAP(instanceID, tap, otherID string) error {
+	links, err := net.Interfaces()
+	if err != nil {
+		return err
+	}
+	for _, link := range links {
+		if link.Name == tap {
+			return fmt.Errorf("cannot release %s by ID: also matches guest %s", tap, otherID)
+		}
+	}
+	m.forgetPendingAllocation(instanceID)
+	m.tcMu.Lock()
+	defer m.tcMu.Unlock()
+	m.clearClassID(instanceID)
+	return nil
 }
 
 // ReleaseAllocation cleans up network allocation (shutdown/delete)
@@ -399,14 +429,13 @@ func (m *manager) ReleaseAllocation(ctx context.Context, alloc *Allocation) erro
 	}
 	m.forgetPendingAllocation(alloc.InstanceID)
 
-	// 1. Delete TAP device (best effort), using the TAP's live tc filter for HTB cleanup.
+	// 1. Delete TAP device using the TAP's live tc filter for HTB cleanup.
 	// Serialize with async tc setup so queued rate-limit work cannot race with
 	// class removal and leave stale bridge state behind.
 	if err := m.deleteTAPDeviceForInstanceSerialized(ctx, alloc.InstanceID, alloc.TAPDevice); err != nil {
-		log.WarnContext(ctx, "failed to delete TAP device", "tap", alloc.TAPDevice, "error", err)
-	} else {
-		m.recordTAPOperation(ctx, "delete")
+		return fmt.Errorf("release TAP %s: %w", alloc.TAPDevice, err)
 	}
+	m.recordTAPOperation(ctx, "delete")
 
 	log.InfoContext(ctx, "released network",
 		"instance_id", alloc.InstanceID,
