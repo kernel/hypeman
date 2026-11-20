@@ -337,6 +337,9 @@ type Hypervisor interface {
 // Capabilities indicates which optional features a hypervisor supports.
 // Callers should check these before calling optional methods.
 type Capabilities struct {
+	// RequiresPerGuestVmnet indicates each networked guest needs a separate vmnet network.
+	RequiresPerGuestVmnet bool
+
 	// SupportsMacOSBoot indicates the backend can cold-boot an imported macOS disk bundle.
 	SupportsMacOSBoot bool
 

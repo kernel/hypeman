@@ -247,7 +247,8 @@ func (s *StoredMetadata) usesLinuxNetwork() bool {
 // guest restored from a snapshot keeps the MAC it was saved with, so clones of one
 // guest share a MAC and must not share a network.
 func (s *StoredMetadata) usesVmnetNetwork() bool {
-	return s.NetworkEnabled && (s.MacOS != nil || s.HypervisorType == hypervisor.TypeVZ)
+	caps, _ := hypervisor.CapabilitiesForType(s.HypervisorType)
+	return s.NetworkEnabled && (s.MacOS != nil || caps.RequiresPerGuestVmnet)
 }
 
 // applyVmnetNetwork gives a vmnet-networked guest its MAC and, if it has none, an

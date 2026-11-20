@@ -259,7 +259,8 @@ func (m *manager) createInstance(
 
 	// 7. Determine network based on NetworkEnabled flag
 	networkName := ""
-	if req.NetworkEnabled && imageInfo.MacOS == nil && hvType != hypervisor.TypeVZ {
+	caps, _ := hypervisor.CapabilitiesForType(hvType)
+	if req.NetworkEnabled && imageInfo.MacOS == nil && !caps.RequiresPerGuestVmnet {
 		networkName = "default"
 	}
 

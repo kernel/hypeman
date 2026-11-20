@@ -147,3 +147,13 @@ func TestDeleteStopsMacOSShimBeforeKilling(t *testing.T) {
 	require.NoError(t, m.stopHypervisorForDelete(context.Background(), inst(false)))
 	require.EqualValues(t, 1, calls.Load(), "other guests are killed as before")
 }
+
+func TestVmnetNetworkFollowsHypervisorCapabilities(t *testing.T) {
+	typ := hypervisor.Type("per-guest-vmnet-test")
+	hypervisor.RegisterCapabilities(typ, hypervisor.Capabilities{RequiresPerGuestVmnet: true})
+	guest := &StoredMetadata{HypervisorType: typ, NetworkEnabled: true}
+	require.True(t, guest.usesVmnetNetwork())
+	require.False(t, guest.usesLinuxNetwork())
+	guest.NetworkEnabled = false
+	require.False(t, guest.usesVmnetNetwork())
+}
