@@ -92,7 +92,8 @@ func Collect(p *paths.Paths) (Breakdown, error) {
 		// A macOS guest's own writes and files. Its disk.N.asif layers are clones of
 		// its image's, which Images already counts.
 		breakdown.RootfsOverlays += allocatedBytesForPath(p.InstanceOverlay(instanceID)) + allocatedBytesForPath(p.InstanceMacOSBootDisk(instanceID)) +
-			allocatedBytesForPath(p.InstanceMacOSAgentDisk(instanceID)) + allocatedBytesForPath(filepath.Join(p.InstanceDir(instanceID), paths.MacOSAuxStorageFile))
+			allocatedBytesForPath(p.InstanceMacOSAgentDisk(instanceID)) + allocatedBytesForPath(p.InstanceMacOSConfigDisk(instanceID)) +
+			allocatedBytesForPath(filepath.Join(p.InstanceDir(instanceID), paths.MacOSAuxStorageFile))
 
 		volumeOverlays, err := sumMatchingFilesAllocatedBytes(p.InstanceVolumeOverlaysDir(instanceID), func(path string, entry fs.DirEntry) bool {
 			return !entry.IsDir() && filepath.Ext(entry.Name()) == ".raw"

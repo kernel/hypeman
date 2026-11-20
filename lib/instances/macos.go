@@ -81,8 +81,11 @@ func prepareMacOSCreate(req *CreateInstanceRequest, img *images.Image, caps hype
 	if img.Platform != "darwin/arm64" || img.SizeBytes == nil || *img.SizeBytes <= 0 {
 		return fmt.Errorf("%w: incomplete macOS image", ErrImageNotReady)
 	}
-	if req.HotplugSize != 0 || req.OverlaySize != 0 || len(req.Volumes) != 0 || len(req.Devices) != 0 || req.GPU != nil || len(req.Env) != 0 || len(req.Entrypoint) != 0 || len(req.Cmd) != 0 || req.NetworkEgress != nil || len(req.Credentials) != 0 || req.AutoStandby != nil || req.SnapshotPolicy != nil || req.DiskIOBps != 0 || req.NetworkBandwidthDownload != 0 || req.NetworkBandwidthUpload != 0 {
-		return fmt.Errorf("%w: experimental macOS supports local disk clone, CPU/RAM, tags, expiration and NAT only; Linux commands/env/volumes, overlays, auto-standby/snapshot policies and I/O shaping are unsupported", ErrInvalidRequest)
+	if req.HotplugSize != 0 || req.OverlaySize != 0 || len(req.Volumes) != 0 || len(req.Devices) != 0 || req.GPU != nil || len(req.Entrypoint) != 0 || len(req.Cmd) != 0 || req.NetworkEgress != nil || len(req.Credentials) != 0 || req.AutoStandby != nil || req.SnapshotPolicy != nil || req.DiskIOBps != 0 || req.NetworkBandwidthDownload != 0 || req.NetworkBandwidthUpload != 0 {
+		return fmt.Errorf("%w: experimental macOS supports local disk clone, CPU/RAM, env, tags, expiration and NAT only; Linux commands/volumes, overlays, auto-standby/snapshot policies and I/O shaping are unsupported", ErrInvalidRequest)
+	}
+	if len(req.Env) != 0 && (req.SkipGuestAgent || !img.MacOS.GuestAgent) {
+		return fmt.Errorf("%w: macOS env is delivered by the guest agent; it needs an image with guest_agent and skip_guest_agent unset", ErrInvalidRequest)
 	}
 	if err := validateMacOSRestartPolicy(req.RestartPolicy); err != nil {
 		return err
@@ -127,6 +130,8 @@ func checkMacOSUpdate(stored *StoredMetadata, req UpdateInstanceRequest) error {
 	if stored.MacOS == nil {
 		return nil
 	}
+	// Env is fixed at create: the guest reads it at boot, so an update would only
+	// reach it at a cold start, and never a guest restored from standby.
 	if len(req.Env) != 0 || req.AutoStandby != nil {
 		return fmt.Errorf("%w: macOS updates support expiration, exec health checks and VM restart policy only", ErrInvalidRequest)
 	}
@@ -186,7 +191,10 @@ func (m *manager) createBootDisk(ctx context.Context, stored *StoredMetadata, im
 		return err
 	}
 	stored.MacOSDiskLayers = len(chain)
-	return m.installMacOSAgentDisk(ctx, stored)
+	if err := m.installMacOSAgentDisk(ctx, stored); err != nil {
+		return err
+	}
+	return m.installMacOSConfigDisk(ctx, stored)
 }
 
 // macOSAgentDiskSource returns the host's current guest agent disk. Tests replace it.
@@ -217,13 +225,47 @@ func (m *manager) installMacOSAgentDisk(ctx context.Context, stored *StoredMetad
 	return os.Rename(staged, disk)
 }
 
+// macOSConfigDiskBuilder writes a config disk holding env. Tests replace it.
+var macOSConfigDiskBuilder = system.BuildMacOSConfigDisk
+
+// installMacOSConfigDisk writes the read-only disk that carries a macOS guest's env,
+// from its metadata, at create and at every cold start. A fork or a guest restored
+// from a stopped snapshot therefore boots with the env in its own metadata. Standby
+// restore keeps the disk the guest was saved with, which holds the same env, since
+// env cannot change after create.
+func (m *manager) installMacOSConfigDisk(ctx context.Context, stored *StoredMetadata) error {
+	if stored.MacOS == nil {
+		return nil
+	}
+	disk := m.paths.InstanceMacOSConfigDisk(stored.Id)
+	if !macOSConfigDiskAttached(stored) {
+		if err := os.Remove(disk); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		return nil
+	}
+	if err := macOSConfigDiskBuilder(ctx, stored.Env, disk); err != nil {
+		return fmt.Errorf("write macOS config disk: %w", err)
+	}
+	return nil
+}
+
+// macOSConfigDiskAttached reports whether a macOS guest has a config disk: it has
+// env, which only reaches the guest through its agent.
+func macOSConfigDiskAttached(stored *StoredMetadata) bool {
+	return stored.GuestAgentEnabled() && len(stored.Env) != 0
+}
+
 // macOSDisks returns a macOS guest's disks: its boot disk, then, when it runs the
-// guest agent, its read-only guest agent disk. The boot disk must come first; VZ
-// does not boot with it second.
+// guest agent, its read-only guest agent disk, then its read-only config disk if it
+// has env. The boot disk must come first; VZ does not boot with it second.
 func macOSDisks(p *paths.Paths, stored *StoredMetadata) []hypervisor.DiskConfig {
 	disks := []hypervisor.DiskConfig{{Path: p.InstanceMacOSBootDisk(stored.Id), Format: hypervisor.DiskFormatASIF, Parents: macOSDiskParents(stored)}}
 	if stored.GuestAgentEnabled() {
 		disks = append(disks, hypervisor.DiskConfig{Path: p.InstanceMacOSAgentDisk(stored.Id), Readonly: true})
+	}
+	if macOSConfigDiskAttached(stored) {
+		disks = append(disks, hypervisor.DiskConfig{Path: p.InstanceMacOSConfigDisk(stored.Id), Readonly: true})
 	}
 	return disks
 }

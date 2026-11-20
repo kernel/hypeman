@@ -102,6 +102,10 @@ func (m *manager) startInstance(
 		log.ErrorContext(ctx, "failed to refresh macOS agent disk", "instance_id", id, "error", err)
 		return nil, fmt.Errorf("refresh macOS agent disk: %w", err)
 	}
+	if err := m.installMacOSConfigDisk(ctx, stored); err != nil {
+		log.ErrorContext(ctx, "failed to write macOS config disk", "instance_id", id, "error", err)
+		return nil, err
+	}
 
 	// 3. Get image info (needed for buildHypervisorConfig).
 	imageInfo, err := m.resolveBootImage(ctx, stored)
