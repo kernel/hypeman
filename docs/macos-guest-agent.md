@@ -48,33 +48,15 @@ works; the disk is attached and unused.
 
 ## Instance env
 
-A guest created with `env` needs the agent; without it the create is rejected. macOS
-has no hypeman-init to start a workload with the env, so hypeman hands it to the
-image's own services as a file:
-
-1. hypeman writes the env as a JSON object of strings (`env.json`) on an ISO 9660
-   volume named `HypemanConfig` (`config.iso`, 0400 on the host) and attaches it
-   read-only, third after the agent disk. ISO is used because `hdiutil makehybrid`
-   builds one in milliseconds; an APFS image takes seconds. A guest without env has
-   no config disk.
-2. On every boot the agent finds the disk by reading each disk's ISO volume
-   descriptor (Disk Arbitration can take seconds longer to report it), refuses it
-   unless it is a fixed internal device (as the launcher does for the agent disk),
-   mounts it read-only if macOS has not, copies `env.json` to
-   `/var/run/hypeman/env.json` (root:wheel, 0600) and unmounts the volume. A guest
-   without the disk gets `{}`. The agent removes the previous boot's file first and
-   writes nothing if the disk cannot be read. Values are not logged.
-3. Image services wait for a `/var/run/hypeman/env.json` modified since boot and read
-   the names they honor. Readiness does not wait for the file.
-
-The disk is rebuilt from the instance's metadata at create and every cold start, so a
-fork or a guest restored from a stopped snapshot boots with its own env. Standby and
-memory snapshots keep the disk the guest was saved with; it holds the same env,
-since env cannot change after create (PATCH rejects it for macOS guests).
-
-The volume is readable by every guest user while it is mounted, from boot until the
-agent unmounts it, and an administrator in the guest can mount it again. Only the
-copy in `/var/run/hypeman` is root only.
+A guest created with `env` needs the agent. hypeman writes the env as `env.json`, a JSON
+object of strings, on an ISO volume named `HypemanConfig` (`config.iso`), attached
+read-only after the agent disk and rebuilt from the instance's metadata at create and
+every cold start; standby and memory snapshots keep the disk they were saved with. On
+every boot the agent finds the disk by its ISO descriptor, refuses a disk image, copies
+`env.json` to `/var/run/hypeman/env.json` (root, 0600) and unmounts the volume. A guest
+without the disk gets `{}`. Image services should ignore a file older than the current
+boot. The volume is readable by every guest user while mounted, from boot until the agent
+unmounts it, and a guest administrator can mount it again.
 
 ## Provisioning boundary
 

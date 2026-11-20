@@ -130,8 +130,7 @@ func checkMacOSUpdate(stored *StoredMetadata, req UpdateInstanceRequest) error {
 	if stored.MacOS == nil {
 		return nil
 	}
-	// Env is fixed at create: the guest reads it at boot, so an update would only
-	// reach it at a cold start, and never a guest restored from standby.
+	// Env is fixed at create: the guest reads it at boot, never at standby restore.
 	if len(req.Env) != 0 || req.AutoStandby != nil {
 		return fmt.Errorf("%w: macOS updates support expiration, exec health checks and VM restart policy only", ErrInvalidRequest)
 	}
@@ -228,30 +227,21 @@ func (m *manager) installMacOSAgentDisk(ctx context.Context, stored *StoredMetad
 // macOSConfigDiskBuilder writes a config disk holding env. Tests replace it.
 var macOSConfigDiskBuilder = system.BuildMacOSConfigDisk
 
-// installMacOSConfigDisk writes the read-only disk that carries a macOS guest's env,
-// from its metadata, at create and at every cold start. A fork or a guest restored
-// from a stopped snapshot therefore boots with the env in its own metadata. Standby
-// restore keeps the disk the guest was saved with, which holds the same env, since
-// env cannot change after create.
+// installMacOSConfigDisk writes the read-only disk carrying a macOS guest's env from
+// its metadata, at create and every cold start, so a fork boots with its own env.
+// Standby restore keeps the disk it was saved with; env cannot change after create.
 func (m *manager) installMacOSConfigDisk(ctx context.Context, stored *StoredMetadata) error {
-	if stored.MacOS == nil {
-		return nil
-	}
 	disk := m.paths.InstanceMacOSConfigDisk(stored.Id)
-	if !macOSConfigDiskAttached(stored) {
+	if stored.MacOS == nil || !macOSConfigDiskAttached(stored) {
 		if err := os.Remove(disk); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
 		return nil
 	}
-	if err := macOSConfigDiskBuilder(ctx, stored.Env, disk); err != nil {
-		return fmt.Errorf("write macOS config disk: %w", err)
-	}
-	return nil
+	return macOSConfigDiskBuilder(ctx, stored.Env, disk)
 }
 
-// macOSConfigDiskAttached reports whether a macOS guest has a config disk: it has
-// env, which only reaches the guest through its agent.
+// macOSConfigDiskAttached reports whether a guest's env reaches it through its agent.
 func macOSConfigDiskAttached(stored *StoredMetadata) bool {
 	return stored.GuestAgentEnabled() && len(stored.Env) != 0
 }

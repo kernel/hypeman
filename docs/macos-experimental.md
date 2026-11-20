@@ -159,9 +159,8 @@ Each instance gets clones of the image's ASIF layers (`disk.{n}.asif`), its own
 auxiliary storage, and an empty writable ASIF overlay (`boot.asif`) above the
 layers; the guest's writes only grow the overlay. Instances created before ASIF
 must be deleted and recreated. No
-Linux kernel, initrd, overlay filesystem or balloon is attached. A guest created
-with `env` gets a read-only config disk instead of the Linux configuration disk;
-see [Instance env](macos-guest-agent.md#instance-env). A networked guest gets its own vmnet network (macOS 26 and later):
+Linux kernel, initrd, overlay filesystem or balloon is attached; `env` goes on a
+config disk ([Instance env](macos-guest-agent.md#instance-env)). A networked guest gets its own vmnet network (macOS 26 and later):
 hypeman assigns it a /29 from `network.macos_subnet_cidr` (default
 `192.168.128.0/20`) and vmnet's DHCP serves the guest a reservation for its
 preserved MAC. The guest's address is stored with the instance, kept through stop

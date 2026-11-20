@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	_ "embed"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -91,4 +92,32 @@ func buildMacOSAgentDisk(ctx context.Context, binary []byte, version, path strin
 		return fmt.Errorf("build macOS agent disk: %w: %s", err, output)
 	}
 	return os.Rename(out+".cdr", path)
+}
+
+// BuildMacOSConfigDisk writes env as env.json on a read-only ISO volume named
+// HypemanConfig at path, for the guest agent to read at boot. hdiutil makes an ISO
+// in milliseconds, an APFS image in seconds.
+func BuildMacOSConfigDisk(ctx context.Context, env map[string]string, path string) error {
+	data, err := json.Marshal(env)
+	if err != nil {
+		return err
+	}
+	src, err := os.MkdirTemp(filepath.Dir(path), ".config-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(src)
+	if err := os.WriteFile(filepath.Join(src, "env.json"), data, 0400); err != nil {
+		return err
+	}
+	out := path + ".tmp"
+	os.Remove(out)
+	defer os.Remove(out)
+	if output, err := exec.CommandContext(ctx, "/usr/bin/hdiutil", "makehybrid", "-quiet", "-iso", "-joliet", "-default-volume-name", "HypemanConfig", "-o", out, src).CombinedOutput(); err != nil {
+		return fmt.Errorf("build macOS config disk: %w: %s", err, output)
+	}
+	if err := os.Chmod(out, 0400); err != nil {
+		return err
+	}
+	return os.Rename(out, path)
 }
