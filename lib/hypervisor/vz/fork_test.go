@@ -62,6 +62,7 @@ func TestPrepareFork_RewritesSnapshotManifest(t *testing.T) {
 		VsockCID:           22222,
 		VsockSocket:        targetDir + "/fork.vsock",
 		SerialLogPath:      targetDir + "/logs/fork-serial.log",
+		Network:            &hypervisor.ForkNetworkConfig{IP: "192.168.128.10", MAC: "02:00:00:00:00:02", Netmask: "255.255.255.248"},
 	})
 	require.NoError(t, err)
 	assert.False(t, result.VsockCIDUpdated)
@@ -88,5 +89,5 @@ func TestPrepareFork_RewritesSnapshotManifest(t *testing.T) {
 	assert.Equal(t, shimconfig.DiskConfig{Path: targetDir + "/agent.img", Readonly: true}, updated.ShimConfig.Disks[3])
 	assert.Equal(t, targetDir+"/mac-aux.img", updated.ShimConfig.MacAuxStoragePath)
 	require.Len(t, updated.ShimConfig.Networks, 1)
-	assert.Equal(t, "02:00:00:00:00:01", updated.ShimConfig.Networks[0].MAC)
+	assert.Equal(t, shimconfig.NetworkConfig{MAC: "02:00:00:00:00:01", IPv4Subnet: "192.168.128.8/29", IPv4Address: "192.168.128.10"}, updated.ShimConfig.Networks[0])
 }

@@ -67,6 +67,10 @@ func (m *manager) restoreInstance(
 		return nil, fmt.Errorf("no snapshot available for instance %s", id)
 	}
 
+	if m.hasLegacyVmnetAddress(stored) {
+		return nil, fmt.Errorf("cannot restore legacy vmnet address %s outside guest pool %s; cold start required", stored.IP, m.vmnetGuestPool())
+	}
+
 	// 2a. Validate the instance's image (rootfs) still exists before reserving
 	// resources or invoking the hypervisor shim. A deleted image otherwise fails
 	// deep in storage configuration ("disk image not found"), retrying for ~60s
@@ -134,6 +138,10 @@ func (m *manager) restoreInstance(
 			m.unregisterEgressProxyInstance(ctx, id)
 			proxyRegistered = false
 		}
+		if stored.usesVmnetNetwork() {
+			m.forgetMacOSAddress(id)
+			return
+		}
 		if allocatedNet != nil {
 			if err := m.networkManager.ReleaseAllocation(ctx, allocatedNet); err != nil {
 				log.WarnContext(ctx, "failed to release allocated network", "instance_id", id, "error", err)
@@ -146,8 +154,34 @@ func (m *manager) restoreInstance(
 		}
 	}
 
-	// 4. Recreate or allocate network if network enabled. A macOS guest keeps the MAC
-	// in its saved configuration, and vmnet supplies the address, so no TAP is allocated.
+	// 4. Recreate or allocate network if network enabled. A vmnet guest keeps the MAC
+	// in its saved configuration and its own vmnet network, so no TAP is allocated. A
+	// Linux vz fork has no address yet: it gets one, its snapshot config is pointed at
+	// the new network, and its guest is reconfigured after resume.
+	if stored.usesVmnetNetwork() && stored.MacOS == nil && stored.IP == "" {
+		netConfig, err := m.applyVmnetNetwork(stored)
+		if err != nil {
+			return nil, fmt.Errorf("assign vmnet guest network: %w", err)
+		}
+		if _, err := starter.PrepareFork(ctx, hypervisor.ForkPrepareRequest{
+			SnapshotConfigPath: m.paths.InstanceSnapshotConfig(id),
+			VsockCID:           stored.VsockCID,
+			VsockSocket:        stored.VsockSocket,
+			Network:            &hypervisor.ForkNetworkConfig{IP: netConfig.IP, MAC: netConfig.MAC, Netmask: netConfig.Netmask},
+		}); err != nil {
+			releaseNetwork()
+			return nil, fmt.Errorf("rewrite snapshot config: %w", err)
+		}
+		allocatedNet = &network.Allocation{
+			InstanceID:   id,
+			InstanceName: stored.Name,
+			IP:           netConfig.IP,
+			MAC:          netConfig.MAC,
+			Gateway:      netConfig.Gateway,
+			Netmask:      netConfig.Netmask,
+			DNS:          netConfig.DNS,
+		}
+	}
 	if stored.usesLinuxNetwork() {
 		networkCtx, networkSpanEnd := m.startLifecycleStep(ctx, "restore_network",
 			attribute.String("instance_id", id),
@@ -494,13 +528,45 @@ func reconfigureGuestNetwork(ctx context.Context, stored *StoredMetadata, alloc 
 		WaitForAgent:  120 * time.Second,
 	})
 	if err != nil {
-		if status.Code(err) == codes.Unimplemented {
-			return reconfigureGuestNetworkWithExec(ctx, dialer, alloc)
+		if status.Code(err) != codes.Unimplemented {
+			return fmt.Errorf("reconfigure guest network: %w", err)
 		}
-		return fmt.Errorf("reconfigure guest network: %w", err)
+		if err := reconfigureGuestNetworkWithExec(ctx, dialer, alloc); err != nil {
+			return err
+		}
 	}
 
+	resolver, err := guestResolverCommand(stored, alloc)
+	if err != nil || resolver == "" {
+		return err
+	}
+	var stdout, stderr bytes.Buffer
+	exit, err := guest.ExecIntoInstance(ctx, dialer, guest.ExecOptions{
+		Command: []string{"sh", "-c", resolver},
+		Stdout:  &stdout, Stderr: &stderr, WaitForAgent: 120 * time.Second,
+	})
+	if err != nil {
+		return fmt.Errorf("exec DNS reconfiguration: %w", err)
+	}
+	if exit.Code != 0 {
+		return fmt.Errorf("DNS reconfiguration failed (exit=%d, stdout=%q, stderr=%q)", exit.Code, strings.TrimSpace(stdout.String()), strings.TrimSpace(stderr.String()))
+	}
 	return nil
+}
+
+// guestResolverCommand returns the command that points a fork's resolver at its
+// new network's DNS, or "" when the fork keeps the source's DNS. Only a vmnet
+// guest moves to a network with a different DNS address; TAP forks share the
+// source's.
+func guestResolverCommand(stored *StoredMetadata, alloc *network.Allocation) (string, error) {
+	if !stored.usesVmnetNetwork() || alloc.DNS == "" {
+		return "", nil
+	}
+	dns := net.ParseIP(alloc.DNS)
+	if dns == nil {
+		return "", fmt.Errorf("invalid network allocation DNS %q", alloc.DNS)
+	}
+	return "printf 'nameserver %s\\n' '" + dns.String() + "' > /etc/resolv.conf", nil
 }
 
 func reconfigureGuestNetworkWithExec(ctx context.Context, dialer hypervisor.VsockDialer, alloc *network.Allocation) error {

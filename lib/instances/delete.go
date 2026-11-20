@@ -205,9 +205,9 @@ func (m *manager) deleteInstanceWithOptions(
 		}
 	}
 
-	// 8. Hold a macOS guest's address before its data goes, so it is not reused while
+	// 8. Hold a vmnet guest's address before its data goes, so it is not reused while
 	// ingress may still route to it.
-	if stored.MacOS != nil {
+	if stored.usesVmnetNetwork() {
 		if err := m.releaseMacOSAddress(id, stored.IP); err != nil {
 			return fmt.Errorf("release macOS guest address: %w", err)
 		}
@@ -241,12 +241,12 @@ func resolveDeleteStopTimeout(stored *StoredMetadata) int {
 }
 
 // stopHypervisorForDelete stops the hypervisor before a delete removes the instance.
-// A macOS guest's vz-shim owns its vmnet network, and macOS keeps a network whose
-// owner is killed while the VM is attached, which blocks that subnet until the host
-// restarts. Its shim is asked to stop the VM and exit first; shutdownHypervisor still
-// kills it if it does not. Other guests are killed as before.
+// A vz guest's shim owns its vmnet network, and macOS keeps a network whose owner is
+// killed while the VM is attached, which blocks that subnet until the host restarts.
+// Its shim is asked to stop the VM and exit first; shutdownHypervisor still kills it
+// if it does not. Other guests are killed as before.
 func (m *manager) stopHypervisorForDelete(ctx context.Context, inst *Instance) error {
-	if inst.MacOS != nil && inst.NetworkEnabled {
+	if inst.usesVmnetNetwork() {
 		return m.shutdownHypervisor(ctx, inst)
 	}
 	return m.killHypervisor(ctx, inst)

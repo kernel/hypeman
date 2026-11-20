@@ -114,9 +114,9 @@ func (m *manager) startInstance(
 	defer cu.Clean()
 
 	// 4. Allocate fresh network if network enabled
-	netConfig, err := m.applyMacOSNetwork(stored)
+	netConfig, err := m.applyVmnetNetwork(stored)
 	if err != nil {
-		return nil, fmt.Errorf("assign macOS guest network: %w", err)
+		return nil, fmt.Errorf("assign vmnet guest network: %w", err)
 	}
 	if stored.usesLinuxNetwork() {
 		log.DebugContext(ctx, "allocating network for start", "instance_id", id, "network", "default")

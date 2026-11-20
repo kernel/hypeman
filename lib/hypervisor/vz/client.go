@@ -90,7 +90,8 @@ func (c *Client) Capabilities() hypervisor.Capabilities {
 
 func capabilities() hypervisor.Capabilities {
 	return hypervisor.Capabilities{
-		SupportsMacOSBoot: runtime.GOARCH == "arm64",
+		RequiresPerGuestVmnet: true,
+		SupportsMacOSBoot:     runtime.GOARCH == "arm64",
 		// Snapshot/standby support is runtime-derived: it requires Apple
 		// Silicon AND macOS 14+. An arm64-only check would overstate
 		// support on macOS 13 hosts.

@@ -40,11 +40,27 @@ func macOSGuestSubnet(ip string) (netip.Prefix, error) {
 	return netip.PrefixFrom(addr, macOSGuestSubnetBits).Masked(), nil
 }
 
+func (m *manager) vmnetGuestPool() netip.Prefix {
+	if m.macOSGuestSubnet.IsValid() {
+		return m.macOSGuestSubnet
+	}
+	return DefaultMacOSGuestSubnet
+}
+
+func (m *manager) hasLegacyVmnetAddress(stored *StoredMetadata) bool {
+	if !stored.usesVmnetNetwork() || stored.MacOS != nil || stored.IP == "" {
+		return false
+	}
+	addr, err := netip.ParseAddr(stored.IP)
+	return err != nil || !m.vmnetGuestPool().Contains(addr)
+}
+
 // assignMacOSAddress gives a networked macOS guest without an address the first free
-// guest address in the pool. A guest that has one keeps it. Addresses held by other
+// guest address in the pool. Existing addresses are kept except legacy Linux vmnet
+// addresses outside the pool. Addresses held by other
 // instances, by creates in progress, or released within the reuse hold are skipped.
 func (m *manager) assignMacOSAddress(stored *StoredMetadata) error {
-	if stored.MacOS == nil || !stored.NetworkEnabled || stored.IP != "" {
+	if !stored.usesVmnetNetwork() || (stored.IP != "" && !m.hasLegacyVmnetAddress(stored)) {
 		return nil
 	}
 	m.macOSAddressMu.Lock()
@@ -54,10 +70,7 @@ func (m *manager) assignMacOSAddress(stored *StoredMetadata) error {
 		return err
 	}
 
-	pool := m.macOSGuestSubnet
-	if !pool.IsValid() {
-		pool = DefaultMacOSGuestSubnet
-	}
+	pool := m.vmnetGuestPool()
 	size := uint64(1) << (32 - macOSGuestSubnetBits)
 	base := pool.Masked().Addr().As4()
 	start := uint64(base[0])<<24 | uint64(base[1])<<16 | uint64(base[2])<<8 | uint64(base[3])

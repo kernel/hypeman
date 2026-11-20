@@ -238,23 +238,49 @@ func macOSDiskParents(stored *StoredMetadata) []string {
 }
 
 // usesLinuxNetwork reports whether the instance's network is a hypeman TAP
-// allocation. Networked macOS guests get their own vmnet network instead.
+// allocation. Networked vz guests get their own vmnet network instead.
 func (s *StoredMetadata) usesLinuxNetwork() bool {
-	return s.NetworkEnabled && s.MacOS == nil
+	return s.NetworkEnabled && !s.usesVmnetNetwork()
 }
 
-// applyMacOSNetwork sets the template MAC on a networked macOS guest, assigns its
-// address if it has none, and returns its network config. No Linux TAP is allocated.
+// usesVmnetNetwork reports whether the instance gets its own vmnet network. A vz
+// guest restored from a snapshot keeps the MAC it was saved with, so clones of one
+// guest share a MAC and must not share a network.
+func (s *StoredMetadata) usesVmnetNetwork() bool {
+	caps, _ := hypervisor.CapabilitiesForType(s.HypervisorType)
+	return s.NetworkEnabled && (s.MacOS != nil || caps.RequiresPerGuestVmnet)
+}
+
+// applyVmnetNetwork gives a vmnet-networked guest its MAC and, if it has none, an
+// address, and returns its network config. A macOS guest takes its template MAC; a
+// Linux guest keeps its MAC or gets a new unique one. No Linux TAP is allocated.
 // Other instances get nil.
-func (m *manager) applyMacOSNetwork(stored *StoredMetadata) (*network.NetworkConfig, error) {
-	if stored.MacOS == nil || !stored.NetworkEnabled {
+func (m *manager) applyVmnetNetwork(stored *StoredMetadata) (*network.NetworkConfig, error) {
+	if !stored.usesVmnetNetwork() {
 		return nil, nil
 	}
-	stored.MAC = stored.MacOS.MAC
+	if stored.MacOS != nil {
+		stored.MAC = stored.MacOS.MAC
+	} else if stored.MAC == "" {
+		used, err := m.storedMACs(stored.Id)
+		if err != nil {
+			return nil, err
+		}
+		mac, err := network.NewUniqueMAC(used)
+		if err != nil {
+			return nil, fmt.Errorf("generate guest MAC: %w", err)
+		}
+		stored.MAC = mac
+	}
 	if err := m.assignMacOSAddress(stored); err != nil {
 		return nil, err
 	}
-	return &network.NetworkConfig{MAC: stored.MAC, IP: stored.IP, Netmask: macOSGuestNetmask}, nil
+	subnet, err := macOSGuestSubnet(stored.IP)
+	if err != nil {
+		return nil, err
+	}
+	host := subnet.Addr().Next().String()
+	return &network.NetworkConfig{MAC: stored.MAC, IP: stored.IP, Netmask: macOSGuestNetmask, Gateway: host, DNS: host}, nil
 }
 
 // admitMacOSBoot holds the macOS boot lock and checks socket paths and identity
