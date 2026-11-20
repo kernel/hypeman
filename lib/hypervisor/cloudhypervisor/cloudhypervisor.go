@@ -73,7 +73,7 @@ func CapabilitiesForVersion(v vmm.CHVersion) hypervisor.Capabilities {
 		SupportsSnapshotBaseReuse:   false,
 	}
 	switch v {
-	case vmm.V51_1:
+	case vmm.V51_1, vmm.V51_2:
 		caps.SupportsDiskResize = true
 	}
 	return caps

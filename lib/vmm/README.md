@@ -78,7 +78,10 @@ lib/vmm/
 │       ├── v49.0/
 │       │   ├── x86_64/cloud-hypervisor
 │       │   └── aarch64/cloud-hypervisor
-│       └── v51.1/
+│       ├── v51.1/
+│       │   ├── x86_64/cloud-hypervisor
+│       │   └── aarch64/cloud-hypervisor
+│       └── v51.2/
 │           ├── x86_64/cloud-hypervisor
 │           └── aarch64/cloud-hypervisor
 └── client_test.go      # Tests with real Cloud Hypervisor
@@ -88,6 +91,7 @@ lib/vmm/
 
 - Cloud Hypervisor v49.0 (API v0.3.0)
 - Cloud Hypervisor v51.1 (API v0.3.0)
+- Cloud Hypervisor v51.2 (API v0.3.0)
 
 Cloud Hypervisor versions may update frequently while the API updates less frequently. All embedded versions currently share the same API spec.
 
