@@ -524,12 +524,32 @@ func reconfigureGuestNetwork(ctx context.Context, stored *StoredMetadata, alloc 
 		WaitForAgent:  120 * time.Second,
 	})
 	if err != nil {
-		if status.Code(err) == codes.Unimplemented {
-			return reconfigureGuestNetworkWithExec(ctx, dialer, alloc)
+		if status.Code(err) != codes.Unimplemented {
+			return fmt.Errorf("reconfigure guest network: %w", err)
 		}
-		return fmt.Errorf("reconfigure guest network: %w", err)
+		if err := reconfigureGuestNetworkWithExec(ctx, dialer, alloc); err != nil {
+			return err
+		}
 	}
 
+	if alloc.DNS == "" {
+		return nil
+	}
+	dns := net.ParseIP(alloc.DNS)
+	if dns == nil {
+		return fmt.Errorf("invalid network allocation DNS %q", alloc.DNS)
+	}
+	var stdout, stderr bytes.Buffer
+	exit, err := guest.ExecIntoInstance(ctx, dialer, guest.ExecOptions{
+		Command: []string{"sh", "-c", "printf 'nameserver %s\\n' '" + dns.String() + "' > /etc/resolv.conf"},
+		Stdout:  &stdout, Stderr: &stderr, WaitForAgent: 120 * time.Second,
+	})
+	if err != nil {
+		return fmt.Errorf("exec DNS reconfiguration: %w", err)
+	}
+	if exit.Code != 0 {
+		return fmt.Errorf("DNS reconfiguration failed (exit=%d, stdout=%q, stderr=%q)", exit.Code, strings.TrimSpace(stdout.String()), strings.TrimSpace(stderr.String()))
+	}
 	return nil
 }
 

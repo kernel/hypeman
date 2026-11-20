@@ -682,6 +682,10 @@ func TestVZForkFromRunningNetwork(t *testing.T) {
 
 	requireVZGatewayReachable(t, ctx, sourceAfterFork)
 	requireVZGatewayReachable(t, ctx, forked)
+	require.NoError(t, deleteTestInstanceNow(ctx, mgr, sourceID))
+	output, exitCode, err = vzExecCommand(ctx, forked, "sh", "-c", `gw=$(ip route | awk '/^default/ {print $3}'); cat /etc/resolv.conf; awk -v gw="$gw" '$1 == "nameserver" && $2 == gw {found=1} END {exit !found}' /etc/resolv.conf && nslookup example.com`)
+	require.NoError(t, err)
+	require.Equal(t, 0, exitCode, "%s", output)
 }
 
 func requireVZGatewayReachable(t *testing.T, ctx context.Context, inst *Instance) {
