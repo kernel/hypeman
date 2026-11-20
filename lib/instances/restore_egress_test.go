@@ -3,6 +3,8 @@ package instances
 import (
 	"testing"
 
+	"github.com/kernel/hypeman/lib/hypervisor"
+	"github.com/kernel/hypeman/lib/images"
 	"github.com/kernel/hypeman/lib/network"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -81,4 +83,23 @@ func TestRequiresRestoreConfigDiskRefresh(t *testing.T) {
 		NetworkEnabled: true,
 		NetworkEgress:  &NetworkEgressPolicy{Enabled: true},
 	}))
+}
+
+func TestGuestResolverCommand_OnlyForVmnetGuests(t *testing.T) {
+	t.Parallel()
+
+	alloc := &network.Allocation{DNS: "192.168.176.9"}
+
+	tap := &StoredMetadata{NetworkEnabled: true, HypervisorType: hypervisor.TypeCloudHypervisor}
+	cmd, err := guestResolverCommand(tap, alloc)
+	require.NoError(t, err)
+	assert.Empty(t, cmd, "TAP forks keep the source DNS")
+
+	vz := &StoredMetadata{NetworkEnabled: true, MacOS: &images.MacOSImage{}}
+	cmd, err = guestResolverCommand(vz, alloc)
+	require.NoError(t, err)
+	assert.Equal(t, "printf 'nameserver %s\\n' '192.168.176.9' > /etc/resolv.conf", cmd)
+
+	_, err = guestResolverCommand(vz, &network.Allocation{DNS: "not-an-ip"})
+	require.Error(t, err)
 }

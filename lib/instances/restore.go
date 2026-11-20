@@ -536,16 +536,13 @@ func reconfigureGuestNetwork(ctx context.Context, stored *StoredMetadata, alloc 
 		}
 	}
 
-	if alloc.DNS == "" {
-		return nil
-	}
-	dns := net.ParseIP(alloc.DNS)
-	if dns == nil {
-		return fmt.Errorf("invalid network allocation DNS %q", alloc.DNS)
+	resolver, err := guestResolverCommand(stored, alloc)
+	if err != nil || resolver == "" {
+		return err
 	}
 	var stdout, stderr bytes.Buffer
 	exit, err := guest.ExecIntoInstance(ctx, dialer, guest.ExecOptions{
-		Command: []string{"sh", "-c", "printf 'nameserver %s\\n' '" + dns.String() + "' > /etc/resolv.conf"},
+		Command: []string{"sh", "-c", resolver},
 		Stdout:  &stdout, Stderr: &stderr, WaitForAgent: 120 * time.Second,
 	})
 	if err != nil {
@@ -555,6 +552,21 @@ func reconfigureGuestNetwork(ctx context.Context, stored *StoredMetadata, alloc 
 		return fmt.Errorf("DNS reconfiguration failed (exit=%d, stdout=%q, stderr=%q)", exit.Code, strings.TrimSpace(stdout.String()), strings.TrimSpace(stderr.String()))
 	}
 	return nil
+}
+
+// guestResolverCommand returns the command that points a fork's resolver at its
+// new network's DNS, or "" when the fork keeps the source's DNS. Only a vmnet
+// guest moves to a network with a different DNS address; TAP forks share the
+// source's.
+func guestResolverCommand(stored *StoredMetadata, alloc *network.Allocation) (string, error) {
+	if !stored.usesVmnetNetwork() || alloc.DNS == "" {
+		return "", nil
+	}
+	dns := net.ParseIP(alloc.DNS)
+	if dns == nil {
+		return "", fmt.Errorf("invalid network allocation DNS %q", alloc.DNS)
+	}
+	return "printf 'nameserver %s\\n' '" + dns.String() + "' > /etc/resolv.conf", nil
 }
 
 func reconfigureGuestNetworkWithExec(ctx context.Context, dialer hypervisor.VsockDialer, alloc *network.Allocation) error {
