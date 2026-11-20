@@ -88,6 +88,11 @@ func verifyForkAlias(p *paths.Paths, source, link string) error {
 		return fmt.Errorf("unexpected source alias target %q", link)
 	}
 	info, err := os.Lstat(link)
+	if os.IsNotExist(err) {
+		// The fork the link pointed at has been deleted, which an older
+		// binary allows. Nothing can be read through a link that dangles.
+		return nil
+	}
 	if err != nil {
 		return err
 	}

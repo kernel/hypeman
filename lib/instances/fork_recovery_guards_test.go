@@ -71,7 +71,7 @@ func TestSnapshotPayloadNeverCopiesPendingMark(t *testing.T) {
 }
 
 func TestRecoveryRestoresParkedFirecrackerSource(t *testing.T) {
-	for _, layout := range []string{"link", "source-absent", "unrelated-link", "live-owner", "existing-directory", "two-backups"} {
+	for _, layout := range []string{"link", "source-absent", "dangling-link", "unrelated-link", "live-owner", "existing-directory", "two-backups"} {
 		t.Run(layout, func(t *testing.T) {
 			m, _ := setupTestManager(t)
 			const source, fork = "original", "interrupted"
@@ -104,11 +104,15 @@ func TestRecoveryRestoresParkedFirecrackerSource(t *testing.T) {
 			default:
 				require.NoError(t, os.Symlink(forkDir, sourceDir))
 			}
+			if layout == "dangling-link" {
+				// The fork was deleted by a binary that does not recover the link.
+				require.NoError(t, os.RemoveAll(forkDir))
+			}
 			if layout == "two-backups" {
 				require.NoError(t, os.Mkdir(sourceDir+".fork-bak.124", 0755))
 			}
 			err = RecoverParkedForkSources(m.paths)
-			if layout != "link" && layout != "source-absent" {
+			if layout != "link" && layout != "source-absent" && layout != "dangling-link" {
 				require.Error(t, err)
 				require.DirExists(t, backup)
 				require.DirExists(t, forkDir)
