@@ -116,7 +116,7 @@ func (m *manager) writeMetadata(meta *metadata, durable bool) error {
 		return err
 	}
 	unlockAliasReaders := hypervisor.LockSnapshotSourceAliasReaders()
-	defer unlockAliasReaders()
+	defer func() { unlockAliasReaders() }()
 
 	metaPath := m.paths.InstanceMetadata(meta.Id)
 
@@ -140,8 +140,23 @@ func (m *manager) writeMetadata(meta *metadata, durable bool) error {
 		tmp.Close()
 		return fmt.Errorf("chmod temporary metadata: %w", err)
 	}
+	var dir *os.File
 	if durable {
-		if err := tmp.Sync(); err != nil {
+		// The syncs run without the alias lock. A restore waiting to alias a
+		// source directory holds back every metadata read on the host, so it
+		// must not wait on a disk. An alias puts the directory back before it
+		// lets readers in again, so the file and directory opened here are
+		// still this instance's once the lock is taken again.
+		dir, err = os.Open(filepath.Dir(metaPath))
+		if err != nil {
+			tmp.Close()
+			return fmt.Errorf("open instance directory: %w", err)
+		}
+		defer dir.Close()
+		unlockAliasReaders()
+		err = tmp.Sync()
+		unlockAliasReaders = hypervisor.LockSnapshotSourceAliasReaders()
+		if err != nil {
 			tmp.Close()
 			return fmt.Errorf("sync temporary metadata: %w", err)
 		}
@@ -158,11 +173,13 @@ func (m *manager) writeMetadata(meta *metadata, durable bool) error {
 
 	if durable {
 		// The rename lasts only once the directory is synced too.
-		syncDir := syncDir
+		unlockAliasReaders()
+		unlockAliasReaders = func() {}
+		syncDir := (*os.File).Sync
 		if m.syncDirFn != nil {
 			syncDir = m.syncDirFn
 		}
-		if err := syncDir(filepath.Dir(metaPath)); err != nil {
+		if err := syncDir(dir); err != nil {
 			return fmt.Errorf("sync instance directory: %w", err)
 		}
 	}

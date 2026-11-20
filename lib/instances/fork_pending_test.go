@@ -131,6 +131,36 @@ func TestRecoverInterruptedForksDeletesOnlyForksWhoseProcessIsGone(t *testing.T)
 	}
 }
 
+// A directory sync can take as long as the disk does. A restore waiting to
+// alias a source directory must not wait on it: while it waits, no metadata
+// on the host can be read.
+func TestDurableMetadataSaveSyncsWithoutAliasLock(t *testing.T) {
+	mgr, _ := setupTestManager(t)
+
+	id := "fork-sync-unlocked"
+	createStoppedSnapshotSourceFixture(t, mgr, id, id, mgr.defaultHypervisor)
+	meta, err := mgr.loadMetadata(id)
+	require.NoError(t, err)
+
+	aliased := false
+	mgr.syncDirFn = func(dir *os.File) error {
+		taken := make(chan struct{})
+		go func() {
+			hypervisor.LockSnapshotSourceAliasMutation()()
+			close(taken)
+		}()
+		select {
+		case <-taken:
+			aliased = true
+		case <-time.After(5 * time.Second):
+		}
+		return dir.Sync()
+	}
+
+	require.NoError(t, mgr.saveMetadataDurably(meta))
+	assert.True(t, aliased, "the alias lock was held across the directory sync")
+}
+
 // Clearing the mark is synced to disk, so a host crash cannot undo it after
 // the caller got a success. If it cannot be synced the request fails and the
 // fork is deleted. A fork that is not deleted is still marked.
@@ -141,8 +171,8 @@ func TestForkFailsWhenClearingItsMarkCannotBeSynced(t *testing.T) {
 	sourceID := "fork-sync-source"
 	createStoppedSnapshotSourceFixture(t, mgr, sourceID, sourceID, mgr.defaultHypervisor)
 	var synced string
-	mgr.syncDirFn = func(dir string) error {
-		synced = dir
+	mgr.syncDirFn = func(dir *os.File) error {
+		synced = dir.Name()
 		return errors.New("sync failed")
 	}
 
