@@ -4,11 +4,16 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"strconv"
+	"sync"
 
+	"github.com/opencontainers/umoci/oci/layer"
 	"github.com/u-root/u-root/pkg/cpio"
 )
 
@@ -242,7 +247,7 @@ func convertToExt4(ctx context.Context, rootfsDir, diskPath string) (int64, erro
 }
 
 // convertToErofs converts a rootfs directory to an erofs disk image using mkfs.erofs
-func convertToErofs(ctx context.Context, rootfsDir, diskPath string) (int64, error) {
+func convertToErofs(ctx context.Context, rootfsDir, diskPath string, extraArgs ...string) (int64, error) {
 	// Ensure parent directory exists
 	if err := os.MkdirAll(filepath.Dir(diskPath), 0755); err != nil {
 		return 0, fmt.Errorf("create disk parent dir: %w", err)
@@ -251,12 +256,69 @@ func convertToErofs(ctx context.Context, rootfsDir, diskPath string) (int64, err
 	// Create erofs image with LZ4 fast compression
 	// -zlz4: LZ4 fast compression (~20-25% space savings, faster builds)
 	// erofs doesn't need pre-allocation, creates file directly
-	cmd := exec.CommandContext(ctx, "mkfs.erofs", "-zlz4", diskPath, rootfsDir)
+	args := append([]string{"-zlz4"}, extraArgs...)
+	cmd := exec.CommandContext(ctx, "mkfs.erofs", append(args, diskPath, rootfsDir)...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return 0, fmt.Errorf("mkfs.erofs failed: %w, output: %s", err, output)
 	}
+	return alignErofsDisk(diskPath)
+}
 
+// exportImageRootfs exports a rootfs unpacked by unpackLayers. As root the
+// directory carries the image's file owners and is exported as is. Otherwise
+// the owners are only in xattrs (see rootfsOnDiskFormat), so erofs is built
+// from a tar stream of the directory that restores them. That needs
+// mkfs.erofs 1.8 or newer: 1.7 leaves the nanoseconds of every mtime
+// uninitialized when reading a tar. With an older mkfs.erofs every file is
+// owned by root in the image. Other formats get the current user as owner.
+func exportImageRootfs(ctx context.Context, rootfsDir, diskPath string, format ExportFormat) (int64, error) {
+	if os.Geteuid() == 0 {
+		return ExportRootfsWithContext(ctx, rootfsDir, diskPath, format)
+	}
+	if format != FormatErofs {
+		slog.WarnContext(ctx, "image file owners are not preserved; every file will be owned by the current user", "format", format)
+		return ExportRootfsWithContext(ctx, rootfsDir, diskPath, format)
+	}
+	if !mkfsErofsReadsTarMtimes() {
+		slog.WarnContext(ctx, "image file owners are not preserved with mkfs.erofs older than 1.8; every file will be owned by root")
+		return convertToErofs(ctx, rootfsDir, diskPath, "--all-root")
+	}
+	if err := os.MkdirAll(filepath.Dir(diskPath), 0755); err != nil {
+		return 0, fmt.Errorf("create disk parent dir: %w", err)
+	}
+
+	rootfsTar := layer.GenerateInsertLayer(rootfsDir, ".", false, &layer.RepackOptions{OnDiskFormat: rootfsOnDiskFormat()})
+	defer rootfsTar.Close()
+
+	cmd := exec.CommandContext(ctx, "mkfs.erofs", "-zlz4", "--tar=f", diskPath)
+	cmd.Stdin = rootfsTar
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return 0, fmt.Errorf("mkfs.erofs failed: %w, output: %s", err, output)
+	}
+	return alignErofsDisk(diskPath)
+}
+
+var erofsVersionPattern = regexp.MustCompile(`\(erofs-utils\) (\d+)\.(\d+)`)
+
+// mkfsErofsReadsTarMtimes reports whether mkfs.erofs is 1.8 or newer.
+// --version was added in 1.8, so older releases fail the command.
+var mkfsErofsReadsTarMtimes = sync.OnceValue(func() bool {
+	output, err := exec.Command("mkfs.erofs", "--version").Output()
+	if err != nil {
+		return false
+	}
+	match := erofsVersionPattern.FindSubmatch(output)
+	if match == nil {
+		return false
+	}
+	major, _ := strconv.Atoi(string(match[1]))
+	minor, _ := strconv.Atoi(string(match[2]))
+	return major > 1 || (major == 1 && minor >= 8)
+})
+
+func alignErofsDisk(diskPath string) (int64, error) {
 	// Get actual disk size
 	stat, err := os.Stat(diskPath)
 	if err != nil {
