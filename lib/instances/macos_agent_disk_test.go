@@ -58,6 +58,24 @@ func TestMacOSDisksAttachAgentDiskSecond(t *testing.T) {
 	require.Equal(t, hypervisor.DiskConfig{Path: p.InstanceMacOSAgentDisk("mac"), Readonly: true}, disks[1])
 }
 
+func TestMacOSConfigDiskCarriesEnv(t *testing.T) {
+	m := &manager{paths: paths.New(t.TempDir())}
+	stored := &StoredMetadata{Id: "mac", DataDir: m.paths.InstanceDir("mac"), MacOS: &images.MacOSImage{GuestAgent: true}, Env: map[string]string{"A": "1"}}
+	require.NoError(t, os.MkdirAll(stored.DataDir, 0700))
+	prev := macOSConfigDiskBuilder
+	macOSConfigDiskBuilder = func(_ context.Context, env map[string]string, path string) error {
+		return os.WriteFile(path, []byte(env["A"]), 0400)
+	}
+	t.Cleanup(func() { macOSConfigDiskBuilder = prev })
+
+	require.NoError(t, m.installMacOSConfigDisk(context.Background(), stored))
+	require.Equal(t, hypervisor.DiskConfig{Path: m.paths.InstanceMacOSConfigDisk("mac"), Readonly: true}, macOSDisks(m.paths, stored)[2], "the config disk follows the agent disk")
+	stored.Env = nil
+	require.NoError(t, m.installMacOSConfigDisk(context.Background(), stored))
+	require.NoFileExists(t, m.paths.InstanceMacOSConfigDisk("mac"), "a guest without env has no config disk")
+	require.Len(t, macOSDisks(m.paths, stored), 2)
+}
+
 func TestMacOSMemorySnapshotRestoresAgentDiskItWasSavedWith(t *testing.T) {
 	m, meta := macOSMemorySnapshotFixture(t)
 	meta.MacOS.GuestAgent, meta.SkipGuestAgent = true, false

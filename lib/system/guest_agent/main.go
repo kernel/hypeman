@@ -31,6 +31,8 @@ type guestServer struct {
 }
 
 func main() {
+	go deliverInstanceEnv()
+
 	// Listen on vsock port 2222 with retries
 	var l net.Listener
 	var err error

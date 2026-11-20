@@ -246,6 +246,14 @@ func (p *Paths) InstanceMacOSAgentDisk(id string) string {
 	return filepath.Join(p.InstanceDir(id), MacOSAgentDiskFile)
 }
 
+// MacOSConfigDiskFile is the read-only disk that carries a macOS guest's env.
+const MacOSConfigDiskFile = "config.iso"
+
+// InstanceMacOSConfigDisk returns the path to a macOS guest's config disk.
+func (p *Paths) InstanceMacOSConfigDisk(id string) string {
+	return filepath.Join(p.InstanceDir(id), MacOSConfigDiskFile)
+}
+
 // SystemMacOSAgentDisk returns the path to the guest agent disk built for an agent
 // version, from which macOS guests take their copies.
 func (p *Paths) SystemMacOSAgentDisk(version string) string {

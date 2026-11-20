@@ -46,6 +46,18 @@ adds a LaunchDaemon that waits for the volume, mounts it read-only if macOS has
 not, and runs the agent from it. An image with its own agent and no launcher still
 works; the disk is attached and unused.
 
+## Instance env
+
+A guest created with `env` needs the agent. hypeman writes the env as `env.json`, a JSON
+object of strings, on an ISO volume named `HypemanConfig` (`config.iso`), attached
+read-only after the agent disk and rebuilt from the instance's metadata at create and
+every cold start; standby and memory snapshots keep the disk they were saved with. On
+every boot the agent finds the disk by its ISO descriptor, refuses a disk image, copies
+`env.json` to `/var/run/hypeman/env.json` (root, 0600) and unmounts the volume. A guest
+without the disk gets `{}`. Image services should ignore a file older than the current
+boot. The volume is readable by every guest user while mounted, from boot until the agent
+unmounts it, and a guest administrator can mount it again.
+
 ## Provisioning boundary
 
 Install the binary **inside a stopped-template provisioning guest**, not on the

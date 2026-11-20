@@ -21,3 +21,14 @@ func TestBuildMacOSAgentDisk(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, entries, 1, "the build directory is removed")
 }
+
+func TestBuildMacOSConfigDisk(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.iso")
+	require.NoError(t, BuildMacOSConfigDisk(context.Background(), map[string]string{"A": "1"}, path))
+	entries, err := os.ReadDir(filepath.Dir(path))
+	require.NoError(t, err)
+	require.Len(t, entries, 1, "only the disk is left")
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Equal(t, "CD001", string(data[16*2048+1:16*2048+6]), "an ISO 9660 volume")
+}

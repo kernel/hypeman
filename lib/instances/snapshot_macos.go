@@ -196,6 +196,9 @@ func (m *manager) validateMacOSMemorySnapshotPayload(guestDir string, stored *St
 	if stored.GuestAgentEnabled() {
 		payload = append(payload, filepath.Join(guestDir, paths.MacOSAgentDiskFile))
 	}
+	if macOSConfigDiskAttached(stored) {
+		payload = append(payload, filepath.Join(guestDir, paths.MacOSConfigDiskFile))
+	}
 	for _, path := range payload {
 		info, err := os.Stat(path)
 		if err != nil || !info.Mode().IsRegular() || info.Size() == 0 {

@@ -49,6 +49,10 @@ func TestMacOSGuestAgentOptIn(t *testing.T) {
 	request = CreateInstanceRequest{SkipGuestAgent: true}
 	require.NoError(t, prepareMacOSCreate(&request, image, caps))
 	require.True(t, request.SkipGuestAgent)
+	request = CreateInstanceRequest{Env: map[string]string{"X": "Y"}}
+	require.NoError(t, prepareMacOSCreate(&request, image, caps), "env is delivered by the agent")
+	request = CreateInstanceRequest{Env: map[string]string{"X": "Y"}, SkipGuestAgent: true}
+	require.ErrorIs(t, prepareMacOSCreate(&request, image, caps), ErrInvalidRequest)
 }
 
 func TestMacOSAgentReadinessGatesRunning(t *testing.T) {
