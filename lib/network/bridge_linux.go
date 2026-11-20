@@ -1304,8 +1304,11 @@ func deriveClassID(tapName string) string {
 func (m *manager) deleteTAPDevice(ctx context.Context, tapName string) error {
 	link, err := netlink.LinkByName(tapName)
 	if err != nil {
-		// TAP doesn't exist, nothing to do
-		return nil
+		var notFound netlink.LinkNotFoundError
+		if errors.As(err, &notFound) {
+			return nil
+		}
+		return err
 	}
 
 	// A pin left behind points at a MAC no guest uses and is replaced when

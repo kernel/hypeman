@@ -181,6 +181,8 @@ type manager struct {
 	now                       func() time.Time
 	writeFile                 func(string, []byte, os.FileMode) error
 	deleteInstanceFn          func(context.Context, string) error
+	syncDirFn                 func(*os.File) error
+	forkOwnerGoneFn           func(ForkOwner) bool
 	discoverVGPU              func() (devices.VGPUFramework, []devices.VirtualFunction, error)
 	createVGPU                func(context.Context, string, string) (*devices.VGPUDevice, error)
 	configureVGPU             func(context.Context, string, string) error
@@ -556,12 +558,12 @@ func (m *manager) ForkInstance(ctx context.Context, id string, req ForkInstanceR
 		} else {
 			inst, err = m.applyForkTargetState(ctx, forked.Id, targetState)
 		}
-		if err != nil {
-			if cleanupErr := m.cleanupForkInstanceOnError(ctx, forked.Id); cleanupErr != nil {
-				return nil, fmt.Errorf("apply fork target state: %w; additionally failed to cleanup forked instance %s: %v", err, forked.Id, cleanupErr)
-			}
-			return nil, fmt.Errorf("apply fork target state: %w", err)
-		}
+	}
+	if err != nil {
+		return nil, m.discardFork(ctx, forked.Id, fmt.Errorf("apply fork target state: %w", err))
+	}
+	if err := m.completeFork(inst); err != nil {
+		return nil, m.discardFork(ctx, forked.Id, err)
 	}
 	m.notifyLifecycleEvent(ctx, LifecycleEventFork, inst)
 	return inst, nil
@@ -854,6 +856,11 @@ func (m *manager) getInstanceWithMinIDPrefix(ctx context.Context, idOrName strin
 	if err == nil {
 		m.finalizeResolvedInstance(ctx, inst)
 		return inst, nil
+	}
+
+	// An alias or partial copy is not a name/prefix lookup.
+	if errors.Is(err, errMetadataIDMismatch) {
+		return nil, ErrNotFound
 	}
 
 	// 2. Resolve exact name or ID prefix from metadata only, then hydrate the

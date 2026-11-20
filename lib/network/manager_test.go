@@ -143,6 +143,13 @@ func TestDefaultNetworkCacheReturnsCopy(t *testing.T) {
 	assert.Equal(t, "hm0", m.cachedDefaultNetwork().Bridge)
 }
 
+func TestReleaseByInstanceIDWithMissingSharedTAP(t *testing.T) {
+	p := paths.New(t.TempDir())
+	require.NoError(t, os.MkdirAll(p.InstanceDir("abcdefgh-other"), 0755))
+	m := &manager{paths: p}
+	require.NoError(t, m.ReleaseByInstanceID(t.Context(), "abcdefgh-fork"))
+}
+
 func TestGenerateTAPName(t *testing.T) {
 	tests := []struct {
 		name       string

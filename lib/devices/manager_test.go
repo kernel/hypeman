@@ -2,6 +2,7 @@ package devices
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -180,6 +181,50 @@ func TestDeviceLookupAndDeleteRejectPathTraversal(t *testing.T) {
 	require.ErrorIs(t, mgr.saveDevice(&Device{Id: ".."}), paths.ErrInvalidPathComponent)
 	require.ErrorIs(t, mgr.DeleteDevice(context.Background(), ".."), ErrNotFound)
 	require.FileExists(t, marker)
+}
+
+type releaseTestBinder struct {
+	*VFIOBinder
+	unbind func(string) error
+}
+
+func (b releaseTestBinder) UnbindFromVFIO(addr string) error { return b.unbind(addr) }
+
+func TestReleaseInstanceDeviceKeepsOwnerUntilUnbound(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		retryResult error
+	}{
+		{"unbind", nil},
+		{"already-unbound", ErrNotBound},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, p, _ := setupTestManager(t)
+			owner := "fork"
+			device := &Device{Id: "dev-1", PCIAddress: "test-device", AttachedTo: &owner, BoundToVFIO: true}
+			createTestDevice(t, p, device)
+			busy := errors.New("device busy")
+			result := busy
+			var calls int
+			m.vfioBinder = releaseTestBinder{unbind: func(addr string) error {
+				calls++
+				require.Equal(t, device.PCIAddress, addr)
+				stored, err := m.loadDevice(device.Id)
+				require.NoError(t, err)
+				require.Equal(t, &owner, stored.AttachedTo)
+				return result
+			}}
+
+			require.ErrorIs(t, m.ReleaseInstanceDevice(t.Context(), device.Id, owner), busy)
+			result = tc.retryResult
+			require.NoError(t, m.ReleaseInstanceDevice(t.Context(), device.Id, owner))
+			require.Equal(t, 2, calls)
+			got, err := m.loadDevice(device.Id)
+			require.NoError(t, err)
+			require.Nil(t, got.AttachedTo)
+			require.False(t, got.BoundToVFIO)
+		})
+	}
 }
 
 func TestSaveLoadDevice_MetadataRoundTrip(t *testing.T) {

@@ -3,6 +3,7 @@ package devices
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"runtime"
@@ -65,6 +66,9 @@ type Manager interface {
 	// MarkDetached marks a device as detached from an instance
 	MarkDetached(ctx context.Context, deviceID string) error
 
+	// ReleaseInstanceDevice detaches and unbinds a passthrough device only if this instance owns it.
+	ReleaseInstanceDevice(ctx context.Context, deviceID, instanceID string) error
+
 	// ReconcileDevices cleans up stale device state on startup.
 	// It detects devices with AttachedTo referencing non-existent instances
 	// and clears the orphaned attachment state.
@@ -75,9 +79,21 @@ type Manager interface {
 	SetLivenessChecker(checker InstanceLivenessChecker)
 }
 
+type deviceBinder interface {
+	deviceBoundToVFIO(string) (bool, error)
+	IsDeviceBoundToVFIO(string) bool
+	BindToVFIO(string) error
+	UnbindFromVFIO(string) error
+	CheckIOMMUGroupSafe(string, []string) error
+	unbindFromDriver(string, string) error
+	setDriverOverride(string, string) error
+	triggerDriverProbe(string) error
+	startNvidiaPersistenced() error
+}
+
 type manager struct {
 	paths           *paths.Paths
-	vfioBinder      *VFIOBinder
+	vfioBinder      deviceBinder
 	livenessChecker InstanceLivenessChecker
 	mu              sync.RWMutex
 }
@@ -322,8 +338,6 @@ func (m *manager) BindToVFIO(ctx context.Context, id string) error {
 }
 
 func (m *manager) UnbindFromVFIO(ctx context.Context, id string) error {
-	log := logger.FromContext(ctx)
-
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -341,7 +355,7 @@ func (m *manager) UnbindFromVFIO(ctx context.Context, id string) error {
 		return ErrInUse
 	}
 
-	// Unbind from VFIO
+	log := logger.FromContext(ctx)
 	if err := m.vfioBinder.UnbindFromVFIO(device.PCIAddress); err != nil {
 		return err
 	}
@@ -397,11 +411,32 @@ func (m *manager) MarkDetached(ctx context.Context, deviceID string) error {
 	return m.saveDevice(device)
 }
 
+// ReleaseInstanceDevice checks the recorded owner under the same lock as the unbind.
+// A fork's device list can name a passthrough device still owned by its source.
+func (m *manager) ReleaseInstanceDevice(ctx context.Context, deviceID, instanceID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	device, err := m.loadDevice(deviceID)
+	if err != nil {
+		return err
+	}
+	if device.AttachedTo == nil || *device.AttachedTo != instanceID {
+		return nil
+	}
+	// A retry after the unbind but before the save sees ErrNotBound.
+	if err := m.vfioBinder.UnbindFromVFIO(device.PCIAddress); err != nil && !errors.Is(err, ErrNotBound) {
+		return err
+	}
+	device.AttachedTo = nil
+	device.BoundToVFIO = false
+	return m.saveDevice(device)
+}
+
 // ReconcileDevices cleans up stale device state on startup.
 // It performs safe-by-default reconciliation:
 // 1. Detects orphaned device attachments (instance missing or not running)
-// 2. Clears orphaned AttachedTo metadata
-// 3. Runs GPU-reset-lite for orphaned devices (unbind VFIO, clear override, probe driver)
+// 2. Runs GPU-reset-lite for orphaned devices (unbind VFIO, clear override, probe driver)
+// 3. Clears the attachment once the device is no longer bound to VFIO
 // 4. Logs mismatches between instance→device and device→instance references
 // 5. Detects suspicious cloud-hypervisor processes
 func (m *manager) ReconcileDevices(ctx context.Context) error {
@@ -471,19 +506,6 @@ func (m *manager) ReconcileDevices(ctx context.Context) error {
 				"orphaned_instance_id", instanceID,
 			)
 
-			// Clear the orphaned attachment
-			device.AttachedTo = nil
-			if err := m.saveDevice(device); err != nil {
-				log.ErrorContext(ctx, "failed to save device after clearing attachment",
-					"device_id", device.Id,
-					"error", err,
-				)
-				stats.errors++
-				continue
-			}
-			stats.orphanedCleared++
-
-			// Run GPU-reset-lite for orphaned device
 			m.resetOrphanedDevice(ctx, device, &stats)
 		}
 	}
@@ -695,30 +717,22 @@ func (m *manager) resetOrphanedDevice(ctx context.Context, device *Device, stats
 	}
 
 	// Verify the device is now unbound from VFIO
-	stillBoundToVFIO := m.vfioBinder.IsDeviceBoundToVFIO(device.PCIAddress)
-	if stillBoundToVFIO {
-		log.WarnContext(ctx, "device still bound to VFIO after reset-lite",
-			"device_id", device.Id,
-			"pci_address", device.PCIAddress,
-		)
+	bound, err := m.vfioBinder.deviceBoundToVFIO(device.PCIAddress)
+	if err != nil || bound {
+		log.WarnContext(ctx, "cannot confirm device was unbound after reset-lite; keeping attachment",
+			"device_id", device.Id, "pci_address", device.PCIAddress, "bound_to_vfio", bound, "error", err)
 		stats.resetFailed++
-	} else {
-		log.InfoContext(ctx, "GPU-reset-lite completed for orphaned device",
-			"device_id", device.Id,
-			"device_name", device.Name,
-			"pci_address", device.PCIAddress,
-		)
-		stats.resetSucceeded++
+		return
 	}
-
-	// Update device metadata to reflect new VFIO state
-	device.BoundToVFIO = stillBoundToVFIO
+	stats.resetSucceeded++
+	device.AttachedTo = nil
+	device.BoundToVFIO = false
 	if err := m.saveDevice(device); err != nil {
-		log.WarnContext(ctx, "failed to save device after reset-lite",
-			"device_id", device.Id,
-			"error", err,
-		)
+		log.WarnContext(ctx, "failed to save device after reset-lite", "device_id", device.Id, "error", err)
+		stats.errors++
+		return
 	}
+	stats.orphanedCleared++
 }
 
 // Helper methods

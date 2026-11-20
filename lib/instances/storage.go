@@ -63,6 +63,8 @@ func (m *manager) ensureDirectories(id string) error {
 	return nil
 }
 
+var errMetadataIDMismatch = errors.New("instance metadata ID mismatch")
+
 // loadMetadata loads instance metadata from disk
 func (m *manager) loadMetadata(id string) (*metadata, error) {
 	return m.loadMetadataTimed(id, nil)
@@ -97,16 +99,29 @@ func (m *manager) loadMetadataTimed(id string, timings *metadataScanTimings) (*m
 		return nil, fmt.Errorf("unmarshal metadata: %w", err)
 	}
 
+	if meta.Id != id {
+		return nil, fmt.Errorf("%w: directory %q contains metadata for %q", errMetadataIDMismatch, id, meta.Id)
+	}
 	return &meta, nil
 }
 
 // saveMetadata saves instance metadata to disk
 func (m *manager) saveMetadata(meta *metadata) error {
+	return m.writeMetadata(meta, false)
+}
+
+// saveMetadataDurably is saveMetadata for a write that a host crash must not
+// undo once it has returned: it syncs the file and its directory.
+func (m *manager) saveMetadataDurably(meta *metadata) error {
+	return m.writeMetadata(meta, true)
+}
+
+func (m *manager) writeMetadata(meta *metadata, durable bool) error {
 	if err := paths.ValidatePathComponent(meta.Id); err != nil {
 		return err
 	}
 	unlockAliasReaders := hypervisor.LockSnapshotSourceAliasReaders()
-	defer unlockAliasReaders()
+	defer func() { unlockAliasReaders() }()
 
 	metaPath := m.paths.InstanceMetadata(meta.Id)
 
@@ -130,6 +145,27 @@ func (m *manager) saveMetadata(meta *metadata) error {
 		tmp.Close()
 		return fmt.Errorf("chmod temporary metadata: %w", err)
 	}
+	var dir *os.File
+	if durable {
+		// The syncs run without the alias lock. A restore waiting to alias a
+		// source directory holds back every metadata read on the host, so it
+		// must not wait on a disk. An alias puts the directory back before it
+		// lets readers in again, so the file and directory opened here are
+		// still this instance's once the lock is taken again.
+		dir, err = os.Open(filepath.Dir(metaPath))
+		if err != nil {
+			tmp.Close()
+			return fmt.Errorf("open instance directory: %w", err)
+		}
+		defer dir.Close()
+		unlockAliasReaders()
+		err = tmp.Sync()
+		unlockAliasReaders = hypervisor.LockSnapshotSourceAliasReaders()
+		if err != nil {
+			tmp.Close()
+			return fmt.Errorf("sync temporary metadata: %w", err)
+		}
+	}
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("close temporary metadata: %w", err)
 	}
@@ -140,7 +176,29 @@ func (m *manager) saveMetadata(meta *metadata) error {
 
 	m.syncAdmissionAllocation(meta)
 
+	if durable {
+		// The rename lasts only once the directory is synced too.
+		unlockAliasReaders()
+		unlockAliasReaders = func() {}
+		syncDir := (*os.File).Sync
+		if m.syncDirFn != nil {
+			syncDir = m.syncDirFn
+		}
+		if err := syncDir(dir); err != nil {
+			return fmt.Errorf("sync instance directory: %w", err)
+		}
+	}
+
 	return nil
+}
+
+func syncDir(path string) error {
+	dir, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	return dir.Sync()
 }
 
 // createOverlayDisk creates a sparse overlay disk for the instance
