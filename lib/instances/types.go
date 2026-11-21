@@ -144,7 +144,7 @@ type StoredMetadata struct {
 
 	// Hypervisor configuration
 	HypervisorType    hypervisor.Type // Hypervisor type (e.g., "cloud-hypervisor")
-	HypervisorVersion string          // Hypervisor version (e.g., "v51.1")
+	HypervisorVersion string          // Hypervisor version (e.g., "v51.2")
 	// Embedded so its fields keep their flat JSON keys in persisted metadata.
 	HypervisorProcessIdentity
 

@@ -28,7 +28,7 @@ func TestRestoreInstanceMissingImageReturnsNotFoundFast(t *testing.T) {
 		Vcpus:             1,
 		CreatedAt:         time.Now(),
 		HypervisorType:    hypervisor.TypeCloudHypervisor,
-		HypervisorVersion: string(vmm.V51_1),
+		HypervisorVersion: string(vmm.V51_2),
 		// A socket path that does not exist forces deriveState down the
 		// no-socket branch, where a present snapshot dir yields Standby.
 		SocketPath: filepath.Join(tmpDir, id, "nonexistent.sock"),
