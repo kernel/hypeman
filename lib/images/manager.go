@@ -316,11 +316,14 @@ func (m *manager) inflightCredentialsMatch(digest string, credentials *authn.Aut
 	return existingFingerprint == credentialFingerprint(credentials)
 }
 
-func (m *manager) registerInflightPull(digest string, credentials *authn.AuthConfig) *inflightImagePull {
+// registerInflightPull publishes a new handle for digest. It returns the
+// handle it replaced, if any, so a refused successor can put that one back.
+func (m *manager) registerInflightPull(digest string, credentials *authn.AuthConfig) (current, previous *inflightImagePull) {
 	if m.inflightPulls == nil {
 		m.inflightPulls = make(map[string]*inflightImagePull)
 	}
-	if previous := m.inflightPulls[digest]; previous != nil && previous.timer != nil {
+	previous = m.inflightPulls[digest]
+	if previous != nil && previous.timer != nil {
 		previous.timer.Stop()
 	}
 	inflight := &inflightImagePull{
@@ -328,36 +331,71 @@ func (m *manager) registerInflightPull(digest string, credentials *authn.AuthCon
 		credentials: credentials,
 	}
 	m.inflightPulls[digest] = inflight
-	if credentials == nil {
-		return inflight
+	if credentials != nil {
+		if m.borrowedCredentialsTimeout <= 0 {
+			m.borrowedCredentialsTimeout = DefaultBorrowedCredentialsTimeout
+		}
+		inflight.credentialsExpireAt = time.Now().Add(m.borrowedCredentialsTimeout)
+		m.armInflightExpiryLocked(digest, inflight)
 	}
-	if m.borrowedCredentialsTimeout <= 0 {
-		m.borrowedCredentialsTimeout = DefaultBorrowedCredentialsTimeout
+	return inflight, previous
+}
+
+// armInflightExpiryLocked starts the credentials expiry timer from the deadline
+// the handle already carries, so a restored handle keeps its original bound.
+// createMu must be held.
+func (m *manager) armInflightExpiryLocked(digest string, inflight *inflightImagePull) {
+	if inflight.credentials == nil {
+		return
 	}
-	inflight.credentialsExpireAt = time.Now().Add(m.borrowedCredentialsTimeout)
-	inflight.timer = time.AfterFunc(m.borrowedCredentialsTimeout, func() {
+	remaining := time.Until(inflight.credentialsExpireAt)
+	if remaining <= 0 {
+		// Expired credentials must not survive as current: drop them so the
+		// pull fails with ErrBorrowedCredentialsExpired instead of running
+		// unauthenticated.
+		inflight.credentials = nil
+		return
+	}
+	inflight.timer = time.AfterFunc(remaining, func() {
 		m.createMu.Lock()
 		defer m.createMu.Unlock()
 		if m.inflightPulls[digest] == inflight {
 			inflight.credentials = nil
 		}
 	})
-	return inflight
+}
+
+// restoreInflightPullLocked makes previous current again after its successor
+// was refused, so the pull already running for digest keeps its credentials.
+// It re-arms the previous handle's expiry bound. createMu must be held.
+func (m *manager) restoreInflightPullLocked(digest string, previous *inflightImagePull) {
+	if previous == nil {
+		delete(m.inflightPulls, digest)
+		return
+	}
+	m.inflightPulls[digest] = previous
+	m.armInflightExpiryLocked(digest, previous)
 }
 
 func (m *manager) releaseInflightPull(digest string, inflight *inflightImagePull) func() {
 	return func() {
 		m.createMu.Lock()
 		defer m.createMu.Unlock()
-		if m.inflightPulls[digest] != inflight {
-			return
-		}
-		delete(m.inflightPulls, digest)
-		if inflight.timer != nil {
-			inflight.timer.Stop()
-		}
-		inflight.credentials = nil
+		m.releaseInflightPullLocked(digest, inflight)
 	}
+}
+
+// releaseInflightPullLocked drops inflight when it is still the current handle.
+// createMu must be held.
+func (m *manager) releaseInflightPullLocked(digest string, inflight *inflightImagePull) {
+	if m.inflightPulls[digest] != inflight {
+		return
+	}
+	delete(m.inflightPulls, digest)
+	if inflight.timer != nil {
+		inflight.timer.Stop()
+	}
+	inflight.credentials = nil
 }
 
 func (m *manager) borrowedAuth(digest string, expected *inflightImagePull) (*authn.AuthConfig, time.Time, bool, bool) {
@@ -400,7 +438,7 @@ func (m *manager) createAndQueueImage(ref *ResolvedRef, req CreateImageRequest, 
 
 	// Keep borrowed credentials outside the queued closure so their lifetime is
 	// bounded even when this job waits behind another pull.
-	inflight := m.registerInflightPull(ref.Digest(), req.Credentials)
+	inflight, previousInflight := m.registerInflightPull(ref.Digest(), req.Credentials)
 	buildID := meta.BuildID
 	queuePos := m.queue.EnqueueSuccessor(ref.Digest(), func() {
 		credentials, deadline, expired, stale := m.borrowedAuth(ref.Digest(), inflight)
@@ -420,10 +458,13 @@ func (m *manager) createAndQueueImage(ref *ResolvedRef, req CreateImageRequest, 
 		m.buildImage(ctx, ref, credentials, buildID)
 	}, m.releaseInflightPull(ref.Digest(), inflight))
 	if queuePos < 0 {
-		// Rejected before entering the queue: release the borrowed credentials
-		// and fail the record so it is not left pending forever.
-		m.releaseInflightPull(ref.Digest(), inflight)()
-		m.updateStatusByDigest(ref, StatusFailed, queue.ErrFull, buildID)
+		// Rejected before entering the queue: drop the reserved handle, put back
+		// the pull that was already running for this digest, then fail the
+		// record so it is not left pending forever. createMu is held here (both
+		// callers hold it), so the locked variants are used.
+		m.releaseInflightPullLocked(ref.Digest(), inflight)
+		m.restoreInflightPullLocked(ref.Digest(), previousInflight)
+		m.updateStatusByDigestLocked(ref, StatusFailed, queue.ErrFull, buildID)
 		return nil, queue.ErrFull
 	}
 
@@ -604,7 +645,12 @@ func (m *manager) recordImageBuildPhase(ctx context.Context, digest, phase strin
 func (m *manager) updateStatusByDigest(ref *ResolvedRef, status string, err error, buildID string) {
 	m.createMu.Lock()
 	defer m.createMu.Unlock()
+	m.updateStatusByDigestLocked(ref, status, err, buildID)
+}
 
+// updateStatusByDigestLocked applies a status change unless the record moved on
+// to another build. createMu must be held.
+func (m *manager) updateStatusByDigestLocked(ref *ResolvedRef, status string, err error, buildID string) {
 	layout := resolveImageLayout(m.paths, ref.Repository(), ref.DigestHex())
 	meta, readErr := readMetadataAt(layout)
 	if readErr != nil || meta.BuildID != buildID {

@@ -456,7 +456,13 @@ func (m *manager) recoverInterruptedPushes() {
 			m.executePush(context.Background(), &metaCopy, m.provider)
 		}, m.releaseInflight(key)) < 0 {
 			// Keep recovery bounded: a record that cannot enter the queue is
-			// failed with a reason instead of sitting queued forever.
+			// failed with a reason instead of sitting queued forever. The
+			// reservation above must go too: no job will ever run to release it,
+			// and a stale entry would keep handing this failed record to later
+			// CreatePush calls for the same digest and target.
+			m.mu.Lock()
+			delete(m.inflight, key)
+			m.mu.Unlock()
 			m.failRecovered(meta, "push queue is full during recovery; resubmit the push")
 		}
 	}
