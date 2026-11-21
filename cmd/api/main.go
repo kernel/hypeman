@@ -554,9 +554,15 @@ func run() error {
 	r.Get("/swagger", api.SwaggerUIHandler)
 
 	// Create HTTP server
+	// ReadHeaderTimeout and IdleTimeout bound sockets that never finish (or never
+	// start) a request; without them half-open connections are held forever.
+	// ReadTimeout is intentionally unset: it caps the whole request body read and
+	// would abort legitimate multi-gigabyte image pushes and streaming responses.
 	srv := &http.Server{
-		Addr:    net.JoinHostPort(app.Config.ListenAddress, app.Config.Port),
-		Handler: r,
+		Addr:              net.JoinHostPort(app.Config.ListenAddress, app.Config.Port),
+		Handler:           r,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 
 	metricsAddr := metricsServerAddress(cfg)
