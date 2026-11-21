@@ -29,9 +29,10 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'push' && github.ref != 'refs/heads/main' }}
 
 # A slash-command dispatch supplies a fork repository and immutable commit SHA.
-# Only fork-checks checks that code out. Every other job needs a shared runner,
-# passwordless sudo and registry credentials, so it runs this repository's code
-# at this workflow revision and is skipped when the dispatch names a fork.
+# Only fork-checks checks out a foreign repository. Every other job needs a
+# shared runner, passwordless sudo and registry credentials, so it is skipped
+# when the dispatch names a fork and otherwise checks out the dispatched commit
+# in this repository (or the pushed ref for a push run), never plain main.
 env:
   TEST_PR_HEAD_REPO: ${{ inputs.pr_head_repo || github.repository }}
 
@@ -61,10 +62,18 @@ jobs:
     # Fork code must never reach a runner that has passwordless sudo.
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.pr_head_repo == '' || inputs.pr_head_repo == github.repository }}
     runs-on: [self-hosted, linux, x64, kvm]
+    outputs:
+      tested_sha: ${{ steps.tested-sha.outputs.sha }}
     steps:
       - uses: actions/checkout@v4.4.0
         with:
+          # Test the dispatched PR commit; a push has no inputs and uses its ref.
+          ref: ${{ inputs.pr_head_sha || github.ref }}
           persist-credentials: false
+
+      - name: Record tested commit
+        id: tested-sha
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       # Checkout already resets the tree; this second pass exists because a
       # previous run on this shared runner may have left anything behind, and
@@ -314,12 +323,21 @@ jobs:
           PR_NUMBER: ${{ inputs.pr_number }}
           EXPECTED_REPO: ${{ inputs.pr_head_repo }}
           EXPECTED_SHA: ${{ inputs.pr_head_sha }}
+          # The commit the privileged job actually checked out, so a run that
+          # fell back to main's code can never be reported as the PR's result.
+          TESTED_SHA: ${{ needs.test.outputs.tested_sha }}
           # Fork dispatches skip the privileged jobs; report what actually ran.
           TEST_RESULT: ${{ needs.test.result == 'skipped' && needs.fork-checks.result || needs.test.result }}
+          FORK_ONLY: ${{ needs.test.result == 'skipped' }}
         run: |
           set -euo pipefail
           [[ "$PR_NUMBER" =~ ^[0-9]+$ ]]
           [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          # Fork-checks fetches EXPECTED_SHA itself; a privileged run must show it did.
+          if [[ "$FORK_ONLY" != "true" && "$TESTED_SHA" != "$EXPECTED_SHA" ]]; then
+            echo "::notice::Skipping test status because the run tested ${TESTED_SHA:-nothing}, not $EXPECTED_SHA"
+            exit 0
+          fi
           pr="$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '[.state, .base.ref, .head.repo.full_name, .head.sha] | @tsv')"
           read -r state base_ref head_repo head_sha <<< "$pr"
           if [[ "$state" != open || "$base_ref" != main || "$head_repo" != "$EXPECTED_REPO" || "$head_sha" != "$EXPECTED_SHA" ]]; then
@@ -351,6 +369,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4.4.0
         with:
+          # Same commit as test: the dispatched PR commit, else the pushed ref.
+          ref: ${{ inputs.pr_head_sha || github.ref }}
           persist-credentials: false
       - uses: actions/setup-go@v6.5.0
         with:
@@ -465,6 +485,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4.4.0
         with:
+          # Same commit as test: the dispatched PR commit, else the pushed ref.
+          ref: ${{ inputs.pr_head_sha || github.ref }}
           persist-credentials: false
       - uses: actions/setup-go@v6.5.0
         with:
