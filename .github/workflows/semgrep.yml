@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   scan:
-    uses: kernel/security-workflows/.github/workflows/semgrep.yml@main
+    uses: kernel/security-workflows/.github/workflows/semgrep.yml@c9309e66fdf92bb9703640982406a5ba0445f5be  # commit pinned: a branch ref would move under this repo's secrets
     with:
       extra-configs: '--config p/golang --config p/trailofbits'
       codebase-description: 'Hypervisor runtime managing VMs for customer browser sessions'

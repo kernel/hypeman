@@ -13,7 +13,7 @@ permissions: {}
 jobs:
   merge:
     if: github.event.issue.pull_request && startsWith(github.event.comment.body, '/breakglass')
-    uses: kernel/security-workflows/.github/workflows/breakglass-merge.yml@main
+    uses: kernel/security-workflows/.github/workflows/breakglass-merge.yml@c9309e66fdf92bb9703640982406a5ba0445f5be  # commit pinned: a branch ref would move under this repo's secrets
     # Named rather than `secrets: inherit`: this calls a workflow in another repository, and
     # inherit would hand it every secret this repo holds.
     secrets:
