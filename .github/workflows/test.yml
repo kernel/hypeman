@@ -29,35 +29,51 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'push' && github.ref != 'refs/heads/main' }}
 
 # A slash-command dispatch supplies a fork repository and immutable commit SHA.
-# Normal push runs use the upstream repository and pushed ref.
+# Only fork-checks checks that code out. Every other job needs a shared runner,
+# passwordless sudo and registry credentials, so it runs this repository's code
+# at this workflow revision and is skipped when the dispatch names a fork.
 env:
   TEST_PR_HEAD_REPO: ${{ inputs.pr_head_repo || github.repository }}
-  TEST_SOURCE_REPO: ${{ inputs.pr_head_repo || github.repository }}
-  TEST_SOURCE_REF: ${{ inputs.pr_head_sha || github.ref }}
 
 permissions:
   contents: read
 
 jobs:
+  # Untrusted fork commits run only here: a disposable hosted runner with no
+  # secrets, no sudo and no registry login. Nothing it builds is reused.
+  fork-checks:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.pr_head_repo != '' && inputs.pr_head_repo != github.repository }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4.4.0
+        with:
+          repository: ${{ inputs.pr_head_repo }}
+          ref: ${{ inputs.pr_head_sha }}
+          persist-credentials: false
+      - uses: actions/setup-go@v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Build
+        run: make build
+
   test:
+    # Fork code must never reach a runner that has passwordless sudo.
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.pr_head_repo == '' || inputs.pr_head_repo == github.repository }}
     runs-on: [self-hosted, linux, x64, kvm]
     steps:
       - uses: actions/checkout@v4.4.0
         with:
-          clean: false
-          repository: ${{ env.TEST_SOURCE_REPO }}
-          ref: ${{ env.TEST_SOURCE_REF }}
           persist-credentials: false
 
-      - name: Clean workspace (preserve binary caches)
+      # Checkout already resets the tree; this second pass exists because a
+      # previous run on this shared runner may have left anything behind, and
+      # nothing untracked (bin/, downloaded binaries) is trusted across runs.
+      - name: Clean workspace
         run: |
           git reset --hard HEAD
-          git clean -ffdx \
-            -e lib/vmm/binaries/ \
-            -e lib/hypervisor/firecracker/binaries/ \
-            -e lib/ingress/binaries/ \
-            -e bin/
-      
+          git clean -ffdx
+
       # Tests create a bridge and route per VM and clean up on success, but a
       # run that dies mid-test (crash, timeout, superseded-run cancellation)
       # leaks them, and enough leaked routes fail new tests on subnet
@@ -284,7 +300,7 @@ jobs:
 
   report-pr-test:
     if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.pr_number != '' }}
-    needs: test
+    needs: [test, fork-checks]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -298,7 +314,8 @@ jobs:
           PR_NUMBER: ${{ inputs.pr_number }}
           EXPECTED_REPO: ${{ inputs.pr_head_repo }}
           EXPECTED_SHA: ${{ inputs.pr_head_sha }}
-          TEST_RESULT: ${{ needs.test.result }}
+          # Fork dispatches skip the privileged jobs; report what actually ran.
+          TEST_RESULT: ${{ needs.test.result == 'skipped' && needs.fork-checks.result || needs.test.result }}
         run: |
           set -euo pipefail
           [[ "$PR_NUMBER" =~ ^[0-9]+$ ]]
@@ -323,6 +340,8 @@ jobs:
             --field target_url="$GITHUB_SERVER_URL/$REPO/actions/runs/$GITHUB_RUN_ID"
 
   test-darwin:
+    # Same rule as test: a macOS runner is shared and holds registry credentials.
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.pr_head_repo == '' || inputs.pr_head_repo == github.repository }}
     runs-on: [self-hosted, macos, arm64]
     concurrency:
       group: macos-ci-test-${{ inputs.pr_head_sha || github.ref }}
@@ -332,8 +351,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4.4.0
         with:
-          repository: ${{ env.TEST_SOURCE_REPO }}
-          ref: ${{ env.TEST_SOURCE_REF }}
           persist-credentials: false
       - uses: actions/setup-go@v6.5.0
         with:
@@ -438,6 +455,8 @@ jobs:
           make clean
 
   e2e-install:
+    # Same rule as test: a macOS runner is shared and holds registry credentials.
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.pr_head_repo == '' || inputs.pr_head_repo == github.repository }}
     runs-on: [self-hosted, macos, arm64]
     needs: test-darwin
     concurrency:
@@ -446,8 +465,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4.4.0
         with:
-          repository: ${{ env.TEST_SOURCE_REPO }}
-          ref: ${{ env.TEST_SOURCE_REF }}
           persist-credentials: false
       - uses: actions/setup-go@v6.5.0
         with:
