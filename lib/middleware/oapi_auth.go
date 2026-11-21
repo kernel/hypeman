@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	v2 "github.com/docker/distribution/registry/api/v2"
+	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/getkin/kin-openapi/openapi3filter"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/gorilla/mux"
@@ -17,6 +18,7 @@ import (
 	"github.com/kernel/hypeman/lib/logger"
 	"github.com/kernel/hypeman/lib/scopes"
 	"github.com/kernel/hypeman/lib/tokenrevocation"
+	nethttpmiddleware "github.com/oapi-codegen/nethttp-middleware"
 )
 
 // errRepoNotAllowed is returned when a valid token doesn't have access to the requested repository.
@@ -55,6 +57,31 @@ type RegistryTokenClaims struct {
 	// Legacy format fields (kept for backward compat)
 	Repositories []string `json:"repos,omitempty"`
 	Scope        string   `json:"scope,omitempty"`
+}
+
+// OapiRequestValidator builds the OpenAPI request validation middleware, including
+// bearer authentication.
+func OapiRequestValidator(spec *openapi3.T, verifier *jwtauth.Verifier, revoked *tokenrevocation.List) func(http.Handler) http.Handler {
+	validate := nethttpmiddleware.OapiRequestValidatorWithOptions(spec, &nethttpmiddleware.Options{
+		Options: openapi3filter.Options{
+			AuthenticationFunc: OapiAuthenticationFunc(verifier, revoked),
+		},
+		ErrorHandler: OapiErrorHandler,
+	})
+
+	return func(next http.Handler) http.Handler {
+		handler := validate(next)
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// The validator reads the entire body into memory before calling the
+			// authentication function. A request without credentials is rejected
+			// regardless, so hide the body and keep anonymous clients from making
+			// the server buffer an arbitrarily large upload.
+			if r.Header.Get("Authorization") == "" {
+				r.Body = http.NoBody
+			}
+			handler.ServeHTTP(w, r)
+		})
+	}
 }
 
 // OapiAuthenticationFunc creates an AuthenticationFunc compatible with nethttp-middleware
