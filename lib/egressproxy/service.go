@@ -483,6 +483,11 @@ func (s *Service) handleConnect(w http.ResponseWriter, r *http.Request, sourceIP
 			}
 			return
 		}
+		// Body reads extend the idle bound as data arrives.
+		_ = clientConn.SetReadDeadline(time.Now().Add(connectIdleTimeout))
+		if req.Body != nil {
+			req.Body = &connectBodyReader{r: req.Body, conn: clientConn}
+		}
 
 		if req.URL == nil {
 			req.URL = &url.URL{}
@@ -525,6 +530,24 @@ func (s *Service) handleConnect(w http.ResponseWriter, r *http.Request, sourceIP
 		}
 	}
 }
+
+// connectBodyReader refreshes the tunnel's idle read deadline on every
+// successful read so a slow but active upload is not cut off by the deadline
+// that bounded the header read.
+type connectBodyReader struct {
+	r    io.ReadCloser
+	conn net.Conn
+}
+
+func (b *connectBodyReader) Read(p []byte) (int, error) {
+	n, err := b.r.Read(p)
+	if n > 0 {
+		_ = b.conn.SetReadDeadline(time.Now().Add(connectIdleTimeout))
+	}
+	return n, err
+}
+
+func (b *connectBodyReader) Close() error { return b.r.Close() }
 
 func (s *Service) getOrCreateLeafCert(host string) (*tls.Certificate, error) {
 	s.mu.RLock()
