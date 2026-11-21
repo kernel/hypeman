@@ -29,7 +29,7 @@ type InstanceConfig struct {
 type HeaderInjectRuleConfig struct {
 	HeaderName     string
 	HeaderValue    string
-	AllowedDomains []string // optional exact or *.example.com patterns; empty means allow all
+	AllowedDomains []string // optional exact or *.example.com patterns; empty means no destinations
 }
 
 // ServiceOptions customizes service construction (primarily for tests).

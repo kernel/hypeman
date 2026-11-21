@@ -27,7 +27,7 @@ That means the VM can make authenticated outbound requests without ever receivin
   - `inject[*].hosts` to optionally restrict destination hosts:
     - Exact host: `api.openai.com`
     - Single-level wildcard: `*.openai.com`
-    - If omitted, injection is allowed for all destinations.
+    - If omitted or empty, no destinations match and nothing is injected.
   - `inject[*].as` to define the header/format template shape.
 - Per instance, `network.egress.enforcement.mode` controls host-side direct egress blocking:
   - `all` (default when proxy is enabled): reject direct non-proxy TCP egress from the VM TAP interface.
