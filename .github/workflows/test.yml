@@ -67,8 +67,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4.4.0
         with:
-          # Test the dispatched PR commit; a push has no inputs and uses its ref.
-          ref: ${{ inputs.pr_head_sha || github.ref }}
+          # Test the dispatched PR commit; otherwise the commit that triggered the run.
+          ref: ${{ inputs.pr_head_sha || github.sha }}
           persist-credentials: false
 
       - name: Record tested commit
@@ -369,8 +369,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4.4.0
         with:
-          # Same commit as test: the dispatched PR commit, else the pushed ref.
-          ref: ${{ inputs.pr_head_sha || github.ref }}
+          # Same commit as test: the dispatched PR commit, else the triggering commit.
+          ref: ${{ inputs.pr_head_sha || github.sha }}
           persist-credentials: false
       - uses: actions/setup-go@v6.5.0
         with:
@@ -485,8 +485,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4.4.0
         with:
-          # Same commit as test: the dispatched PR commit, else the pushed ref.
-          ref: ${{ inputs.pr_head_sha || github.ref }}
+          # Same commit as test: the dispatched PR commit, else the triggering commit.
+          ref: ${{ inputs.pr_head_sha || github.sha }}
           persist-credentials: false
       - uses: actions/setup-go@v6.5.0
         with:
