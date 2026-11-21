@@ -134,3 +134,26 @@ func TestVerifierMetricsConcurrent(t *testing.T) {
 	}
 	assert.Equal(t, map[string]int64{"primary": 10, "fallback": 10}, counts)
 }
+
+func TestVerifierRejectsPublishedPlaceholderVerificationSecrets(t *testing.T) {
+	for _, placeholder := range []string{"dev-secret-change-me", "secret", " Change-Me ", "jwt-secret"} {
+		verifier, err := NewVerifier("a-unique-random-primary", []string{"old", placeholder}, noop.NewMeterProvider().Meter("test"))
+		require.Nil(t, verifier)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "entry 1")
+		assert.NotContains(t, err.Error(), "dev-secret-change-me")
+	}
+}
+
+func TestVerifierAcceptsStrongVerificationSecret(t *testing.T) {
+	verifier, err := NewVerifier("a-unique-random-primary", []string{"9f3c1d7e5b2a4c60"}, noop.NewMeterProvider().Meter("test"))
+	require.NoError(t, err)
+	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"sub": "user", "exp": time.Now().Add(time.Hour).Unix(),
+	}).SignedString([]byte("9f3c1d7e5b2a4c60"))
+	require.NoError(t, err)
+	claims := jwt.MapClaims{}
+	_, err = verifier.ParseWithClaims(context.Background(), token, claims)
+	require.NoError(t, err)
+	assert.Equal(t, "user", claims["sub"])
+}

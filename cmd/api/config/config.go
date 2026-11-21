@@ -619,8 +619,8 @@ func expandHomePath(path string) string {
 // Returns an error if any configuration value is invalid.
 func (c *Config) Validate() error {
 	for i, secret := range c.JwtVerificationSecrets {
-		if secret == "" {
-			return fmt.Errorf("jwt_verification_secrets entry %d must not be empty", i)
+		if jwtauth.IsWeakSecret(secret) {
+			return fmt.Errorf("jwt_verification_secrets entry %d must not be empty or a value published in the examples; set a unique random value or drop it", i)
 		}
 	}
 	if c.MacOSOnly && (runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" || c.Hypervisor.Default != "vz") {

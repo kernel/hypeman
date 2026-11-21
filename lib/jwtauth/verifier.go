@@ -43,8 +43,10 @@ func NewVerifier(signingSecret string, verificationSecrets []string, meter metri
 	}
 	keys := [][]byte{[]byte(signingSecret)}
 	for i, secret := range verificationSecrets {
-		if secret == "" {
-			return nil, fmt.Errorf("jwt_verification_secrets entry %d must not be empty", i)
+		// Every fallback key is tried for every token, so a value published in the
+		// examples would let anyone who read the repository mint accepted tokens.
+		if IsWeakSecret(secret) {
+			return nil, fmt.Errorf("jwt_verification_secrets entry %d must not be empty or a value published in the examples; a published value cannot be a verification key", i)
 		}
 		keys = append(keys, []byte(secret))
 	}

@@ -50,8 +50,22 @@ func TestLoadJWTVerificationSecretsRejectsInvalidEnv(t *testing.T) {
 	}
 }
 
-func TestValidateJWTVerificationSecretsRejectsEmptyEntry(t *testing.T) {
-	cfg := defaultConfig()
-	cfg.JwtVerificationSecrets = []string{"old", ""}
-	require.ErrorContains(t, cfg.Validate(), "entry 1 must not be empty")
+func TestValidateJWTVerificationSecretsRejectsUnusableEntry(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		secrets []string
+		want    string
+	}{
+		{"empty", []string{"old", ""}, "entry 1 must not be empty"},
+		{"single published placeholder", []string{"dev-secret-change-me"}, "entry 0"},
+		{"placeholder after a real key", []string{"old", "secret"}, "entry 1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := defaultConfig()
+			cfg.JwtVerificationSecrets = tc.secrets
+			err := cfg.Validate()
+			require.ErrorContains(t, err, tc.want)
+			assert.NotContains(t, err.Error(), "dev-secret-change-me")
+		})
+	}
 }
