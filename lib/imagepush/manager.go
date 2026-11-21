@@ -178,6 +178,15 @@ func (m *manager) CreatePush(ctx context.Context, req PushRequest) (*Push, error
 	queuePos := m.queue.Enqueue(key, func() {
 		m.executePush(context.Background(), &metaCopy, provider)
 	}, m.releaseInflight(key))
+	if queuePos < 0 {
+		// The job never entered the queue, so no completion hook will fire:
+		// drop the reservation and the record so a retry starts clean.
+		m.mu.Lock()
+		delete(m.inflight, key)
+		m.mu.Unlock()
+		removePushData(m.paths, meta.ID)
+		return nil, fmt.Errorf("push queue is full: %w", queue.ErrFull)
+	}
 
 	push := meta.toPush()
 	if queuePos > 0 {
@@ -443,9 +452,13 @@ func (m *manager) recoverInterruptedPushes() {
 		m.mu.Unlock()
 
 		metaCopy := *meta
-		m.queue.Enqueue(key, func() {
+		if m.queue.Enqueue(key, func() {
 			m.executePush(context.Background(), &metaCopy, m.provider)
-		}, m.releaseInflight(key))
+		}, m.releaseInflight(key)) < 0 {
+			// Keep recovery bounded: a record that cannot enter the queue is
+			// failed with a reason instead of sitting queued forever.
+			m.failRecovered(meta, "push queue is full during recovery; resubmit the push")
+		}
 	}
 }
 

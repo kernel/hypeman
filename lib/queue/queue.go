@@ -3,7 +3,19 @@
 // already active or pending returns its position instead of re-enqueueing.
 package queue
 
-import "sync"
+import (
+	"errors"
+	"sync"
+)
+
+// ErrFull is wrapped by callers when Enqueue reports a full queue, so an
+// unbounded pile of pending jobs cannot be grown by request input.
+var ErrFull = errors.New("queue pending limit reached")
+
+// MaxPending bounds the pending queue. Enqueue returns -1 once it is reached;
+// callers must treat that as a rejected job (fail it or tell the caller to
+// retry) instead of assuming it will start later.
+const MaxPending = 512
 
 type job struct {
 	key     string
@@ -16,6 +28,7 @@ type Queue struct {
 	maxConcurrent int
 	active        map[string]bool
 	pending       []job
+	pendingIndex  map[string]int // key -> index in pending, for O(1) dedup
 	mu            sync.Mutex
 }
 
@@ -28,16 +41,18 @@ func New(maxConcurrent int) *Queue {
 		maxConcurrent: maxConcurrent,
 		active:        make(map[string]bool),
 		pending:       make([]job, 0),
+		pendingIndex:  make(map[string]int),
 	}
 }
 
 // Enqueue adds a job keyed by key. Returns the queue position: 0 if it
-// started immediately, >0 if queued behind other jobs. If the key is already
-// active or pending, Enqueue dedups and returns its current position without
-// re-enqueueing. A completion hook may be provided; when non-nil it runs
-// after the key leaves the active set (so a caller's bookkeeping for the key
-// is torn down only once the queue is done with it), but only when this call
-// actually started the job — a dedup'd enqueue does not run it.
+// started immediately, >0 if queued behind other jobs, and -1 if the pending
+// queue is full (the job was not queued and will not run). If the key is
+// already active or pending, Enqueue dedups and returns its current position
+// without re-enqueueing. A completion hook may be provided; when non-nil it
+// runs after the key leaves the active set (so a caller's bookkeeping for the
+// key is torn down only once the queue is done with it), but only when this
+// call actually started the job — a dedup'd enqueue does not run it.
 func (q *Queue) Enqueue(key string, startFn func(), done func()) int {
 	return q.enqueue(key, startFn, done, false, false)
 }
@@ -68,13 +83,11 @@ func (q *Queue) enqueue(key string, startFn func(), done func(), allowActive, re
 		startFn()
 	}
 
-	for i, j := range q.pending {
-		if j.key == key {
-			if replacePending {
-				q.pending[i] = job{key: key, startFn: wrappedFn}
-			}
-			return i + 1
+	if i, ok := q.pendingIndex[key]; ok {
+		if replacePending {
+			q.pending[i] = job{key: key, startFn: wrappedFn}
 		}
+		return i + 1
 	}
 
 	if len(q.active) < q.maxConcurrent && !q.active[key] {
@@ -88,7 +101,12 @@ func (q *Queue) enqueue(key string, startFn func(), done func(), allowActive, re
 		return 0
 	}
 
+	if len(q.pending) >= MaxPending {
+		return -1
+	}
+
 	q.pending = append(q.pending, job{key: key, startFn: wrappedFn})
+	q.pendingIndex[key] = len(q.pending) - 1
 	return len(q.pending)
 }
 
@@ -106,6 +124,10 @@ func (q *Queue) complete(key string) {
 				continue
 			}
 			q.pending = append(q.pending[:i], q.pending[i+1:]...)
+			delete(q.pendingIndex, pending.key)
+			for j := i; j < len(q.pending); j++ {
+				q.pendingIndex[q.pending[j].key] = j
+			}
 			q.active[pending.key] = true
 			next = &pending
 			break
@@ -124,11 +146,9 @@ func (q *Queue) GetPosition(key string) *int {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
-	for i, j := range q.pending {
-		if j.key == key {
-			pos := i + 1
-			return &pos
-		}
+	if i, ok := q.pendingIndex[key]; ok {
+		pos := i + 1
+		return &pos
 	}
 	return nil
 }

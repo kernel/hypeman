@@ -419,6 +419,13 @@ func (m *manager) createAndQueueImage(ref *ResolvedRef, req CreateImageRequest, 
 		}
 		m.buildImage(ctx, ref, credentials, buildID)
 	}, m.releaseInflightPull(ref.Digest(), inflight))
+	if queuePos < 0 {
+		// Rejected before entering the queue: release the borrowed credentials
+		// and fail the record so it is not left pending forever.
+		m.releaseInflightPull(ref.Digest(), inflight)()
+		m.updateStatusByDigest(ref, StatusFailed, queue.ErrFull, buildID)
+		return nil, queue.ErrFull
+	}
 
 	img := meta.toImageFor(ref.String())
 	if queuePos > 0 {
@@ -669,9 +676,13 @@ func (m *manager) recoverInterruptedBuild(meta *imageMetadata) bool {
 		return true
 	}
 	buildID := meta.BuildID
-	m.queue.Enqueue(meta.Digest, func() {
+	if m.queue.Enqueue(meta.Digest, func() {
 		m.buildImage(context.Background(), ref, nil, buildID)
-	}, nil)
+	}, nil) < 0 {
+		// A rejected recovery would stay pending with no runner; fail it so
+		// the record reaches a terminal state a caller can see.
+		m.updateStatusByDigest(ref, StatusFailed, queue.ErrFull, buildID)
+	}
 	return true
 }
 
