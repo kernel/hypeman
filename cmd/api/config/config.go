@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/netip"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/c2h5oh/datasize"
+	"github.com/kernel/hypeman/lib/jwtauth"
 	"github.com/kernel/hypeman/lib/snapshot"
 	"github.com/knadh/koanf/parsers/yaml"
 	"github.com/knadh/koanf/providers/env"
@@ -581,6 +583,12 @@ func Load(configPath string) (*Config, error) {
 		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
 	}
 	cfg.expandPathFields()
+
+	// Empty is allowed here (the server fails later); a shipped placeholder is
+	// never acceptable, so refuse to start with a key anyone can read.
+	if cfg.JwtSecret != "" && jwtauth.IsWeakSecret(cfg.JwtSecret) {
+		return nil, errors.New("jwt_secret is a published placeholder, not a secret; set a unique random value (openssl rand -hex 32)")
+	}
 
 	return &cfg, nil
 }
