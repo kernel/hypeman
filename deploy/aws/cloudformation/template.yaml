@@ -33,6 +33,7 @@ Metadata:
           default: Hypeman
         Parameters:
           - HypemanVersion
+          - HypemanVersionSha256
           - HypemanCliVersion
           - HypemanBranch
     ParameterLabels:
@@ -68,6 +69,8 @@ Metadata:
         default: Hypeman data volume throughput
       HypemanVersion:
         default: Hypeman release
+      HypemanVersionSha256:
+        default: Hypeman release installer digest
       HypemanBranch:
         default: Hypeman source branch
       HypemanCliVersion:
@@ -152,7 +155,12 @@ Parameters:
   HypemanVersion:
     Type: String
     Default: v0.3.0
-    Description: Hypeman API release tag, or latest. Ignored when HypemanBranch is set.
+    Description: Hypeman API release tag, or latest. Ignored when HypemanBranch is set. Also pins the installer script used during provisioning.
+  HypemanVersionSha256:
+    Type: String
+    Default: fa98e8a2e21a173daaf33a2f788eb146f8e48de67940ea5ef91d8261c4269ef6
+    AllowedPattern: "^[0-9a-f]{64}$"
+    Description: SHA-256 of scripts/install.sh at HypemanVersion. Update this together with HypemanVersion, otherwise provisioning refuses to run the installer.
   HypemanBranch:
     Type: String
     Default: ""
@@ -509,7 +517,20 @@ Resources:
           else
             export CLI_VERSION="${HypemanCliVersion}"
           fi
-          curl -fsSL https://raw.githubusercontent.com/kernel/hypeman/main/scripts/install.sh | bash
+          # No checksum is published for the installer itself, so the digest is pinned
+          # as a parameter and checked before the script runs as root.
+          if [ "${HypemanVersion}" = "latest" ]; then
+            installer_tag="$(curl -fsSL https://api.github.com/repos/kernel/hypeman/releases/latest | grep -m1 '"tag_name"' | cut -d'"' -f4)"
+          else
+            installer_tag="${HypemanVersion}"
+          fi
+          case "${!installer_tag}" in
+            v*) ;;
+            *) echo "could not resolve a pinned release tag for the installer" >&2; exit 1 ;;
+          esac
+          curl -fsSL -o /tmp/hypeman-install.sh "https://raw.githubusercontent.com/kernel/hypeman/${!installer_tag}/scripts/install.sh"
+          echo "${HypemanVersionSha256}  /tmp/hypeman-install.sh" | sha256sum -c - || { echo "installer checksum mismatch, refusing to run it" >&2; exit 1; }
+          bash /tmp/hypeman-install.sh
 
           install -d -m 755 /etc/systemd/system/hypeman.service.d
           cat >/etc/systemd/system/hypeman.service.d/cloudformation.conf <<EOF
