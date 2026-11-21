@@ -483,9 +483,9 @@ func (s *Service) handleConnect(w http.ResponseWriter, r *http.Request, sourceIP
 			}
 			return
 		}
-		// Body reads extend the idle bound as data arrives.
-		_ = clientConn.SetReadDeadline(time.Now().Add(connectIdleTimeout))
-		if req.Body != nil {
+		// Headers are in; each body read arms its own idle bound.
+		_ = clientConn.SetReadDeadline(time.Time{})
+		if req.Body != nil && req.Body != http.NoBody {
 			req.Body = &connectBodyReader{r: req.Body, conn: clientConn}
 		}
 
@@ -531,15 +531,16 @@ func (s *Service) handleConnect(w http.ResponseWriter, r *http.Request, sourceIP
 	}
 }
 
-// connectBodyReader refreshes the tunnel's idle read deadline on every
-// successful read so a slow but active upload is not cut off by the deadline
-// that bounded the header read.
+// connectBodyReader arms the tunnel's idle read deadline when each body read
+// starts, so slow connection setup cannot expire it, and keeps it refreshed on
+// progress so only a client that stops sending is cut off.
 type connectBodyReader struct {
 	r    io.ReadCloser
 	conn net.Conn
 }
 
 func (b *connectBodyReader) Read(p []byte) (int, error) {
+	_ = b.conn.SetReadDeadline(time.Now().Add(connectIdleTimeout))
 	n, err := b.r.Read(p)
 	if n > 0 {
 		_ = b.conn.SetReadDeadline(time.Now().Add(connectIdleTimeout))
