@@ -520,7 +520,11 @@ Resources:
           # No checksum is published for the installer itself, so the digest is pinned
           # as a parameter and checked before the script runs as root.
           if [ "${HypemanVersion}" = "latest" ]; then
-            installer_tag="$(curl -fsSL https://api.github.com/repos/kernel/hypeman/releases/latest | grep -m1 '"tag_name"' | cut -d'"' -f4)"
+            # Read the tag from the releases/latest redirect: piping that JSON into a
+            # reader that exits after the first match kills curl with SIGPIPE, and
+            # pipefail turns that into an aborted bootstrap.
+            installer_tag="$(curl -fsSLo /dev/null -w '%{url_effective}' https://github.com/kernel/hypeman/releases/latest)"
+            installer_tag="${!installer_tag##*/tag/}"
           else
             installer_tag="${HypemanVersion}"
           fi
