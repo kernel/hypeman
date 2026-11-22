@@ -10,7 +10,7 @@ workflows:
         - 'aws-actions/configure-aws-credentials@v4.3.1'
         - 'docker/setup-buildx-action@v3.12.0'
     '.github/workflows/deploy-staging.yml':
-        - 'actions/create-github-app-token@v1.12.0'
+        - 'actions/create-github-app-token@v3.3.0'
     '.github/workflows/deploy.yml':
         - 'actions/checkout@v4.4.0'
         - 'actions/setup-go@v6.5.0'
@@ -26,7 +26,7 @@ workflows:
     '.github/workflows/semgrep.yml': []
     '.github/workflows/stlc-generate.yml':
         - 'actions/checkout@v4.4.0'
-        - 'actions/create-github-app-token@v1.12.0'
+        - 'actions/create-github-app-token@v3.3.0'
         - 'actions/setup-go@v5.6.0'
         - 'actions/setup-node@v4.4.0'
         - 'pnpm/action-setup@v4.3.0'
@@ -43,9 +43,9 @@ dependencies:
         commit: 'sha1-11d5960a326750d5838078e36cf38b85af677262'
         owner_id: 44036562
         repo_id: 197814629
-    'actions/create-github-app-token@v1.12.0':
-        ref: 'v1.12.0'
-        commit: 'sha1-d72941d797fd3113feb6b93fd0dec494b13a2547'
+    'actions/create-github-app-token@v3.3.0':
+        ref: 'v3.3.0'
+        commit: 'sha1-64ab729a6294000f5aa4a4bc0b73d1f32bc45510'
         owner_id: 44036562
         repo_id: 642580244
     'actions/setup-go@v5.6.0':
