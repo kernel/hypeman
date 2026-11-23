@@ -180,11 +180,11 @@ func (m *manager) writeMetadata(meta *metadata, durable bool) error {
 		// The rename lasts only once the directory is synced too.
 		unlockAliasReaders()
 		unlockAliasReaders = func() {}
-		syncDir := (*os.File).Sync
+		fsync := (*os.File).Sync
 		if m.syncDirFn != nil {
-			syncDir = m.syncDirFn
+			fsync = m.syncDirFn
 		}
-		if err := syncDir(dir); err != nil {
+		if err := fsync(dir); err != nil {
 			return fmt.Errorf("sync instance directory: %w", err)
 		}
 	}

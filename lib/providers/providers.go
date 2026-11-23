@@ -61,7 +61,11 @@ func ProvideContext(log *slog.Logger) context.Context {
 
 // ServerConfig loads the configuration once so dependency initialization uses
 // the same data directory the API locked before startup.
-var ServerConfig = sync.OnceValues(func() (*config.Config, error) {
+func ServerConfig() (*config.Config, error) {
+	return loadServerConfig()
+}
+
+var loadServerConfig = sync.OnceValues(func() (*config.Config, error) {
 	cfg, err := config.Load(os.Getenv("CONFIG_PATH"))
 	if err != nil {
 		return nil, fmt.Errorf("load configuration: %w", err)
