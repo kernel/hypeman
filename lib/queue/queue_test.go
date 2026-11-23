@@ -1,6 +1,7 @@
 package queue
 
 import (
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -241,4 +242,34 @@ func TestDoneRunsAfterKeyReleased(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+}
+
+func TestEnqueueRejectsAtPendingLimit(t *testing.T) {
+	q := New(1)
+	block := make(chan struct{})
+	started := make(chan struct{})
+	q.Enqueue("active", func() { close(started); <-block }, nil)
+	<-started
+
+	for i := 0; i < MaxPending; i++ {
+		if pos := q.Enqueue(fmt.Sprintf("p-%d", i), func() {}, nil); pos != i+1 {
+			t.Fatalf("enqueue %d: pos = %d, want %d", i, pos, i+1)
+		}
+	}
+	if pos := q.Enqueue("overflow", func() {}, nil); pos != -1 {
+		t.Fatalf("overflow Enqueue = %d, want -1", pos)
+	}
+	if pos := q.Enqueue("p-0", func() {}, nil); pos != 1 {
+		t.Fatalf("dedup at full queue = %d, want 1", pos)
+	}
+
+	close(block)
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if q.Enqueue("after", func() {}, nil) >= 0 {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("queue did not accept a job after the active one completed")
 }

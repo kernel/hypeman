@@ -89,7 +89,7 @@ func TestInflightPullRejectsDifferentCredentials(t *testing.T) {
 	}
 	const digest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	credentials := &authn.AuthConfig{Username: "AWS", Password: "token-a"}
-	inflight := m.registerInflightPull(digest, credentials)
+	inflight, _ := m.registerInflightPull(digest, credentials)
 	t.Cleanup(m.releaseInflightPull(digest, inflight))
 
 	assert.True(t, m.inflightCredentialsMatch(digest, &authn.AuthConfig{Username: "AWS", Password: "token-a"}))
@@ -103,7 +103,7 @@ func TestBorrowedCredentialsExpireWhileQueued(t *testing.T) {
 		borrowedCredentialsTimeout: time.Millisecond,
 	}
 	const digest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	inflight := m.registerInflightPull(digest, &authn.AuthConfig{Username: "AWS", Password: "secret"})
+	inflight, _ := m.registerInflightPull(digest, &authn.AuthConfig{Username: "AWS", Password: "secret"})
 	defer m.releaseInflightPull(digest, inflight)()
 
 	require.Eventually(t, func() bool {
@@ -121,8 +121,8 @@ func TestBorrowedCredentialsExpireWhileQueued(t *testing.T) {
 func TestBorrowedAuthRejectsReplacedInflightPull(t *testing.T) {
 	m := &manager{inflightPulls: make(map[string]*inflightImagePull)}
 	const digest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	first := m.registerInflightPull(digest, &authn.AuthConfig{Username: "first"})
-	second := m.registerInflightPull(digest, &authn.AuthConfig{Username: "second"})
+	first, _ := m.registerInflightPull(digest, &authn.AuthConfig{Username: "first"})
+	second, _ := m.registerInflightPull(digest, &authn.AuthConfig{Username: "second"})
 	defer m.releaseInflightPull(digest, second)()
 
 	credentials, _, expired, stale := m.borrowedAuth(digest, first)
