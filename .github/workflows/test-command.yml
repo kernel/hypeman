@@ -56,15 +56,21 @@ jobs:
         run: |
           set -euo pipefail
           gh api "repos/$REPO/pulls/$PR_NUMBER" \
-            --jq '[.state, .base.ref, .head.repo.full_name, .head.sha] | @tsv' > "$RUNNER_TEMP/pr.tsv"
-          read -r state base_repo head_repo head_sha < "$RUNNER_TEMP/pr.tsv"
+            --jq '[.state, .base.ref, .head.repo.full_name, .head.sha, .head.ref] | @tsv' > "$RUNNER_TEMP/pr.tsv"
+          read -r state base_repo head_repo head_sha head_ref < "$RUNNER_TEMP/pr.tsv"
           if [ "$state" != "open" ] || [ "$base_repo" != "main" ] || [ -z "$head_repo" ]; then
             echo "::error::only open pull requests targeting main can be tested"
+            exit 1
+          fi
+          if [ "$head_repo" != "$REPO" ]; then
+            gh api "repos/$REPO/issues/$PR_NUMBER/comments" \
+              --field body="Full CI runs from branches in this repository only. A maintainer can review the changes and push them to a branch here to run CI."
             exit 1
           fi
           {
             echo "head_repo=$head_repo"
             echo "head_sha=$head_sha"
+            echo "head_ref=$head_ref"
           } >> "$GITHUB_OUTPUT"
 
       - name: Reject commits pushed after the command
@@ -93,23 +99,6 @@ jobs:
             exit 1
           fi
 
-      - name: Reject dependency changes
-        if: steps.command.outputs.run == 'true' && steps.pr.outputs.head_repo != github.repository
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          PR_NUMBER: ${{ github.event.issue.number }}
-        run: |
-          set -euo pipefail
-          dependency_files="$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" \
-            --jq '.[] | select(.filename == "go.mod" or .filename == "go.sum") | .filename')"
-          if [ -n "$dependency_files" ]; then
-            gh api "repos/$REPO/issues/$PR_NUMBER/comments" \
-              --field body="Tests were not dispatched because public contributions cannot change go.mod or go.sum."
-            echo "::error::public contribution changes dependency files: $dependency_files"
-            exit 1
-          fi
-
       - name: Dispatch tests
         if: steps.command.outputs.run == 'true'
         env:
@@ -118,6 +107,7 @@ jobs:
           PR_NUMBER: ${{ github.event.issue.number }}
           HEAD_REPO: ${{ steps.pr.outputs.head_repo }}
           HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+          HEAD_REF: ${{ steps.pr.outputs.head_ref }}
         run: |
           set -euo pipefail
           current_head_sha="$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.head.sha')"
@@ -130,7 +120,7 @@ jobs:
 
           gh workflow run test.yml \
             --repo "$REPO" \
-            --ref main \
+            --ref "$HEAD_REF" \
             --field pr_head_repo="$HEAD_REPO" \
             --field pr_head_sha="$HEAD_SHA" \
             --field pr_number="$PR_NUMBER"

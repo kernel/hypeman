@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       pr_head_repo:
-        description: "Fork repository containing the PR commit"
+        description: "Repository containing the PR branch (must be this repository)"
         required: false
         type: string
       pr_head_sha:
@@ -28,26 +28,25 @@ concurrency:
   group: test-${{ (github.event_name == 'push' && github.ref != 'refs/heads/main') && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'push' && github.ref != 'refs/heads/main' }}
 
-# A slash-command dispatch supplies a fork repository and immutable commit SHA.
-# Normal push runs use the upstream repository and pushed ref.
-env:
-  TEST_PR_HEAD_REPO: ${{ inputs.pr_head_repo || github.repository }}
-  TEST_SOURCE_REPO: ${{ inputs.pr_head_repo || github.repository }}
-  TEST_SOURCE_REF: ${{ inputs.pr_head_sha || github.ref }}
-
 permissions:
   contents: read
-  id-token: write
+
+env:
+  DOCKERHUB_OIDC_CONNECTIONID: e87832ce-a4e3-4386-8b17-44a6085109f2
+  DOCKERHUB_OIDC_EXPIREIN: '3600'
 
 jobs:
   test:
+    # Test the commit selected by GitHub, not a dispatch-supplied checkout.
+    if: ${{ github.repository == 'kernel/hypeman' && (!inputs.pr_head_repo || inputs.pr_head_repo == github.repository) && (!inputs.pr_head_sha || inputs.pr_head_sha == github.sha) }}
     runs-on: [self-hosted, linux, x64, kvm]
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v4.4.0
         with:
           clean: false
-          repository: ${{ env.TEST_SOURCE_REPO }}
-          ref: ${{ env.TEST_SOURCE_REF }}
           persist-credentials: false
 
       - name: Clean workspace (preserve binary caches)
@@ -167,14 +166,13 @@ jobs:
           done
           exit 1
 
-      # Slash-command runs are maintainer-approved and need authenticated pulls
-      # for images that are not covered by the prewarm cache.
+      - name: Create isolated Docker config
+        run: echo "DOCKER_CONFIG=$(mktemp -d "$RUNNER_TEMP/docker-config.XXXXXX")" >> "$GITHUB_ENV"
+
       - name: Login to Docker Hub with OIDC
         uses: docker/login-action@v4.7.0
         with:
           username: onkernel
-        env:
-          DOCKERHUB_OIDC_CONNECTIONID: ${{ vars.DOCKERHUB_OIDC_PULL_CONNECTION_ID }}
 
       - name: Generate OpenAPI code
         run: make oapi-generate
@@ -222,7 +220,6 @@ jobs:
 
       - name: Prewarm test cache
         env:
-          DOCKER_CONFIG: /home/debianuser/.docker
           GITHUB_TOKEN: ${{ github.token }}
           HYPEMAN_TEST_REGISTRY: 127.0.0.1:5001
         run: |
@@ -262,13 +259,11 @@ jobs:
         env:
           GO_TEST_TIMEOUT: 600s
           GITHUB_TOKEN: ${{ github.token }}
-          # Docker auth for tests running as root (sudo)
-          DOCKER_CONFIG: /home/debianuser/.docker
           # TLS/ACME testing (optional - tests will skip if not configured)
-          ACME_EMAIL: ${{ env.TEST_PR_HEAD_REPO == github.repository && secrets.ACME_EMAIL || '' }}
+          ACME_EMAIL: ${{ secrets.ACME_EMAIL }}
           ACME_DNS_PROVIDER: "cloudflare"
           ACME_CA: "https://acme-staging-v02.api.letsencrypt.org/directory"
-          CLOUDFLARE_API_TOKEN: ${{ env.TEST_PR_HEAD_REPO == github.repository && secrets.CLOUDFLARE_API_TOKEN || '' }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           TLS_TEST_DOMAIN: "test.hypeman-development.com"
           TLS_ALLOWED_DOMAINS: '*.hypeman-development.com'
           HYPEMAN_TEST_PREWARM_STRICT: "1"
@@ -325,7 +320,11 @@ jobs:
             --field target_url="$GITHUB_SERVER_URL/$REPO/actions/runs/$GITHUB_RUN_ID"
 
   test-darwin:
+    if: ${{ github.repository == 'kernel/hypeman' && (!inputs.pr_head_repo || inputs.pr_head_repo == github.repository) && (!inputs.pr_head_sha || inputs.pr_head_sha == github.sha) }}
     runs-on: [self-hosted, macos, arm64]
+    permissions:
+      contents: read
+      id-token: write
     concurrency:
       group: macos-ci-test-${{ inputs.pr_head_sha || github.ref }}
       cancel-in-progress: true
@@ -374,8 +373,6 @@ jobs:
         uses: docker/login-action@v4.7.0
         with:
           username: onkernel
-        env:
-          DOCKERHUB_OIDC_CONNECTIONID: ${{ vars.DOCKERHUB_OIDC_PULL_CONNECTION_ID }}
       - name: Install dependencies
         run: |
           brew list e2fsprogs &>/dev/null || brew install e2fsprogs
@@ -443,6 +440,9 @@ jobs:
   e2e-install:
     runs-on: [self-hosted, macos, arm64]
     needs: test-darwin
+    permissions:
+      contents: read
+      id-token: write
     concurrency:
       group: macos-ci-e2e-${{ inputs.pr_head_sha || github.ref }}
       cancel-in-progress: true
@@ -480,8 +480,6 @@ jobs:
         uses: docker/login-action@v4.7.0
         with:
           username: onkernel
-        env:
-          DOCKERHUB_OIDC_CONNECTIONID: ${{ vars.DOCKERHUB_OIDC_PULL_CONNECTION_ID }}
       - name: Build E2E install artifacts
         env:
           GITHUB_TOKEN: ${{ github.token }}
