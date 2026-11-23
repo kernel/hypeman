@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/c2h5oh/datasize"
-	"github.com/getkin/kin-openapi/openapi3filter"
 	"github.com/ghodss/yaml"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -41,7 +40,6 @@ import (
 	"github.com/kernel/hypeman/lib/scopes"
 	"github.com/kernel/hypeman/lib/tokenrevocation"
 	"github.com/kernel/hypeman/lib/vmm"
-	nethttpmiddleware "github.com/oapi-codegen/nethttp-middleware"
 	"github.com/riandyrn/otelchi"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
@@ -509,13 +507,7 @@ func run() error {
 		}
 
 		// OpenAPI request validation with authentication
-		validatorOptions := &nethttpmiddleware.Options{
-			Options: openapi3filter.Options{
-				AuthenticationFunc: mw.OapiAuthenticationFunc(jwtVerifier, revokedTokens),
-			},
-			ErrorHandler: mw.OapiErrorHandler,
-		}
-		r.Use(nethttpmiddleware.OapiRequestValidatorWithOptions(spec, validatorOptions))
+		r.Use(mw.OapiRequestValidator(spec, jwtVerifier, revokedTokens))
 
 		// Scoped permissions — enforce per-route scope requirements
 		r.Use(scopes.Middleware())

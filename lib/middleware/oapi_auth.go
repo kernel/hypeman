@@ -10,13 +10,17 @@ import (
 	"strings"
 
 	v2 "github.com/docker/distribution/registry/api/v2"
+	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/getkin/kin-openapi/openapi3filter"
+	"github.com/getkin/kin-openapi/routers"
+	"github.com/getkin/kin-openapi/routers/gorillamux"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/gorilla/mux"
 	"github.com/kernel/hypeman/lib/jwtauth"
 	"github.com/kernel/hypeman/lib/logger"
 	"github.com/kernel/hypeman/lib/scopes"
 	"github.com/kernel/hypeman/lib/tokenrevocation"
+	nethttpmiddleware "github.com/oapi-codegen/nethttp-middleware"
 )
 
 // errRepoNotAllowed is returned when a valid token doesn't have access to the requested repository.
@@ -57,12 +61,99 @@ type RegistryTokenClaims struct {
 	Scope        string   `json:"scope,omitempty"`
 }
 
+// authenticatedRequestKey carries the outcome of an authentication check that ran
+// before the request body was read.
+const authenticatedRequestKey contextKey = "authenticated_request"
+
+// requestAuth is the result of pre-checking a request's credential.
+type requestAuth struct {
+	claims jwt.MapClaims
+	err    error
+}
+
+// OapiRequestValidator builds the OpenAPI request validation middleware, including
+// bearer authentication.
+func OapiRequestValidator(spec *openapi3.T, verifier *jwtauth.Verifier, revoked *tokenrevocation.List) func(http.Handler) http.Handler {
+	validate := nethttpmiddleware.OapiRequestValidatorWithOptions(spec, &nethttpmiddleware.Options{
+		Options: openapi3filter.Options{
+			AuthenticationFunc: OapiAuthenticationFunc(verifier, revoked),
+		},
+		ErrorHandler: OapiErrorHandler,
+	})
+
+	router, err := gorillamux.NewRouter(spec)
+	if err != nil {
+		panic(err) // the validator above panics on the same spec
+	}
+
+	return func(next http.Handler) http.Handler {
+		handler := validate(next)
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// The validator reads the entire body into memory before calling the
+			// authentication function, so a client whose credential cannot succeed
+			// could make the server buffer an arbitrarily large upload. Check the
+			// credential first and hide the body when it is unusable.
+			if r.Body != nil && r.Body != http.NoBody && routeRequiresAuth(router, r) {
+				auth := &requestAuth{}
+				auth.claims, auth.err = authenticateRequest(r.Context(), r, verifier, revoked)
+				if auth.err != nil {
+					r.Body = http.NoBody
+				} else {
+					r = r.WithContext(contextWithUserClaims(r.Context(), auth.claims))
+				}
+				r = r.WithContext(context.WithValue(r.Context(), authenticatedRequestKey, auth))
+			}
+			handler.ServeHTTP(w, r)
+		})
+	}
+}
+
+// routeRequiresAuth reports whether the request matches a secured operation,
+// resolving operation and global security the way the validator does.
+func routeRequiresAuth(router routers.Router, r *http.Request) bool {
+	route, _, err := router.FindRoute(r)
+	if err != nil {
+		return false
+	}
+	requirements := route.Operation.Security
+	if requirements == nil {
+		requirements = &route.Spec.Security
+	}
+	return len(*requirements) > 0
+}
+
+// authenticateRequest resolves the Authorization header to user claims.
+func authenticateRequest(ctx context.Context, r *http.Request, verifier *jwtauth.Verifier, revoked *tokenrevocation.List) (jwt.MapClaims, error) {
+	log := logger.FromContext(ctx)
+
+	authHeader := r.Header.Get("Authorization")
+	if authHeader == "" {
+		log.DebugContext(ctx, "missing authorization header")
+		return nil, fmt.Errorf("authorization header required")
+	}
+
+	token, err := extractBearerToken(authHeader)
+	if err != nil {
+		log.DebugContext(ctx, "invalid authorization header", "error", err)
+		return nil, fmt.Errorf("invalid authorization header format")
+	}
+
+	claims, err := validateUserToken(ctx, token, verifier, revoked)
+	if err != nil {
+		logTokenValidationFailure(ctx, log, err, r)
+		if errors.Is(err, errInvalidTokenType) {
+			return nil, errInvalidTokenType
+		}
+		return nil, fmt.Errorf("invalid token")
+	}
+
+	return claims, nil
+}
+
 // OapiAuthenticationFunc creates an AuthenticationFunc compatible with nethttp-middleware
 // that validates JWT bearer tokens for endpoints with security requirements.
 func OapiAuthenticationFunc(verifier *jwtauth.Verifier, revoked *tokenrevocation.List) openapi3filter.AuthenticationFunc {
 	return func(ctx context.Context, input *openapi3filter.AuthenticationInput) error {
-		log := logger.FromContext(ctx)
-
 		// If no security requirements, allow the request
 		if input.SecurityScheme == nil {
 			return nil
@@ -73,27 +164,14 @@ func OapiAuthenticationFunc(verifier *jwtauth.Verifier, revoked *tokenrevocation
 			return fmt.Errorf("unsupported security scheme: %s", input.SecurityScheme.Type)
 		}
 
-		// Extract token from Authorization header
-		authHeader := input.RequestValidationInput.Request.Header.Get("Authorization")
-		if authHeader == "" {
-			log.DebugContext(ctx, "missing authorization header")
-			return fmt.Errorf("authorization header required")
+		// Reuse the credential check that ran before the body was read, if any.
+		if auth, ok := ctx.Value(authenticatedRequestKey).(*requestAuth); ok {
+			return auth.err
 		}
 
-		// Extract bearer token
-		token, err := extractBearerToken(authHeader)
+		claims, err := authenticateRequest(ctx, input.RequestValidationInput.Request, verifier, revoked)
 		if err != nil {
-			log.DebugContext(ctx, "invalid authorization header", "error", err)
-			return fmt.Errorf("invalid authorization header format")
-		}
-
-		claims, err := validateUserToken(ctx, token, verifier, revoked)
-		if err != nil {
-			logTokenValidationFailure(ctx, log, err, input.RequestValidationInput.Request)
-			if errors.Is(err, errInvalidTokenType) {
-				return errInvalidTokenType
-			}
-			return fmt.Errorf("invalid token")
+			return err
 		}
 
 		// Update the request with the authenticated user context.
