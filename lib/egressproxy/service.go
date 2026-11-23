@@ -36,6 +36,15 @@ type headerInjectRule struct {
 
 const defaultLeafCertCacheLimit = 512
 
+// Hijacking drops http.Server's ReadHeaderTimeout, so the phases after Hijack
+// must bound themselves or an idle client pins a goroutine, fd and TLS buffers.
+const (
+	connectIdleTimeout = 3 * time.Second
+	// A stalled client must not hold the goroutine, but a slow transfer needs
+	// more than the idle bound.
+	connectWriteTimeout = 60 * time.Second
+)
+
 // Service is a host-side per-process HTTP/HTTPS MITM egress proxy.
 type Service struct {
 	mu sync.RWMutex
@@ -440,6 +449,9 @@ func (s *Service) handleConnect(w http.ResponseWriter, r *http.Request, sourceIP
 
 	_, _ = io.WriteString(clientConn, "HTTP/1.1 200 Connection Established\r\n\r\n")
 
+	// Bound the handshake: the server's read timeout no longer covers this conn.
+	_ = clientConn.SetDeadline(time.Now().Add(connectIdleTimeout))
+
 	cert, err := s.getOrCreateLeafCert(targetHost)
 	if err != nil {
 		log := s.loggerForContext(r.Context())
@@ -458,15 +470,23 @@ func (s *Service) handleConnect(w http.ResponseWriter, r *http.Request, sourceIP
 		return
 	}
 	defer tlsConn.Close()
+	_ = clientConn.SetDeadline(time.Time{})
 
 	reader := bufio.NewReader(tlsConn)
 	for {
+		// Idle tunnels are reaped; active ones reset this on every request.
+		_ = clientConn.SetReadDeadline(time.Now().Add(connectIdleTimeout))
 		req, err := http.ReadRequest(reader)
 		if err != nil {
 			if err == io.EOF {
 				return
 			}
 			return
+		}
+		// Headers are in; each body read arms its own idle bound.
+		_ = clientConn.SetReadDeadline(time.Time{})
+		if req.Body != nil && req.Body != http.NoBody {
+			req.Body = &connectBodyReader{r: req.Body, conn: clientConn}
 		}
 
 		if req.URL == nil {
@@ -495,11 +515,13 @@ func (s *Service) handleConnect(w http.ResponseWriter, r *http.Request, sourceIP
 		}
 
 		removeHopByHopHeaders(resp.Header)
+		_ = clientConn.SetWriteDeadline(time.Now().Add(connectWriteTimeout))
 		if err := resp.Write(tlsConn); err != nil {
 			resp.Body.Close()
 			return
 		}
 		resp.Body.Close()
+		_ = clientConn.SetWriteDeadline(time.Time{})
 		s.metrics.recordRequest(r.Context(), "https", "success", injected)
 		s.metrics.recordUpstreamDuration(r.Context(), "https", "success", time.Since(start).Seconds())
 
@@ -508,6 +530,25 @@ func (s *Service) handleConnect(w http.ResponseWriter, r *http.Request, sourceIP
 		}
 	}
 }
+
+// connectBodyReader arms the tunnel's idle read deadline when each body read
+// starts, so slow connection setup cannot expire it, and keeps it refreshed on
+// progress so only a client that stops sending is cut off.
+type connectBodyReader struct {
+	r    io.ReadCloser
+	conn net.Conn
+}
+
+func (b *connectBodyReader) Read(p []byte) (int, error) {
+	_ = b.conn.SetReadDeadline(time.Now().Add(connectIdleTimeout))
+	n, err := b.r.Read(p)
+	if n > 0 {
+		_ = b.conn.SetReadDeadline(time.Now().Add(connectIdleTimeout))
+	}
+	return n, err
+}
+
+func (b *connectBodyReader) Close() error { return b.r.Close() }
 
 func (s *Service) getOrCreateLeafCert(host string) (*tls.Certificate, error) {
 	s.mu.RLock()
