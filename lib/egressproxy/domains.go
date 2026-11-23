@@ -102,8 +102,10 @@ func compileDomainMatchers(patterns []string) ([]domainMatcher, error) {
 }
 
 func matchesAnyDomain(host string, matchers []domainMatcher) bool {
+	// An empty allowlist means no destinations: a secret must never be sent
+	// to a host the operator did not name.
 	if len(matchers) == 0 {
-		return true
+		return false
 	}
 	for _, m := range matchers {
 		if m.matches(host) {
