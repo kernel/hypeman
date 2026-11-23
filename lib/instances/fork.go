@@ -641,6 +641,22 @@ func (m *manager) forkOwnerGone(owner ForkOwner) bool {
 	return owner.gone()
 }
 
+// Public boot requests must not take over a fork that can still be discarded.
+// The fork's own start/restore transitions use refuseAbandonedFork instead.
+func (m *manager) loadMetadataForBootRequest(id string) (*metadata, error) {
+	meta, err := m.loadMetadata(id)
+	if err != nil {
+		return nil, err
+	}
+	if meta.ForkPending == nil {
+		return meta, nil
+	}
+	if err := m.refuseAbandonedFork(&meta.StoredMetadata); err != nil {
+		return nil, err
+	}
+	return nil, fmt.Errorf("%w: fork request has not completed", ErrInvalidState)
+}
+
 // refuseAbandonedFork keeps a fork that is waiting to be deleted from being
 // brought up. Such a fork is still marked, so the next start deletes it, and
 // until then it looks like any other instance under the name its caller asked

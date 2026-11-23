@@ -129,7 +129,7 @@ func (v *VFIOBinder) UnbindFromVFIO(pciAddress string) error {
 
 	// Clear driver override first
 	if err := v.setDriverOverride(pciAddress, ""); err != nil {
-		// Non-fatal, continue with unbind
+		return fmt.Errorf("clear VFIO driver override: %w", err)
 	}
 
 	// Unbind from vfio-pci

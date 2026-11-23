@@ -359,7 +359,7 @@ func (m *manager) UnbindFromVFIO(ctx context.Context, id string) error {
 	}
 
 	log := logger.FromContext(ctx)
-	if err := m.vfioBinder.UnbindFromVFIO(device.PCIAddress); err != nil {
+	if err := m.unbindAndVerify(device.PCIAddress); err != nil {
 		return err
 	}
 
@@ -414,6 +414,22 @@ func (m *manager) MarkDetached(ctx context.Context, deviceID string) error {
 	return m.saveDevice(device)
 }
 
+// The driver probe can bind the device straight back to vfio-pci. Check
+// sysfs before recording the release or dropping the owner that can retry it.
+func (m *manager) unbindAndVerify(pciAddress string) error {
+	if err := m.vfioBinder.UnbindFromVFIO(pciAddress); err != nil {
+		return err
+	}
+	bound, err := m.vfioBinder.deviceBoundToVFIO(pciAddress)
+	if err != nil {
+		return fmt.Errorf("verify VFIO release of %s: %w", pciAddress, err)
+	}
+	if bound {
+		return fmt.Errorf("device %s is still bound to vfio-pci", pciAddress)
+	}
+	return nil
+}
+
 // ReleaseInstanceDevice checks the recorded owner under the same lock as the unbind.
 // A fork's device list can name a passthrough device still owned by its source.
 func (m *manager) ReleaseInstanceDevice(ctx context.Context, deviceID, instanceID string) error {
@@ -427,7 +443,7 @@ func (m *manager) ReleaseInstanceDevice(ctx context.Context, deviceID, instanceI
 		return nil
 	}
 	// A retry after the unbind but before the save sees ErrNotBound.
-	if err := m.vfioBinder.UnbindFromVFIO(device.PCIAddress); err != nil && !errors.Is(err, ErrNotBound) {
+	if err := m.unbindAndVerify(device.PCIAddress); err != nil && !errors.Is(err, ErrNotBound) {
 		return err
 	}
 	device.AttachedTo = nil

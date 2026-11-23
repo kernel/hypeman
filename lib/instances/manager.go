@@ -618,17 +618,18 @@ func (m *manager) RestoreInstance(ctx context.Context, id string) (*Instance, er
 	lock := m.getInstanceLock(id)
 	lock.Lock()
 	defer lock.Unlock()
-	current, err := m.currentInstanceWithoutHydration(ctx, id)
+	meta, err := m.loadMetadataForBootRequest(id)
 	if err != nil {
 		return nil, err
 	}
+	current := m.toInstanceWithoutHydration(ctx, meta)
 	if current.State == StateRunning || current.State == StateInitializing {
 		// A running macOS guest has consumed its checkpoint. One still on disk means an
 		// earlier resume failed before removing it, so finish that resume now.
 		if current.MacOS != nil && current.HasSnapshot {
 			// Initializing without a control socket is a shim still loading the VM. It has
 			// not resumed, so the checkpoint it will consume must stay.
-			if current.State == StateInitializing && !m.macOSSocketAnswers(ctx, current) {
+			if current.State == StateInitializing && !m.macOSSocketAnswers(ctx, &current) {
 				return nil, fmt.Errorf("%w: macOS restore is still loading the VM; retry shortly", ErrInvalidState)
 			}
 			if err := m.finishMacOSResume(id); err != nil {
@@ -636,7 +637,7 @@ func (m *manager) RestoreInstance(ctx context.Context, id string) (*Instance, er
 			}
 			return m.currentInstanceWithoutHydration(ctx, id)
 		}
-		return current, nil
+		return &current, nil
 	}
 	if current.State == StatePaused {
 		hv, err := m.getHypervisor(current.SocketPath, current.HypervisorType)
@@ -658,12 +659,12 @@ func (m *manager) RestoreInstance(ctx context.Context, id string) (*Instance, er
 				return nil, fmt.Errorf("finish resumed restore: %w", err)
 			}
 		}
-		current, err = m.currentInstanceWithoutHydration(ctx, id)
+		resumed, err := m.currentInstanceWithoutHydration(ctx, id)
 		if err != nil {
 			return nil, err
 		}
-		m.notifyLifecycleEvent(ctx, LifecycleEventRestore, current)
-		return current, nil
+		m.notifyLifecycleEvent(ctx, LifecycleEventRestore, resumed)
+		return resumed, nil
 	}
 	inst, err := m.restoreInstance(ctx, id)
 	if err == nil {
@@ -717,14 +718,15 @@ func (m *manager) StartInstance(ctx context.Context, id string, req StartInstanc
 	lock := m.getInstanceLock(id)
 	lock.Lock()
 	defer lock.Unlock()
-	if err := m.clearRestartStatusLocked(ctx, id); err != nil {
+	meta, err := m.loadMetadataForBootRequest(id)
+	if err != nil {
+		return nil, err
+	}
+	if err := m.clearRestartStatusLocked(ctx, meta); err != nil {
 		return nil, err
 	}
 	if !startRequestHasOverrides(req) {
-		current, err := m.currentInstanceWithoutHydration(ctx, id)
-		if err != nil {
-			return nil, err
-		}
+		current := m.toInstanceWithoutHydration(ctx, meta)
 		if current.State == StateRunning || current.State == StateInitializing {
 			// The API can exit after a clone boots and before its rekey finishes. Finish it
 			// here, or the clone keeps its source's SSH host keys.
@@ -734,7 +736,7 @@ func (m *manager) StartInstance(ctx context.Context, id string, req StartInstanc
 				}
 				return m.currentInstanceWithoutHydration(ctx, id)
 			}
-			return current, nil
+			return &current, nil
 		}
 	}
 	inst, err := m.startInstance(ctx, id, req)

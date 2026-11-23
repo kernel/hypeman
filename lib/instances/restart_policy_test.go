@@ -183,6 +183,26 @@ func TestStartInstanceClearsRestartStatusWhenAlreadyRunning(t *testing.T) {
 	assert.True(t, loaded.RestartStatus.IsZero())
 }
 
+func TestRestartPolicyLeavesPendingForkToItsCreator(t *testing.T) {
+	for _, state := range []State{StateStopped, StateRunning} {
+		t.Run(string(state), func(t *testing.T) {
+			m, id := newLifecycleNoopManagerWithInstance(t, state, time.Now().UTC())
+			meta, err := m.loadMetadata(id)
+			require.NoError(t, err)
+			meta.ForkPending = currentForkOwner()
+			meta.RestartPolicy = &restartpolicy.Policy{Policy: restartpolicy.PolicyAlways}
+			require.NoError(t, m.saveMetadata(meta))
+
+			require.NoError(t, m.reconcileRestartPolicyInstanceID(t.Context(), id, slog.Default()))
+			require.NoError(t, m.HandleHealthCheckUnhealthy(t.Context(), id))
+			got, err := m.currentInstanceWithoutHydration(t.Context(), id)
+			require.NoError(t, err)
+			require.Equal(t, state, got.State)
+			require.True(t, got.RestartStatus.IsZero())
+		})
+	}
+}
+
 func TestStartInstanceForRestartPolicyPreservesConcurrentManualStop(t *testing.T) {
 	manager, _ := setupTestManager(t)
 	id := "restart-manual-race"

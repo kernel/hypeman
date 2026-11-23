@@ -100,6 +100,9 @@ func (m *manager) loadMetadataTimed(id string, timings *metadataScanTimings) (*m
 	}
 
 	if meta.Id != id {
+		if err := paths.ValidatePathComponent(meta.Id); err != nil {
+			return nil, fmt.Errorf("invalid instance ID %q in %s: %w", meta.Id, metaPath, err)
+		}
 		return nil, fmt.Errorf("%w: directory %q contains metadata for %q", errMetadataIDMismatch, id, meta.Id)
 	}
 	return &meta, nil
