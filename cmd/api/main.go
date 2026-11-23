@@ -35,6 +35,7 @@ import (
 	mw "github.com/kernel/hypeman/lib/middleware"
 	"github.com/kernel/hypeman/lib/oapi"
 	"github.com/kernel/hypeman/lib/ocicachegc"
+	"github.com/kernel/hypeman/lib/oidcfederation"
 	"github.com/kernel/hypeman/lib/otel"
 	"github.com/kernel/hypeman/lib/paths"
 	"github.com/kernel/hypeman/lib/registry"
@@ -286,6 +287,16 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("initialize JWT verifier: %w", err)
 	}
+	oidcRegistry, err := oidcfederation.Compile(app.Config.OIDC)
+	if err != nil {
+		return fmt.Errorf("initialize OIDC federation: %w", err)
+	}
+	tokenExchanger, err := oidcfederation.NewExchanger(oidcRegistry, app.Config.JwtSecret, otelProvider.Meter)
+	if err != nil {
+		return fmt.Errorf("initialize OIDC federation: %w", err)
+	}
+	// Tokens issued for a federation rule stay valid only while that rule is configured unchanged.
+	jwtVerifier = jwtVerifier.WithFederation(tokenExchanger)
 	revokedTokens, err := tokenrevocation.New(app.Config.RevokedTokenHashes)
 	if err != nil {
 		return fmt.Errorf("invalid revoked_token_hashes: %w", err)
@@ -440,6 +451,16 @@ func run() error {
 		scopes.RequireScope(scopes.InstanceWrite),
 		mw.ResolveResource(app.ApiService.NewResolvers(), api.ResolverErrorResponder),
 	).Get("/instances/{id}/cp", app.ApiService.CpHandler)
+
+	// OIDC assertion exchange (outside OpenAPI spec: form-encoded, and the
+	// assertion is the only credential)
+	r.With(
+		middleware.RequestID,
+		middleware.RealIP,
+		middleware.Recoverer,
+		mw.InjectLogger(logger),
+		mw.AccessLogger(accessLogger),
+	).Post("/oauth/token", tokenExchanger.ServeHTTP)
 
 	// Create builder VM resolver for secure token authentication
 	// This validates that token requests from builder VMs are for their authorized repos only

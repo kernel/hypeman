@@ -104,6 +104,7 @@ Common settings:
 | `data_dir` | Data directory for VM images, volumes, etc. | `/var/lib/hypeman` |
 | `jwt_secret` | Secret key for JWT authentication (required) | _(empty)_ |
 | `revoked_token_hashes` | Hex SHA-256 digests of API tokens to reject before they expire (`printf '%s' "$TOKEN" \| sha256sum`) | _(empty)_ |
+| `oidc` | OIDC issuers and federation rules whose identity tokens can be exchanged for short-lived API tokens; see [docs/oidc-federation.md](docs/oidc-federation.md). `OIDC` in the environment is one JSON document that replaces the block | _(empty)_ |
 | `env` | Deployment environment (filters telemetry) | `unset` |
 | `network.bridge_name` | Network bridge for VM networking | `vmbr0` |
 | `network.subnet_cidr` | CIDR for the VM network subnet | `10.100.0.0/16` |

@@ -8,6 +8,8 @@ JWT bearer token validation for protected endpoints. Extracts user identity and 
 
 Tokens whose SHA-256 appears in `revoked_token_hashes` are rejected even when they are correctly signed and unexpired, so a single leaked token can be revoked without rotating `jwt_secret`. Revoked tokens are logged at warn level with the request path and remote address.
 
+A token issued by the OIDC assertion exchange (`POST /oauth/token`, see [docs/oidc-federation.md](../../docs/oidc-federation.md)) names the federation rule it was issued for. It is rejected once that rule is removed or changed, and it always carries an explicit `permissions` list.
+
 ## Resource Resolution
 
 Automatically resolves user-provided identifiers (IDs, names, or prefixes) to full resource objects before handlers run. This enables:

@@ -188,6 +188,8 @@ var PublicRoutes = map[string]bool{
 	"GET /spec.yaml": true,
 	"GET /spec.json": true,
 	"GET /swagger":   true,
+	// The OIDC assertion exchange authenticates with the assertion it is given.
+	"POST /oauth/token": true,
 }
 
 // DirectScopeRoutes lists route keys that enforce scopes via RequireScope

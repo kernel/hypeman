@@ -25,6 +25,28 @@ jwt_secret: ""
 # revoked_token_hashes:
 #   - 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
 
+# Optional - let workloads trade an OIDC identity token (GitHub Actions, a cloud
+# workload identity, a Kubernetes service account, ...) for a short-lived API
+# token at POST /oauth/token, instead of storing an API token with them.
+# Nothing is trusted until an issuer and a rule are configured. Restart after
+# changes; see docs/oidc-federation.md.
+# oidc:
+#   issuers:
+#     - name: github-actions
+#       preset_type: github_actions
+#   federation_rules:
+#     - name: ci
+#       issuer: github-actions
+#       expected_audience: https://hypeman.example.com
+#       match:
+#         type: github_actions
+#         repository_id: "123456789"
+#         repository_owner_id: "987654321"
+#         workflow: .github/workflows/deploy.yml
+#         ref: refs/heads/main
+#       authorization:
+#         permissions: [image:read, image:write]
+
 # Data directory (default: /var/lib/hypeman)
 data_dir: /var/lib/hypeman
 

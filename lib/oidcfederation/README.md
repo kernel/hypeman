@@ -16,6 +16,11 @@ Trust is two kinds of object, both written in the `oidc` block of the server con
 assertion against a rule's issuer and audience, and `Match.Matches` evaluates the rule's conditions
 on the verified claims.
 
+`Exchanger` puts these together behind `POST /oauth/token`: it verifies an assertion against the
+rule the caller names, records single-use assertions as spent, and issues an API token signed with
+the server's `jwt_secret`. Operator documentation is in
+[docs/oidc-federation.md](../../docs/oidc-federation.md).
+
 ## Presets
 
 Each issuer has a `preset_type`, and a rule's `match.type` must be the same type. A preset carries

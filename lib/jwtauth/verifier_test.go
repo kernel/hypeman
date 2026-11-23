@@ -134,3 +134,101 @@ func TestVerifierMetricsConcurrent(t *testing.T) {
 	}
 	assert.Equal(t, map[string]int64{"primary": 10, "fallback": 10}, counts)
 }
+
+type federationRules map[string]string
+
+func (f federationRules) Current(issuer, rule, revision string) bool {
+	return f[rule] == issuer+"@"+revision
+}
+
+// A federated token is bound to its rule's current configuration and never
+// reads as a legacy full-access token.
+func TestFederatedTokensFollowTheirRule(t *testing.T) {
+	const secret = "primary"
+	base, err := NewVerifier(secret, nil, noop.NewMeterProvider().Meter("test"))
+	require.NoError(t, err)
+	verifier := base.WithFederation(federationRules{"ci": "github@rev1"})
+	sign := func(claims jwt.MapClaims) string {
+		claims["exp"] = time.Now().Add(time.Hour).Unix()
+		token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(secret))
+		require.NoError(t, err)
+		return token
+	}
+	federated := func(alter func(jwt.MapClaims)) string {
+		claims := jwt.MapClaims{
+			"sub":         "federation:ci",
+			"permissions": []string{"instance:read"},
+			"fed":         map[string]string{"issuer": "github", "rule": "ci", "rev": "rev1"},
+		}
+		alter(claims)
+		return sign(claims)
+	}
+
+	_, err = verifier.ParseWithClaims(context.Background(), federated(func(jwt.MapClaims) {}), jwt.MapClaims{})
+	require.NoError(t, err)
+	_, err = verifier.ParseWithClaims(context.Background(), sign(jwt.MapClaims{"sub": "admin"}), jwt.MapClaims{})
+	require.NoError(t, err, "tokens without a fed claim are unaffected")
+	_, err = base.ParseWithClaims(context.Background(), sign(jwt.MapClaims{"sub": "admin"}), jwt.MapClaims{})
+	require.NoError(t, err)
+
+	for name, alter := range map[string]func(jwt.MapClaims){
+		"changed rule":        func(c jwt.MapClaims) { c["fed"] = map[string]string{"issuer": "github", "rule": "ci", "rev": "rev0"} },
+		"other issuer":        func(c jwt.MapClaims) { c["fed"] = map[string]string{"issuer": "other", "rule": "ci", "rev": "rev1"} },
+		"removed rule":        func(c jwt.MapClaims) { c["fed"] = map[string]string{"issuer": "github", "rule": "gone", "rev": "rev1"} },
+		"malformed lineage":   func(c jwt.MapClaims) { c["fed"] = "ci" },
+		"empty lineage":       func(c jwt.MapClaims) { c["fed"] = map[string]string{} },
+		"null lineage":        func(c jwt.MapClaims) { c["fed"] = nil },
+		"another subject":     func(c jwt.MapClaims) { c["sub"] = "admin" },
+		"no permissions":      func(c jwt.MapClaims) { delete(c, "permissions") },
+		"null permissions":    func(c jwt.MapClaims) { c["permissions"] = nil },
+		"invalid permissions": func(c jwt.MapClaims) { c["permissions"] = "instance:read" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := verifier.ParseWithClaims(context.Background(), federated(alter), jwt.MapClaims{})
+			require.ErrorIs(t, err, ErrFederationInactive)
+		})
+	}
+	t.Run("no checker", func(t *testing.T) {
+		_, err := base.ParseWithClaims(context.Background(), federated(func(jwt.MapClaims) {}), jwt.MapClaims{})
+		require.ErrorIs(t, err, ErrFederationInactive)
+	})
+	t.Run("typed claims", func(t *testing.T) {
+		_, err := verifier.ParseWithClaims(context.Background(), federated(func(c jwt.MapClaims) {
+			c["fed"] = map[string]string{"issuer": "github", "rule": "ci", "rev": "rev0"}
+		}), &jwt.RegisteredClaims{})
+		require.ErrorIs(t, err, ErrFederationInactive, "the check does not depend on the caller's claims type")
+	})
+}
+
+// Federated tokens are signed with the signing key like any other token, so
+// they follow the same rotation phases and need no step of their own.
+func TestFederatedTokensFollowKeyRotation(t *testing.T) {
+	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"sub":         "federation:ci",
+		"exp":         time.Now().Add(time.Hour).Unix(),
+		"permissions": []string{"instance:read"},
+		"fed":         map[string]string{"issuer": "github", "rule": "ci", "rev": "rev1"},
+	}).SignedString([]byte("old"))
+	require.NoError(t, err)
+	for _, phase := range []struct {
+		name     string
+		primary  string
+		fallback []string
+		accepted bool
+	}{
+		{"accept both", "old", []string{"new"}, true},
+		{"switched signing", "new", []string{"old"}, true},
+		{"retired old", "new", nil, false},
+	} {
+		t.Run(phase.name, func(t *testing.T) {
+			verifier, err := NewVerifier(phase.primary, phase.fallback, noop.NewMeterProvider().Meter("test"))
+			require.NoError(t, err)
+			_, err = verifier.WithFederation(federationRules{"ci": "github@rev1"}).ParseWithClaims(context.Background(), token, jwt.MapClaims{})
+			if phase.accepted {
+				require.NoError(t, err)
+			} else {
+				require.ErrorIs(t, err, jwt.ErrTokenSignatureInvalid)
+			}
+		})
+	}
+}

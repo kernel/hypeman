@@ -3,19 +3,41 @@ package jwtauth
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/golang-jwt/jwt/v5"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 )
 
+// ErrFederationInactive is returned for a correctly signed token that was
+// issued for an OIDC federation rule which is no longer configured as it was.
+var ErrFederationInactive = errors.New("federated token is not valid for the current configuration")
+
+// FederationChecker reports whether the federation rule a token was issued for
+// is still configured, trusts the same issuer, and is unchanged since then.
+type FederationChecker interface {
+	Current(issuer, rule, revision string) bool
+}
+
 // Verifier accepts the signing key and additional verification-only keys.
 // It is immutable and safe for concurrent use.
 type Verifier struct {
 	keys        [][]byte
 	validations metric.Int64Counter
+	federation  FederationChecker
+}
+
+// WithFederation returns a Verifier that accepts federated tokens the checker
+// reports as current. Without one, every federated token is rejected.
+func (v *Verifier) WithFederation(checker FederationChecker) *Verifier {
+	out := *v
+	out.federation = checker
+	return &out
 }
 
 func NewVerifier(signingSecret string, verificationSecrets []string, meter metric.Meter) (*Verifier, error) {
@@ -53,6 +75,9 @@ func (v *Verifier) ParseWithClaims(ctx context.Context, tokenString string, clai
 			return key, nil
 		})
 		if err == nil {
+			if err := v.checkFederation(tokenString); err != nil {
+				return nil, err
+			}
 			role := "primary"
 			if i > 0 {
 				role = "fallback"
@@ -65,4 +90,42 @@ func (v *Verifier) ParseWithClaims(ctx context.Context, tokenString string, clai
 		}
 	}
 	return nil, err
+}
+
+// checkFederation applies to every token carrying a `fed` claim, whatever
+// claims type the caller parses into: it reads the verified payload itself.
+// Such a token is bound to one federation rule and must carry that rule's
+// subject and an explicit permissions list, so it can never be read as a
+// legacy full-access token.
+func (v *Verifier) checkFederation(tokenString string) error {
+	parts := strings.Split(tokenString, ".")
+	if len(parts) != 3 {
+		return ErrFederationInactive
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return ErrFederationInactive
+	}
+	var claims map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return ErrFederationInactive
+	}
+	federation, federated := claims["fed"]
+	if !federated {
+		return nil
+	}
+	var lineage struct {
+		Issuer   string `json:"issuer"`
+		Rule     string `json:"rule"`
+		Revision string `json:"rev"`
+	}
+	var subject string
+	var permissions []string
+	if json.Unmarshal(federation, &lineage) != nil || lineage.Rule == "" ||
+		json.Unmarshal(claims["sub"], &subject) != nil || subject != "federation:"+lineage.Rule ||
+		json.Unmarshal(claims["permissions"], &permissions) != nil || permissions == nil ||
+		v.federation == nil || !v.federation.Current(lineage.Issuer, lineage.Rule, lineage.Revision) {
+		return ErrFederationInactive
+	}
+	return nil
 }

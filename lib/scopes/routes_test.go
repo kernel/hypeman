@@ -28,6 +28,7 @@ func TestAllRoutesHaveScopes(t *testing.T) {
 	r.Get("/spec.yaml", noop)
 	r.Get("/spec.json", noop)
 	r.Get("/swagger", noop)
+	r.Post("/oauth/token", noop)
 
 	// Registry endpoints — scoped by registry token auth, not API key scopes
 	r.Route("/v2", func(r chi.Router) {
