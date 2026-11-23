@@ -290,3 +290,22 @@ func TestRecoveryRestoresParkedFirecrackerSource(t *testing.T) {
 		})
 	}
 }
+
+// An older fork copy cut short before the fork saved its own metadata holds
+// the source's. It cannot have a VMM, so it must not fail the listing that
+// vGPU claims and reconciles depend on, whether or not its source still exists.
+func TestReconcileListingSkipsDirectoryHoldingAnotherInstancesMetadata(t *testing.T) {
+	m, _ := setupTestManager(t)
+	const source, deleted = "source", "deleted-source"
+	for _, id := range []string{source, deleted} {
+		createStoppedSnapshotSourceFixture(t, m, id, id, m.defaultHypervisor)
+		require.NoError(t, forkvm.CopyGuestDirectory(m.paths.InstanceDir(id), m.paths.InstanceDir(id+"-copy")))
+	}
+	require.NoError(t, os.RemoveAll(m.paths.InstanceDir(deleted)))
+
+	listed, err := m.listMetadataForReconcile()
+	require.NoError(t, err)
+	require.Len(t, listed, 1)
+	require.Equal(t, source, listed[0].Id)
+}
+

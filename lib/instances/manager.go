@@ -792,7 +792,10 @@ func (m *manager) listMetadataForReconcile() ([]StoredMetadata, error) {
 		id := filepath.Base(filepath.Dir(file))
 		meta, err := m.loadMetadata(id)
 		if err != nil {
-			if errors.Is(err, ErrNotFound) {
+			// A directory holding another guest's metadata is a partial fork
+			// copy or a parked source. Neither can have a VMM of its own, so
+			// it holds nothing a reconcile has to account for.
+			if errors.Is(err, ErrNotFound) || errors.Is(err, errMetadataIDMismatch) {
 				continue
 			}
 			return nil, fmt.Errorf("load metadata for instance %s: %w", id, err)
