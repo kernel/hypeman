@@ -6,6 +6,7 @@ import (
 	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -16,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/kernel/hypeman/lib/logger"
@@ -35,6 +37,17 @@ type headerInjectRule struct {
 }
 
 const defaultLeafCertCacheLimit = 512
+
+// errBlockedDestination keeps hosts from tunnelling into the host network.
+var errBlockedDestination = errors.New("egress proxy: destination address is not routable")
+
+// isBlockedDestination refuses addresses that stay inside the host or its
+// local network: loopback, link-local (incl. cloud metadata), private,
+// unspecified and multicast.
+func isBlockedDestination(ip net.IP) bool {
+	return ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
+		ip.IsUnspecified() || ip.IsMulticast() || ip.IsPrivate()
+}
 
 // Service is a host-side per-process HTTP/HTTPS MITM egress proxy.
 type Service struct {
@@ -83,9 +96,27 @@ func NewServiceWithOptions(dataDir string, listenPort int, opts ServiceOptions) 
 		return nil, err
 	}
 
+	dialer := &net.Dialer{
+		Timeout:   30 * time.Second,
+		KeepAlive: 30 * time.Second,
+		// Control sees the address after DNS resolution, so a hostname that
+		// resolves to a blocked IP is refused too, not just a literal IP.
+		Control: func(_, address string, _ syscall.RawConn) error {
+			host, _, err := net.SplitHostPort(address)
+			if err != nil {
+				return errBlockedDestination
+			}
+			ip := net.ParseIP(host)
+			if ip == nil || isBlockedDestination(ip) {
+				return errBlockedDestination
+			}
+			return nil
+		},
+	}
+
 	transport := &http.Transport{
 		Proxy:               nil,
-		DialContext:         (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+		DialContext:         dialer.DialContext,
 		ForceAttemptHTTP2:   false,
 		MaxIdleConns:        100,
 		IdleConnTimeout:     90 * time.Second,
