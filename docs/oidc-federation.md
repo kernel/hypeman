@@ -123,7 +123,7 @@ Errors are JSON with `error` and `error_description`:
 | `invalid_request` | 400 | The form is malformed, repeats a parameter or has no `grant_type`. For the supported grant type with federation configured: an unknown or missing parameter, or an `Authorization` header |
 | `unsupported_grant_type` | 400 | The form is well-formed, but it names another grant type or no federation rule is configured |
 | `invalid_grant` | 400 | The rule or the identity token was not accepted. The response does not say why. |
-| `temporarily_unavailable` | 503 | No token can be issued right now: the issuer's keys could not be loaded, the server started recently (see [Replay](#replay)), or its record of spent tokens is full. Retry with a fresh identity token. |
+| `temporarily_unavailable` | 503 | No token can be issued right now: the issuer's keys could not be loaded, the record of spent tokens could not be written or is full, or the server started without that record (see [Replay](#replay)). Retry with a fresh identity token. |
 
 The reason for a refusal is in the server log, in the `oidc assertion exchange` line for the
 request.
@@ -136,15 +136,23 @@ carry no ID and always allow reuse. Kubernetes allows reuse by default, because 
 same projected token until it is rotated; set `single_use` when every exchange fetches a fresh
 token.
 
-The record of spent tokens is kept in memory, per server:
+The record of spent tokens is kept in memory and in the file `oidc/spent-assertions` under the
+data directory. A token is written there before the API token exchanged for it is returned, so a
+restart forgets nothing and exchanges work as soon as the server is up.
 
-- A restart loses it. The server therefore refuses every single-use identity token whose `iat` is
-  earlier than 30 seconds after its start, the margin it allows between its own clock and the
-  issuer's: any token the previous process could have accepted falls below that line. A token from
-  an issuer whose clock runs ahead can be above the line sooner, and is accepted. For about the
-  first minute after a start the refusal is `temporarily_unavailable`, because a fresh token gets
-  through once the issuer's clock passes the line; retry with a fresh identity token. After that
-  minute a token below the line is refused with `invalid_grant`.
+- If the file is missing or does not read in full when the server starts (the first start with a
+  federation rule, a lost data directory, a damaged file), the server cannot tell what was spent
+  before. From then on it
+  refuses every single-use identity token whose `iat` is earlier than 30 seconds after that start,
+  the margin it allows between its own clock and the issuer's; the file remembers that line across
+  later restarts. For about the first minute the refusal is `temporarily_unavailable`, because a
+  fresh token gets through once the issuer's clock passes the line; retry with a fresh identity
+  token. After that minute a token below the line is refused with `invalid_grant`.
+- If a spent token cannot be written to the file, no API token is issued and the exchange answers
+  `temporarily_unavailable`.
+- The record is as current as the data directory. Restoring an earlier copy of the directory
+  brings back an earlier record, and that is not detected.
+- The record is kept per issuer URL, so renaming an issuer in the configuration keeps it.
 - Servers do not share the record. Give each server its own `expected_audience`, so an identity
   token is accepted by one server only.
 

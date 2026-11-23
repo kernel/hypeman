@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -23,6 +24,9 @@ const (
 	// assertions are refused rather than accepted without a replay record.
 	maxSpentAssertions = 100_000
 	spentSweepPeriod   = time.Minute
+	// spentLogSlack is how many expired lines the file may hold beyond twice
+	// the live ones before it is rewritten.
+	spentLogSlack = 1024
 	// tokenRequestReadTimeout bounds how long a caller may take to send the form.
 	tokenRequestReadTimeout = 10 * time.Second
 )
@@ -37,23 +41,35 @@ type Token struct {
 }
 
 // Exchanger trades verified external assertions for API tokens signed with the
-// server's own key. It holds the only record of spent assertions, in memory.
+// server's own key. It keeps the record of spent single-use assertions, in
+// memory and in a file that survives restarts.
 type Exchanger struct {
 	registry    *Registry
 	verifier    *Verifier
 	secret      []byte
-	startedAt   time.Time
 	readTimeout time.Duration
 	now         func() time.Time
 	exchanges   metric.Int64Counter
 
-	mu         sync.Mutex
+	mu sync.Mutex
+	// spent holds exactly the unexpired entries recorded in spentLog.
 	spent      map[string]time.Time
+	spentLog   *spentLog
 	sweepAfter time.Time
+	// spentComplete is false when the record on disk could not vouch for
+	// every assertion an earlier process spent. This start then raised the
+	// record's floor.
+	spentComplete bool
 }
 
-// NewExchanger issues tokens signed with signingSecret for the rules in registry.
-func NewExchanger(registry *Registry, signingSecret string, meter metric.Meter) (*Exchanger, error) {
+// NewExchanger issues tokens signed with signingSecret for the rules in
+// registry. Spent single-use assertions are recorded in the file at spentPath;
+// without any rule the file is not touched.
+func NewExchanger(registry *Registry, signingSecret, spentPath string, meter metric.Meter) (*Exchanger, error) {
+	return newExchanger(registry, signingSecret, spentPath, meter, time.Now())
+}
+
+func newExchanger(registry *Registry, signingSecret, spentPath string, meter metric.Meter, startedAt time.Time) (*Exchanger, error) {
 	if signingSecret == "" {
 		return nil, errors.New("JWT_SECRET must be set")
 	}
@@ -62,16 +78,44 @@ func NewExchanger(registry *Registry, signingSecret string, meter metric.Meter) 
 	if err != nil {
 		return nil, err
 	}
-	return &Exchanger{
+	e := &Exchanger{
 		registry:    registry,
 		verifier:    NewVerifier(),
 		secret:      []byte(signingSecret),
-		startedAt:   time.Now(),
 		readTimeout: tokenRequestReadTimeout,
 		now:         time.Now,
 		exchanges:   exchanges,
 		spent:       make(map[string]time.Time),
-	}, nil
+	}
+	if registry.Enabled() {
+		// Anything an earlier process could have spent was accepted before
+		// this one started, so its iat is earlier than the start time plus
+		// the clock leeway the verifier allows. Without a complete record,
+		// refusing everything below that floor keeps single use without
+		// trusting the issuer's clock to match this host's.
+		e.spentLog, e.spent, e.spentComplete, err = openSpentLog(spentPath, startedAt, startedAt.Add(clockLeeway))
+		if err != nil {
+			return nil, fmt.Errorf("open the record of spent identity tokens: %w", err)
+		}
+	}
+	return e, nil
+}
+
+// SpentRecordComplete reports whether the record of spent single-use
+// assertions was read in full at start. When it was not, this start raised
+// the record's floor.
+func (e *Exchanger) SpentRecordComplete() bool {
+	return e.spentComplete
+}
+
+// SpentRecordFloor returns the issue time below which single-use assertions
+// are refused because the record cannot say whether they were spent. It is
+// zero without a federation rule.
+func (e *Exchanger) SpentRecordFloor() time.Time {
+	if e.spentLog == nil {
+		return time.Time{}
+	}
+	return e.spentLog.floor
 }
 
 // Enabled reports whether any federation rule is configured.
@@ -147,24 +191,40 @@ func (e *Exchanger) exchange(ctx context.Context, ruleName, raw string) (Token, 
 		return refuse(outcome, "claims do not match the rule")
 	}
 	now := e.now()
-	// The record of spent assertions does not survive a restart. Anything the
-	// previous process could have spent was accepted before this one started,
-	// so its iat is earlier than the start time plus the clock leeway the
-	// verifier allows. Refusing everything below that floor keeps single use
-	// across restarts without trusting the issuer's clock to match this host's.
-	if floor := e.startedAt.Add(clockLeeway); assertion.SingleUse && assertion.IssuedAt.Before(floor) {
+	// Below the record's floor nothing says whether the assertion was spent.
+	if assertion.SingleUse && assertion.IssuedAt.Before(e.spentLog.floor) {
 		// A fresh assertion from an issuer whose clock runs behind by up to
 		// the leeway stays below the floor that much longer, and iat is in
 		// whole seconds. Until then the refusal is worth retrying.
-		if now.Before(floor.Add(clockLeeway + time.Second)) {
-			outcome.result, outcome.reason, outcome.err = "unavailable", "server started recently; this single-use assertion is not accepted yet", ErrUnavailable
+		if now.Before(e.spentLog.floor.Add(clockLeeway + time.Second)) {
+			outcome.result, outcome.reason, outcome.err = "unavailable", "server started recently without a complete record of spent assertions; this single-use assertion is not accepted yet", ErrUnavailable
 			return Token{}, outcome
 		}
-		return refuse(outcome, "assertion was issued before this server could vouch for it being unused")
+		return refuse(outcome, "assertion was issued before the record of spent assertions can vouch for it being unused")
 	}
-	expiry, err := AccessExpiry(now, assertion.ExpiresAt, *rule.Authorization.MaxTokenTTLSeconds)
-	if err != nil {
+	ttl := *rule.Authorization.MaxTokenTTLSeconds
+	if _, err := AccessExpiry(now, assertion.ExpiresAt, ttl); err != nil {
 		return refuse(outcome, "assertion expires too soon")
+	}
+	// Everything above leaves a refused assertion usable. From here it is spent.
+	if assertion.SingleUse {
+		switch result, err := e.consume(rule.IssuerSpec.IssuerURL, assertion.JTI, assertion.ExpiresAt, now); result {
+		case spentAlready:
+			return refuse(outcome, "assertion was already used")
+		case spentFull:
+			outcome.result, outcome.reason, outcome.err = "unavailable", "the record of spent assertions is full", ErrUnavailable
+			return Token{}, outcome
+		case spentUnrecorded:
+			outcome.result, outcome.reason, outcome.err = "unavailable", "the spent assertion could not be recorded: "+err.Error(), ErrUnavailable
+			return Token{}, outcome
+		}
+	}
+	// Recording the assertion can take a while. The token's lifetime starts
+	// now, so that a token is never returned already expired.
+	now = e.now()
+	expiry, err := AccessExpiry(now, assertion.ExpiresAt, ttl)
+	if err != nil {
+		return refuse(outcome, "assertion expired while it was being recorded")
 	}
 	var id [16]byte
 	if _, err := rand.Read(id[:]); err != nil {
@@ -185,16 +245,6 @@ func (e *Exchanger) exchange(ctx context.Context, ruleName, raw string) (Token, 
 		outcome.result, outcome.reason, outcome.err = "unavailable", "token signing failed", ErrUnavailable
 		return Token{}, outcome
 	}
-	// Consume the assertion last, so a failure above leaves it usable.
-	if assertion.SingleUse {
-		switch e.consume(rule.Issuer, assertion.JTI, assertion.ExpiresAt, now) {
-		case spentAlready:
-			return refuse(outcome, "assertion was already used")
-		case spentFull:
-			outcome.result, outcome.reason, outcome.err = "unavailable", "replay cache is full", ErrUnavailable
-			return Token{}, outcome
-		}
-	}
 	outcome.result, outcome.reason, outcome.tokenID = "issued", "issued", tokenID
 	return Token{
 		AccessToken: signed,
@@ -212,16 +262,18 @@ const (
 	spentRecorded spentResult = iota
 	spentAlready
 	spentFull
+	spentUnrecorded
 )
 
-// consume records a single-use assertion. Uniqueness is per issuer, so one
-// assertion cannot be spent once for each rule that would accept it.
-func (e *Exchanger) consume(issuer, jti string, expires, now time.Time) spentResult {
-	key := issuer + "\x00" + jti
+// consume records a single-use assertion, in memory and on disk, before its
+// token is returned. An assertion that could not be written to disk is not
+// recorded in memory either, and no token is issued for it.
+func (e *Exchanger) consume(issuerURL, jti string, expires, now time.Time) (spentResult, error) {
+	key := spentKey(issuerURL, jti)
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if until, exists := e.spent[key]; exists && now.Before(until) {
-		return spentAlready
+		return spentAlready, nil
 	}
 	if len(e.spent) >= maxSpentAssertions || !now.Before(e.sweepAfter) {
 		for spentKey, until := range e.spent {
@@ -230,11 +282,21 @@ func (e *Exchanger) consume(issuer, jti string, expires, now time.Time) spentRes
 			}
 		}
 		e.sweepAfter = now.Add(spentSweepPeriod)
+		// Expired lines stay in the file until it is rewritten. Do that once
+		// they outnumber the live ones. A failure either leaves the old file
+		// in use or marks the log dirty, which the append below must clear.
+		if e.spentLog.lines > 2*len(e.spent)+spentLogSlack {
+			_ = e.spentLog.rewrite(e.spent)
+		}
 	}
 	if len(e.spent) >= maxSpentAssertions {
-		return spentFull
+		return spentFull, nil
 	}
 	// The verifier accepts an assertion until its expiry plus the clock leeway.
-	e.spent[key] = expires.Add(clockLeeway)
-	return spentRecorded
+	until := expires.Add(clockLeeway)
+	if err := e.spentLog.append(key, until, e.spent); err != nil {
+		return spentUnrecorded, err
+	}
+	e.spent[key] = until
+	return spentRecorded, nil
 }

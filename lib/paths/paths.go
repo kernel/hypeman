@@ -33,6 +33,11 @@ func (p *Paths) DataDir() string {
 	return p.dataDir
 }
 
+// OIDCSpentAssertions returns the file recording spent single-use OIDC identity tokens.
+func (p *Paths) OIDCSpentAssertions() string {
+	return filepath.Join(p.dataDir, "oidc", "spent-assertions")
+}
+
 // System path methods
 
 // SystemKernel returns the path to a kernel file.

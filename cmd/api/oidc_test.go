@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -35,7 +36,8 @@ func oidcTestServer(t *testing.T, key *rsa.PublicKey, permissions []string) http
 		Issuers: []oidcfederation.IssuerSpec{{
 			Name:      "idp",
 			IssuerURL: "https://idp.example.test",
-			// A server refuses single-use assertions while it has just started.
+			// On its first start a server has no record of spent assertions and
+			// refuses single-use ones for a while.
 			TokenValidation: oidcfederation.TokenValidation{ReplayProtection: oidcfederation.ReplayAllowReuse},
 			JWKS: oidcfederation.KeySource{Type: "inline", Keys: []map[string]any{{
 				"kty": "RSA", "kid": "key-a", "alg": "RS256", "use": "sig",
@@ -51,7 +53,7 @@ func oidcTestServer(t *testing.T, key *rsa.PublicKey, permissions []string) http
 	})
 	require.NoError(t, err)
 	meter := noop.NewMeterProvider().Meter("test")
-	exchanger, err := oidcfederation.NewExchanger(registry, testJWTSecret, meter)
+	exchanger, err := oidcfederation.NewExchanger(registry, testJWTSecret, filepath.Join(t.TempDir(), "spent"), meter)
 	require.NoError(t, err)
 	verifier, err := jwtauth.NewVerifier(testJWTSecret, nil, meter)
 	require.NoError(t, err)

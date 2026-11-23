@@ -17,8 +17,8 @@ assertion against a rule's issuer and audience, and `Match.Matches` evaluates th
 on the verified claims.
 
 `Exchanger` puts these together behind `POST /oauth/token`: it verifies an assertion against the
-rule the caller names, records single-use assertions as spent, and issues an API token signed with
-the server's `jwt_secret`. Operator documentation is in
+rule the caller names, records single-use assertions as spent in memory and in a file that
+survives restarts, and issues an API token signed with the server's `jwt_secret`. Operator documentation is in
 [docs/oidc-federation.md](../../docs/oidc-federation.md).
 
 ## Presets

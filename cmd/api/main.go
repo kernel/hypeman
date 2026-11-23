@@ -291,9 +291,12 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("initialize OIDC federation: %w", err)
 	}
-	tokenExchanger, err := oidcfederation.NewExchanger(oidcRegistry, app.Config.JwtSecret, otelProvider.Meter)
+	tokenExchanger, err := oidcfederation.NewExchanger(oidcRegistry, app.Config.JwtSecret, paths.New(app.Config.DataDir).OIDCSpentAssertions(), otelProvider.Meter)
 	if err != nil {
 		return fmt.Errorf("initialize OIDC federation: %w", err)
+	}
+	if tokenExchanger.Enabled() && !tokenExchanger.SpentRecordComplete() {
+		logger.Warn("no complete record of spent OIDC identity tokens was found; single-use identity tokens issued before the floor are refused", "floor", tokenExchanger.SpentRecordFloor())
 	}
 	// Tokens issued for a federation rule stay valid only while that rule is configured unchanged.
 	jwtVerifier = jwtVerifier.WithFederation(tokenExchanger)

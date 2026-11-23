@@ -19,9 +19,8 @@ year-long installer-issued CLI tokens.
 Tokens issued by the [OIDC assertion exchange](oidc-federation.md) are signed
 with `jwt_secret` and live at most 10 minutes. Their callers hold nothing to
 reissue: after signing switches, the next exchange is signed with the new key.
-Each restart forgets which single-use identity tokens were spent, so for about
-a minute afterwards those exchanges can answer `temporarily_unavailable` and
-callers retry with a fresh identity token.
+The restarts do not interrupt them: spent single-use identity tokens are
+recorded on disk, so exchanges work as soon as the server is up.
 
 ## Caveats
 
