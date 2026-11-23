@@ -280,7 +280,7 @@ jobs:
           make test TEST_TIMEOUT=20m
 
   report-pr-test:
-    if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.pr_number != '' }}
+    if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.pr_number != '' && (needs.test.result == 'success' || needs.test.result == 'failure') }}
     needs: test
     runs-on: ubuntu-latest
     permissions:
