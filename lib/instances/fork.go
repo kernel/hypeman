@@ -654,7 +654,8 @@ func (m *manager) RecoverInterruptedForks(ctx context.Context) {
 	if len(statErrs) > 0 {
 		log.WarnContext(ctx, "cannot tell whether some instances are interrupted forks: their metadata is unreadable", "error", errors.Join(statErrs...))
 	}
-	// Each delete of a fork that was running waits on its guest to shut down.
+	// Each delete waits on its VMM to exit, and on its guest to shut down
+	// first when the guest holds a passthrough device.
 	var deletes errgroup.Group
 	deletes.SetLimit(interruptedForkMaxConcurrentDeletes)
 	var deleted, failed atomic.Int64
@@ -693,8 +694,11 @@ func (m *manager) RecoverInterruptedForks(ctx context.Context) {
 			continue
 		}
 		name := meta.Name
+		// Nobody was given this guest, so it is shut down cleanly only when a
+		// passthrough device needs its driver unloaded.
+		options := DeleteInstanceOptions{SkipGracefulShutdown: !hasVFIODevices(&meta.StoredMetadata)}
 		deletes.Go(func() error {
-			if err := m.cleanupForkInstanceOnError(ctx, id); err != nil {
+			if err := m.deleteFork(ctx, id, options); err != nil {
 				log.ErrorContext(ctx, "failed to delete interrupted fork; it stays until it is deleted", "instance_id", id, "instance_name", name, "error", err)
 				failed.Add(1)
 				m.recordInterruptedFork(ctx, "delete_failed")
@@ -719,6 +723,10 @@ func (m *manager) discardFork(ctx context.Context, forkID string, cause error) e
 }
 
 func (m *manager) cleanupForkInstanceOnError(ctx context.Context, forkID string) error {
+	return m.deleteFork(ctx, forkID, DeleteInstanceOptions{})
+}
+
+func (m *manager) deleteFork(ctx context.Context, forkID string, options DeleteInstanceOptions) error {
 	// The request may be failing because its caller went away. The fork must
 	// still be deleted, or it stays up marked until the next start.
 	ctx = context.WithoutCancel(ctx)
@@ -726,7 +734,7 @@ func (m *manager) cleanupForkInstanceOnError(ctx context.Context, forkID string)
 	lock.Lock()
 	defer lock.Unlock()
 
-	err := m.deleteInstance(ctx, forkID)
+	err := m.deleteInstanceWithOptions(ctx, forkID, options)
 	if err == nil || errors.Is(err, ErrNotFound) {
 		m.instanceLocks.Delete(forkID)
 		return nil
