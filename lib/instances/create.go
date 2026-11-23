@@ -807,6 +807,26 @@ func isSystemDirectory(path string) bool {
 	return false
 }
 
+// resolveStartVersion maps the version stored in instance metadata onto one the
+// starter can still launch. An upgrade can drop a build from the supported set
+// (a vulnerable one, say), but a stopped instance keeps its pinned version, so a
+// cold start falls back to the starter's default instead of failing forever.
+// fellBack reports whether the requested version was unusable.
+func resolveStartVersion(requested string, resolve func(requested string) (string, error)) (string, bool, error) {
+	version, err := resolve(requested)
+	if err == nil {
+		return version, false, nil
+	}
+	if requested == "" {
+		return "", false, err
+	}
+	fallback, fallbackErr := resolve("")
+	if fallbackErr != nil {
+		return "", false, err
+	}
+	return fallback, true, nil
+}
+
 // startAndBootVM starts the VMM and boots the VM
 func (m *manager) startAndBootVM(
 	ctx context.Context,
@@ -837,6 +857,21 @@ func (m *manager) startAndBootVM(
 		}
 		stored.HypervisorVersion = resolvedVersion
 	}
+
+	// A stored version may no longer be supported (for example a dropped
+	// vulnerable build); boot on the starter default instead of failing.
+	resolvedVersion, fellBack, err := resolveStartVersion(stored.HypervisorVersion, func(requested string) (string, error) {
+		return starter.ResolveVersion(m.paths, requested)
+	})
+	if err != nil {
+		return fmt.Errorf("resolve version for hypervisor %s start: %w", stored.HypervisorType, err)
+	}
+	if fellBack {
+		log.WarnContext(ctx, "stored hypervisor version unsupported, using default",
+			"instance_id", stored.Id, "hypervisor", stored.HypervisorType,
+			"stored_version", stored.HypervisorVersion, "version", resolvedVersion)
+	}
+	stored.HypervisorVersion = resolvedVersion
 
 	// Build VM configuration
 	inst := &Instance{StoredMetadata: *stored}

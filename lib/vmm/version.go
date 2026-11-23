@@ -8,7 +8,7 @@ import (
 
 // ParseVersion extracts version from cloud-hypervisor --version output
 // and matches it against SupportedVersions. Checks longer version strings
-// first so "v49.0.1" doesn't falsely match "v49.0".
+// first so "v51.2.1" doesn't falsely match "v51.2".
 func ParseVersion(binaryPath string) (CHVersion, error) {
 	cmd := exec.Command(binaryPath, "--version")
 	output, err := cmd.Output()
@@ -19,7 +19,7 @@ func ParseVersion(binaryPath string) (CHVersion, error) {
 	versionStr := strings.TrimSpace(string(output))
 
 	// Match against supported versions, longest first to avoid
-	// "v49.0" matching inside "v49.0.1".
+	// "v51.2" matching inside "v51.2.1".
 	for _, v := range sortedByLengthDesc(SupportedVersions) {
 		if strings.Contains(versionStr, string(v)) {
 			return v, nil

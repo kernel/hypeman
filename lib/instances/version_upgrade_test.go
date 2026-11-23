@@ -18,11 +18,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestCloudHypervisorVersionUpgradeRestore verifies that instances created on
-// one CH version can be put in standby and restored after the default version
-// changes. This tests the backwards-compatible upgrade path: deploy new binary
-// with both versions embedded, flip the flag, and existing standbys still
-// restore using their original version.
+// TestCloudHypervisorVersionUpgradeRestore verifies that a standby instance is
+// restored with the CH version stored in its metadata, while new instances
+// follow the configured default version.
 func TestCloudHypervisorVersionUpgradeRestore(t *testing.T) {
 	t.Parallel()
 	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
@@ -64,8 +62,8 @@ func TestCloudHypervisorVersionUpgradeRestore(t *testing.T) {
 		_ = cloudhypervisor.SetDefaultVersion("")
 	})
 
-	// Phase 1: Create instance with explicit v49.0 version
-	t.Log("Creating instance with CH v49.0...")
+	// Phase 1: Create instance with an explicit version
+	t.Log("Creating instance with an explicit CH version...")
 	inst, err := mgr.CreateInstance(ctx, CreateInstanceRequest{
 		Name:              "version-upgrade-test",
 		Image:             integrationTestImageRef(t, "docker.io/library/alpine:latest"),
@@ -74,11 +72,11 @@ func TestCloudHypervisorVersionUpgradeRestore(t *testing.T) {
 		Vcpus:             1,
 		NetworkEnabled:    false,
 		Hypervisor:        hypervisor.TypeCloudHypervisor,
-		HypervisorVersion: string(vmm.V49_0),
+		HypervisorVersion: string(vmm.V51_2),
 		Cmd:               []string{"sleep", "infinity"},
 	})
 	require.NoError(t, err)
-	assert.Equal(t, string(vmm.V49_0), inst.HypervisorVersion)
+	assert.Equal(t, string(vmm.V51_2), inst.HypervisorVersion)
 	t.Logf("Instance created: %s (version: %s)", inst.Id, inst.HypervisorVersion)
 
 	inst, err = waitForInstanceState(ctx, mgr, inst.Id, StateRunning, integrationTestTimeout(20*time.Second))
@@ -94,25 +92,25 @@ func TestCloudHypervisorVersionUpgradeRestore(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, StateStandby, inst.State)
 	assert.True(t, inst.HasSnapshot)
-	assert.Equal(t, string(vmm.V49_0), inst.HypervisorVersion)
+	assert.Equal(t, string(vmm.V51_2), inst.HypervisorVersion)
 
-	// Phase 3: Change default version to v51.1 (simulates a deploy with new config)
-	t.Log("Switching default CH version to v51.1...")
-	require.NoError(t, cloudhypervisor.SetDefaultVersion(string(vmm.V51_1)))
+	// Phase 3: Set the default version (simulates a deploy with new config)
+	t.Log("Setting default CH version...")
+	require.NoError(t, cloudhypervisor.SetDefaultVersion(string(vmm.V51_2)))
 
-	// Phase 4: Restore -- must use the stored v49.0, not the new default
-	t.Log("Restoring instance (should use stored v49.0)...")
+	// Phase 4: Restore -- must use the stored version
+	t.Log("Restoring instance (should use stored version)...")
 	inst, err = mgr.RestoreInstance(ctx, inst.Id)
 	require.NoError(t, err)
 	inst, err = waitForInstanceState(ctx, mgr, inst.Id, StateRunning, integrationTestTimeout(20*time.Second))
 	require.NoError(t, err)
 	assert.Equal(t, StateRunning, inst.State)
-	assert.Equal(t, string(vmm.V49_0), inst.HypervisorVersion,
-		"Restored instance must use original version, not the new default")
+	assert.Equal(t, string(vmm.V51_2), inst.HypervisorVersion,
+		"Restored instance must use its stored version")
 	t.Logf("Instance restored with version: %s", inst.HypervisorVersion)
 
-	// Phase 5: Verify a NEW instance picks up the v51.1 default
-	t.Log("Creating second instance (should use v51.1 via default)...")
+	// Phase 5: Verify a NEW instance picks up the configured default
+	t.Log("Creating second instance (should use the default version)...")
 	inst2, err := mgr.CreateInstance(ctx, CreateInstanceRequest{
 		Name:           "version-upgrade-new",
 		Image:          integrationTestImageRef(t, "docker.io/library/alpine:latest"),
@@ -124,7 +122,7 @@ func TestCloudHypervisorVersionUpgradeRestore(t *testing.T) {
 		Cmd:            []string{"sleep", "infinity"},
 	})
 	require.NoError(t, err)
-	assert.Equal(t, string(vmm.V51_1), inst2.HypervisorVersion,
+	assert.Equal(t, string(vmm.V51_2), inst2.HypervisorVersion,
 		"New instance should use the updated default version")
 	t.Logf("New instance created: %s (version: %s)", inst2.Id, inst2.HypervisorVersion)
 
