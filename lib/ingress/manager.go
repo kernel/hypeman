@@ -112,6 +112,9 @@ type manager struct {
 	logForwarder     *CaddyLogForwarder
 	dnsServer        *dns.Server
 	mu               sync.RWMutex
+	// writeMu serializes writers without blocking readers; mu only covers the
+	// on-disk state mutation, never the Caddy admin reload.
+	writeMu sync.Mutex
 }
 
 // NewManager creates a new ingress manager.
@@ -256,8 +259,8 @@ func (m *manager) Initialize(ctx context.Context) error {
 
 // Create creates a new ingress resource.
 func (m *manager) Create(ctx context.Context, req CreateIngressRequest) (*Ingress, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	m.writeMu.Lock()
+	defer m.writeMu.Unlock()
 
 	log := logger.FromContext(ctx)
 
@@ -373,7 +376,11 @@ func (m *manager) Create(ctx context.Context, req CreateIngressRequest) (*Ingres
 		}
 	}
 
-	// Config accepted - save ingress to storage
+	// Config accepted - save ingress to storage.
+	// Only the short on-disk mutation takes mu; the reload above must not hold
+	// it, or readers stall for the whole admin API timeout.
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	stored := &storedIngress{
 		ID:        ingress.ID,
 		Name:      ingress.Name,
@@ -480,8 +487,8 @@ func (m *manager) List(ctx context.Context) ([]Ingress, error) {
 
 // Delete removes an ingress resource by ID, name, or ID prefix.
 func (m *manager) Delete(ctx context.Context, idOrName string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	m.writeMu.Lock()
+	defer m.writeMu.Unlock()
 
 	log := logger.FromContext(ctx)
 
@@ -493,7 +500,10 @@ func (m *manager) Delete(ctx context.Context, idOrName string) error {
 	id := ingress.ID
 
 	// Delete from storage
-	if err := deleteIngressData(m.paths, id); err != nil {
+	m.mu.Lock()
+	err = deleteIngressData(m.paths, id)
+	m.mu.Unlock()
+	if err != nil {
 		return fmt.Errorf("delete ingress data: %w", err)
 	}
 
@@ -518,7 +528,10 @@ func (m *manager) Delete(ctx context.Context, idOrName string) error {
 	}
 
 	// Write config to disk
-	if err := m.configGenerator.WriteConfig(ctx, ingresses); err != nil {
+	m.mu.Lock()
+	err = m.configGenerator.WriteConfig(ctx, ingresses)
+	m.mu.Unlock()
+	if err != nil {
 		log.ErrorContext(ctx, "failed to write config after delete", "error", err)
 	}
 
