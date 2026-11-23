@@ -136,7 +136,7 @@ func (r *forkTAPRelease) ReleaseByInstanceID(_ context.Context, id string) error
 	return r.err
 }
 
-func createPendingForkWithoutAllocation(t *testing.T, m *manager, fork string) *metadata {
+func createPendingForkWithoutAllocation(t *testing.T, m *manager, fork string) {
 	t.Helper()
 	createStoppedSnapshotSourceFixture(t, m, fork, fork, m.defaultHypervisor)
 	meta, err := m.loadMetadata(fork)
@@ -147,25 +147,19 @@ func createPendingForkWithoutAllocation(t *testing.T, m *manager, fork string) *
 	alloc, err := m.networkManager.GetAllocation(t.Context(), fork)
 	require.NoError(t, err)
 	require.Nil(t, alloc)
-	return meta
 }
 
-func TestRecoveryRetriesTAPReleaseWithoutAllocation(t *testing.T) {
+// The TAP reconciler deletes a TAP that no live instance claims, so a fork is
+// not kept for one that could not be released.
+func TestRecoveryDeletesForkWhenTAPReleaseFails(t *testing.T) {
 	m, _ := setupTestManager(t)
 	const fork = "fork-no-allocation"
-	meta := createPendingForkWithoutAllocation(t, m, fork)
+	createPendingForkWithoutAllocation(t, m, fork)
 	release := &forkTAPRelease{Manager: m.networkManager, err: errors.New("TAP busy")}
 	m.networkManager = release
 
 	m.RecoverInterruptedForks(t.Context())
 	require.Equal(t, []string{fork}, release.ids)
-	stored, err := m.loadMetadata(fork)
-	require.NoError(t, err)
-	require.Equal(t, meta.ForkPending, stored.ForkPending)
-
-	release.err = nil
-	m.RecoverInterruptedForks(t.Context())
-	require.Equal(t, []string{fork, fork}, release.ids)
 	require.NoDirExists(t, m.paths.InstanceDir(fork))
 }
 

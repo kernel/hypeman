@@ -173,9 +173,7 @@ func (m *manager) deleteInstanceWithOptions(
 		}
 		releaseNetworkSpanEnd(err)
 		if err != nil {
-			if stored.ForkPending != nil {
-				return fmt.Errorf("release fork network: %w", err)
-			}
+			// The TAP reconciler deletes a TAP that no live instance claims.
 			log.WarnContext(ctx, "failed to release network, continuing with cleanup", "instance_id", id, "error", err)
 		}
 	}

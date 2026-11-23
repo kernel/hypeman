@@ -17,29 +17,38 @@ func TestRecoveryRemovesKernelTAPWithoutAllocation(t *testing.T) {
 	if _, err := os.Stat("/dev/net/tun"); os.IsNotExist(err) {
 		t.Skip("no TUN device")
 	}
-	m, _ := setupTestManager(t)
-	id := cuid2.Generate()
-	createPendingForkWithoutAllocation(t, m, id)
-	tap := &netlink.Tuntap{
-		LinkAttrs: netlink.LinkAttrs{Name: network.GenerateTAPName(id)},
-		Mode:      netlink.TUNTAP_MODE_TAP,
+	for _, tc := range []struct {
+		name       string
+		sharedName bool
+	}{
+		{"own name", false},
+		{"shared name", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, _ := setupTestManager(t)
+			id := cuid2.Generate()
+			createPendingForkWithoutAllocation(t, m, id)
+			tap := &netlink.Tuntap{
+				LinkAttrs: netlink.LinkAttrs{Name: network.GenerateTAPName(id)},
+				Mode:      netlink.TUNTAP_MODE_TAP,
+			}
+			require.NoError(t, netlink.LinkAdd(tap))
+			t.Cleanup(func() { _ = netlink.LinkDel(tap) })
+			if tc.sharedName {
+				// A second guest can share the short TAP name, so the TAP may
+				// be its own. It is left for the TAP reconciler.
+				require.NoError(t, os.Mkdir(m.paths.InstanceDir(id+"-other"), 0755))
+			}
+
+			m.RecoverInterruptedForks(t.Context())
+			require.NoDirExists(t, m.paths.InstanceDir(id))
+			_, err := netlink.LinkByName(tap.Name)
+			if tc.sharedName {
+				require.NoError(t, err)
+				return
+			}
+			var notFound netlink.LinkNotFoundError
+			require.ErrorAs(t, err, &notFound)
+		})
 	}
-	require.NoError(t, netlink.LinkAdd(tap))
-	t.Cleanup(func() { _ = netlink.LinkDel(tap) })
-	// A second guest can share the short TAP name. Leave it alone until
-	// the full instance ID unambiguously identifies it.
-	other := m.paths.InstanceDir(id + "-other")
-	require.NoError(t, os.Mkdir(other, 0755))
-	m.RecoverInterruptedForks(t.Context())
-	_, err := netlink.LinkByName(tap.Name)
-	require.NoError(t, err)
-	require.FileExists(t, m.paths.InstanceMetadata(id))
-	require.NoError(t, os.Remove(other))
-
-	m.RecoverInterruptedForks(t.Context())
-
-	var notFound netlink.LinkNotFoundError
-	_, err = netlink.LinkByName(tap.Name)
-	require.ErrorAs(t, err, &notFound)
-	require.NoDirExists(t, m.paths.InstanceDir(id))
 }
