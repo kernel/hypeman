@@ -156,7 +156,7 @@ func TestExchangeSpendsASingleUseAssertionOnce(t *testing.T) {
 	refused := f.assertion(t, func(c jwt.MapClaims) { c["jti"] = "kept"; c["ref"] = "refs/heads/feature" })
 	_, err := f.exchanger.Exchange(context.Background(), "ci", refused)
 	require.ErrorIs(t, err, ErrAssertion)
-	result, err := f.exchanger.consume("github-actions", "kept", f.now.Add(time.Minute), f.now)
+	result, err := f.exchanger.consume("github-actions", "kept", f.now, f.now.Add(time.Minute), f.now)
 	require.NoError(t, err)
 	require.Equal(t, spentRecorded, result)
 }
@@ -195,7 +195,9 @@ func TestSpentAssertionsSurviveARestart(t *testing.T) {
 	require.Empty(t, f.exchanger.spent)
 	raw, err := os.ReadFile(f.spentPath)
 	require.NoError(t, err)
-	require.Equal(t, spentLine(floorKey, f.exchanger.spentLog.floor), string(raw), "only the floor from the first start remains")
+	require.Equal(t, spentLine(floorKey, f.exchanger.spentLog.floor)+spentLine(droppedKey, f.exchanger.spentLog.dropped), string(raw),
+		"only what the record does not hold remains")
+	require.False(t, f.exchanger.spentLog.dropped.IsZero())
 }
 
 // A record that does not read in full as one this code wrote cannot vouch for
@@ -208,8 +210,9 @@ func TestDamagedSpentRecordFallsBackToTheStartFloor(t *testing.T) {
 	require.NoError(t, err)
 	recorded, err := os.ReadFile(f.spentPath)
 	require.NoError(t, err)
-	require.Equal(t, 2, bytes.Count(recorded, []byte("\n")), "the floor and one spent assertion")
-	firstLine := bytes.IndexByte(recorded, '\n') + 1
+	require.Equal(t, 3, bytes.Count(recorded, []byte("\n")), "the floor, the dropped mark and one spent assertion")
+	secondLine := bytes.IndexByte(recorded, '\n') + 1
+	firstLine := secondLine + bytes.IndexByte(recorded[secondLine:], '\n') + 1
 	// altered returns the record with one byte replaced by another of its kind,
 	// so the line still reads as a key or a time.
 	altered := func(offset int) []byte {
@@ -226,7 +229,8 @@ func TestDamagedSpentRecordFallsBackToTheStartFloor(t *testing.T) {
 
 	for name, damaged := range map[string][]byte{
 		"emptied":                   {},
-		"floor line missing":        recorded[firstLine:],
+		"floor line missing":        recorded[secondLine:],
+		"dropped line missing":      slices.Concat(recorded[:secondLine], recorded[firstLine:]),
 		"last record cut short":     recorded[:len(recorded)-1],
 		"unfinished line at end":    slices.Concat(recorded, []byte("0123abc")),
 		"unreadable line":           slices.Concat([]byte("not a record\n"), recorded),
@@ -234,6 +238,7 @@ func TestDamagedSpentRecordFallsBackToTheStartFloor(t *testing.T) {
 		"one digit of a key":        altered(firstLine),
 		"one digit of an expiry":    altered(recordTime),
 		"one digit of the floor":    altered(floorTime),
+		"one digit of the dropped":  altered(secondLine + len(droppedKey) + 2),
 		"larger than it can become": bytes.Repeat([]byte("x"), maxSpentLogBytes+1),
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -251,6 +256,14 @@ func TestDamagedSpentRecordFallsBackToTheStartFloor(t *testing.T) {
 			require.Equal(t, f.now.Add(clockLeeway), f.exchanger.SpentRecordFloor())
 		})
 	}
+
+	// Dropping an expired record does not stand in for a missing floor line.
+	require.NoError(t, os.WriteFile(f.spentPath, recorded[secondLine:], 0o600))
+	f.now = f.now.Add(time.Hour)
+	f.start(t, githubConfig(), f.now)
+	require.Empty(t, f.exchanger.spent)
+	require.False(t, f.exchanger.SpentRecordComplete())
+	require.Equal(t, f.now.Add(clockLeeway), f.exchanger.SpentRecordFloor())
 }
 
 // A start that follows a lost record must not forget that the record has a
@@ -305,6 +318,75 @@ func TestExchangeRequiresTheSpentRecordToBeWritten(t *testing.T) {
 	require.True(t, f.exchanger.SpentRecordComplete())
 	for _, spent := range []string{recorded, assertion} {
 		_, err = f.exchanger.Exchange(context.Background(), "ci", spent)
+		require.ErrorIs(t, err, ErrAssertion)
+	}
+}
+
+// A host clock that runs ahead expires records early, at a start or while
+// running. Their assertions are still valid once the clock is corrected, so
+// the record remembers the latest expiry it dropped and refuses anything
+// expiring that early.
+func TestClockRunningAheadDoesNotReopenASpentAssertion(t *testing.T) {
+	for _, restart := range []bool{true, false} {
+		f := newExchangeFixture(t, githubConfig())
+		start := f.now
+		expiry := start.Add(5 * time.Minute)
+		spent := f.assertion(t, nil)
+		_, err := f.exchanger.Exchange(context.Background(), "ci", spent)
+		require.NoError(t, err)
+		issuedNow := func() string {
+			return f.assertion(t, func(c jwt.MapClaims) {
+				c["iat"], c["exp"] = f.now.Unix(), f.now.Add(5*time.Minute).Unix()
+			})
+		}
+
+		// The clock jumps an hour ahead and the record is dropped as expired.
+		f.now = start.Add(time.Hour)
+		if restart {
+			f.start(t, githubConfig(), f.now)
+			require.True(t, f.exchanger.SpentRecordComplete())
+		} else {
+			_, err = f.exchanger.Exchange(context.Background(), "ci", issuedNow())
+			require.NoError(t, err)
+		}
+		require.Equal(t, expiry, f.exchanger.spentLog.dropped, "restart=%v", restart)
+
+		// The clock is corrected. The spent assertion is still within its lifetime.
+		f.now = start.Add(time.Minute)
+		_, err = f.exchanger.Exchange(context.Background(), "ci", spent)
+		require.ErrorIs(t, err, ErrUnavailable, "restart=%v", restart)
+		_, err = f.exchanger.Exchange(context.Background(), "ci", issuedNow())
+		require.NoError(t, err, "an assertion obtained now expires after everything that was dropped")
+
+		// After another start the assertion is still refused: by the mark a
+		// rewritten file kept, or by its record if the file still held it.
+		f.start(t, githubConfig(), f.now)
+		_, err = f.exchanger.Exchange(context.Background(), "ci", spent)
+		require.Error(t, err, "restart=%v", restart)
+	}
+}
+
+// With a correct clock, dropping expired records never gets in the way of an
+// assertion still within its lifetime, however long ago it was issued.
+func TestDroppingExpiredRecordsLeavesHeldAssertionsUsable(t *testing.T) {
+	for _, restart := range []bool{true, false} {
+		f := newExchangeFixture(t, githubConfig())
+		start := f.now
+		_, err := f.exchanger.Exchange(context.Background(), "ci", f.assertion(t, nil))
+		require.NoError(t, err)
+		// Issued a minute later and held, unused, until the first has expired.
+		held := f.assertion(t, func(c jwt.MapClaims) {
+			c["iat"], c["exp"] = start.Add(time.Minute).Unix(), start.Add(6*time.Minute).Unix()
+		})
+
+		f.now = start.Add(5*time.Minute + clockLeeway)
+		if restart {
+			f.start(t, githubConfig(), f.now)
+		}
+		_, err = f.exchanger.Exchange(context.Background(), "ci", held)
+		require.NoError(t, err, "restart=%v", restart)
+		require.Equal(t, start.Add(5*time.Minute), f.exchanger.spentLog.dropped)
+		_, err = f.exchanger.Exchange(context.Background(), "ci", held)
 		require.ErrorIs(t, err, ErrAssertion)
 	}
 }
@@ -382,20 +464,20 @@ func TestSpentRecordIsCompactedAndOnlyKeptWithFederation(t *testing.T) {
 	e := f.exchanger
 	expires := f.now.Add(time.Minute)
 	for _, jti := range []string{"one", "two"} {
-		result, err := e.consume("a", jti, expires, f.now)
+		result, err := e.consume("a", jti, f.now, expires, f.now)
 		require.NoError(t, err)
 		require.Equal(t, spentRecorded, result)
 	}
 	// Stand in for a file that has accumulated expired lines.
 	e.spentLog.lines = 2*3 + spentLogSlack + 1
 	later := f.now.Add(spentSweepPeriod)
-	result, err := e.consume("a", "three", later.Add(time.Minute), later)
+	result, err := e.consume("a", "three", later, later.Add(time.Minute), later)
 	require.NoError(t, err)
 	require.Equal(t, spentRecorded, result)
 	require.Equal(t, 3, e.spentLog.lines)
 	raw, err := os.ReadFile(f.spentPath)
 	require.NoError(t, err)
-	require.Equal(t, 4, bytes.Count(raw, []byte("\n")), "the floor and three live entries")
+	require.Equal(t, 5, bytes.Count(raw, []byte("\n")), "the floor, the dropped mark and three live entries")
 	require.Contains(t, string(raw), spentKey("a", "three")+" ")
 
 	registry, err := Compile(Config{})
@@ -517,7 +599,7 @@ func TestSpentAssertionsAreBoundedAndExpire(t *testing.T) {
 	e := f.exchanger
 	expires := f.now.Add(time.Minute)
 	consume := func(issuer, jti string, expires, now time.Time) spentResult {
-		result, err := e.consume(issuer, jti, expires, now)
+		result, err := e.consume(issuer, jti, now, expires, now)
 		require.NoError(t, err)
 		return result
 	}

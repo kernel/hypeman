@@ -148,6 +148,13 @@ restart forgets nothing and exchanges work as soon as the server is up.
   later restarts. For about the first minute the refusal is `temporarily_unavailable`, because a
   fresh token gets through once the issuer's clock passes the line; retry with a fresh identity
   token. After that minute a token below the line is refused with `invalid_grant`.
+- A record is dropped once its token has expired, and the file keeps the latest expiry it has
+  dropped. A token expiring at or before that mark is refused, so a host clock that ran ahead and
+  expired records early cannot reopen them when it is corrected. With a correct clock this changes
+  nothing: such a token has expired anyway. After a clock error the refusal is
+  `temporarily_unavailable`, and an identity token obtained later, which expires past the mark, is
+  accepted. If a wrong clock left the mark or the line above far in the future, stop the server,
+  remove the file and start it again; that start is treated like any other without the file.
 - If a spent token cannot be written to the file, no API token is issued and the exchange answers
   `temporarily_unavailable`.
 - The record is as current as the data directory. Restoring an earlier copy of the directory

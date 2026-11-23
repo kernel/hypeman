@@ -21,8 +21,8 @@ const maxSpentLogBytes = 64 << 20
 // restart does not forget them. It is an append-only file with one line per
 // assertion: the SHA-256 of the issuer URL and token ID in hex, the Unix time
 // after which the record is no longer needed, and a checksum of the two,
-// separated by spaces. A "floor" line of the same shape holds the Unix time
-// before which the record is not complete.
+// separated by spaces. Two lines of the same shape, "floor" and "dropped",
+// say what the record does not hold.
 //
 // The file is trusted as far as it reads as one this code wrote. A copy of the
 // data directory restored from an earlier time, or a file cut back to an
@@ -32,10 +32,15 @@ type spentLog struct {
 	path string
 	file *os.File
 	// floor is the issue time below which the record cannot say whether a
-	// single-use assertion was spent, so such assertions are refused. It is
-	// set whenever a start finds no complete record, and is never lowered:
-	// a later start with an intact file still knows nothing about that gap.
+	// single-use assertion was spent, so such assertions are refused. It
+	// rises whenever a start finds no complete record. It is never lowered:
+	// a later start with an intact file still knows nothing about what came
+	// before.
 	floor time.Time
+	// dropped is the latest expiry among the entries the record has let go
+	// of as expired. An assertion expiring at or before it may be one of
+	// them, so it is refused. It is never lowered either.
+	dropped time.Time
 	// lines counts the lines in the file, including expired ones.
 	lines int
 	// dirty means the file on disk may not hold exactly what was recorded: a
@@ -56,9 +61,9 @@ func spentKey(issuerURL, jti string) string {
 // openSpentLog loads the record at path, creating it if needed, and returns
 // the entries that have not expired. complete is false unless the file reads
 // in full as one this code wrote: every line parses and ends in a newline, and
-// the floor line every such file carries is there. Otherwise the record cannot
-// vouch for everything an earlier process spent, and the floor is raised to
-// incompleteFloor.
+// the floor and dropped lines every such file carries are there. Otherwise the
+// record cannot vouch for everything an earlier process spent, and the floor
+// is raised to incompleteFloor.
 func openSpentLog(path string, now, incompleteFloor time.Time) (log *spentLog, entries map[string]time.Time, complete bool, err error) {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -81,20 +86,29 @@ func openSpentLog(path string, now, incompleteFloor time.Time) (log *spentLog, e
 		// line without its end, which may be a record that was cut short
 		// before its token was returned or one that was damaged afterwards.
 		complete = len(lines[len(lines)-1]) == 0
+		var sawFloor, sawDropped bool
 		for _, line := range lines[:len(lines)-1] {
 			key, until, ok := parseSpentLine(line)
 			switch {
 			case !ok:
 				complete = false
 			case key == floorKey:
+				sawFloor = true
 				if until.After(log.floor) {
 					log.floor = until
 				}
+			case key == droppedKey:
+				sawDropped = true
+				if until.After(log.dropped) {
+					log.dropped = until
+				}
 			case until.After(now):
 				entries[key] = until
+			default:
+				log.forget(until)
 			}
 		}
-		if log.floor.IsZero() {
+		if !sawFloor || !sawDropped {
 			complete = false
 		}
 	}
@@ -106,6 +120,18 @@ func openSpentLog(path string, now, incompleteFloor time.Time) (log *spentLog, e
 		return nil, nil, false, err
 	}
 	return log, entries, complete, nil
+}
+
+// forget notes the expiry of an entry that is being dropped as expired. With
+// a correct clock that changes nothing: an assertion expiring that early is
+// one the verifier refuses anyway. It matters when the host clock ran ahead
+// and expired entries early: once the clock is corrected their assertions
+// would otherwise be accepted again.
+func (l *spentLog) forget(until time.Time) {
+	// An entry is held until its assertion's expiry plus the clock leeway.
+	if expiry := until.Add(-clockLeeway); expiry.After(l.dropped) {
+		l.dropped = expiry
+	}
 }
 
 // syncDir makes the names in a directory durable. Tests replace it.
@@ -121,7 +147,10 @@ var syncDir = func(path string) error {
 	return err
 }
 
-const floorKey = "floor"
+const (
+	floorKey   = "floor"
+	droppedKey = "dropped"
+)
 
 var errSpentLogTooLarge = errors.New("spent assertion log is too large")
 
@@ -152,7 +181,7 @@ func parseSpentLine(line []byte) (string, time.Time, bool) {
 	if string(fields[2]) != spentChecksum(key, until) {
 		return "", time.Time{}, false
 	}
-	if key != floorKey {
+	if key != floorKey && key != droppedKey {
 		if len(key) != hex.EncodedLen(sha256.Size) {
 			return "", time.Time{}, false
 		}
@@ -206,9 +235,8 @@ func (l *spentLog) rewrite(entries map[string]time.Time) error {
 		return fmt.Errorf("write spent assertion log: %w", err)
 	}
 	var buf bytes.Buffer
-	if !l.floor.IsZero() {
-		buf.WriteString(spentLine(floorKey, l.floor))
-	}
+	buf.WriteString(spentLine(floorKey, l.floor))
+	buf.WriteString(spentLine(droppedKey, l.dropped))
 	for key, until := range entries {
 		buf.WriteString(spentLine(key, until))
 	}

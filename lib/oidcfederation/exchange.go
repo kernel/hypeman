@@ -115,6 +115,8 @@ func (e *Exchanger) SpentRecordFloor() time.Time {
 	if e.spentLog == nil {
 		return time.Time{}
 	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	return e.spentLog.floor
 }
 
@@ -191,26 +193,20 @@ func (e *Exchanger) exchange(ctx context.Context, ruleName, raw string) (Token, 
 		return refuse(outcome, "claims do not match the rule")
 	}
 	now := e.now()
-	// Below the record's floor nothing says whether the assertion was spent.
-	if assertion.SingleUse && assertion.IssuedAt.Before(e.spentLog.floor) {
-		// A fresh assertion from an issuer whose clock runs behind by up to
-		// the leeway stays below the floor that much longer, and iat is in
-		// whole seconds. Until then the refusal is worth retrying.
-		if now.Before(e.spentLog.floor.Add(clockLeeway + time.Second)) {
-			outcome.result, outcome.reason, outcome.err = "unavailable", "server started recently without a complete record of spent assertions; this single-use assertion is not accepted yet", ErrUnavailable
-			return Token{}, outcome
-		}
-		return refuse(outcome, "assertion was issued before the record of spent assertions can vouch for it being unused")
-	}
 	ttl := *rule.Authorization.MaxTokenTTLSeconds
 	if _, err := AccessExpiry(now, assertion.ExpiresAt, ttl); err != nil {
 		return refuse(outcome, "assertion expires too soon")
 	}
-	// Everything above leaves a refused assertion usable. From here it is spent.
+	// Everything above leaves a refused assertion usable. Once consumed it is spent.
 	if assertion.SingleUse {
-		switch result, err := e.consume(rule.IssuerSpec.IssuerURL, assertion.JTI, assertion.ExpiresAt, now); result {
+		switch result, err := e.consume(rule.IssuerSpec.IssuerURL, assertion.JTI, assertion.IssuedAt, assertion.ExpiresAt, now); result {
 		case spentAlready:
 			return refuse(outcome, "assertion was already used")
+		case spentUnknown:
+			return refuse(outcome, "assertion was issued before the record of spent assertions can vouch for it being unused")
+		case spentUnknownForNow:
+			outcome.result, outcome.reason, outcome.err = "unavailable", "the record of spent assertions cannot vouch for this assertion being unused; a later one will be accepted", ErrUnavailable
+			return Token{}, outcome
 		case spentFull:
 			outcome.result, outcome.reason, outcome.err = "unavailable", "the record of spent assertions is full", ErrUnavailable
 			return Token{}, outcome
@@ -263,22 +259,25 @@ const (
 	spentAlready
 	spentFull
 	spentUnrecorded
+	// spentUnknown: the record cannot say whether the assertion was spent.
+	spentUnknown
+	// spentUnknownForNow: the same, while an assertion obtained now may hit
+	// the same limit, so retrying with a fresh one is worthwhile.
+	spentUnknownForNow
 )
 
 // consume records a single-use assertion, in memory and on disk, before its
 // token is returned. An assertion that could not be written to disk is not
 // recorded in memory either, and no token is issued for it.
-func (e *Exchanger) consume(issuerURL, jti string, expires, now time.Time) (spentResult, error) {
+func (e *Exchanger) consume(issuerURL, jti string, issuedAt, expires, now time.Time) (spentResult, error) {
 	key := spentKey(issuerURL, jti)
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if until, exists := e.spent[key]; exists && now.Before(until) {
-		return spentAlready, nil
-	}
 	if len(e.spent) >= maxSpentAssertions || !now.Before(e.sweepAfter) {
 		for spentKey, until := range e.spent {
 			if !now.Before(until) {
 				delete(e.spent, spentKey)
+				e.spentLog.forget(until)
 			}
 		}
 		e.sweepAfter = now.Add(spentSweepPeriod)
@@ -288,6 +287,26 @@ func (e *Exchanger) consume(issuerURL, jti string, expires, now time.Time) (spen
 		if e.spentLog.lines > 2*len(e.spent)+spentLogSlack {
 			_ = e.spentLog.rewrite(e.spent)
 		}
+	}
+	// Below the record's floor nothing says whether the assertion was spent.
+	if floor := e.spentLog.floor; issuedAt.Before(floor) {
+		// A fresh assertion from an issuer whose clock runs behind by up to
+		// the leeway stays below the floor that much longer, and iat is in
+		// whole seconds.
+		if now.Before(floor.Add(clockLeeway + time.Second)) {
+			return spentUnknownForNow, nil
+		}
+		return spentUnknown, nil
+	}
+	// An entry that was dropped as expired had an expiry at or before this
+	// mark, so an assertion expiring that early may be one of them. With a
+	// correct clock no assertion still within its lifetime does; after a
+	// clock that ran ahead, one obtained later expires past the mark.
+	if !expires.After(e.spentLog.dropped) {
+		return spentUnknownForNow, nil
+	}
+	if until, exists := e.spent[key]; exists && now.Before(until) {
+		return spentAlready, nil
 	}
 	if len(e.spent) >= maxSpentAssertions {
 		return spentFull, nil
