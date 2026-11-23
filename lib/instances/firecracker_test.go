@@ -43,8 +43,9 @@ func setupTestManagerForFirecrackerWithConfig(t *testing.T, networkCfg config.Ne
 	tmpDir := t.TempDir()
 	prepareIntegrationTestDataDir(t, tmpDir)
 	cfg := &config.Config{
-		DataDir: tmpDir,
-		Network: networkCfg,
+		DataDir:    tmpDir,
+		Network:    networkCfg,
+		Hypervisor: config.HypervisorConfig{FirecrackerJailer: testFirecrackerJailer},
 	}
 
 	p := paths.New(tmpDir)
@@ -313,7 +314,7 @@ func TestFirecrackerStopClearsStaleSnapshot(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, beforeStop.HasSnapshot, "test setup should create visible stale snapshot")
 
-	inst, err = mgr.StopInstance(ctx, inst.Id)
+	inst, err = mgr.StopInstance(ctx, inst.Id, StopInstanceRequest{})
 	require.NoError(t, err)
 	assert.Equal(t, StateStopped, inst.State)
 	assert.False(t, inst.HasSnapshot, "stopped instances should not retain stale snapshots")

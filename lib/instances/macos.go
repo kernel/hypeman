@@ -6,11 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/kernel/hypeman/lib/forkvm"
 	"github.com/kernel/hypeman/lib/healthcheck"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/hypervisor/vz/shimconfig"
@@ -19,25 +21,22 @@ import (
 	"github.com/kernel/hypeman/lib/network"
 	"github.com/kernel/hypeman/lib/paths"
 	restartpolicy "github.com/kernel/hypeman/lib/restart-policy"
+	"github.com/kernel/hypeman/lib/system"
 )
 
-// macOSAuxStorageFile is the instance's copy of the image's auxiliary storage.
-const macOSAuxStorageFile = "mac-aux.img"
+const macOSAuxStorageFile = paths.MacOSAuxStorageFile
 
-// requireMacOSImageName refuses a create on a macOS-only server unless the image
-// is an already imported macOS image, so a Linux image is never pulled there.
+// requireMacOSImageName checks lookup errors before resolving the reference as
+// darwin/arm64. The resolved image is validated by checkMacOSCreate.
 func (m *manager) requireMacOSImageName(ctx context.Context, name string) error {
 	if !m.macOSOnly {
 		return nil
 	}
-	cached, err := m.imageManager.GetImage(ctx, name)
-	if err != nil && !errors.Is(err, images.ErrNotFound) {
-		return err
+	_, err := m.imageManager.GetImage(ctx, name)
+	if errors.Is(err, images.ErrNotFound) {
+		return nil
 	}
-	if err != nil || cached.MacOS == nil {
-		return fmt.Errorf("%w: macOS-only server requires an already imported macOS image", ErrInvalidRequest)
-	}
-	return nil
+	return err
 }
 
 // checkMacOSCreate applies macOS machine defaults to a create from a macOS image.
@@ -60,8 +59,8 @@ func (m *manager) checkMacOSCreate(req *CreateInstanceRequest, img *images.Image
 	}
 	config := hypervisor.VMConfig{
 		BootMode: hypervisor.BootModeMacOS, VCPUs: prepared.Vcpus, MemoryBytes: prepared.Size,
-		MacOS: &hypervisor.MacOSPlatform{HardwareModelData: img.MacOS.HardwareModel, MachineIdentifierData: img.MacOS.MachineIdentifier, AuxStoragePath: "mac-aux.img"},
-		Disks: []hypervisor.DiskConfig{{Path: "disk.img"}},
+		MacOS: &hypervisor.MacOSPlatform{HardwareModelData: img.MacOS.HardwareModel, MachineIdentifierData: img.MacOS.MachineIdentifier, AuxStoragePath: macOSAuxStorageFile},
+		Disks: []hypervisor.DiskConfig{{Path: paths.MacOSBootDiskFile, Format: hypervisor.DiskFormatASIF, Parents: []string{images.MacOSDiskLayerFile(0)}}},
 	}
 	if err := validatePlannedVMConfig(starter, hvType, config); err != nil {
 		return err
@@ -82,8 +81,11 @@ func prepareMacOSCreate(req *CreateInstanceRequest, img *images.Image, caps hype
 	if img.Platform != "darwin/arm64" || img.SizeBytes == nil || *img.SizeBytes <= 0 {
 		return fmt.Errorf("%w: incomplete macOS image", ErrImageNotReady)
 	}
-	if req.HotplugSize != 0 || req.OverlaySize != 0 || len(req.Volumes) != 0 || len(req.Devices) != 0 || req.GPU != nil || len(req.Env) != 0 || len(req.Entrypoint) != 0 || len(req.Cmd) != 0 || req.NetworkEgress != nil || len(req.Credentials) != 0 || req.AutoStandby != nil || req.SnapshotPolicy != nil || req.DiskIOBps != 0 || req.NetworkBandwidthDownload != 0 || req.NetworkBandwidthUpload != 0 {
-		return fmt.Errorf("%w: experimental macOS supports local disk clone, CPU/RAM, tags, expiration and NAT only; Linux commands/env/volumes, overlays, auto-standby/snapshot policies and I/O shaping are unsupported", ErrInvalidRequest)
+	if req.HotplugSize != 0 || req.OverlaySize != 0 || len(req.Volumes) != 0 || len(req.Devices) != 0 || req.GPU != nil || len(req.Entrypoint) != 0 || len(req.Cmd) != 0 || req.NetworkEgress != nil || len(req.Credentials) != 0 || req.AutoStandby != nil || req.SnapshotPolicy != nil || req.DiskIOBps != 0 || req.NetworkBandwidthDownload != 0 || req.NetworkBandwidthUpload != 0 {
+		return fmt.Errorf("%w: experimental macOS supports local disk clone, CPU/RAM, env, tags, expiration and NAT only; Linux commands/volumes, overlays, auto-standby/snapshot policies and I/O shaping are unsupported", ErrInvalidRequest)
+	}
+	if len(req.Env) != 0 && (req.SkipGuestAgent || !img.MacOS.GuestAgent) {
+		return fmt.Errorf("%w: macOS env is delivered by the guest agent; it needs an image with guest_agent and skip_guest_agent unset", ErrInvalidRequest)
 	}
 	if err := validateMacOSRestartPolicy(req.RestartPolicy); err != nil {
 		return err
@@ -102,7 +104,7 @@ func prepareMacOSCreate(req *CreateInstanceRequest, img *images.Image, caps hype
 		return fmt.Errorf("%w: macOS requires at least 4 GiB in whole MiB and 2 vCPUs", ErrInvalidRequest)
 	}
 	req.Size, req.Vcpus = size, vcpus
-	req.OverlaySize = *img.SizeBytes // Reserve the writable boot disk, not a Linux overlay.
+	req.OverlaySize = macOSBootDiskAllowance // Reserve room for the guest's writes, not the whole disk.
 	req.SkipGuestAgent = req.SkipGuestAgent || !img.MacOS.GuestAgent
 	req.SkipKernelHeaders = true
 	return nil
@@ -128,6 +130,7 @@ func checkMacOSUpdate(stored *StoredMetadata, req UpdateInstanceRequest) error {
 	if stored.MacOS == nil {
 		return nil
 	}
+	// Env is fixed at create: the guest reads it at boot, never at standby restore.
 	if len(req.Env) != 0 || req.AutoStandby != nil {
 		return fmt.Errorf("%w: macOS updates support expiration, exec health checks and VM restart policy only", ErrInvalidRequest)
 	}
@@ -162,18 +165,108 @@ func (m *manager) checkMacOSStart(stored *StoredMetadata, req StartInstanceReque
 	return nil
 }
 
-// createBootDisk creates the Linux overlay, or clones a macOS image's boot disk and
-// aux storage into the instance.
-func (m *manager) createBootDisk(stored *StoredMetadata, img *images.Image) error {
+// DefaultPlatform returns the create platform: a macOS-only server defaults an
+// unset one to darwin/arm64.
+func DefaultPlatform(macOSOnly bool, platform string) string {
+	if macOSOnly && strings.TrimSpace(platform) == "" {
+		return "darwin/arm64"
+	}
+	return platform
+}
+
+// createBootDisk creates the Linux overlay, or the macOS boot disk: the image's
+// ASIF chain and auxiliary storage cloned into the instance, with an empty
+// writable overlay on top.
+func (m *manager) createBootDisk(ctx context.Context, stored *StoredMetadata, img *images.Image) error {
 	if stored.MacOS == nil {
 		return m.createOverlayDisk(stored.Id, stored.OverlaySize)
 	}
-	disk, err := images.GetDiskPath(m.paths, img.Name, img.Digest)
+	chain, err := images.MacOSDiskChain(m.paths, img.Name, img.Digest)
 	if err != nil {
 		return err
 	}
-	aux := filepath.Join(filepath.Dir(disk), "aux.img")
-	return cloneMacOSStorage(disk, aux, m.paths.InstanceMacOSBootDisk(stored.Id), filepath.Join(stored.DataDir, macOSAuxStorageFile))
+	aux := filepath.Join(filepath.Dir(chain[0]), images.MacOSMachineAuxFile)
+	if err := createMacOSStorage(chain, aux, stored.DataDir); err != nil {
+		return err
+	}
+	stored.MacOSDiskLayers = len(chain)
+	if err := m.installMacOSAgentDisk(ctx, stored); err != nil {
+		return err
+	}
+	return m.installMacOSConfigDisk(ctx, stored)
+}
+
+// macOSAgentDiskSource returns the host's current guest agent disk. Tests replace it.
+var macOSAgentDiskSource = system.MacOSAgentDisk
+
+// installMacOSAgentDisk gives a macOS guest that runs the guest agent a copy of the
+// host's current guest agent disk. Each guest keeps its own copy, so saved state
+// restores with the disk it was saved with; a cold start takes the host's current
+// agent.
+func (m *manager) installMacOSAgentDisk(ctx context.Context, stored *StoredMetadata) error {
+	if stored.MacOS == nil || !stored.GuestAgentEnabled() {
+		return nil
+	}
+	source, err := macOSAgentDiskSource(ctx, m.paths)
+	if err != nil {
+		return err
+	}
+	disk := m.paths.InstanceMacOSAgentDisk(stored.Id)
+	staged := disk + ".tmp"
+	_ = os.Remove(staged)
+	if err := forkvm.CopyRegularFile(source, staged); err != nil {
+		return fmt.Errorf("copy macOS agent disk: %w", err)
+	}
+	if err := os.Chmod(staged, 0400); err != nil {
+		_ = os.Remove(staged)
+		return err
+	}
+	return os.Rename(staged, disk)
+}
+
+// macOSConfigDiskBuilder writes a config disk holding env. Tests replace it.
+var macOSConfigDiskBuilder = system.BuildMacOSConfigDisk
+
+// installMacOSConfigDisk writes the read-only disk carrying a macOS guest's env from
+// its metadata, at create and every cold start, so a fork boots with its own env.
+// Standby restore keeps the disk it was saved with; env cannot change after create.
+func (m *manager) installMacOSConfigDisk(ctx context.Context, stored *StoredMetadata) error {
+	disk := m.paths.InstanceMacOSConfigDisk(stored.Id)
+	if stored.MacOS == nil || !macOSConfigDiskAttached(stored) {
+		if err := os.Remove(disk); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		return nil
+	}
+	return macOSConfigDiskBuilder(ctx, stored.Env, disk)
+}
+
+// macOSConfigDiskAttached reports whether a guest's env reaches it through its agent.
+func macOSConfigDiskAttached(stored *StoredMetadata) bool {
+	return stored.GuestAgentEnabled() && len(stored.Env) != 0
+}
+
+// macOSDisks returns a macOS guest's disks: its boot disk, then, when it runs the
+// guest agent, its read-only guest agent disk, then its read-only config disk if it
+// has env. The boot disk must come first; VZ does not boot with it second.
+func macOSDisks(p *paths.Paths, stored *StoredMetadata) []hypervisor.DiskConfig {
+	disks := []hypervisor.DiskConfig{{Path: p.InstanceMacOSBootDisk(stored.Id), Format: hypervisor.DiskFormatASIF, Parents: macOSDiskParents(stored)}}
+	if stored.GuestAgentEnabled() {
+		disks = append(disks, hypervisor.DiskConfig{Path: p.InstanceMacOSAgentDisk(stored.Id), Readonly: true})
+	}
+	if macOSConfigDiskAttached(stored) {
+		disks = append(disks, hypervisor.DiskConfig{Path: p.InstanceMacOSConfigDisk(stored.Id), Readonly: true})
+	}
+	return disks
+}
+
+// macOSDiskParents returns the read-only layers below a macOS guest's boot overlay.
+func macOSDiskParents(stored *StoredMetadata) []string {
+	parents := make([]string, stored.MacOSDiskLayers)
+	for i := range parents {
+		parents[i] = filepath.Join(stored.DataDir, images.MacOSDiskLayerFile(i))
+	}
+	return parents
 }
 
 // usesLinuxNetwork reports whether the instance's network is a hypeman TAP
@@ -217,7 +310,7 @@ func (m *manager) admitMacOSBoot(ctx context.Context, stored *StoredMetadata) (f
 func (m *manager) macOSVMConfig(inst *Instance) hypervisor.VMConfig {
 	c := hypervisor.VMConfig{BootMode: hypervisor.BootModeMacOS, VCPUs: inst.Vcpus, MemoryBytes: inst.Size, VsockCID: inst.VsockCID, VsockSocket: inst.VsockSocket,
 		MacOS: &hypervisor.MacOSPlatform{HardwareModelData: inst.MacOS.HardwareModel, MachineIdentifierData: inst.MacOS.MachineIdentifier, AuxStoragePath: filepath.Join(inst.DataDir, macOSAuxStorageFile)},
-		Disks: []hypervisor.DiskConfig{{Path: m.paths.InstanceMacOSBootDisk(inst.Id)}}}
+		Disks: macOSDisks(m.paths, &inst.StoredMetadata)}
 	if inst.NetworkEnabled {
 		c.Networks = []hypervisor.NetworkConfig{{MAC: inst.MAC, IP: inst.IP, Netmask: macOSGuestNetmask}}
 	}

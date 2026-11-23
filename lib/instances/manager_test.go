@@ -46,8 +46,9 @@ func setupTestManager(t *testing.T) (*manager, string) {
 	prepareIntegrationTestDataDir(t, tmpDir)
 
 	cfg := &config.Config{
-		DataDir: tmpDir,
-		Network: newParallelTestNetworkConfig(t),
+		DataDir:    tmpDir,
+		Network:    newParallelTestNetworkConfig(t),
+		Hypervisor: config.HypervisorConfig{FirecrackerJailer: testFirecrackerJailer},
 	}
 
 	p := paths.New(tmpDir)
@@ -913,7 +914,7 @@ func TestBasicEndToEnd(t *testing.T) {
 	// Test graceful stop: StopInstance sends Shutdown RPC -> init forwards SIGTERM
 	// -> app exits -> init writes exit sentinel -> reboot(POWER_OFF) -> VM stops cleanly
 	t.Log("Testing graceful stop via StopInstance...")
-	stoppedInst, err := manager.StopInstance(ctx, inst.Id)
+	stoppedInst, err := manager.StopInstance(ctx, inst.Id, StopInstanceRequest{})
 	require.NoError(t, err, "StopInstance should succeed")
 	assert.Equal(t, StateStopped, stoppedInst.State, "Instance should be in Stopped state after StopInstance")
 
@@ -942,7 +943,7 @@ func TestBasicEndToEnd(t *testing.T) {
 	t.Log("Restart test passed -- exit info cleared!")
 
 	// Stop again before deleting
-	_, err = manager.StopInstance(ctx, inst.Id)
+	_, err = manager.StopInstance(ctx, inst.Id, StopInstanceRequest{})
 	require.NoError(t, err)
 
 	// Delete instance

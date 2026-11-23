@@ -14,7 +14,7 @@ owns the behavior.
 | Stats | Partial | CPU and memory from the VM process. Network counters are 0 under NAT. | PR 1 |
 | Memory reclaim | Unsupported | Reported per guest as `unsupported`. No balloon change. | PR 1 |
 | Guest port forwarding | Agent-gated | HTTP and WebSocket to a guest loopback port at `/instances/{id}/ports/{port}/*`. The image starts its own services. See [macos-guest-ports.md](macos-guest-ports.md). | PR 5 |
-| Builds | Partial | Opt-in `macos_builds`. Restricted recipe. Linux Dockerfile builds unsupported. | PR 6 |
+| Builds | Unsupported | Build with Packer and Tart, then publish with `import-tart`. See [macos-experimental.md](macos-experimental.md#building-images-with-packer-and-tart). Linux Dockerfile builds unsupported. | PR 6 |
 | Stopped snapshots, same-instance restore | Experimental | Graceful stop required. Stopped and Running targets; restored metadata and storage are staged together. | PR 4 |
 | Standby and restore (same instance) | Experimental | Saves memory, restores the same instance. Restore can fail (about 2% observed, cause unknown); a failed restore leaves the instance in Standby. Recover by deleting, as on Linux. Standby auto-policies rejected: no host-visible connection tracking on NAT. | PR 4 |
 | Same-instance memory snapshots | Experimental | Running/Standby capture, with exact VZ configuration validation and an uncompressed disk/aux/memory bundle. Same-instance restore only; new path needs native QA. | PR 4 |
@@ -23,7 +23,8 @@ owns the behavior.
 | Fork from stopped snapshot | Experimental | Graceful receipt and enabled agent required. Fresh machine identifier/MAC; SSH rekey on first cold boot. Stopped and Running targets supported. | PR 4 |
 | Update (PATCH), VM restart policy | Partial | Expiration/TTL and `restart_policy: always` or `never` are supported. Manual stop suppresses automatic restart. A shim that dies without removing its socket (for example, SIGKILL) reads as Stopped, so `always` restarts it. `on_failure` is rejected: no workload exit status is available. | PR 1 |
 | Exec health checks | Agent-gated | Supported at create and PATCH; `type: none` disables them. HTTP/TCP checks remain unsupported. | PR 3 |
-| Volumes, env and commands, credentials and auto-standby policies, passthrough, shaping | Unsupported | Rejected at create, start, or update. | — |
+| Env | Agent-gated | Create only. See [macos-guest-agent.md](macos-guest-agent.md#instance-env). | — |
+| Volumes, commands, credentials and auto-standby policies, passthrough, shaping | Unsupported | Rejected at create, start, or update. | — |
 | Ingress | Experimental | Routes to the guest's hypeman-assigned address on its own vmnet network, as on Linux, including in macOS-only mode. Caddy is not embedded on macOS (`make build-caddy-darwin`). New path needs native QA. | PR 5 |
 | Snapshot schedules | Experimental | State-based stopped or memory capture, existing cadence/retention, host save/restore gate and live configuration probe. New path needs native QA. | PR 4 |
 

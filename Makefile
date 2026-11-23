@@ -63,12 +63,16 @@ download-firecracker-binaries:
 		mkdir -p lib/hypervisor/firecracker/binaries/firecracker/$$version/{x86_64,aarch64}; \
 		for arch in x86_64 aarch64; do \
 			echo "Downloading $$version for $$arch..."; \
-			curl -fL "https://github.com/firecracker-microvm/firecracker/releases/download/$$version/firecracker-$$version-$$arch.tgz" \
-				| tar -xzO "release-$$version-$$arch/firecracker-$$version-$$arch" \
-				> lib/hypervisor/firecracker/binaries/firecracker/$$version/$$arch/firecracker; \
+			tgz=$$(mktemp); \
+			curl -fL -o "$$tgz" "https://github.com/firecracker-microvm/firecracker/releases/download/$$version/firecracker-$$version-$$arch.tgz"; \
+			for bin in firecracker jailer; do \
+				tar -xzOf "$$tgz" "release-$$version-$$arch/$$bin-$$version-$$arch" \
+					> lib/hypervisor/firecracker/binaries/firecracker/$$version/$$arch/$$bin; \
+			done; \
+			rm -f "$$tgz"; \
 		done; \
 	done
-	@chmod +x lib/hypervisor/firecracker/binaries/firecracker/v*/*/firecracker
+	@chmod +x lib/hypervisor/firecracker/binaries/firecracker/v*/*/firecracker lib/hypervisor/firecracker/binaries/firecracker/v*/*/jailer
 	@echo "Firecracker binaries downloaded successfully"
 
 # Caddy version and modules
@@ -216,7 +220,8 @@ ensure-firecracker-binaries:
 		echo "Unsupported architecture: $$ARCH"; exit 1; \
 	fi; \
 	for version in $(FIRECRACKER_VERSIONS); do \
-		if [ ! -f lib/hypervisor/firecracker/binaries/firecracker/$$version/$$FC_ARCH/firecracker ]; then \
+		if [ ! -f lib/hypervisor/firecracker/binaries/firecracker/$$version/$$FC_ARCH/firecracker ] || \
+			[ ! -f lib/hypervisor/firecracker/binaries/firecracker/$$version/$$FC_ARCH/jailer ]; then \
 			echo "Firecracker binaries not found, downloading..."; \
 			$(MAKE) download-firecracker-binaries; \
 			break; \
@@ -245,6 +250,12 @@ lib/system/guest_agent/guest-agent: lib/system/guest_agent/*.go
 	@echo "Building guest-agent for Linux..."
 	cd lib/system/guest_agent && CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o guest-agent .
 
+# Build the macOS guest-agent, carried on the read-only agent disk of macOS guests.
+# Darwin AF_VSOCK needs cgo, so it builds only on macOS, the only host that embeds it.
+lib/system/guest_agent/guest-agent-darwin: lib/system/guest_agent/*.go
+	@echo "Building guest-agent for macOS..."
+	cd lib/system/guest_agent && CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o guest-agent-darwin .
+
 # Build init binary (runs as PID 1 in guest VM) for embedding
 # Cross-compile for Linux since it runs inside the VM
 lib/system/init/init: lib/system/init/*.go
@@ -253,6 +264,9 @@ lib/system/init/init: lib/system/init/*.go
 
 build-embedded:
 	@$(MAKE) -B lib/system/guest_agent/guest-agent
+ifeq ($(shell uname -s),Darwin)
+	@$(MAKE) -B lib/system/guest_agent/guest-agent-darwin
+endif
 	@$(MAKE) -B lib/system/init/init
 
 # Build the binary
@@ -306,6 +320,7 @@ test-linux: ensure-ch-binaries ensure-firecracker-binaries ensure-caddy-binaries
 			"HYPEMAN_TEST_PREWARM_DIR=$${HYPEMAN_TEST_PREWARM_DIR:-}" \
 			"HYPEMAN_TEST_PREWARM_STRICT=$${HYPEMAN_TEST_PREWARM_STRICT:-}" \
 			"HYPEMAN_TEST_REGISTRY=$${HYPEMAN_TEST_REGISTRY:-}" \
+			"HYPEMAN_TEST_FIRECRACKER_JAILER=$${HYPEMAN_TEST_FIRECRACKER_JAILER:-}" \
 			"HYPEMAN_HYPERVISOR_BOOT_BENCH=$${HYPEMAN_HYPERVISOR_BOOT_BENCH:-}" \
 			"HYPEMAN_HYPERVISOR_BOOT_BENCH_SAMPLES=$${HYPEMAN_HYPERVISOR_BOOT_BENCH_SAMPLES:-}" \
 			"HYPEMAN_HYPERVISOR_BOOT_BENCH_TYPES=$${HYPEMAN_HYPERVISOR_BOOT_BENCH_TYPES:-}" \
@@ -317,6 +332,7 @@ test-linux: ensure-ch-binaries ensure-firecracker-binaries ensure-caddy-binaries
 			"HYPEMAN_TEST_PREWARM_DIR=$${HYPEMAN_TEST_PREWARM_DIR:-}" \
 			"HYPEMAN_TEST_PREWARM_STRICT=$${HYPEMAN_TEST_PREWARM_STRICT:-}" \
 			"HYPEMAN_TEST_REGISTRY=$${HYPEMAN_TEST_REGISTRY:-}" \
+			"HYPEMAN_TEST_FIRECRACKER_JAILER=$${HYPEMAN_TEST_FIRECRACKER_JAILER:-}" \
 			"HYPEMAN_HYPERVISOR_BOOT_BENCH=$${HYPEMAN_HYPERVISOR_BOOT_BENCH:-}" \
 			"HYPEMAN_HYPERVISOR_BOOT_BENCH_SAMPLES=$${HYPEMAN_HYPERVISOR_BOOT_BENCH_SAMPLES:-}" \
 			"HYPEMAN_HYPERVISOR_BOOT_BENCH_TYPES=$${HYPEMAN_HYPERVISOR_BOOT_BENCH_TYPES:-}" \
@@ -326,7 +342,7 @@ test-linux: ensure-ch-binaries ensure-firecracker-binaries ensure-caddy-binaries
 # macOS tests (no sudo needed, adds e2fsprogs to PATH)
 # Uses 'go list' to discover compilable packages, then filters out packages
 # whose test files reference Linux-only symbols (devices, system/init).
-DARWIN_EXCLUDE_PKGS := /lib/devices|/lib/system/init|/cmd/vz-shim
+DARWIN_EXCLUDE_PKGS := /lib/devices|/lib/system/init
 test-darwin: build-embedded sign-vz-shim
 	@VERBOSE_FLAG=""; \
 	if [ -n "$(VERBOSE)" ]; then VERBOSE_FLAG="-v"; fi; \
@@ -340,23 +356,6 @@ test-darwin: build-embedded sign-vz-shim
 		PATH="/opt/homebrew/opt/e2fsprogs/sbin:$(PATH)" \
 		go test -tags containers_image_openpgp $$VERBOSE_FLAG -timeout=$(TEST_TIMEOUT) $$PKGS; \
 	fi
-	$(MAKE) test-vz-shim-signed VERBOSE="$(VERBOSE)" TEST="$(TEST)" TEST_TIMEOUT="$(TEST_TIMEOUT)"
-
-# cmd/vz-shim's tests call Virtualization.framework in-process, which requires the
-# com.apple.security.virtualization entitlement. Plain `go test` binaries are
-# unsigned, so compile the test binary, ad-hoc-sign it with the entitlement (as
-# sign-vz-shim does for the shim), then run it. HYPEMAN_VZ_SIGNED=1 tells the
-# tests not to skip for a missing entitlement.
-.PHONY: test-vz-shim-signed
-test-vz-shim-signed:
-	@set -e; \
-	RUN_FLAG=""; \
-	if [ -n "$(TEST)" ]; then RUN_FLAG="-test.run=$(TEST)"; fi; \
-	BIN="$$(mktemp -d)/vz-shim.test"; \
-	go test -tags containers_image_openpgp -c -o "$$BIN" ./cmd/vz-shim; \
-	if [ ! -f "$$BIN" ]; then echo "no cmd/vz-shim test binary for this platform; skipping"; exit 0; fi; \
-	codesign --sign - --entitlements $(ENTITLEMENTS_FILE) --force "$$BIN"; \
-	HYPEMAN_VZ_SIGNED=1 "$$BIN" $$RUN_FLAG -test.v -test.timeout=$(TEST_TIMEOUT)
 
 # Manual-only guest memory policy integration tests (Linux hypervisors).
 test-guestmemory-linux: ensure-ch-binaries ensure-firecracker-binaries ensure-caddy-binaries build-embedded
@@ -399,7 +398,7 @@ clean:
 	rm -rf lib/vmm/binaries/cloud-hypervisor/
 	rm -rf lib/hypervisor/firecracker/binaries/firecracker/
 	rm -rf lib/ingress/binaries/
-	rm -f lib/system/guest_agent/guest-agent
+	rm -f lib/system/guest_agent/guest-agent lib/system/guest_agent/guest-agent-darwin
 	rm -f lib/system/init/init
 	rm -f lib/hypervisor/vz/vz-shim/vz-shim
 
@@ -415,8 +414,13 @@ release-prep: download-ch-binaries download-firecracker-binaries build-caddy-bin
 # Entitlements file for macOS codesigning
 ENTITLEMENTS_FILE ?= vz.entitlements
 
-# Build vz-shim (subprocess that hosts vz VMs)
-# Also copies to embed directory so it gets embedded in the hypeman binary
+# Build vz-shim (subprocess that hosts vz VMs) from the Swift sources in
+# cmd/vz-shim. Also copies to embed directory so it gets embedded in the hypeman
+# binary. It links DiskImageKit and the vmnet network API, so it needs the macOS 27
+# SDK (Xcode 27); the binary runs on macOS 26, and stacked disks need macOS 27.
+VZ_SHIM_SOURCES := $(wildcard cmd/vz-shim/*.swift)
+VZ_SHIM_TARGET ?= $(shell uname -m)-apple-macos26.0
+
 # DARWIN_LDFLAGS silences the macOS (Xcode 15+) linker's "ignoring duplicate
 # libraries: '-lobjc'" warning: cgo deps that link Virtualization.framework
 # specify -lobjc more than once, which the new linker flags. Harmless; suppress.
@@ -425,7 +429,8 @@ DARWIN_LDFLAGS := -ldflags=-extldflags=-Wl,-no_warn_duplicate_libraries
 .PHONY: build-vz-shim
 build-vz-shim: | $(BIN_DIR)
 	@echo "Building vz-shim for macOS..."
-	go build $(DARWIN_LDFLAGS) -o $(BIN_DIR)/vz-shim ./cmd/vz-shim
+	@sdk=$$(xcrun --sdk macosx --show-sdk-version); case $$sdk in 2[7-9]*|[3-9][0-9]*) ;; *) echo "vz-shim needs the macOS 27 SDK (Xcode 27); found $$sdk" >&2; exit 1;; esac
+	swiftc -O -target $(VZ_SHIM_TARGET) -o $(BIN_DIR)/vz-shim $(VZ_SHIM_SOURCES)
 	mkdir -p lib/hypervisor/vz/vz-shim
 	cp $(BIN_DIR)/vz-shim lib/hypervisor/vz/vz-shim/vz-shim
 	@echo "Build complete: $(BIN_DIR)/vz-shim"

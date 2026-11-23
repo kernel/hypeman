@@ -1,0 +1,80 @@
+name: Publish builder image
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/builder-image.yml
+      - lib/builds/images/generic/Dockerfile
+      - lib/builds/builder_agent/**
+      - lib/builds/registryauth/**
+      - lib/system/guest_agent/**
+      - lib/guest/guest.pb.go
+      - lib/guest/guest_grpc.pb.go
+      - go.mod
+      - go.sum
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-builder-image
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: aws-publish
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4.4.0
+      - uses: actions/setup-go@v6.5.0
+        with:
+          go-version-file: go.mod
+      - name: Test builder authentication
+        env:
+          HYPEMAN_BUILD_AUTH_DOCKER_TEST: "1"
+        run: go test ./lib/builds/builder_agent ./lib/builds/registryauth
+      - name: Isolate builder state
+        run: echo "BUILDX_CONFIG=$RUNNER_TEMP/builder-buildx" >> "$GITHUB_ENV"
+      - uses: docker/setup-buildx-action@v3.12.0
+      - name: Configure publishing credentials
+        uses: aws-actions/configure-aws-credentials@v4.3.1
+        with:
+          role-to-assume: arn:aws:iam::613957054632:role/github-actions-hypeman-cloudformation-publisher
+          aws-region: us-east-1
+      - name: Publish and report the builder digest
+        env:
+          REGISTRY: 613957054632.dkr.ecr.us-east-1.amazonaws.com
+          REPOSITORY: kernel/builder-generic
+        run: |
+          set -euo pipefail
+          IMAGE="$REGISTRY/$REPOSITORY"
+          TAG="git-$GITHUB_SHA"
+          export DOCKER_CONFIG="$(mktemp -d "$RUNNER_TEMP/builder-docker.XXXXXX")"
+          trap 'rm -rf "$DOCKER_CONFIG"' EXIT
+
+          if ! aws ecr describe-images --repository-name "$REPOSITORY" \
+            --image-ids "imageTag=$TAG" > "$RUNNER_TEMP/builder-image.json" 2> "$RUNNER_TEMP/builder-image.err"; then
+            if ! grep -q ImageNotFoundException "$RUNNER_TEMP/builder-image.err"; then
+              cat "$RUNNER_TEMP/builder-image.err" >&2
+              exit 1
+            fi
+            aws ecr get-login-password | docker login --username AWS --password-stdin "$REGISTRY"
+            docker buildx build --platform linux/amd64 --provenance=false \
+              --output type=image,oci-mediatypes=true,push=true \
+              --tag "$IMAGE:$TAG" --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+              --file lib/builds/images/generic/Dockerfile .
+            aws ecr describe-images --repository-name "$REPOSITORY" \
+              --image-ids "imageTag=$TAG" > "$RUNNER_TEMP/builder-image.json"
+          fi
+
+          DIGEST="$(jq -er '.imageDetails[0].imageDigest' "$RUNNER_TEMP/builder-image.json")"
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          echo "$IMAGE@$DIGEST"
+          printf '### Builder image\n\n`%s@%s`\n' "$IMAGE" "$DIGEST" >> "$GITHUB_STEP_SUMMARY"

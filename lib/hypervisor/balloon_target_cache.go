@@ -30,10 +30,16 @@ func (c *BalloonTargetCache) Load(socketPath string) (int64, bool) {
 		return value, true
 	}
 
-	if indexedKey, ok := c.keys.Load(socketPath); ok {
-		if keyString, ok := indexedKey.(string); ok {
-			if value, ok := c.loadKey(keyString); ok {
-				return value, true
+	// SocketCacheKey falls back to the bare path when the socket file is
+	// missing, which can happen while its VMM is still running. A socket that
+	// exists under another key belongs to a newer process, which must not
+	// inherit the old target.
+	if key == socketPath {
+		if indexedKey, ok := c.keys.Load(socketPath); ok {
+			if keyString, ok := indexedKey.(string); ok {
+				if value, ok := c.loadKey(keyString); ok {
+					return value, true
+				}
 			}
 		}
 	}

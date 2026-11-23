@@ -104,6 +104,16 @@ func (s *BlobStore) Put(_ context.Context, repo string, h v1.Hash, r io.ReadClos
 	return nil
 }
 
+// install moves a verified file into the store as the blob h, keeping an existing
+// copy. The file must be on the store's filesystem.
+func (s *BlobStore) install(path string, h v1.Hash) error {
+	target := s.blobPath(h.String())
+	if _, err := os.Stat(target); err == nil {
+		return os.Remove(path)
+	}
+	return os.Rename(path, target)
+}
+
 func (s *BlobStore) Delete(_ context.Context, repo string, h v1.Hash) error {
 	path := s.blobPath(h.String())
 	err := os.Remove(path)

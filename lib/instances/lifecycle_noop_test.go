@@ -124,7 +124,7 @@ func TestLifecycleNoopTransitionsReturnCurrentInstanceWithoutEvent(t *testing.T)
 			name:  "stop already stopped",
 			state: StateStopped,
 			action: func(ctx context.Context, m *manager, id string) (*Instance, error) {
-				return m.StopInstance(ctx, id)
+				return m.StopInstance(ctx, id, StopInstanceRequest{})
 			},
 		},
 	}
@@ -317,7 +317,7 @@ func TestStopInstanceRetiresPooledGuestConnection(t *testing.T) {
 	require.NoError(t, err)
 	require.Same(t, oldConn, cachedConn, "connection must be pooled before stop")
 
-	inst, err := m.StopInstance(ctx, id)
+	inst, err := m.StopInstance(ctx, id, StopInstanceRequest{})
 	require.NoError(t, err)
 	require.Equal(t, StateStopped, inst.State)
 
@@ -342,7 +342,7 @@ func TestStopStoppedInstanceLeavesVGPUForReconcile(t *testing.T) {
 
 	// Stop on an already-stopped instance is a no-op for the assignment; the
 	// periodic reconcile retries the release.
-	inst, err := m.StopInstance(context.Background(), id)
+	inst, err := m.StopInstance(context.Background(), id, StopInstanceRequest{})
 	require.NoError(t, err)
 	require.NotNil(t, inst)
 	assert.Equal(t, StateStopped, inst.State)

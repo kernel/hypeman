@@ -269,7 +269,7 @@ func TestQEMUMicroVMEndToEnd(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, string(qemu.MachineTypeMicroVM), config)
 
-	inst, err = manager.StopInstance(ctx, inst.Id)
+	inst, err = manager.StopInstance(ctx, inst.Id, StopInstanceRequest{})
 	require.NoError(t, err)
 	require.Equal(t, StateStopped, inst.State)
 	inst, err = manager.StartInstance(ctx, inst.Id, StartInstanceRequest{})
@@ -308,7 +308,7 @@ func TestQEMUStoppedSnapshotSwitchesToMicroVM(t *testing.T) {
 	inst, err = waitForInstanceState(ctx, manager, instanceID, StateRunning, integrationTestTimeout(30*time.Second))
 	require.NoError(t, err)
 
-	inst, err = manager.StopInstance(ctx, inst.Id)
+	inst, err = manager.StopInstance(ctx, inst.Id, StopInstanceRequest{})
 	require.NoError(t, err)
 	require.Equal(t, StateStopped, inst.State)
 	snapshot, err := manager.CreateSnapshot(ctx, inst.Id, CreateSnapshotRequest{Kind: SnapshotKindStopped})
@@ -702,7 +702,7 @@ func TestQEMUBasicEndToEnd(t *testing.T) {
 	// Test graceful stop: StopInstance sends Shutdown RPC -> init forwards SIGTERM
 	// -> app exits -> init writes exit sentinel -> reboot(POWER_OFF) -> VM stops cleanly
 	t.Log("Testing graceful stop via StopInstance...")
-	stoppedInst, err := manager.StopInstance(ctx, inst.Id)
+	stoppedInst, err := manager.StopInstance(ctx, inst.Id, StopInstanceRequest{})
 	require.NoError(t, err, "StopInstance should succeed")
 	assert.Equal(t, StateStopped, stoppedInst.State, "Instance should be in Stopped state after StopInstance")
 

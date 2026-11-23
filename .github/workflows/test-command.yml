@@ -30,7 +30,7 @@ jobs:
 
       - name: Checkout command configuration
         if: steps.command.outputs.run == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4.4.0
         with:
           ref: main
           persist-credentials: false

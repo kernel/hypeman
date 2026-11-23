@@ -16,11 +16,19 @@ import (
 // macOSHost is true where macOS guests can exist. Tests override it.
 var macOSHost = runtime.GOOS == "darwin"
 
-// isMacOSImage reports whether a create names an imported macOS image. Other
-// hosts skip the lookup, so Linux creates are unchanged. An image that is not
-// cached yet is not a macOS image; any other lookup error is returned.
-func (s *ApiService) isMacOSImage(ctx context.Context, name string) (bool, error) {
-	if !macOSHost || s.ImageManager == nil {
+// isMacOSImage identifies macOS creates before Linux defaults are applied. An
+// explicit Darwin platform and macOS-only servers can resolve uncached images.
+func (s *ApiService) isMacOSImage(ctx context.Context, name, platform string) (bool, error) {
+	if !macOSHost {
+		return false, nil
+	}
+	if s.Config != nil && s.Config.MacOSOnly {
+		return true, nil
+	}
+	if p, err := images.ParsePlatform(platform); err == nil && p.OS == "darwin" {
+		return true, nil
+	}
+	if s.ImageManager == nil {
 		return false, nil
 	}
 	img, err := s.ImageManager.GetImage(ctx, name)

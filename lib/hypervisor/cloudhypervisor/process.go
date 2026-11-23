@@ -59,6 +59,7 @@ func init() {
 	hypervisor.RegisterClientFactory(hypervisor.TypeCloudHypervisor, func(socketPath string) (hypervisor.Hypervisor, error) {
 		return New(socketPath)
 	})
+	hypervisor.RegisterVMMStateReleaser(hypervisor.TypeCloudHypervisor, clearBalloonTargetCache)
 }
 
 // Starter implements hypervisor.VMStarter for Cloud Hypervisor.
@@ -128,7 +129,9 @@ func (s *Starter) StartVM(ctx context.Context, p *paths.Paths, version string, s
 		return 0, nil, fmt.Errorf("start serial reader: %w", err)
 	}
 
-	// 1. Start the Cloud Hypervisor process
+	// 1. Start the Cloud Hypervisor process. One that exited on its own leaves
+	// its balloon target cached, so drop it before the socket path is reused.
+	clearBalloonTargetCache(socketPath)
 	processCtx, processSpan := hypervisor.StartProcessSpan(ctx, hypervisor.TypeCloudHypervisor)
 	pid, err := vmm.StartProcess(processCtx, p, chVersion, socketPath)
 	hypervisor.FinishTraceSpan(processSpan, err)
@@ -209,7 +212,9 @@ func (s *Starter) RestoreVM(ctx context.Context, p *paths.Paths, version string,
 		return 0, nil, fmt.Errorf("rewrite snapshot serial config: %w", err)
 	}
 
-	// 1. Start the Cloud Hypervisor process
+	// 1. Start the Cloud Hypervisor process. One that exited on its own leaves
+	// its balloon target cached, so drop it before the socket path is reused.
+	clearBalloonTargetCache(socketPath)
 	processStartTime := time.Now()
 	processCtx, processSpan := hypervisor.StartProcessSpan(ctx, hypervisor.TypeCloudHypervisor)
 	pid, err := vmm.StartProcess(processCtx, p, chVersion, socketPath)

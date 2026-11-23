@@ -71,6 +71,9 @@ type ShimConfig struct {
 type DiskConfig struct {
 	Path     string `json:"path"`
 	Readonly bool   `json:"readonly"`
+	// Parents, when set, are the read-only images below Path, base first; Path is
+	// then the ASIF overlay on top of them.
+	Parents []string `json:"parents,omitempty"`
 }
 
 // NetworkConfig represents a network interface.

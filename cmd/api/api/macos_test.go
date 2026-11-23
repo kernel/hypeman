@@ -84,6 +84,38 @@ func TestLinuxCreateDefaultsMatchSchema(t *testing.T) {
 	require.EqualValues(t, linuxDefaultVcpus, props["vcpus"].Value.Default)
 }
 
+func TestMacOSCreateDefaultsToDarwinPlatform(t *testing.T) {
+	useMacOSHost(t)
+	darwin := "darwin/arm64"
+	for _, tc := range []struct {
+		name     string
+		cfg      *config.Config
+		images   images.Manager
+		body     string
+		platform *string
+	}{
+		{"macOS-only server", &config.Config{MacOSOnly: true}, nil, `{"name":"macos","image":"registry.example/macos/app:latest"}`, nil},
+		{"uncached darwin image", &config.Config{}, missingMacOSImageManager{}, `{"name":"macos","image":"registry.example/macos/app:latest","platform":"darwin/arm64"}`, &darwin},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			manager := newCaptureCreateManager(nil)
+			service := &ApiService{InstanceManager: manager, ImageManager: tc.images, Config: tc.cfg}
+			ctx, status := recordCreateBody(t, tc.body)
+			require.Equal(t, http.StatusOK, status)
+			size, overlay, vcpus := linuxDefaultSize, linuxDefaultOverlaySize, linuxDefaultVcpus
+			_, err := service.CreateInstance(ctx, oapi.CreateInstanceRequestObject{Body: &oapi.CreateInstanceRequest{
+				Name: "macos", Image: "registry.example/macos/app:latest", Platform: tc.platform,
+				Size: &size, OverlaySize: &overlay, Vcpus: &vcpus,
+			}})
+			require.NoError(t, err)
+			require.Equal(t, "darwin/arm64", manager.lastReq.Platform)
+			require.Zero(t, manager.lastReq.Size)
+			require.Zero(t, manager.lastReq.OverlaySize)
+			require.Zero(t, manager.lastReq.Vcpus)
+		})
+	}
+}
+
 func TestMacOSCreateIgnoresInjectedLinuxDefaults(t *testing.T) {
 	useMacOSHost(t)
 	m := newCaptureCreateManager(nil)
@@ -171,4 +203,10 @@ type macOSImageManager struct{ images.Manager }
 
 func (macOSImageManager) GetImage(context.Context, string) (*images.Image, error) {
 	return &images.Image{Platform: "darwin/arm64", MacOS: &images.MacOSImage{}}, nil
+}
+
+type missingMacOSImageManager struct{ images.Manager }
+
+func (missingMacOSImageManager) GetImage(context.Context, string) (*images.Image, error) {
+	return nil, images.ErrNotFound
 }

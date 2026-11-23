@@ -45,7 +45,7 @@ type Manager interface {
 	StandbyInstance(ctx context.Context, id string, req StandbyInstanceRequest) (*Instance, error)
 	RestoreInstance(ctx context.Context, id string) (*Instance, error)
 	RestoreSnapshot(ctx context.Context, id string, snapshotID string, req RestoreSnapshotRequest) (*Instance, error)
-	StopInstance(ctx context.Context, id string) (*Instance, error)
+	StopInstance(ctx context.Context, id string, req StopInstanceRequest) (*Instance, error)
 	StartInstance(ctx context.Context, id string, req StartInstanceRequest) (*Instance, error)
 	UpdateInstance(ctx context.Context, id string, req UpdateInstanceRequest) (*Instance, error)
 	StreamInstanceLogs(ctx context.Context, id string, tail int, follow bool, source LogSource) (<-chan string, error)
@@ -681,8 +681,8 @@ func (m *manager) RestoreSnapshot(ctx context.Context, id string, snapshotID str
 	return inst, err
 }
 
-// StopInstance gracefully stops a running instance
-func (m *manager) StopInstance(ctx context.Context, id string) (*Instance, error) {
+// StopInstance stops a running instance, gracefully unless req.Force is set
+func (m *manager) StopInstance(ctx context.Context, id string, req StopInstanceRequest) (*Instance, error) {
 	lock := m.getInstanceLock(id)
 	lock.Lock()
 	defer lock.Unlock()
@@ -703,7 +703,7 @@ func (m *manager) StopInstance(ctx context.Context, id string) (*Instance, error
 	if err := m.markRestartManualStopLocked(ctx, id); err != nil {
 		return nil, err
 	}
-	inst, err := m.stopInstance(ctx, id)
+	inst, err := m.stopInstance(ctx, id, req)
 	if err == nil {
 		m.notifyLifecycleEvent(ctx, LifecycleEventStop, inst)
 	}
@@ -858,7 +858,7 @@ func (m *manager) getInstanceWithMinIDPrefix(ctx context.Context, idOrName strin
 
 	// 2. Resolve exact name or ID prefix from metadata only, then hydrate the
 	// single matched instance.
-	meta, err := m.findInstanceMetadataByNameOrIDPrefix(idOrName, minPrefixLength)
+	meta, err := m.findInstanceMetadataByNameOrIDPrefix(ctx, idOrName, minPrefixLength)
 	if err != nil {
 		return nil, err
 	}

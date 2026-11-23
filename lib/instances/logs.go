@@ -211,6 +211,14 @@ func (m *manager) archiveAppLogForBoot(id string) error {
 	}
 
 	archivedPath := fmt.Sprintf("%s.prev.%d", logPath, time.Now().UTC().UnixNano())
+	// A jailed VM's log is a link to a file inside its chroot. Move that file, so
+	// the archive keeps the content and the next boot starts from an empty log.
+	if target, err := os.Readlink(logPath); err == nil {
+		if err := os.Rename(target, archivedPath); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return os.Remove(logPath)
+	}
 	if err := os.Rename(logPath, archivedPath); err != nil {
 		return err
 	}

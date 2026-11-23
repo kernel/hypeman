@@ -42,7 +42,10 @@ func TestPrepareFork_RewritesSnapshotManifest(t *testing.T) {
 			Disks: []shimconfig.DiskConfig{
 				{Path: sourceDir + "/overlay.raw"},
 				{Path: "/volumes/shared.raw"},
+				{Path: sourceDir + "/boot.asif", Parents: []string{sourceDir + "/disk.0.asif", "/images/shared.asif"}},
+				{Path: sourceDir + "/agent.img", Readonly: true},
 			},
+			MacAuxStoragePath: sourceDir + "/mac-aux.img",
 			Networks: []shimconfig.NetworkConfig{
 				{MAC: "02:00:00:00:00:01"},
 			},
@@ -77,9 +80,13 @@ func TestPrepareFork_RewritesSnapshotManifest(t *testing.T) {
 	assert.Equal(t, targetDir+"/kernel/initrd", updated.ShimConfig.InitrdPath)
 	assert.Equal(t, targetDir+"/vz.sock", updated.ShimConfig.ControlSocket)
 	assert.Equal(t, targetDir+"/logs/vz-shim.log", updated.ShimConfig.LogPath)
-	require.Len(t, updated.ShimConfig.Disks, 2)
+	require.Len(t, updated.ShimConfig.Disks, 4)
 	assert.Equal(t, targetDir+"/overlay.raw", updated.ShimConfig.Disks[0].Path)
 	assert.Equal(t, "/volumes/shared.raw", updated.ShimConfig.Disks[1].Path)
+	assert.Equal(t, targetDir+"/boot.asif", updated.ShimConfig.Disks[2].Path)
+	assert.Equal(t, []string{targetDir + "/disk.0.asif", "/images/shared.asif"}, updated.ShimConfig.Disks[2].Parents)
+	assert.Equal(t, shimconfig.DiskConfig{Path: targetDir + "/agent.img", Readonly: true}, updated.ShimConfig.Disks[3])
+	assert.Equal(t, targetDir+"/mac-aux.img", updated.ShimConfig.MacAuxStoragePath)
 	require.Len(t, updated.ShimConfig.Networks, 1)
 	assert.Equal(t, "02:00:00:00:00:01", updated.ShimConfig.Networks[0].MAC)
 }

@@ -17,6 +17,25 @@ Like Cloud Hypervisor, Firecracker binaries are embedded and extracted into `dat
 
 Multiple versions are embedded so snapshots can be restored with the Firecracker version recorded in their instance metadata. `defaultVersion` in `binaries.go` controls the version used for new instances; changing it does not migrate running or standby instances.
 
+## Jailer (optional, prototype)
+
+`hypervisor.firecracker_jailer.enabled` runs each VM's firecracker under the
+`jailer` as `uid`/`gid`, in a chroot at `<instance>/jail/<firecracker binary>/vm/root`.
+
+- The jailer is embedded with each firecracker version, from the same release tarball.
+  `binary_path` overrides it and is required with `hypervisor.firecracker_binary_path`.
+- Kernel, initrd, and disks are hardlinked into the chroot, so they must share a
+  filesystem with the instance. Writable disks and TAP devices are owned by the jail uid.
+- The API socket, vsock socket, and serial log keep their host paths, as symlinks
+  into the chroot.
+- Each boot records the jail inputs in the restore metadata. Snapshot, restore and
+  fork follow that record, not the flag. Restoring a jailed snapshot with the flag
+  off fails before anything starts.
+- AppArmor profiles do not cover the jailed launch yet.
+
+`jailer_integration_test.go` (`-tags jailer_integration`) boots real guests; setup is
+in `scripts/jailer-smoke/README.md`.
+
 ## VM State Mapping
 
 `mapVMState()` maps Firecracker `GET /` state strings to internal states:

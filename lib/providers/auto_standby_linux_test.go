@@ -114,6 +114,31 @@ func TestAutoStandbyInstanceStoreListFailsOnRuntimeErrorForKnownState(t *testing
 	require.ErrorIs(t, err, loadErr)
 }
 
+func TestAutoStandbyInstanceStoreListSkipsInstanceDeletedMidList(t *testing.T) {
+	t.Parallel()
+
+	store := autoStandbyInstanceStore{
+		manager: autoStandbyListManagerStub{insts: []instances.Instance{
+			{
+				StoredMetadata: instances.StoredMetadata{Id: "deleted"},
+				State:          instances.StateRunning,
+			},
+			{
+				StoredMetadata: instances.StoredMetadata{Id: "running"},
+				State:          instances.StateRunning,
+			},
+		}},
+		runtimeManager: &autoStandbyRuntimeManagerStub{
+			errByID: map[string]error{"deleted": instances.ErrNotFound},
+		},
+	}
+
+	listed, err := store.ListInstances(context.Background())
+	require.NoError(t, err)
+	require.Len(t, listed, 1)
+	require.Equal(t, "running", listed[0].ID)
+}
+
 func TestAutoStandbyInstanceStoreSubscribeInstanceEventsIncludesRuntime(t *testing.T) {
 	t.Parallel()
 

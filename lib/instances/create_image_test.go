@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/kernel/hypeman/lib/images"
@@ -28,6 +29,55 @@ func (f createImageResolverFake) WaitForReady(ctx context.Context, name string) 
 		return nil
 	}
 	return f.waitReady(ctx, name)
+}
+
+func TestResolveImageForCreatePullsUncachedMacOSImage(t *testing.T) {
+	t.Parallel()
+
+	const imageName = "registry.example/macos/app:latest"
+	digest := "sha256:" + strings.Repeat("a", 64)
+	pinnedName := "registry.example/macos/app@" + digest
+	createPlatform := ""
+	waitName := ""
+	resolver := createImageResolverFake{
+		getImage: func(_ context.Context, name string) (*images.Image, error) {
+			if name == imageName {
+				return nil, images.ErrNotFound
+			}
+			if name != pinnedName {
+				t.Fatalf("unexpected image lookup %q", name)
+			}
+			return &images.Image{
+				Name: imageName, Digest: digest, Platform: "darwin/arm64",
+				Status: images.StatusReady, MacOS: &images.MacOSImage{},
+			}, nil
+		},
+		createImage: func(_ context.Context, req images.CreateImageRequest) (*images.Image, error) {
+			createPlatform = req.Platform
+			return &images.Image{
+				Name: req.Name, Digest: digest, Platform: "darwin/arm64",
+				Status: images.StatusPending, MacOS: &images.MacOSImage{},
+			}, nil
+		},
+		waitReady: func(_ context.Context, name string) error {
+			waitName = name
+			return nil
+		},
+	}
+
+	img, err := resolveImageForCreate(context.Background(), resolver, imageName, "darwin/arm64", slog.Default())
+	if err != nil {
+		t.Fatalf("resolve image: %v", err)
+	}
+	if createPlatform != "darwin/arm64" {
+		t.Fatalf("expected Darwin pull, got %q", createPlatform)
+	}
+	if waitName != pinnedName {
+		t.Fatalf("expected readiness wait on %q, got %q", pinnedName, waitName)
+	}
+	if img.MacOS == nil || img.Platform != "darwin/arm64" {
+		t.Fatalf("expected ready macOS image, got %+v", img)
+	}
 }
 
 func TestResolveImageForCreateWithPlatformForcesPlatformResolve(t *testing.T) {

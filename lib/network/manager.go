@@ -64,6 +64,7 @@ type manager struct {
 	defaultNetwork     *Network
 	pendingAllocations map[string]pendingAllocation
 	tcMu               sync.Mutex // Serializes shared bridge tc mutations.
+	neighMu            sync.Mutex // Serializes pinning and unpinning guest neighbor entries.
 	metrics            *Metrics
 }
 

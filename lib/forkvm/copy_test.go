@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/kernel/hypeman/lib/paths"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -95,4 +96,18 @@ func TestCopyGuestDirectory_DoesNotSkipTmpSuffixedDirectories(t *testing.T) {
 
 	assert.DirExists(t, filepath.Join(dst, "snapshots", "snapshot-latest", "memory-ranges.lz4.tmp"))
 	assert.FileExists(t, filepath.Join(dst, "snapshots", "snapshot-latest", "memory-ranges.lz4.tmp", "nested.txt"))
+}
+
+func TestCopyGuestDirectorySkipsJailDir(t *testing.T) {
+	src := t.TempDir()
+	dst := filepath.Join(t.TempDir(), "copy")
+	require.NoError(t, os.WriteFile(filepath.Join(src, "overlay.raw"), []byte("data"), 0644))
+	jailRoot := filepath.Join(src, paths.InstanceJailDirName, "firecracker", "vm", "root")
+	require.NoError(t, os.MkdirAll(jailRoot, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(jailRoot, "disk0"), []byte("linked input"), 0644))
+
+	require.NoError(t, CopyGuestDirectory(src, dst))
+
+	assert.FileExists(t, filepath.Join(dst, "overlay.raw"))
+	assert.NoDirExists(t, filepath.Join(dst, paths.InstanceJailDirName), "the jail is a runtime artifact and must not be copied")
 }
