@@ -2,6 +2,7 @@ package instances
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -16,7 +17,11 @@ import (
 
 // RecoverParkedForkSources puts back directories renamed by Firecracker's
 // snapshot alias fallback and removes verified aliases whose sources no longer
-// exist. Call under the data directory lock, before listing instances.
+// exist. A source it cannot recover is left exactly as it is and named in the
+// returned error, and the rest are still recovered. Leaving one in place
+// affects no other guest: the metadata loader rejects a directory holding
+// another guest's metadata, so a link left at a source's path resolves to
+// nothing. Call under the data directory lock, before listing instances.
 func RecoverParkedForkSources(p *paths.Paths) error {
 	entries, err := os.ReadDir(p.GuestsDir())
 	if os.IsNotExist(err) {
@@ -25,7 +30,9 @@ func RecoverParkedForkSources(p *paths.Paths) error {
 	if err != nil {
 		return err
 	}
+	var errs []error
 	backups := make(map[string]string)
+	ambiguous := make(map[string]bool)
 	for _, entry := range entries {
 		id, stamp, found := strings.Cut(entry.Name(), firecracker.ForkBackupSeparator)
 		if !found || !entry.IsDir() {
@@ -35,33 +42,45 @@ func RecoverParkedForkSources(p *paths.Paths) error {
 			continue
 		}
 		if err := paths.ValidatePathComponent(id); err != nil {
-			return fmt.Errorf("invalid source ID in backup %q", entry.Name())
+			errs = append(errs, fmt.Errorf("invalid source ID in backup %q", entry.Name()))
+			continue
 		}
 		if other, ok := backups[id]; ok {
-			return fmt.Errorf("ambiguous backups for %q: %q and %q", id, other, entry.Name())
+			errs = append(errs, fmt.Errorf("ambiguous backups for %q: %q and %q", id, other, entry.Name()))
+			ambiguous[id] = true
+			continue
 		}
 		backups[id] = entry.Name()
 	}
+	changed := false
 	for id, backup := range backups {
-		if err := restoreParkedForkSource(p, id, backup); err != nil {
-			return fmt.Errorf("restore %s from %s: %w", id, backup, err)
+		if ambiguous[id] {
+			continue
 		}
+		if err := restoreParkedForkSource(p, id, backup); err != nil {
+			errs = append(errs, fmt.Errorf("restore %s from %s: %w", id, backup, err))
+			continue
+		}
+		changed = true
 	}
-	changed := len(backups) > 0
+	// A link whose source has a backup was handled above or is left with it.
 	for _, entry := range entries {
 		if entry.Type()&os.ModeSymlink == 0 || backups[entry.Name()] != "" {
 			continue
 		}
 		removed, err := removeUnparkedForkAlias(p, p.InstanceDir(entry.Name()))
 		if err != nil {
-			return err
+			errs = append(errs, fmt.Errorf("remove source alias %s: %w", entry.Name(), err))
+			continue
 		}
 		changed = changed || removed
 	}
 	if changed {
-		return syncDir(p.GuestsDir())
+		if err := syncDir(p.GuestsDir()); err != nil {
+			errs = append(errs, err)
+		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 func removeUnparkedForkAlias(p *paths.Paths, source string) (bool, error) {

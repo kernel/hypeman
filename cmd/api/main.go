@@ -174,8 +174,10 @@ func run() error {
 		return fmt.Errorf("lock data directory %q: %w", cfg.DataDir, err)
 	}
 	defer dataDir.Close()
+	// A source that cannot be put back is left as it is and never resolves
+	// to another guest, so the rest of the host starts without it.
 	if err := instances.RecoverParkedForkSources(paths.New(cfg.DataDir)); err != nil {
-		return fmt.Errorf("recover parked fork sources: %w", err)
+		slog.Error("failed to recover parked fork sources; they are left as they are until repaired", "error", err)
 	}
 
 	// Configure GPU profile cache TTL

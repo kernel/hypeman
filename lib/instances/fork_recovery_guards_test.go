@@ -309,3 +309,43 @@ func TestReconcileListingSkipsDirectoryHoldingAnotherInstancesMetadata(t *testin
 	require.Equal(t, source, listed[0].Id)
 }
 
+// One source that cannot be recovered must not keep the others parked.
+func TestParkedSourceRecoveryGoesOnPastASourceItRefuses(t *testing.T) {
+	m, _ := setupTestManager(t)
+	const refused, parked, fork = "refused", "parked", "interrupted"
+	for _, id := range []string{refused, parked, fork} {
+		createStoppedSnapshotSourceFixture(t, m, id, id, m.defaultHypervisor)
+	}
+	meta, err := m.loadMetadata(fork)
+	require.NoError(t, err)
+	meta.HypervisorType = hypervisor.TypeFirecracker
+	meta.ForkPending = exitedProcessOwner(t)
+	require.NoError(t, m.saveMetadata(meta))
+	forkDir := m.paths.InstanceDir(fork)
+	data, err := json.Marshal(map[string]string{"snapshot_source_data_dir": m.paths.InstanceDir(parked)})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(forkDir, "firecracker-config.json"), data, 0644))
+
+	for _, id := range []string{refused, parked} {
+		dir := m.paths.InstanceDir(id)
+		require.NoError(t, os.Rename(dir, dir+".fork-bak.123"))
+		require.NoError(t, os.Symlink(forkDir, dir))
+	}
+	// The fork records only one of them as its source.
+	refusedDir := m.paths.InstanceDir(refused)
+
+	err = RecoverParkedForkSources(m.paths)
+	require.ErrorContains(t, err, "restore "+refused)
+	require.NotContains(t, err.Error(), "restore "+parked)
+
+	got, err := m.GetInstance(t.Context(), parked)
+	require.NoError(t, err)
+	require.Equal(t, parked, got.Id)
+	link, err := os.Readlink(refusedDir)
+	require.NoError(t, err)
+	require.Equal(t, forkDir, link)
+	require.DirExists(t, refusedDir+".fork-bak.123")
+	_, err = m.GetInstance(t.Context(), refused)
+	require.ErrorIs(t, err, ErrNotFound)
+}
+
