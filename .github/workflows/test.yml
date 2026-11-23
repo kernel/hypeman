@@ -333,8 +333,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4.4.0
         with:
-          repository: ${{ env.TEST_SOURCE_REPO }}
-          ref: ${{ env.TEST_SOURCE_REF }}
           persist-credentials: false
       - uses: actions/setup-go@v6.5.0
         with:
@@ -449,8 +447,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4.4.0
         with:
-          repository: ${{ env.TEST_SOURCE_REPO }}
-          ref: ${{ env.TEST_SOURCE_REF }}
           persist-credentials: false
       - uses: actions/setup-go@v6.5.0
         with:
