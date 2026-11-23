@@ -439,6 +439,16 @@ func JwtAuth(verifier *jwtauth.Verifier, revoked *tokenrevocation.List) func(htt
 								"auth_type", authType,
 								"subject", userClaims["sub"])
 							ctx := contextWithUserClaims(r.Context(), userClaims)
+							// /v2 routes bypass the OpenAPI scope middleware, so a user
+							// token must carry image:write to push.
+							if isWriteOperation(r.Method) && !scopes.HasScope(ctx, scopes.ImageWrite) {
+								log.DebugContext(r.Context(), "user token lacks image:write for registry write",
+									"subject", userClaims["sub"])
+								w.Header().Set("Content-Type", "application/json")
+								w.WriteHeader(http.StatusForbidden)
+								fmt.Fprintf(w, `{"errors":[{"code":"DENIED","message":"missing required scope: %s"}]}`, scopes.ImageWrite)
+								return
+							}
 							next.ServeHTTP(w, requestWithoutAuthorization(r, ctx))
 							return
 						}
