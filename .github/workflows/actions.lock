@@ -35,7 +35,7 @@ workflows:
     '.github/workflows/test.yml':
         - 'actions/checkout@v4.4.0'
         - 'actions/setup-go@v6.5.0'
-        - 'docker/login-action@v3.7.0'
+        - 'docker/login-action@v4.7.0'
     '.github/workflows/vuln-remediation.yml': []
 dependencies:
     'actions/checkout@v4.4.0':
@@ -68,9 +68,9 @@ dependencies:
         commit: 'sha1-7474bc4690e29a8392af63c5b98e7449536d5c3a'
         owner_id: 57468012
         repo_id: 220391287
-    'docker/login-action@v3.7.0':
-        ref: 'v3.7.0'
-        commit: 'sha1-c94ce9fb468520275223c153574b00df6fe4bcc9'
+    'docker/login-action@v4.7.0':
+        ref: 'v4.7.0'
+        commit: 'sha1-81c6f93d4bc991e510b342a00b419b3bb4efc5c6'
         owner_id: 5429470
         repo_id: 287743349
     'docker/setup-buildx-action@v3.12.0':
