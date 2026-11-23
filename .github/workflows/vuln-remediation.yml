@@ -13,7 +13,9 @@ permissions:
 
 jobs:
   remediate:
-    uses: kernel/security-workflows/.github/workflows/vuln-remediation.yml@main
+    uses: kernel/security-workflows/.github/workflows/vuln-remediation.yml@c9309e66fdf92bb9703640982406a5ba0445f5be  # commit pinned: a branch ref would move under this repo's secrets
     with:
       go-version-file: 'go.mod'
+      # The called workflow fetches its own helper scripts; keep that at the same commit.
+      security-workflows-ref: c9309e66fdf92bb9703640982406a5ba0445f5be
     secrets: inherit
