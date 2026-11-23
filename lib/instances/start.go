@@ -45,6 +45,9 @@ func (m *manager) startInstance(
 	if err := m.checkMacOSStart(stored, req); err != nil {
 		return nil, err
 	}
+	if err := m.refuseAbandonedFork(stored); err != nil {
+		return nil, err
+	}
 
 	// 2. Validate state (must be Stopped to start)
 	if inst.State != StateStopped {

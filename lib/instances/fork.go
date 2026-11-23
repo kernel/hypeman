@@ -634,6 +634,42 @@ func (o ForkOwner) gone() bool {
 	return o.StartTime != 0 && startTime != 0 && o.StartTime != startTime
 }
 
+func (m *manager) forkOwnerGone(owner ForkOwner) bool {
+	if m.forkOwnerGoneFn != nil {
+		return m.forkOwnerGoneFn(owner)
+	}
+	return owner.gone()
+}
+
+// refuseAbandonedFork keeps a fork that is waiting to be deleted from being
+// brought up. Such a fork is still marked, so the next start deletes it, and
+// until then it looks like any other instance under the name its caller asked
+// for. A fork whose owner is still running is being made and passes.
+func (m *manager) refuseAbandonedFork(stored *StoredMetadata) error {
+	if stored.ForkPending == nil || !m.forkOwnerGone(*stored.ForkPending) {
+		return nil
+	}
+	return fmt.Errorf("%w: instance is a fork whose request did not complete and is waiting to be deleted", ErrInvalidState)
+}
+
+// abandonFork marks a fork that its own request failed to delete as having no
+// owner, so it is refused like a fork interrupted by a restart. The zero
+// ForkOwner names no process and always counts as gone.
+func (m *manager) abandonFork(ctx context.Context, forkID string) {
+	lock := m.getInstanceLock(forkID)
+	lock.Lock()
+	defer lock.Unlock()
+
+	meta, err := m.loadMetadata(forkID)
+	if err != nil {
+		return
+	}
+	meta.ForkPending = &ForkOwner{}
+	if err := m.saveMetadata(meta); err != nil {
+		logger.FromContext(ctx).WarnContext(ctx, "failed to mark undeleted fork as abandoned", "instance_id", forkID, "error", err)
+	}
+}
+
 // interruptedForkMaxConcurrentDeletes bounds how many interrupted forks
 // startup deletes at once.
 const interruptedForkMaxConcurrentDeletes = 8
@@ -660,10 +696,6 @@ func (m *manager) RecoverInterruptedForks(ctx context.Context) {
 	deletes.SetLimit(interruptedForkMaxConcurrentDeletes)
 	var deleted, failed atomic.Int64
 	ownerRunning := 0
-	ownerGone := ForkOwner.gone
-	if m.forkOwnerGoneFn != nil {
-		ownerGone = m.forkOwnerGoneFn
-	}
 	for _, file := range files {
 		id := filepath.Base(filepath.Dir(file))
 		meta, err := m.loadMetadata(id)
@@ -675,7 +707,7 @@ func (m *manager) RecoverInterruptedForks(ctx context.Context) {
 			continue
 		}
 		owner := *meta.ForkPending
-		if !ownerGone(owner) {
+		if !m.forkOwnerGone(owner) {
 			log.WarnContext(ctx, "not deleting pending fork: the process making it is still running", "instance_id", id, "instance_name", meta.Name, "owner_pid", owner.PID)
 			ownerRunning++
 			m.recordInterruptedFork(ctx, "owner_running")
@@ -723,7 +755,11 @@ func (m *manager) discardFork(ctx context.Context, forkID string, cause error) e
 }
 
 func (m *manager) cleanupForkInstanceOnError(ctx context.Context, forkID string) error {
-	return m.deleteFork(ctx, forkID, DeleteInstanceOptions{})
+	err := m.deleteFork(ctx, forkID, DeleteInstanceOptions{})
+	if err != nil {
+		m.abandonFork(ctx, forkID)
+	}
+	return err
 }
 
 func (m *manager) deleteFork(ctx context.Context, forkID string, options DeleteInstanceOptions) error {

@@ -349,3 +349,53 @@ func TestParkedSourceRecoveryGoesOnPastASourceItRefuses(t *testing.T) {
 	require.ErrorIs(t, err, ErrNotFound)
 }
 
+func TestAbandonedForkCannotBeStartedOrRestored(t *testing.T) {
+	m, _ := setupTestManager(t)
+	const id = "abandoned"
+	createStoppedSnapshotSourceFixture(t, m, id, id, m.defaultHypervisor)
+	mark := func(owner *ForkOwner) *StoredMetadata {
+		meta, err := m.loadMetadata(id)
+		require.NoError(t, err)
+		meta.ForkPending = owner
+		require.NoError(t, m.saveMetadata(meta))
+		return &meta.StoredMetadata
+	}
+
+	// A finished fork, and one its own request is still bringing up, pass.
+	require.NoError(t, m.refuseAbandonedFork(mark(nil)))
+	require.NoError(t, m.refuseAbandonedFork(mark(currentForkOwner())))
+
+	for name, owner := range map[string]*ForkOwner{"interrupted": exitedProcessOwner(t), "undeleted": {}} {
+		mark(owner)
+		_, err := m.StartInstance(t.Context(), id, StartInstanceRequest{})
+		require.ErrorIs(t, err, ErrInvalidState, name)
+		_, err = m.RestoreInstance(t.Context(), id)
+		require.ErrorIs(t, err, ErrInvalidState, name)
+		require.ErrorContains(t, err, "waiting to be deleted", name)
+	}
+}
+
+// A fork its failing request could not delete stays under the requested name.
+// It must be refused like an interrupted one, and deleted at the next start.
+func TestForkItsRequestCannotDeleteIsAbandoned(t *testing.T) {
+	m, _ := setupTestManager(t)
+	const id = "undeleted-fork"
+	createStoppedSnapshotSourceFixture(t, m, id, id, m.defaultHypervisor)
+	meta, err := m.loadMetadata(id)
+	require.NoError(t, err)
+	meta.ForkPending = currentForkOwner()
+	meta.Devices = []string{"dev-1"}
+	require.NoError(t, m.saveMetadata(meta))
+	devices := m.deviceManager
+	m.deviceManager = busyDevice{devices}
+
+	require.Error(t, m.discardFork(t.Context(), id, errors.New("fork failed")))
+	got, err := m.loadMetadata(id)
+	require.NoError(t, err)
+	require.Equal(t, &ForkOwner{}, got.ForkPending)
+	require.ErrorIs(t, m.refuseAbandonedFork(&got.StoredMetadata), ErrInvalidState)
+
+	m.deviceManager = devices
+	m.RecoverInterruptedForks(t.Context())
+	require.NoDirExists(t, m.paths.InstanceDir(id))
+}

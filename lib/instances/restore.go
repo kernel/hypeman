@@ -45,6 +45,9 @@ func (m *manager) restoreInstance(
 	if err := m.admitGuestOperation(&meta.StoredMetadata); err != nil {
 		return nil, err
 	}
+	if err := m.refuseAbandonedFork(&meta.StoredMetadata); err != nil {
+		return nil, err
+	}
 	release, err := m.admitMacOSBoot(ctx, &meta.StoredMetadata)
 	if err != nil {
 		return nil, err
