@@ -175,8 +175,8 @@ jobs:
 
       - name: Mint app token for the SDK repos
         # Workflows:write because the generated SDKs contain .github/workflows.
-        # Pull-requests:write for the integration-test draft PRs (action inputs
-        # can't be conditional, so it is always requested).
+        # Pull-requests:write only for integration-test runs, which open draft
+        # PRs; an empty value leaves the permission out.
         id: sdk-token
         uses: actions/create-github-app-token@v3.3.0
         with:
@@ -186,7 +186,7 @@ jobs:
           repositories: hypeman-go,hypeman-python,hypeman-ts,hypeman-go-staging,hypeman-python-staging,hypeman-ts-staging
           permission-contents: write
           permission-workflows: write
-          permission-pull-requests: write
+          permission-pull-requests: ${{ inputs.integration_test && 'write' || '' }}
 
       - name: Setup stlc
         uses: $/.github/actions/setup-stlc
