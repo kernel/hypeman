@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/netip"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/c2h5oh/datasize"
+	"github.com/kernel/hypeman/lib/jwtauth"
 	"github.com/kernel/hypeman/lib/snapshot"
 	"github.com/knadh/koanf/parsers/yaml"
 	"github.com/knadh/koanf/providers/env"
@@ -582,6 +584,12 @@ func Load(configPath string) (*Config, error) {
 	}
 	cfg.expandPathFields()
 
+	// Empty is allowed here (the server fails later); a shipped placeholder is
+	// never acceptable, so refuse to start with a key anyone can read.
+	if cfg.JwtSecret != "" && jwtauth.IsWeakSecret(cfg.JwtSecret) {
+		return nil, errors.New("jwt_secret is a published placeholder, not a secret; set a unique random value (openssl rand -hex 32)")
+	}
+
 	return &cfg, nil
 }
 
@@ -611,8 +619,8 @@ func expandHomePath(path string) string {
 // Returns an error if any configuration value is invalid.
 func (c *Config) Validate() error {
 	for i, secret := range c.JwtVerificationSecrets {
-		if secret == "" {
-			return fmt.Errorf("jwt_verification_secrets entry %d must not be empty", i)
+		if jwtauth.IsWeakSecret(secret) {
+			return fmt.Errorf("jwt_verification_secrets entry %d must not be empty or a value published in the examples; set a unique random value or drop it", i)
 		}
 	}
 	if c.MacOSOnly && (runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" || c.Hypervisor.Default != "vz") {

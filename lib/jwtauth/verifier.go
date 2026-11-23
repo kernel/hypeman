@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/golang-jwt/jwt/v5"
 	"go.opentelemetry.io/otel/attribute"
@@ -18,14 +19,34 @@ type Verifier struct {
 	validations metric.Int64Counter
 }
 
+// weakSecrets are placeholders published in the example configs; tokens signed
+// with one are forgeable by anyone who has read the repository.
+var weakSecrets = map[string]struct{}{
+	"dev-secret-change-me": {},
+	"change-me":            {},
+	"changeme":             {},
+	"your-secret-here":     {},
+	"jwt-secret":           {},
+	"secret":               {},
+	"password":             {},
+}
+
+// IsWeakSecret reports whether secret is empty or a published placeholder.
+func IsWeakSecret(secret string) bool {
+	_, weak := weakSecrets[strings.ToLower(strings.TrimSpace(secret))]
+	return secret == "" || weak
+}
+
 func NewVerifier(signingSecret string, verificationSecrets []string, meter metric.Meter) (*Verifier, error) {
-	if signingSecret == "" {
-		return nil, errors.New("JWT_SECRET must be set")
+	if IsWeakSecret(signingSecret) {
+		return nil, errors.New("JWT_SECRET must be a unique random value; the configured secret is empty or published in the examples")
 	}
 	keys := [][]byte{[]byte(signingSecret)}
 	for i, secret := range verificationSecrets {
-		if secret == "" {
-			return nil, fmt.Errorf("jwt_verification_secrets entry %d must not be empty", i)
+		// Every fallback key is tried for every token, so a value published in the
+		// examples would let anyone who read the repository mint accepted tokens.
+		if IsWeakSecret(secret) {
+			return nil, fmt.Errorf("jwt_verification_secrets entry %d must not be empty or a value published in the examples; a published value cannot be a verification key", i)
 		}
 		keys = append(keys, []byte(secret))
 	}
