@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/c2h5oh/datasize"
+	"github.com/go-viper/mapstructure/v2"
+	"github.com/kernel/hypeman/lib/oidcfederation"
 	"github.com/kernel/hypeman/lib/snapshot"
 	"github.com/knadh/koanf/parsers/yaml"
 	"github.com/knadh/koanf/providers/env"
@@ -297,6 +299,10 @@ type Config struct {
 	// even though they are signed with JwtSecret and not yet expired.
 	RevokedTokenHashes []string `koanf:"revoked_token_hashes"`
 
+	// OIDC configures the external issuers and federation rules whose identity
+	// tokens can be exchanged for short-lived API tokens.
+	OIDC oidcfederation.Config `koanf:"oidc"`
+
 	Network          NetworkConfig          `koanf:"network"`
 	Caddy            CaddyConfig            `koanf:"caddy"`
 	ACME             ACMEConfig             `koanf:"acme"`
@@ -564,8 +570,14 @@ func Load(configPath string) (*Config, error) {
 			return nil, fmt.Errorf("JWT_VERIFICATION_SECRETS must be a JSON array of strings")
 		}
 	}
+	var oidc map[string]interface{}
+	if value := os.Getenv("OIDC"); value != "" {
+		if err := json.Unmarshal([]byte(value), &oidc); err != nil || oidc == nil {
+			return nil, fmt.Errorf("OIDC must be a JSON object")
+		}
+	}
 	envProvider := env.ProviderWithValue("", "__", func(key string, value string) (string, interface{}) {
-		if value == "" {
+		if value == "" || key == "OIDC" {
 			return "", nil
 		}
 		if key == "JWT_VERIFICATION_SECRETS" {
@@ -574,11 +586,30 @@ func Load(configPath string) (*Config, error) {
 		return strings.ToLower(key), value
 	})
 	_ = k.Load(envProvider, nil)
+	// OIDC replaces the YAML block as a whole: merging would leave rules from
+	// the file trusting issuers the environment redefined.
+	if oidc != nil {
+		k.Delete("oidc")
+		if err := k.Set("oidc", oidc); err != nil {
+			return nil, fmt.Errorf("failed to load OIDC: %w", err)
+		}
+	}
 
 	// 4. Unmarshal to Config struct
 	var cfg Config
 	if err := k.Unmarshal("", &cfg); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
+	}
+	// Decode the oidc block again, rejecting unknown keys: a misspelled
+	// restriction would otherwise be dropped and leave its rule wider than written.
+	cfg.OIDC = oidcfederation.Config{}
+	if err := k.UnmarshalWithConf("oidc", &cfg.OIDC, koanf.UnmarshalConf{DecoderConfig: &mapstructure.DecoderConfig{
+		TagName:          "koanf",
+		WeaklyTypedInput: true,
+		ErrorUnused:      true,
+		Result:           &cfg.OIDC,
+	}}); err != nil {
+		return nil, fmt.Errorf("invalid oidc config: %w", err)
 	}
 	cfg.expandPathFields()
 
@@ -614,6 +645,9 @@ func (c *Config) Validate() error {
 		if secret == "" {
 			return fmt.Errorf("jwt_verification_secrets entry %d must not be empty", i)
 		}
+	}
+	if _, err := oidcfederation.Compile(c.OIDC); err != nil {
+		return err
 	}
 	if c.MacOSOnly && (runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" || c.Hypervisor.Default != "vz") {
 		return fmt.Errorf("macos_only requires vz on Apple silicon")

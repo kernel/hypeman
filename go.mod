@@ -16,6 +16,8 @@ require (
 	github.com/getkin/kin-openapi v0.133.0
 	github.com/ghodss/yaml v1.0.0
 	github.com/go-chi/chi/v5 v5.3.0
+	github.com/go-jose/go-jose/v4 v4.1.5
+	github.com/go-viper/mapstructure/v2 v2.4.0
 	github.com/golang-jwt/jwt/v5 v5.3.0
 	github.com/google/go-containerregistry v0.20.6
 	github.com/google/uuid v1.6.0
@@ -97,7 +99,6 @@ require (
 	github.com/go-openapi/jsonpointer v0.21.0 // indirect
 	github.com/go-openapi/swag v0.23.0 // indirect
 	github.com/go-test/deep v1.1.1 // indirect
-	github.com/go-viper/mapstructure/v2 v2.4.0 // indirect
 	github.com/grafana/regexp v0.0.0-20240518133315-a468a5bfb3bc // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.27.2 // indirect
 	github.com/josharian/intern v1.0.0 // indirect
