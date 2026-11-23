@@ -145,7 +145,9 @@ func TestCloudFormationLaunchContract(t *testing.T) {
 	assertGetAtt(t, requireField(t, hostLaunchTemplate, "Version"), "NestedVirtualizationLaunchTemplate.VersionNumber")
 
 	userData := nodeText(requireField(t, hostProperties, "UserData"))
-	assertContains(t, userData, "curl -fsSL https://raw.githubusercontent.com/kernel/hypeman/main/scripts/install.sh | bash")
+	assertContains(t, userData, "raw.githubusercontent.com/kernel/hypeman/${!installer_tag}/scripts/install.sh")
+	assertContains(t, userData, `echo "${HypemanVersionSha256}  /tmp/hypeman-install.sh" | sha256sum -c -`)
+	assertContains(t, userData, "installer checksum mismatch")
 	assertContains(t, userData, `if [ -n "${DataVolumeThroughput}" ]; then`)
 	assertContains(t, userData, `Environment="CAPACITY__DISK_IO=${DataVolumeThroughput}MB/s"`)
 	assertContains(t, userData, "xfsprogs")
