@@ -227,6 +227,24 @@ func TestReleaseInstanceDeviceKeepsOwnerUntilUnbound(t *testing.T) {
 	}
 }
 
+func TestDetachInstanceDeviceFreesOnlyItsOwnersDevice(t *testing.T) {
+	m, p, _ := setupTestManager(t)
+	owner := "deleted"
+	device := &Device{Id: "dev-1", PCIAddress: "test-device", AttachedTo: &owner, BoundToVFIO: true}
+	createTestDevice(t, p, device)
+
+	require.NoError(t, m.DetachInstanceDevice(t.Context(), device.Id, "fork"))
+	got, err := m.loadDevice(device.Id)
+	require.NoError(t, err)
+	require.Equal(t, &owner, got.AttachedTo)
+
+	require.NoError(t, m.DetachInstanceDevice(t.Context(), device.Id, owner))
+	got, err = m.loadDevice(device.Id)
+	require.NoError(t, err)
+	require.Nil(t, got.AttachedTo)
+	require.False(t, got.BoundToVFIO, "the device is not bound, so the next attach must bind it")
+}
+
 func TestSaveLoadDevice_MetadataRoundTrip(t *testing.T) {
 	p := paths.New(t.TempDir())
 	mgr := &manager{

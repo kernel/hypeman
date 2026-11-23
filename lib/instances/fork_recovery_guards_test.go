@@ -26,11 +26,7 @@ func TestRecoveryLeavesInheritedPCIDeviceWithOwner(t *testing.T) {
 	meta.ForkPending = exitedProcessOwner(t)
 	meta.Devices = []string{dev}
 	require.NoError(t, m.saveMetadata(meta))
-	source := owner
-	data, err := json.Marshal(devices.Device{Id: dev, AttachedTo: &source, BoundToVFIO: true, PCIAddress: "test-device"})
-	require.NoError(t, err)
-	require.NoError(t, os.MkdirAll(m.paths.DeviceDir(dev), 0755))
-	require.NoError(t, os.WriteFile(m.paths.DeviceMetadata(dev), data, 0644))
+	data := writeAttachedTestDevice(t, m, dev, owner)
 
 	m.RecoverInterruptedForks(t.Context())
 	require.NoDirExists(t, m.paths.InstanceDir(fork))
@@ -39,10 +35,38 @@ func TestRecoveryLeavesInheritedPCIDeviceWithOwner(t *testing.T) {
 	require.JSONEq(t, string(data), string(after))
 }
 
-type busyForkDevice struct{ devices.Manager }
+func writeAttachedTestDevice(t *testing.T, m *manager, dev, owner string) []byte {
+	t.Helper()
+	data, err := json.Marshal(devices.Device{Id: dev, AttachedTo: &owner, BoundToVFIO: true, PCIAddress: "test-device"})
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(m.paths.DeviceDir(dev), 0755))
+	require.NoError(t, os.WriteFile(m.paths.DeviceMetadata(dev), data, 0644))
+	return data
+}
 
-func (busyForkDevice) ReleaseInstanceDevice(context.Context, string, string) error {
+type busyDevice struct{ devices.Manager }
+
+func (busyDevice) ReleaseInstanceDevice(context.Context, string, string) error {
 	return errors.New("device busy")
+}
+
+// Nothing retries a release for an instance that is gone, and a device still
+// attached to it cannot be given to another instance until the next start.
+func TestDeleteFreesPCIDeviceWhenReleaseFails(t *testing.T) {
+	m, _ := setupTestManager(t)
+	const id, dev = "deleted", "dev-1"
+	createStoppedSnapshotSourceFixture(t, m, id, id, m.defaultHypervisor)
+	meta, err := m.loadMetadata(id)
+	require.NoError(t, err)
+	meta.Devices = []string{dev}
+	require.NoError(t, m.saveMetadata(meta))
+	writeAttachedTestDevice(t, m, dev, id)
+	m.deviceManager = busyDevice{m.deviceManager}
+
+	require.NoError(t, m.deleteInstance(t.Context(), id))
+	device, err := m.deviceManager.GetDevice(t.Context(), dev)
+	require.NoError(t, err)
+	require.Nil(t, device.AttachedTo)
 }
 
 func TestRecoveryKeepsForkWhenPCIReleaseFails(t *testing.T) {
@@ -54,7 +78,7 @@ func TestRecoveryKeepsForkWhenPCIReleaseFails(t *testing.T) {
 	meta.ForkPending = exitedProcessOwner(t)
 	meta.Devices = []string{"dev-1"}
 	require.NoError(t, m.saveMetadata(meta))
-	m.deviceManager = busyForkDevice{m.deviceManager}
+	m.deviceManager = busyDevice{m.deviceManager}
 
 	m.RecoverInterruptedForks(t.Context())
 	got, err := m.loadMetadata(id)

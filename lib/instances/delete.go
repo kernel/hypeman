@@ -187,6 +187,10 @@ func (m *manager) deleteInstanceWithOptions(
 					return fmt.Errorf("release fork PCI device %s: %w", deviceID, err)
 				}
 				log.WarnContext(ctx, "failed to release passthrough device", "instance_id", id, "device", deviceID, "error", err)
+				// Nothing retries the release once this instance is gone.
+				if err := m.deviceManager.DetachInstanceDevice(ctx, deviceID, id); err != nil && !errors.Is(err, devices.ErrNotFound) {
+					log.WarnContext(ctx, "failed to detach passthrough device", "instance_id", id, "device", deviceID, "error", err)
+				}
 			}
 		}
 	}

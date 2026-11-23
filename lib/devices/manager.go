@@ -69,6 +69,9 @@ type Manager interface {
 	// ReleaseInstanceDevice detaches and unbinds a passthrough device only if this instance owns it.
 	ReleaseInstanceDevice(ctx context.Context, deviceID, instanceID string) error
 
+	// DetachInstanceDevice clears the attachment without unbinding, only if this instance owns it.
+	DetachInstanceDevice(ctx context.Context, deviceID, instanceID string) error
+
 	// ReconcileDevices cleans up stale device state on startup.
 	// It detects devices with AttachedTo referencing non-existent instances
 	// and clears the orphaned attachment state.
@@ -429,6 +432,26 @@ func (m *manager) ReleaseInstanceDevice(ctx context.Context, deviceID, instanceI
 	}
 	device.AttachedTo = nil
 	device.BoundToVFIO = false
+	return m.saveDevice(device)
+}
+
+// DetachInstanceDevice frees a device whose owner is being deleted after its
+// release failed. Nothing retries a release once the owner is gone, and
+// nothing but a restart clears an attachment to a missing instance.
+func (m *manager) DetachInstanceDevice(ctx context.Context, deviceID, instanceID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	device, err := m.loadDevice(deviceID)
+	if err != nil {
+		return err
+	}
+	if device.AttachedTo == nil || *device.AttachedTo != instanceID {
+		return nil
+	}
+	device.AttachedTo = nil
+	// The failed release may or may not have unbound the device, and the next
+	// attach binds it only if this says it is unbound.
+	device.BoundToVFIO = m.vfioBinder.IsDeviceBoundToVFIO(device.PCIAddress)
 	return m.saveDevice(device)
 }
 
