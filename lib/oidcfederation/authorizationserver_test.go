@@ -181,6 +181,53 @@ func TestAuthorizationServerKeysStayInUseWhileARefreshFails(t *testing.T) {
 
 // The saved copy answers the first requests after a start without waiting for
 // the server, which is fetched from at once.
+// A token naming a key the last set lacks may arrive while a refresh that
+// nobody waits for is running. It waits for that refresh, and when the refresh
+// fails the token was not checked against anything newer: the keys are
+// unavailable for it, it is not an invalid token.
+func TestUnknownKeyIDSharesTheOutcomeOfARunningRefresh(t *testing.T) {
+	f := newAuthorizationServerFixture(t)
+	v := NewVerifier()
+	v.now = func() time.Time { return f.now }
+	published := f.keySet(t, "key-a")
+	f.keySet(t, "key-b")
+	blocked := make(chan struct{})
+	release := sync.OnceFunc(func() { close(blocked) })
+	t.Cleanup(release)
+	var fetches atomic.Int32
+	v.fetch = func(context.Context, IssuerSpec) ([]byte, error) {
+		if fetches.Add(1) == 1 {
+			return published, nil
+		}
+		<-blocked
+		return nil, ErrUnavailable
+	}
+	verify := func(keyID string) error {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, err := v.VerifySignature(ctx, f.spec, f.token(t, keyID, "at+jwt"), accessTokenTypes)
+		return err
+	}
+	require.NoError(t, verify("key-a"))
+
+	// The cached set expires; the next known token starts a refresh and does not wait.
+	f.now = f.now.Add(keyCacheTTL + time.Second)
+	require.NoError(t, verify("key-a"))
+	require.Eventually(t, func() bool { return fetches.Load() == 2 }, time.Second, time.Millisecond)
+
+	unknown := make(chan error, 1)
+	go func() { unknown <- verify("key-b") }()
+	select {
+	case err := <-unknown:
+		t.Fatalf("the token did not wait for the refresh: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	release()
+	require.ErrorIs(t, <-unknown, ErrUnavailable)
+	require.EqualValues(t, 2, fetches.Load(), "it joined the running refresh")
+	require.NoError(t, verify("key-a"), "the last key set still answers for its own keys")
+}
+
 func TestAuthorizationServerKeysSurviveARestartThroughTheStore(t *testing.T) {
 	f := newAuthorizationServerFixture(t)
 	published := f.keySet(t, "key-a")

@@ -61,9 +61,6 @@ type keyLoad struct {
 	done chan struct{}
 	keys []jose.JSONWebKey
 	err  error
-	// forced is set when the load was started to find a key ID the cached
-	// set lacks, so that set is not an answer for it.
-	forced bool
 }
 
 // KeyStore keeps the last key set fetched from an authorization server, so
@@ -140,7 +137,8 @@ func (v *Verifier) keySet(ctx context.Context, issuer IssuerSpec, force bool) ([
 		return entry.keys, nil
 	}
 	// An authorization server's last key set keeps answering while a refresh
-	// runs or fails. Only a key ID it does not hold waits for one.
+	// runs or fails. Only a key ID it does not hold waits for one, and shares
+	// that refresh's outcome: the last key set is no answer for it.
 	retained := issuer.authorizationServer && !force && entry.keys != nil
 	load, loading := v.loading[key]
 	if !loading {
@@ -162,7 +160,7 @@ func (v *Verifier) keySet(ctx context.Context, issuer IssuerSpec, force bool) ([
 			entry.refreshAfter = now.Add(keyRefreshPeriod)
 			v.putLocked(key, entry)
 		}
-		load = &keyLoad{done: make(chan struct{}), forced: force}
+		load = &keyLoad{done: make(chan struct{})}
 		v.loading[key] = load
 		go v.loadKeys(key, issuer, load, now)
 	}
@@ -249,12 +247,6 @@ func (v *Verifier) loadKeys(key string, issuer IssuerSpec, load *keyLoad, starte
 		}
 		entry.failure = load.err
 		failure, lastKeySetInUse = load.err, entry.keys != nil
-		// A waiter that would accept an authorization server's last key set
-		// gets it. One waiting on a refresh for a key ID that set lacks still
-		// fails.
-		if issuer.authorizationServer && entry.keys != nil && !load.forced {
-			load.keys, load.err = entry.keys, nil
-		}
 	} else {
 		entry.keys = keys
 		entry.expiresAt = startedAt.Add(keyCacheTTL)
