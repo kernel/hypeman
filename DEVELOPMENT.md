@@ -95,6 +95,7 @@ The config file is searched in these locations (first match wins):
 - Path specified by `CONFIG_PATH` environment variable
 - `/etc/hypeman/config.yaml` (Linux)
 - `~/.config/hypeman/config.yaml` (all platforms)
+- `/etc/hypeman/config.yaml` (macOS)
 
 Common settings:
 

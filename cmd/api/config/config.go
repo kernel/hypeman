@@ -325,6 +325,7 @@ func GetDefaultConfigPaths() []string {
 	if runtime.GOOS == "darwin" {
 		return []string{
 			filepath.Join(home, ".config", "hypeman", "config.yaml"),
+			"/etc/hypeman/config.yaml",
 		}
 	}
 	// Linux: check /etc first, then user config
