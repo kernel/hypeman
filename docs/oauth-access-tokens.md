@@ -67,17 +67,19 @@ Fetched keys are handled so that requests do not wait on the authorization serve
   verified with the last key set.
 - A token signed with a key the last set lacks triggers a refresh, at most one a minute. This is
   how a new signing key is picked up without a restart.
-- The last key set is also saved under `<data_dir>/oauth/keys/`. A server that restarts verifies
-  with that copy from its first request and fetches the key set again at once. Only a server with
-  no saved copy, such as one that has just been configured, makes its first requests wait for the
-  fetch.
+- The last key set is also saved under `<data_dir>/oauth/keys/`, with the time it was fetched. A
+  server that restarts continues from that copy as if it had kept running: a copy fetched less
+  than five minutes ago is used until those five minutes are over, and an older one is used while
+  the key set is fetched again. Only a server with no saved copy, such as one that has just been
+  configured, makes its first requests wait for a fetch.
 
-A key removed from the authorization server stops being trusted at the next successful fetch: at
-most five minutes later while the authorization server is reachable, and just after a restart. A
-key set that is empty, or holds only valid public keys for other purposes such as encryption, is such a
-fetch too, and withdraws every key. While the authorization server is unreachable or answers with
-anything else, the last key set stays trusted, for as long as that lasts. To drop it at once, delete the saved copy and
-restart: until a fetch succeeds, no access token is then accepted.
+A key removed from the authorization server stops being trusted at the next successful fetch, at
+most five minutes later while the authorization server is reachable, whether or not the server
+restarted in between. A key set that is empty, or holds only valid public keys for other purposes
+such as encryption, is such a fetch too, and withdraws every key. While the authorization server
+is unreachable or answers with anything else, the last key set stays trusted, for as long as that
+lasts. To drop it at once, delete the saved copy and restart: until a fetch succeeds, no access
+token is then accepted.
 
 ## Monitor
 
@@ -85,4 +87,4 @@ restart: until a fetch succeeds, no access token is then accepted.
 
 A key fetch that fails is logged as a warning, with whether the last key set is still in use, at
 most every ten seconds for each authorization server. A copy that could not be saved is logged as a
-warning as well, and a start from the saved copy at info level.
+warning as well, and a start from the saved copy at info level, with the copy's fetch time.

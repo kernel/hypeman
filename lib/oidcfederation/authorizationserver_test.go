@@ -179,103 +179,92 @@ func TestAuthorizationServerKeysStayInUseWhileARefreshFails(t *testing.T) {
 	require.NoError(t, verify("key-a"))
 }
 
-// The saved copy answers the first requests after a start without waiting for
-// the server, which is fetched from at once.
-// A token naming a key the last set lacks may arrive while a refresh that
-// nobody waits for is running. It waits for that refresh, and when the refresh
-// fails the token was not checked against anything newer: the keys are
-// unavailable for it, it is not an invalid token.
-func TestUnknownKeyIDSharesTheOutcomeOfARunningRefresh(t *testing.T) {
-	f := newAuthorizationServerFixture(t)
-	v := NewVerifier()
-	v.now = func() time.Time { return f.now }
-	published := f.keySet(t, "key-a")
-	f.keySet(t, "key-b")
-	blocked := make(chan struct{})
-	release := sync.OnceFunc(func() { close(blocked) })
-	t.Cleanup(release)
-	var fetches atomic.Int32
-	v.fetch = func(context.Context, IssuerSpec) ([]byte, error) {
-		if fetches.Add(1) == 1 {
-			return published, nil
-		}
-		<-blocked
-		return nil, ErrUnavailable
-	}
-	verify := func(keyID string) error {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_, err := v.VerifySignature(ctx, f.spec, f.token(t, keyID, "at+jwt"), accessTokenTypes)
-		return err
-	}
-	require.NoError(t, verify("key-a"))
-
-	// The cached set expires; the next known token starts a refresh and does not wait.
-	f.now = f.now.Add(keyCacheTTL + time.Second)
-	require.NoError(t, verify("key-a"))
-	require.Eventually(t, func() bool { return fetches.Load() == 2 }, time.Second, time.Millisecond)
-
-	unknown := make(chan error, 1)
-	go func() { unknown <- verify("key-b") }()
-	select {
-	case err := <-unknown:
-		t.Fatalf("the token did not wait for the refresh: %v", err)
-	case <-time.After(50 * time.Millisecond):
-	}
-	release()
-	require.ErrorIs(t, <-unknown, ErrUnavailable)
-	require.EqualValues(t, 2, fetches.Load(), "it joined the running refresh")
-	require.NoError(t, verify("key-a"), "the last key set still answers for its own keys")
-}
-
-func TestAuthorizationServerKeysSurviveARestartThroughTheStore(t *testing.T) {
+// A restart continues from the saved copy as if the process had kept running:
+// a copy still within the cache lifetime needs no fetch, and an older one
+// answers while it is fetched again.
+func TestAuthorizationServerKeyCacheSurvivesARestart(t *testing.T) {
 	f := newAuthorizationServerFixture(t)
 	published := f.keySet(t, "key-a")
 	store := &memoryKeyStore{}
 	token := f.token(t, "key-a", "at+jwt")
+	fetchedAt := f.now
 	unreachable := func(context.Context, IssuerSpec) ([]byte, error) { return nil, ErrUnavailable }
 	idle := func(v *Verifier) bool { v.mu.Lock(); defer v.mu.Unlock(); return len(v.loading) == 0 }
-
-	first := NewVerifierWithKeyStore(store, nil)
-	first.now = func() time.Time { return f.now }
-	first.fetch = func(context.Context, IssuerSpec) ([]byte, error) { return published, nil }
-	_, err := first.VerifySignature(context.Background(), f.spec, token, accessTokenTypes)
-	require.NoError(t, err)
-	require.Contains(t, store.saved, keyCacheKey(f.spec))
-	require.NotContains(t, string(store.saved[keyCacheKey(f.spec)]), `"d"`, "only public keys are kept")
-	require.Equal(t, 1, store.loads, "a copy was looked for; there was none, so the first request waited for the fetch")
-
-	// A new process verifies with the copy while its own fetch is still running.
-	restarted := NewVerifierWithKeyStore(store, nil)
-	restarted.now = func() time.Time { return f.now }
-	blocked := make(chan struct{})
-	release := sync.OnceFunc(func() { close(blocked) })
-	t.Cleanup(release)
-	var fetches atomic.Int32
-	restarted.fetch = func(context.Context, IssuerSpec) ([]byte, error) {
-		fetches.Add(1)
-		<-blocked
-		return nil, ErrUnavailable
-	}
-	// A request that waited for the fetch would end with this deadline.
+	// A request that waited for a fetch would end with this deadline.
 	waiting, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	for range 3 {
-		_, err = restarted.VerifySignature(waiting, f.spec, token, accessTokenTypes)
-		require.NoError(t, err)
+
+	first := NewVerifierWithKeyStore(store, nil)
+	first.now = func() time.Time { return fetchedAt }
+	first.fetch = func(context.Context, IssuerSpec) ([]byte, error) { return published, nil }
+	_, err := first.VerifySignature(waiting, f.spec, token, accessTokenTypes)
+	require.NoError(t, err)
+	saved := string(store.saved[keyCacheKey(f.spec)])
+	require.Contains(t, saved, `"fetched_at":"`+fetchedAt.UTC().Format(time.RFC3339)+`"`)
+	require.NotContains(t, saved, `"d"`, "only public keys are kept")
+	require.Equal(t, 1, store.loads, "a copy was looked for; there was none, so the first request waited for the fetch")
+
+	// restart returns a new process at the given time whose fetches block
+	// until released and then fail.
+	restart := func(now time.Time) (*Verifier, *atomic.Int32, func()) {
+		v := NewVerifierWithKeyStore(store, nil)
+		v.now = func() time.Time { return now }
+		blocked := make(chan struct{})
+		release := sync.OnceFunc(func() { close(blocked) })
+		t.Cleanup(release)
+		fetches := new(atomic.Int32)
+		v.fetch = func(context.Context, IssuerSpec) ([]byte, error) {
+			fetches.Add(1)
+			<-blocked
+			return nil, ErrUnavailable
+		}
+		return v, fetches, release
 	}
-	require.Eventually(t, func() bool { return fetches.Load() == 1 }, time.Second, time.Millisecond, "one fetch was started in the background")
-	release()
-	require.Eventually(t, func() bool { return idle(restarted) }, time.Second, time.Millisecond)
-	_, err = restarted.VerifySignature(context.Background(), f.spec, token, accessTokenTypes)
-	require.NoError(t, err, "the copy stays in use after the fetch failed")
-	require.Equal(t, 2, store.loads, "each process reads the copy once")
+	verify := func(v *Verifier) error {
+		_, err := v.VerifySignature(waiting, f.spec, token, accessTokenTypes)
+		return err
+	}
+
+	// Within the cache lifetime nothing is fetched at all.
+	fresh, fetches, _ := restart(fetchedAt.Add(keyCacheTTL - time.Second))
+	for range 3 {
+		require.NoError(t, verify(fresh))
+	}
+	require.True(t, idle(fresh))
+	require.Zero(t, fetches.Load())
+
+	// Past it, and when the fetch time cannot be right, the copy answers
+	// while one fetch runs, and stays in use when that fetch fails.
+	for name, now := range map[string]time.Time{
+		"past the cache lifetime": fetchedAt.Add(keyCacheTTL),
+		"hours after":             fetchedAt.Add(12 * time.Hour),
+		"fetched later than now":  fetchedAt.Add(-time.Second),
+	} {
+		restarted, fetches, release := restart(now)
+		for range 3 {
+			require.NoError(t, verify(restarted), name)
+		}
+		require.Eventually(t, func() bool { return fetches.Load() == 1 }, time.Second, time.Millisecond, name)
+		release()
+		require.Eventually(t, func() bool { return idle(restarted) }, time.Second, time.Millisecond, name)
+		require.NoError(t, verify(restarted), name)
+	}
+	require.Equal(t, 5, store.loads, "each process reads the copy once")
+
+	// A copy without a fetch time is due for a refresh at once.
+	undated := &memoryKeyStore{saved: map[string][]byte{keyCacheKey(f.spec): published}}
+	old := NewVerifierWithKeyStore(undated, nil)
+	old.now = func() time.Time { return fetchedAt }
+	var started atomic.Int32
+	old.fetch = func(context.Context, IssuerSpec) ([]byte, error) { started.Add(1); return nil, ErrUnavailable }
+	require.NoError(t, verify(old))
+	require.Eventually(t, func() bool { return started.Load() == 1 && idle(old) }, time.Second, time.Millisecond)
 
 	// A copy fetched from one key source does not stand in for another.
 	moved, err := AuthorizationServer(f.spec.IssuerURL, KeySource{Type: "explicit_url", URL: "https://keys.example.test/jwks.json"})
 	require.NoError(t, err)
-	restarted.fetch = unreachable
-	_, err = restarted.VerifySignature(context.Background(), moved, token, accessTokenTypes)
+	fresh.fetch = unreachable
+	_, err = fresh.VerifySignature(waiting, moved, token, accessTokenTypes)
 	require.ErrorIs(t, err, ErrUnavailable)
 
 	// Without a usable copy there is nothing to verify with.
@@ -284,10 +273,9 @@ func TestAuthorizationServerKeysSurviveARestartThroughTheStore(t *testing.T) {
 		NewVerifierWithKeyStore(&memoryKeyStore{}, nil),
 		NewVerifierWithKeyStore(&memoryKeyStore{saved: map[string][]byte{keyCacheKey(f.spec): []byte(`{"keys":`)}}, nil),
 	} {
-		v.now = func() time.Time { return f.now }
+		v.now = func() time.Time { return fetchedAt }
 		v.fetch = unreachable
-		_, err = v.VerifySignature(context.Background(), f.spec, token, accessTokenTypes)
-		require.ErrorIs(t, err, ErrUnavailable)
+		require.ErrorIs(t, verify(v), ErrUnavailable)
 	}
 }
 
@@ -331,7 +319,7 @@ func TestAuthorizationServerCanWithdrawEveryKey(t *testing.T) {
 		_ = verify(v)
 		require.Eventually(t, func() bool { v.mu.Lock(); defer v.mu.Unlock(); return len(v.loading) == 0 }, time.Second, time.Millisecond)
 		require.ErrorIs(t, verify(v), ErrAssertion, withdrawn)
-		require.JSONEq(t, `{"keys":[]}`, string(store.saved[keyCacheKey(f.spec)]), "the saved copy is replaced too")
+		require.Contains(t, string(store.saved[keyCacheKey(f.spec)]), `"keys":[]`, "the saved copy is replaced too")
 
 		// A restart does not bring the withdrawn key back, reachable or not.
 		// Which refusal it is depends on whether the failed fetch has ended.

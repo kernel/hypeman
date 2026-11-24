@@ -63,8 +63,9 @@ type keyLoad struct {
 	err  error
 }
 
-// KeyStore keeps the last key set fetched from an authorization server, so
-// that its keys outlive a restart during which the server cannot be reached.
+// KeyStore keeps the last key set fetched from an authorization server and
+// the time of that fetch, so that a restarted server continues with the cache
+// it had.
 // A copy that is missing or unreadable is simply not used. The id names one
 // issuer URL together with its configured key source, so a copy is not reused
 // after either changes; the issuer URL is for the store's own reporting.
@@ -130,7 +131,7 @@ func (v *Verifier) keySet(ctx context.Context, issuer IssuerSpec, force bool) ([
 	v.mu.Lock()
 	entry := v.cache[key]
 	if issuer.authorizationServer && !entry.restored {
-		entry = v.restoreLocked(key, issuer, entry)
+		entry = v.restoreLocked(key, issuer, entry, now)
 	}
 	if now.Before(entry.expiresAt) && !force {
 		v.mu.Unlock()
@@ -176,17 +177,34 @@ func (v *Verifier) keySet(ctx context.Context, issuer IssuerSpec, force bool) ([
 	}
 }
 
-// restoreLocked starts an authorization server's cache entry from the stored
-// copy of its key set, so that the first requests after a start are checked
-// against it at once while the set is fetched again. The copy is read with the
+// savedKeySet is an authorization server's key set as a KeyStore keeps it:
+// the public keys and when they were fetched, which is what a cache entry
+// consists of.
+type savedKeySet struct {
+	FetchedAt time.Time         `json:"fetched_at"`
+	Keys      []jose.JSONWebKey `json:"keys"`
+}
+
+// restoreLocked continues an authorization server's cache entry from the
+// stored copy of its key set, as if the server had not restarted: a copy
+// fetched within the cache lifetime is used until that lifetime ends, and an
+// older one is used while the set is fetched again. The copy is read with the
 // lock held, once for each issuer.
-func (v *Verifier) restoreLocked(key string, issuer IssuerSpec, entry cachedKeys) cachedKeys {
+func (v *Verifier) restoreLocked(key string, issuer IssuerSpec, entry cachedKeys, now time.Time) cachedKeys {
 	entry.restored = true
 	if v.store != nil && issuer.JWKS.Type != "inline" && entry.keys == nil {
 		if copied, ok := v.store.Load(key); ok {
 			if keys, err := parseAuthorizationServerKeySet(copied); err == nil {
 				entry.keys = keys
-				v.log.Info("authorization server keys restored from the saved copy while they are fetched again", "issuer", issuer.IssuerURL)
+				// A fetch time that is missing, or later than now because a
+				// clock was wrong, leaves the copy due for a refresh at once.
+				var saved struct {
+					FetchedAt time.Time `json:"fetched_at"`
+				}
+				if json.Unmarshal(copied, &saved) == nil && !saved.FetchedAt.IsZero() && !saved.FetchedAt.After(now) {
+					entry.expiresAt = saved.FetchedAt.Add(keyCacheTTL)
+				}
+				v.log.Info("authorization server keys restored from the saved copy", "issuer", issuer.IssuerURL, "fetched_at", saved.FetchedAt, "refresh_due", !now.Before(entry.expiresAt))
 			}
 		}
 	}
@@ -221,7 +239,7 @@ func (v *Verifier) loadKeys(key string, issuer IssuerSpec, load *keyLoad, starte
 		}
 	}
 	if err == nil && v.store != nil && issuer.authorizationServer && issuer.JWKS.Type != "inline" {
-		if public, marshalErr := json.Marshal(jose.JSONWebKeySet{Keys: keys}); marshalErr == nil {
+		if public, marshalErr := json.Marshal(savedKeySet{FetchedAt: startedAt.UTC(), Keys: keys}); marshalErr == nil {
 			v.store.Save(key, issuer.IssuerURL, public)
 		}
 	}

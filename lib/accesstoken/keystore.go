@@ -1,7 +1,6 @@
 package accesstoken
 
 import (
-	"bytes"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -12,8 +11,8 @@ import (
 const maxKeySetBytes = 256 << 10
 
 // FileKeyStore keeps each authorization server's last fetched public key set
-// in one file of a directory. A server that restarts verifies tokens with that
-// copy until the key set has been fetched again.
+// in one file of a directory, with the time it was fetched. A server that
+// restarts continues from that copy.
 //
 // The copy is a convenience, not a record: a write that fails is logged and
 // the fetched keys stay in memory.
@@ -36,13 +35,10 @@ func (s *FileKeyStore) path(id string) (string, bool) {
 	return filepath.Join(s.dir, id+".json"), true
 }
 
-// Save replaces the stored key set unless it is already the same.
+// Save replaces the stored key set.
 func (s *FileKeyStore) Save(id, issuerURL string, keySet []byte) {
 	path, ok := s.path(id)
 	if !ok {
-		return
-	}
-	if current, err := os.ReadFile(path); err == nil && bytes.Equal(current, keySet) {
 		return
 	}
 	if err := s.write(path, keySet); err != nil {

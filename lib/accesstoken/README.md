@@ -11,5 +11,5 @@ audiences. The token's `scope` becomes `Claims.Permissions`, which is never nil.
 
 `lib/jwtauth` calls it for tokens whose `typ` header is `at+jwt` (`Typed`), and only for those.
 
-`FileKeyStore` keeps each authorization server's last fetched key set in a file, which a restarted
-server verifies with until it has fetched the key set again.
+`FileKeyStore` keeps each authorization server's last fetched key set in a file, with the time it
+was fetched, so that a restarted server continues with the key cache it had.

@@ -59,10 +59,10 @@ against its keys, leaving the audience and other claims to the caller; `lib/acce
 the access token rules. Two things differ from an identity issuer:
 
 - Its metadata is read from the RFC 8414 location, `/.well-known/oauth-authorization-server`.
-- Its last key set stays in use while a refresh runs or fails, and is handed to a `KeyStore` so
-  that a restarted server starts from it. A resource server checks every request against those
-  keys, so it must not stop when the authorization server does. An identity issuer's keys are
-  never kept past their five minutes.
+- Its last key set stays in use while a refresh runs or fails, and is handed to a `KeyStore` with
+  the time it was fetched, so that a restarted server continues with the cache it had. A resource
+  server checks every request against those keys, so it must not stop when the authorization
+  server does. An identity issuer's keys are never kept past their five minutes.
 - A key set that is empty or holds only valid public keys for other purposes is its answer that every
   key is withdrawn, and replaces the last key set. For an identity issuer it is a configuration
   problem.
