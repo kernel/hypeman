@@ -16,6 +16,7 @@ import (
 	"github.com/kernel/hypeman/lib/forkvm"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/logger"
+	"github.com/kernel/hypeman/lib/paths"
 	snapshotstore "github.com/kernel/hypeman/lib/snapshot"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -202,10 +203,91 @@ func TestForkFailsWhenClearingItsMarkCannotBeSynced(t *testing.T) {
 	// The cleared metadata is already in place when the sync fails.
 	kept, _, err := mgr.forkInstanceFromStoppedOrStandby(ctx, sourceID, ForkInstanceRequest{Name: "fork-sync-kept"}, false)
 	require.NoError(t, err)
-	require.ErrorContains(t, mgr.completeFork(kept), "save completed fork metadata")
+	require.ErrorContains(t, mgr.completeFork(ctx, kept), "save completed fork metadata")
 	stored, err := mgr.loadMetadata(kept.Id)
 	require.NoError(t, err)
 	assert.Equal(t, currentForkOwner(), stored.ForkPending)
+}
+
+func TestCanceledForkDoesNotCommitAfterCopy(t *testing.T) {
+	for _, kind := range []string{"instance", "snapshot"} {
+		t.Run(kind, func(t *testing.T) {
+			m, _ := setupTestManager(t)
+			const source = "source"
+			createStoppedSnapshotSourceFixture(t, m, source, source, m.defaultHypervisor)
+			snap, err := m.CreateSnapshot(t.Context(), source, CreateSnapshotRequest{Kind: SnapshotKindStopped})
+			require.NoError(t, err)
+
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			var forkDir string
+			m.renameMetadataFn = func(tmp, dst string) error {
+				if err := os.Rename(tmp, dst); err != nil {
+					return err
+				}
+				// The copy is on disk and the stopped target needs no further transition.
+				forkDir = filepath.Dir(dst)
+				cancel()
+				return nil
+			}
+			if kind == "instance" {
+				_, err = m.ForkInstance(ctx, source, ForkInstanceRequest{Name: "child", TargetState: StateStopped})
+			} else {
+				_, err = m.ForkSnapshot(ctx, snap.Id, ForkSnapshotRequest{Name: "child", TargetState: StateStopped})
+			}
+			require.ErrorIs(t, err, context.Canceled)
+			require.NotEmpty(t, forkDir)
+			require.NoDirExists(t, forkDir)
+			require.FileExists(t, m.paths.InstanceMetadata(source))
+		})
+	}
+}
+
+type forkBootTestStarter struct {
+	concurrentForkPrepareTestStarter
+}
+
+func (s forkBootTestStarter) StartVM(ctx context.Context, p *paths.Paths, version, socket string, _ hypervisor.VMConfig) (int, hypervisor.Hypervisor, error) {
+	return s.RestoreVM(ctx, p, version, socket, "")
+}
+
+func TestRunningForkRequiresRuntimeMetadata(t *testing.T) {
+	for _, state := range []State{StateStopped, StateStandby} {
+		t.Run(string(state), func(t *testing.T) {
+			m, _ := setupTestManager(t)
+			m.vmStarters[lifecycleNoopHypervisorType] = forkBootTestStarter{}
+			const source = "source"
+			createStoppedSnapshotSourceFixture(t, m, source, source, lifecycleNoopHypervisorType)
+			if state == StateStandby {
+				writeLifecycleNoopSnapshot(t, m.paths, source)
+			}
+			meta, err := m.loadMetadata(source)
+			require.NoError(t, err)
+			meta.SkipGuestAgent = true
+			require.NoError(t, m.saveMetadata(meta))
+
+			// Fail only the post-boot write. The pre-boot record remains readable,
+			// and a subsequent rename clearing its pending mark would succeed.
+			writeErr := errors.New("runtime metadata write failed")
+			var forkDir string
+			m.renameMetadataFn = func(tmp, dst string) error {
+				data, err := os.ReadFile(tmp)
+				require.NoError(t, err)
+				var record StoredMetadata
+				require.NoError(t, json.Unmarshal(data, &record))
+				if forkDir == "" && record.ForkPending != nil && record.HypervisorPID != nil {
+					forkDir = filepath.Dir(dst)
+					return writeErr
+				}
+				return os.Rename(tmp, dst)
+			}
+			_, err = m.ForkInstance(t.Context(), source, ForkInstanceRequest{Name: "child", TargetState: StateRunning})
+			require.ErrorIs(t, err, writeErr)
+			require.NotEmpty(t, forkDir)
+			require.NoDirExists(t, forkDir)
+			require.FileExists(t, m.paths.InstanceMetadata(source))
+		})
+	}
 }
 
 // contextRecordingDeviceManager records whether the context a device release

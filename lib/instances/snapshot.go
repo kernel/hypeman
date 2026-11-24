@@ -578,7 +578,7 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 	if err != nil {
 		return nil, m.discardFork(ctx, forkID, fmt.Errorf("apply snapshot fork target state: %w", err))
 	}
-	if err := m.completeFork(inst); err != nil {
+	if err := m.completeFork(ctx, inst); err != nil {
 		return nil, m.discardFork(ctx, forkID, err)
 	}
 	return inst, nil

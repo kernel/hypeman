@@ -181,6 +181,7 @@ type manager struct {
 	now                       func() time.Time
 	writeFile                 func(string, []byte, os.FileMode) error
 	deleteInstanceFn          func(context.Context, string) error
+	renameMetadataFn          func(string, string) error
 	syncDirFn                 func(*os.File) error
 	forkOwnerGoneFn           func(ForkOwner) bool
 	discoverVGPU              func() (devices.VGPUFramework, []devices.VirtualFunction, error)
@@ -562,7 +563,7 @@ func (m *manager) ForkInstance(ctx context.Context, id string, req ForkInstanceR
 	if err != nil {
 		return nil, m.discardFork(ctx, forked.Id, fmt.Errorf("apply fork target state: %w", err))
 	}
-	if err := m.completeFork(inst); err != nil {
+	if err := m.completeFork(ctx, inst); err != nil {
 		return nil, m.discardFork(ctx, forked.Id, err)
 	}
 	m.notifyLifecycleEvent(ctx, LifecycleEventFork, inst)

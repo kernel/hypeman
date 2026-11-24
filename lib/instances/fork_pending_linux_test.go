@@ -4,6 +4,8 @@ package instances
 
 import (
 	"context"
+	"net"
+	"os"
 	"os/exec"
 	"syscall"
 	"testing"
@@ -28,6 +30,30 @@ func TestForkOwnerIsGoneWhenItsPIDBelongsToAnotherProcess(t *testing.T) {
 	beforeReboot := current
 	beforeReboot.BootID = "00000000-0000-0000-0000-000000000000"
 	assert.True(t, beforeReboot.gone(), "same PID and start time, recorded in an earlier boot")
+}
+
+func TestPCILivenessChecksOwnerOfUnresponsiveSocket(t *testing.T) {
+	m, id := newLifecycleNoopManagerWithInstance(t, StateStopped, time.Now())
+	meta, err := m.loadMetadata(id)
+	require.NoError(t, err)
+	staleSocket(t, meta.SocketPath)
+	require.Equal(t, StateUnknown, m.deriveStateWithoutHydration(t.Context(), &meta.StoredMetadata).State)
+	checker := NewLivenessChecker(m)
+	require.False(t, checker.IsInstanceRunning(t.Context(), id), "a stale socket has no owner")
+
+	listen := func() {
+		t.Helper()
+		require.NoError(t, os.Remove(meta.SocketPath))
+		l, err := net.Listen("unix", meta.SocketPath)
+		require.NoError(t, err)
+		t.Cleanup(func() { l.Close() })
+	}
+	listen()
+	require.True(t, checker.IsInstanceRunning(t.Context(), id), "a live listener still protects the device")
+	listen() // two listening inodes now have the same path in /proc/net/unix
+	_, err = resolveLiveHypervisorPID(meta.HypervisorProcessIdentity, meta.SocketPath)
+	require.ErrorContains(t, err, "multiple socket inodes")
+	require.True(t, checker.IsInstanceRunning(t.Context(), id), "ambiguous ownership must also protect the device")
 }
 
 func TestRecoverNetworklessForkWithLivePIDAndNoSocket(t *testing.T) {

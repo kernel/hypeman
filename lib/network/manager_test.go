@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"net"
 	"os"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/kernel/hypeman/cmd/api/config"
+	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/paths"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -123,6 +126,47 @@ func TestPartialForkCopyDoesNotReserveNetworkIdentity(t *testing.T) {
 	ip, err := m.allocateNextIP(t.Context(), subnet)
 	require.NoError(t, err)
 	require.Equal(t, meta.IP, ip)
+}
+
+func TestParkedForkSourceKeepsItsIP(t *testing.T) {
+	m := &manager{paths: paths.New(t.TempDir()), config: &config.Config{}}
+	const subnet = "10.10.10.0/30"
+	nw := newDefaultNetwork("br-test", subnet, "10.10.10.1")
+	m.setDefaultNetwork(nw)
+	meta := instanceMetadata{ID: "source", NetworkEnabled: true, IP: "10.10.10.2", MAC: "02:00:00:00:00:01"}
+	source := m.paths.InstanceDir(meta.ID)
+	fork := m.paths.InstanceDir("fork")
+	require.NoError(t, os.MkdirAll(source, 0755))
+	require.NoError(t, os.Mkdir(fork, 0755))
+	data, err := json.Marshal(meta)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(m.paths.InstanceMetadata(meta.ID), data, 0644))
+
+	unlock := sync.OnceFunc(hypervisor.LockSnapshotSourceAliasMutation())
+	defer unlock()
+	backup := source + ".fork-bak.1"
+	require.NoError(t, os.Rename(source, backup))
+	require.NoError(t, os.Symlink(fork, source))
+
+	done := make(chan error, 1)
+	started := make(chan struct{})
+	go func() {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		close(started)
+		_, err := m.reserveAllocationIdentityLocked(t.Context(), nw, AllocateRequest{InstanceID: "new", InstanceName: "new"})
+		done <- err
+	}()
+	<-started
+	select {
+	case err := <-done:
+		t.Fatalf("allocator returned while source was parked: %v", err)
+	case <-time.After(25 * time.Millisecond):
+	}
+	require.NoError(t, os.Remove(source))
+	require.NoError(t, os.Rename(backup, source))
+	unlock()
+	require.ErrorContains(t, <-done, "no available IPs")
 }
 
 func TestPendingAllocationLoadsPersistedClassID(t *testing.T) {

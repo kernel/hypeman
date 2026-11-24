@@ -114,6 +114,10 @@ func (m *manager) GetAllocation(ctx context.Context, instanceID string) (*Alloca
 
 // ListAllocations scans all guest directories and derives allocations
 func (m *manager) ListAllocations(ctx context.Context) ([]Allocation, error) {
+	// A parked Firecracker source still owns its IP. Keep its directory at
+	// the canonical path from ReadDir through the last metadata read.
+	unlock := hypervisor.LockSnapshotSourceAliasReaders()
+	defer unlock()
 	guests, err := os.ReadDir(m.paths.GuestsDir())
 	if err != nil {
 		if os.IsNotExist(err) {

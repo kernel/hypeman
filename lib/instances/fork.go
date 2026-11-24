@@ -603,7 +603,7 @@ func forkReturnNeedsGuestAgentReady(inst *Instance, guestReady bool) bool {
 // state. The clear is synced to disk before the request succeeds: if a host
 // crash undid it, the next start would delete a fork whose caller got a
 // success.
-func (m *manager) completeFork(inst *Instance) error {
+func (m *manager) completeFork(ctx context.Context, inst *Instance) error {
 	lock := m.getInstanceLock(inst.Id)
 	lock.Lock()
 	defer lock.Unlock()
@@ -611,6 +611,9 @@ func (m *manager) completeFork(inst *Instance) error {
 	meta, err := m.loadMetadata(inst.Id)
 	if err != nil {
 		return fmt.Errorf("load completed fork metadata: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	if pending := meta.ForkPending; pending != nil {
 		meta.ForkPending = nil

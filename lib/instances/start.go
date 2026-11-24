@@ -252,7 +252,9 @@ func (m *manager) startInstance(
 	stored.Phases.Record(initialBootPhase(stored), time.Now().UTC())
 	meta = &metadata{StoredMetadata: *stored}
 	if err := m.saveMetadata(meta); err != nil {
-		// VM is running but metadata failed - log but don't fail
+		if meta.ForkPending != nil {
+			return nil, fmt.Errorf("save fork metadata after start: %w", err)
+		}
 		log.WarnContext(ctx, "failed to update metadata after VM start", "instance_id", id, "error", err)
 	}
 

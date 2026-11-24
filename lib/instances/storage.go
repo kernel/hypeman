@@ -173,7 +173,11 @@ func (m *manager) writeMetadata(meta *metadata, durable bool) error {
 		return fmt.Errorf("close temporary metadata: %w", err)
 	}
 
-	if err := os.Rename(tmpPath, metaPath); err != nil {
+	rename := os.Rename
+	if m.renameMetadataFn != nil {
+		rename = m.renameMetadataFn
+	}
+	if err := rename(tmpPath, metaPath); err != nil {
 		return fmt.Errorf("rename metadata: %w", err)
 	}
 

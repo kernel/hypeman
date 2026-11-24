@@ -393,7 +393,9 @@ func (m *manager) restoreInstance(
 	stored.Phases.Record(resumePhase, time.Now().UTC())
 	meta = &metadata{StoredMetadata: *stored}
 	if err := m.saveMetadata(meta); err != nil {
-		// VM is running but metadata failed
+		if meta.ForkPending != nil {
+			return nil, fmt.Errorf("save fork metadata after restore: %w", err)
+		}
 		log.WarnContext(ctx, "failed to update metadata after restore", "instance_id", id, "error", err)
 	}
 

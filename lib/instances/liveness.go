@@ -39,9 +39,10 @@ func (a *instanceLivenessAdapter) IsInstanceRunning(ctx context.Context, instanc
 		return !errors.Is(err, ErrNotFound)
 	}
 	state := a.manager.deriveStateWithoutHydration(ctx, &meta.StoredMetadata).State
-	if state.RequiresVMM() || state == StateUnknown {
+	if state.RequiresVMM() {
 		return true
 	}
+	// A stale control socket reads as Unknown even after its owner has exited.
 	pid, err := resolveLiveHypervisorPID(meta.HypervisorProcessIdentity, meta.SocketPath)
 	return err != nil || pid != 0
 }
