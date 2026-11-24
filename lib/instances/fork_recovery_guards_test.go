@@ -35,6 +35,36 @@ func TestRecoveryLeavesInheritedPCIDeviceWithOwner(t *testing.T) {
 	require.JSONEq(t, string(data), string(after))
 }
 
+func TestDeleteSourceKeepsPCIDeviceUsedByFork(t *testing.T) {
+	m, _ := setupTestManager(t)
+	const source, fork, dev = "stopped-source", "running-child", "dev-1"
+	for _, id := range []string{source, fork} {
+		createStoppedSnapshotSourceFixture(t, m, id, id, m.defaultHypervisor)
+		meta, err := m.loadMetadata(id)
+		require.NoError(t, err)
+		meta.Devices = []string{dev}
+		if id == fork {
+			meta.HypervisorType = lifecycleNoopHypervisorType
+			writeLifecycleNoopSocket(t, meta.SocketPath, hypervisor.StateRunning)
+			t.Cleanup(func() { lifecycleNoopHypervisorStates.Delete(meta.SocketPath) })
+		}
+		require.NoError(t, m.saveMetadata(meta))
+	}
+	before := writeAttachedTestDevice(t, m, dev, source)
+	err := m.DeleteInstance(t.Context(), source)
+	require.ErrorIs(t, err, devices.ErrInUse)
+	require.FileExists(t, m.paths.InstanceMetadata(source))
+	after, err := os.ReadFile(m.paths.DeviceMetadata(dev))
+	require.NoError(t, err)
+	require.JSONEq(t, string(before), string(after))
+
+	meta, err := m.loadMetadata(fork)
+	require.NoError(t, err)
+	require.NoError(t, os.Remove(meta.SocketPath))
+	require.NoError(t, m.DeleteInstance(t.Context(), source))
+	require.NoDirExists(t, m.paths.InstanceDir(source))
+}
+
 func writeAttachedTestDevice(t *testing.T, m *manager, dev, owner string) []byte {
 	t.Helper()
 	data, err := json.Marshal(devices.Device{Id: dev, AttachedTo: &owner, BoundToVFIO: true, PCIAddress: "test-device"})

@@ -2,13 +2,11 @@ package instances
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"syscall"
 	"time"
 
-	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/guest"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/logger"
@@ -179,20 +177,8 @@ func (m *manager) deleteInstanceWithOptions(
 	}
 
 	// 7. Detach and auto-unbind devices from VFIO
-	if len(inst.Devices) > 0 && m.deviceManager != nil {
-		for _, deviceID := range inst.Devices {
-			log.DebugContext(ctx, "detaching device", "id", id, "device", deviceID)
-			if err := m.deviceManager.ReleaseInstanceDevice(ctx, deviceID, id); err != nil {
-				if stored.ForkPending != nil && !errors.Is(err, devices.ErrNotFound) {
-					return fmt.Errorf("release fork PCI device %s: %w", deviceID, err)
-				}
-				log.WarnContext(ctx, "failed to release passthrough device", "instance_id", id, "device", deviceID, "error", err)
-				// Nothing retries the release once this instance is gone.
-				if err := m.deviceManager.DetachInstanceDevice(ctx, deviceID, id); err != nil && !errors.Is(err, devices.ErrNotFound) {
-					log.WarnContext(ctx, "failed to detach passthrough device", "instance_id", id, "device", deviceID, "error", err)
-				}
-			}
-		}
+	if err := m.releasePCIDevices(ctx, stored); err != nil {
+		return err
 	}
 
 	// 7b. Detach volumes

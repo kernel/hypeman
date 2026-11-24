@@ -110,7 +110,7 @@ POST /devices
 ### Automatic Cleanup
 
 - **vGPU**: mdev destroyed when instance is deleted
-- **Passthrough**: Device unbound from VFIO when instance is deleted
+- **Passthrough**: Deleting the recorded owner unbinds its device from VFIO. If a running fork still uses the device, stop the fork and retry the delete. An incomplete guest inventory also prevents release.
 - **Orphaned mdevs**: Cleaned up on server startup
 
 ## Hypervisor Integration

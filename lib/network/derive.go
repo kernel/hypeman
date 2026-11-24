@@ -10,6 +10,7 @@ import (
 
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/logger"
+	"github.com/kernel/hypeman/lib/paths"
 	"go.opentelemetry.io/otel/attribute"
 )
 
@@ -112,8 +113,29 @@ func (m *manager) GetAllocation(ctx context.Context, instanceID string) (*Alloca
 	return alloc, err
 }
 
+// A refused backup isn't a routable guest, but its addresses must remain
+// reserved until the source is repaired. Read the backup, not the source link.
+func (m *manager) parkedReservation(dir, source string) (*Allocation, error) {
+	meta, err := m.loadInstanceMetadata(dir)
+	if err != nil {
+		return nil, err
+	}
+	if meta.ID != source || paths.ValidatePathComponent(source) != nil {
+		return nil, fmt.Errorf("unexpected instance ID %q", meta.ID)
+	}
+	if !meta.NetworkEnabled {
+		return nil, nil
+	}
+	// No instance ID: a backup cannot replace a pending allocation for the canonical guest.
+	return &Allocation{InstanceName: meta.Name, IP: meta.IP, MAC: meta.MAC}, nil
+}
+
 // ListAllocations scans all guest directories and derives allocations
 func (m *manager) ListAllocations(ctx context.Context) ([]Allocation, error) {
+	return m.listAllocations(ctx, false)
+}
+
+func (m *manager) listAllocations(ctx context.Context, includeParked bool) ([]Allocation, error) {
 	// A parked Firecracker source still owns its IP. Keep its directory at
 	// the canonical path from ReadDir through the last metadata read.
 	unlock := hypervisor.LockSnapshotSourceAliasReaders()
@@ -126,9 +148,22 @@ func (m *manager) ListAllocations(ctx context.Context) ([]Allocation, error) {
 		return nil, fmt.Errorf("read guests dir: %w", err)
 	}
 
-	var allocations []Allocation
+	allocations := make([]Allocation, 0, len(guests))
 	for _, guest := range guests {
 		if !guest.IsDir() {
+			continue
+		}
+		if source, parked := paths.ForkBackupSource(guest.Name()); parked {
+			if !includeParked {
+				continue
+			}
+			alloc, err := m.parkedReservation(guest.Name(), source)
+			if err != nil {
+				return nil, fmt.Errorf("read network reservation in %s: %w", guest.Name(), err)
+			}
+			if alloc != nil {
+				allocations = append(allocations, *alloc)
+			}
 			continue
 		}
 		alloc, err := m.deriveAllocation(ctx, guest.Name())
@@ -169,7 +204,7 @@ func (m *manager) NameExists(ctx context.Context, name string, excludeInstanceID
 }
 
 func (m *manager) listAllocationsWithPendingLocked(ctx context.Context) ([]Allocation, error) {
-	allocations, err := m.ListAllocations(ctx)
+	allocations, err := m.listAllocations(ctx, true)
 	if err != nil {
 		return nil, err
 	}

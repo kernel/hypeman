@@ -10,7 +10,7 @@ import (
 	"github.com/vishvananda/netlink"
 )
 
-func TestRecoveryRemovesKernelTAPWithoutAllocation(t *testing.T) {
+func TestRecoveryReleasesOnlyUnambiguousKernelTAP(t *testing.T) {
 	if os.Geteuid() != 0 {
 		t.Skip("creating a TAP requires CAP_NET_ADMIN")
 	}
@@ -18,16 +18,27 @@ func TestRecoveryRemovesKernelTAPWithoutAllocation(t *testing.T) {
 		t.Skip("no TUN device")
 	}
 	for _, tc := range []struct {
-		name       string
-		sharedName bool
+		name                  string
+		sharedName, persisted bool
 	}{
-		{"own name", false},
-		{"shared name", true},
+		{"own name, no allocation", false, false},
+		{"shared name, no allocation", true, false},
+		{"own name, persisted allocation", false, true},
+		{"shared name, persisted allocation", true, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m, _ := setupTestManager(t)
 			id := cuid2.Generate()
 			createPendingForkWithoutAllocation(t, m, id)
+			if tc.persisted {
+				meta, err := m.loadMetadata(id)
+				require.NoError(t, err)
+				meta.IP, meta.MAC = "10.10.10.2", "02:00:00:00:00:01"
+				require.NoError(t, m.saveMetadata(meta))
+				alloc, err := m.networkManager.GetAllocation(t.Context(), id)
+				require.NoError(t, err)
+				require.NotNil(t, alloc)
+			}
 			tap := &netlink.Tuntap{
 				LinkAttrs: netlink.LinkAttrs{Name: network.GenerateTAPName(id)},
 				Mode:      netlink.TUNTAP_MODE_TAP,

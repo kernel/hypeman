@@ -209,6 +209,7 @@ func TestReleaseInstanceDeviceKeepsOwnerUntilUnbound(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m, p, _ := setupTestManager(t)
+			m.SetLivenessChecker(newMockLivenessChecker())
 			owner := "fork"
 			device := &Device{Id: "dev-1", PCIAddress: "test-device", AttachedTo: &owner, BoundToVFIO: true}
 			createTestDevice(t, p, device)
@@ -241,8 +242,24 @@ func TestReleaseInstanceDeviceKeepsOwnerUntilUnbound(t *testing.T) {
 	}
 }
 
+func TestDeviceReleaseRefusesIncompleteInventory(t *testing.T) {
+	m, p, _ := setupTestManager(t)
+	owner := "source"
+	device := &Device{Id: "dev-1", AttachedTo: &owner, BoundToVFIO: true}
+	createTestDevice(t, p, device)
+	m.vfioBinder = readOnlyReconcileBinder{} // Any unbind would panic.
+	m.SetLivenessChecker(&mockLivenessChecker{})
+	require.ErrorIs(t, m.ReleaseInstanceDevice(t.Context(), device.Id, owner), ErrInUse)
+	require.ErrorIs(t, m.DetachInstanceDevice(t.Context(), device.Id, owner), ErrInUse)
+	stored, err := m.loadDevice(device.Id)
+	require.NoError(t, err)
+	require.Equal(t, &owner, stored.AttachedTo)
+	require.True(t, stored.BoundToVFIO)
+}
+
 func TestDetachInstanceDeviceFreesOnlyItsOwnersDevice(t *testing.T) {
 	m, p, _ := setupTestManager(t)
+	m.SetLivenessChecker(newMockLivenessChecker())
 	owner := "deleted"
 	device := &Device{Id: "dev-1", PCIAddress: "test-device", AttachedTo: &owner, BoundToVFIO: true}
 	createTestDevice(t, p, device)

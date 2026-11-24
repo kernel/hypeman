@@ -309,11 +309,11 @@ identity reservation.
 ### Unlocked Operations  
 - **TAP creation**: Runs outside the allocation mutex so concurrent forks can create TAPs in parallel
 - **RecreateAllocation**: Safe without allocation lock - protected by instance-level locking, doesn't allocate IPs
-- **ReleaseAllocation**: Safe without allocation lock - deletes TAP device and serializes with tc updates
+- **ReleaseAllocation**: Serializes with tc updates and leaves the TAP alone if another guest has the same short interface name, even when the caller has a persisted allocation.
 - **Read operations** (GetAllocation, ListAllocations, NameExists): No lock needed - eventual consistency is acceptable
 
 ### Why This Works
-- Pending reservations are visible to reads until metadata is persisted
+- Pending reservations are visible to reads until metadata is persisted. If startup cannot put a parked Firecracker source back, new allocations reserve the IP and MAC in each readable backup. An unreadable backup blocks allocation until repaired.
 - TAP creation does not choose identity, so it can run outside the allocation mutex
 - tc work is not required for the VMM attach point and can complete after the fork response
 - Instance manager already provides per-instance locking for state transitions

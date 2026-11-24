@@ -17,6 +17,16 @@ import (
 	"github.com/vishvananda/netlink"
 )
 
+func TestTAPReservationRefusesCollidingGuestWithoutAllocation(t *testing.T) {
+	p := paths.New(t.TempDir())
+	require.NoError(t, os.MkdirAll(p.InstanceDir("abcdefgh-source"), 0755))
+	m := &manager{paths: p, config: &config.Config{}}
+	nw := newDefaultNetwork("br-test", "10.10.10.0/30", "10.10.10.1")
+	_, err := m.reserveAllocationIdentityLocked(t.Context(), nw, AllocateRequest{InstanceID: "abcdefgh-child", InstanceName: "child"})
+	require.ErrorContains(t, err, "also matches guest abcdefgh-source")
+	require.Empty(t, m.pendingAllocations)
+}
+
 func TestParseBridgeFilters(t *testing.T) {
 	output := `filter parent 1: protocol all pref 1 basic chain 0
 filter parent 1: protocol all pref 1 basic chain 0 handle 0x1 flowid 1:a3f2

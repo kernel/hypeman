@@ -274,6 +274,8 @@ func (m *manager) listMetadataFiles() ([]string, error) {
 // fail-closed callers treat an unreadable instance as an error instead of
 // silently missing it.
 func (m *manager) listMetadataFilesStrict() ([]string, error) {
+	// Capture canonical IDs before checking individual records for device ownership.
+	defer hypervisor.LockSnapshotSourceAliasReaders()()
 	files, statErrs, err := m.walkMetadataFiles(nil)
 	if err != nil {
 		return nil, err

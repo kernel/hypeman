@@ -7,8 +7,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strconv"
-	"strings"
 
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/hypervisor/firecracker"
@@ -18,10 +16,9 @@ import (
 // RecoverParkedForkSources puts back directories renamed by Firecracker's
 // snapshot alias fallback and removes verified aliases whose sources no longer
 // exist. A source it cannot recover is left exactly as it is and named in the
-// returned error, and the rest are still recovered. Leaving one in place
-// affects no other guest: the metadata loader rejects a directory holding
-// another guest's metadata, so a link left at a source's path resolves to
-// nothing. Call under the data directory lock, before listing instances.
+// returned error, and the rest are still recovered. Network admission must
+// reserve addresses from any backups left behind. Call under the data
+// directory lock, before listing instances.
 func RecoverParkedForkSources(p *paths.Paths) error {
 	entries, err := os.ReadDir(p.GuestsDir())
 	if os.IsNotExist(err) {
@@ -34,11 +31,8 @@ func RecoverParkedForkSources(p *paths.Paths) error {
 	backups := make(map[string]string)
 	ambiguous := make(map[string]bool)
 	for _, entry := range entries {
-		id, stamp, found := strings.Cut(entry.Name(), firecracker.ForkBackupSeparator)
+		id, found := paths.ForkBackupSource(entry.Name())
 		if !found || !entry.IsDir() {
-			continue
-		}
-		if _, err := strconv.ParseUint(stamp, 10, 63); err != nil {
 			continue
 		}
 		if err := paths.ValidatePathComponent(id); err != nil {

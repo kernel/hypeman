@@ -214,6 +214,10 @@ func (m *manager) startInstance(
 		log.WarnContext(ctx, "failed to archive app log before start", "instance_id", id, "error", err)
 	}
 
+	if len(stored.Devices) > 0 {
+		defer m.lockPCIDevices(stored.Devices)()
+	}
+
 	// 6. Start hypervisor and boot VM (reuses logic from create)
 	bootStart := time.Now().UTC()
 	stored.StartedAt = &bootStart

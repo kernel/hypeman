@@ -300,6 +300,10 @@ func (m *manager) restoreInstance(
 	}
 	defer releaseRestoreSlotOnce()
 
+	if len(stored.Devices) > 0 {
+		defer m.lockPCIDevices(stored.Devices)()
+	}
+
 	// 5. Transition: Standby → Paused (start hypervisor + restore)
 	restoreCtx, restoreSpanEnd := m.startLifecycleStep(ctx, "restore_from_snapshot",
 		attribute.String("instance_id", id),

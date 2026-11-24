@@ -365,9 +365,6 @@ func run() error {
 	}
 
 	logger.Info("Reconciling device state...")
-	if checker := instances.NewLivenessChecker(app.InstanceManager); checker != nil {
-		app.DeviceManager.SetLivenessChecker(checker)
-	}
 	if err := app.DeviceManager.ReconcileDevices(app.Ctx); err != nil {
 		logger.Error("failed to reconcile device state", "error", err)
 		return fmt.Errorf("reconcile device state: %w", err)

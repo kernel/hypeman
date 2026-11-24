@@ -169,6 +169,44 @@ func TestParkedForkSourceKeepsItsIP(t *testing.T) {
 	require.ErrorContains(t, <-done, "no available IPs")
 }
 
+func TestUnrecoveredParkedSourceReservesNetworkIdentity(t *testing.T) {
+	m := &manager{paths: paths.New(t.TempDir()), config: &config.Config{}}
+	const subnet = "10.10.10.0/30"
+	nw := newDefaultNetwork("br-test", subnet, "10.10.10.1")
+	m.setDefaultNetwork(nw)
+	meta := instanceMetadata{ID: "source", Name: "original", NetworkEnabled: true, IP: "10.10.10.2", MAC: "02:00:00:00:00:01"}
+	data, err := json.Marshal(meta)
+	require.NoError(t, err)
+	// Two backups make startup refuse the layout. Neither is an exact-ID guest.
+	for _, backup := range []string{"source.fork-bak.1", "source.fork-bak.2"} {
+		require.NoError(t, os.MkdirAll(m.paths.InstanceDir(backup), 0755))
+		require.NoError(t, os.WriteFile(m.paths.InstanceMetadata(backup), data, 0644))
+	}
+	require.NoError(t, os.Symlink(m.paths.InstanceDir("child"), m.paths.InstanceDir(meta.ID)))
+	active, err := m.ListAllocations(t.Context())
+	require.NoError(t, err)
+	require.Empty(t, active, "a backup is a reservation, not an independently routable guest")
+	_, err = m.reserveAllocationIdentityLocked(t.Context(), nw, AllocateRequest{InstanceID: "new", InstanceName: "new"})
+	require.ErrorContains(t, err, "no available IPs")
+	exists, err := m.NameExists(t.Context(), meta.Name, "")
+	require.NoError(t, err)
+	require.True(t, exists)
+	alloc, err := m.GetAllocation(t.Context(), "source.fork-bak.1")
+	require.NoError(t, err)
+	require.Nil(t, alloc)
+
+	// A readable backup reserves only its own identity, not the whole subnet.
+	nw = newDefaultNetwork("br-test", "10.10.10.0/28", "10.10.10.1")
+	cfg, err := m.reserveAllocationIdentityLocked(t.Context(), nw, AllocateRequest{InstanceID: "other", InstanceName: "other"})
+	require.NoError(t, err)
+	require.NotEqual(t, meta.IP, cfg.IP)
+
+	// An unreadable backup can hold a different address. Don't guess even on a larger subnet.
+	require.NoError(t, os.WriteFile(m.paths.InstanceMetadata("source.fork-bak.2"), []byte("{"), 0644))
+	_, err = m.reserveAllocationIdentityLocked(t.Context(), nw, AllocateRequest{InstanceID: "new", InstanceName: "new"})
+	require.ErrorContains(t, err, "source.fork-bak.2")
+}
+
 func TestPendingAllocationLoadsPersistedClassID(t *testing.T) {
 	m := &manager{
 		paths:              paths.New(t.TempDir()),

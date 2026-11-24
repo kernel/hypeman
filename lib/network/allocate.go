@@ -7,10 +7,13 @@ import (
 	mathrand "math/rand"
 	"net"
 	"os"
+	"runtime"
 	"strings"
 	"time"
 
+	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/logger"
+	"github.com/kernel/hypeman/lib/paths"
 	"go.opentelemetry.io/otel/attribute"
 )
 
@@ -116,7 +119,7 @@ func (m *manager) CreateAllocation(ctx context.Context, req AllocateRequest) (*N
 // Note: No lock needed - this operation:
 // 1. Doesn't allocate new IPs (reuses existing from snapshot)
 // 2. Is already protected by instance-level locking
-// 3. Uses deterministic TAP names that can't conflict
+// 3. Checks the short TAP name before replacing any existing link.
 func (m *manager) RecreateAllocation(ctx context.Context, instanceID string, downloadBps, uploadBps int64) error {
 	log := logger.FromContext(ctx)
 
@@ -133,6 +136,10 @@ func (m *manager) RecreateAllocation(ctx context.Context, instanceID string, dow
 	if alloc == nil {
 		// No network configured for this instance
 		return nil
+	}
+
+	if err := m.checkTAPAvailable(instanceID, alloc.TAPDevice); err != nil {
+		return err
 	}
 
 	// 2. Get default network details (same self-healing behavior as CreateAllocation).
@@ -230,6 +237,9 @@ func (m *manager) reserveAllocationIdentityLocked(ctx context.Context, network *
 	}
 
 	tap := GenerateTAPName(req.InstanceID)
+	if err := m.checkTAPAvailable(req.InstanceID, tap); err != nil {
+		return nil, err
+	}
 	_, ipNet, _ := net.ParseCIDR(network.Subnet)
 	netmask := fmt.Sprintf("%d.%d.%d.%d", ipNet.Mask[0], ipNet.Mask[1], ipNet.Mask[2], ipNet.Mask[3])
 
@@ -373,44 +383,9 @@ func (m *manager) applyRateLimitAsync(ctx context.Context, req rateLimitRequest)
 // ReleaseByInstanceID is a best-effort fallback for cases where the full Allocation
 // can't be derived (e.g. metadata read failure during stop, or rollback after a
 // CreateAllocation that succeeded but where downstream metadata writes failed).
-// It deletes the TAP device using the deterministic name from the instance ID and
-// the persisted class ID if available.
+// It uses the same ownership check as release with a persisted allocation.
 func (m *manager) ReleaseByInstanceID(ctx context.Context, instanceID string) error {
-	tap := GenerateTAPName(instanceID)
-	// TAP names use only the first eight ID characters. Don't guess which
-	// guest owns the link when cleaning up without an allocation.
-	guests, err := os.ReadDir(m.paths.GuestsDir())
-	if err != nil && !os.IsNotExist(err) {
-		return err
-	}
-	for _, guest := range guests {
-		if guest.IsDir() && guest.Name() != instanceID && GenerateTAPName(guest.Name()) == tap {
-			return m.releaseAmbiguousTAP(instanceID, tap, guest.Name())
-		}
-	}
-	return m.ReleaseAllocation(ctx, &Allocation{
-		InstanceID: instanceID,
-		TAPDevice:  tap,
-		ClassID:    m.loadClassID(instanceID),
-	})
-}
-
-// A missing TAP is already released, even when two guest IDs share its name.
-func (m *manager) releaseAmbiguousTAP(instanceID, tap, otherID string) error {
-	links, err := net.Interfaces()
-	if err != nil {
-		return err
-	}
-	for _, link := range links {
-		if link.Name == tap {
-			return fmt.Errorf("cannot release %s by ID: also matches guest %s", tap, otherID)
-		}
-	}
-	m.forgetPendingAllocation(instanceID)
-	m.tcMu.Lock()
-	defer m.tcMu.Unlock()
-	m.clearClassID(instanceID)
-	return nil
+	return m.ReleaseAllocation(ctx, &Allocation{InstanceID: instanceID, TAPDevice: GenerateTAPName(instanceID)})
 }
 
 // ReleaseAllocation cleans up network allocation (shutdown/delete)
@@ -451,10 +426,63 @@ func (m *manager) deleteTAPDeviceSerialized(ctx context.Context, tapName string)
 	return m.deleteTAPDevice(ctx, tapName)
 }
 
+// Check before creation as well as release: a new guest must not claim the
+// link between a previous guest's ownership check and its deletion.
+func (m *manager) checkTAPAvailable(instanceID, tap string) error {
+	other, err := m.conflictingTAPGuest(instanceID, tap)
+	if err != nil {
+		return err
+	}
+	if other != "" {
+		return fmt.Errorf("TAP name %s also matches guest %s", tap, other)
+	}
+	return nil
+}
+
+// Match directories rather than allocations: a guest may not have saved its IP yet.
+func (m *manager) conflictingTAPGuest(instanceID, tap string) (string, error) {
+	if runtime.GOOS != "linux" { // vmnet does not use TAPs.
+		return "", nil
+	}
+	defer hypervisor.LockSnapshotSourceAliasReaders()()
+	guests, err := os.ReadDir(m.paths.GuestsDir())
+	if err != nil && !os.IsNotExist(err) {
+		return "", err
+	}
+	for _, guest := range guests {
+		if !guest.IsDir() {
+			continue
+		}
+		id := guest.Name()
+		if source, parked := paths.ForkBackupSource(id); parked {
+			id = source
+		}
+		if id != instanceID && GenerateTAPName(id) == tap {
+			return id, nil
+		}
+	}
+	return "", nil
+}
+
 func (m *manager) deleteTAPDeviceForInstanceSerialized(ctx context.Context, instanceID, tapName string) error {
 	m.tcMu.Lock()
 	defer m.tcMu.Unlock()
-	if err := m.deleteTAPDevice(ctx, tapName); err != nil {
+	other, err := m.conflictingTAPGuest(instanceID, tapName)
+	if err != nil {
+		return err
+	}
+	if other != "" {
+		// A missing TAP is already released; never delete a live, ambiguous link.
+		links, err := net.Interfaces()
+		if err != nil {
+			return err
+		}
+		for _, link := range links {
+			if link.Name == tapName {
+				return fmt.Errorf("cannot release %s: also matches guest %s", tapName, other)
+			}
+		}
+	} else if err := m.deleteTAPDevice(ctx, tapName); err != nil {
 		return err
 	}
 	m.clearClassID(instanceID)
@@ -510,7 +538,7 @@ func (m *manager) allocateNextIP(ctx context.Context, subnet string) (string, er
 		attribute.String("operation", "list_allocations"),
 		attribute.String("caller", "allocate_ip"),
 	)
-	allocations, err := m.ListAllocations(listCtx)
+	allocations, err := m.listAllocations(listCtx, true)
 	listSpanEnd(err)
 	if err != nil {
 		chooseErr = err
@@ -625,7 +653,7 @@ func (m *manager) allocateUniqueMAC(ctx context.Context) (string, error) {
 		attribute.String("operation", "list_allocations"),
 		attribute.String("caller", "allocate_mac"),
 	)
-	allocations, err := m.ListAllocations(listCtx)
+	allocations, err := m.listAllocations(listCtx, true)
 	listSpanEnd(err)
 	if err != nil {
 		chooseErr = err

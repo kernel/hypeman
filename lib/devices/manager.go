@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -428,17 +429,39 @@ func (m *manager) unbindAndVerify(pciAddress string) error {
 	return nil
 }
 
+// releasableDevice returns nil for a non-owner. A recorded owner may be a
+// stopped source whose fork still has the device open. Caller holds m.mu.
+func (m *manager) releasableDevice(ctx context.Context, deviceID, instanceID string) (*Device, error) {
+	device, err := m.loadDevice(deviceID)
+	if err != nil {
+		return nil, err
+	}
+	if device.AttachedTo == nil || *device.AttachedTo != instanceID {
+		return nil, nil
+	}
+	var refs map[string][]string
+	if m.livenessChecker != nil {
+		refs = m.livenessChecker.ListAllInstanceDevices(ctx)
+	}
+	if refs == nil {
+		return nil, fmt.Errorf("%w: cannot verify PCI device references for %s", ErrInUse, deviceID)
+	}
+	for id, ids := range refs {
+		if id != instanceID && slices.Contains(ids, deviceID) && m.livenessChecker.IsInstanceRunning(ctx, id) {
+			return nil, fmt.Errorf("%w: instance %s still references PCI device %s", ErrInUse, id, deviceID)
+		}
+	}
+	return device, nil
+}
+
 // ReleaseInstanceDevice checks the recorded owner under the same lock as the unbind.
 // A fork's device list can name a passthrough device still owned by its source.
 func (m *manager) ReleaseInstanceDevice(ctx context.Context, deviceID, instanceID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	device, err := m.loadDevice(deviceID)
-	if err != nil {
+	device, err := m.releasableDevice(ctx, deviceID, instanceID)
+	if err != nil || device == nil {
 		return err
-	}
-	if device.AttachedTo == nil || *device.AttachedTo != instanceID {
-		return nil
 	}
 	// A retry after the unbind but before the save sees ErrNotBound.
 	if err := m.unbindAndVerify(device.PCIAddress); err != nil && !errors.Is(err, ErrNotBound) {
@@ -455,12 +478,9 @@ func (m *manager) ReleaseInstanceDevice(ctx context.Context, deviceID, instanceI
 func (m *manager) DetachInstanceDevice(ctx context.Context, deviceID, instanceID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	device, err := m.loadDevice(deviceID)
-	if err != nil {
+	device, err := m.releasableDevice(ctx, deviceID, instanceID)
+	if err != nil || device == nil {
 		return err
-	}
-	if device.AttachedTo == nil || *device.AttachedTo != instanceID {
-		return nil
 	}
 	device.AttachedTo = nil
 	// The failed release may or may not have unbound the device, and the next
