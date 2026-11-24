@@ -62,6 +62,7 @@ func TestDarwinAllocationAndDerivationUseVZNATNetwork(t *testing.T) {
 	assert.True(t, vzSubnet.Contains(net.ParseIP(networkConfig.IP)))
 
 	metadata, err := json.Marshal(instanceMetadata{
+		ID:             instanceID,
 		Name:           "darwin-network-regression",
 		NetworkEnabled: true,
 		HypervisorType: "vz",

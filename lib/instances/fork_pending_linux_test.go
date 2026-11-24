@@ -4,6 +4,7 @@ package instances
 
 import (
 	"context"
+	"os/exec"
 	"syscall"
 	"testing"
 	"time"
@@ -27,6 +28,23 @@ func TestForkOwnerIsGoneWhenItsPIDBelongsToAnotherProcess(t *testing.T) {
 	beforeReboot := current
 	beforeReboot.BootID = "00000000-0000-0000-0000-000000000000"
 	assert.True(t, beforeReboot.gone(), "same PID and start time, recorded in an earlier boot")
+}
+
+func TestRecoverNetworklessForkWithLivePIDAndNoSocket(t *testing.T) {
+	m, id := newLifecycleNoopManagerWithInstance(t, StateStopped, time.Now())
+	child := exec.Command("sleep", "60")
+	require.NoError(t, child.Start())
+	t.Cleanup(func() { _ = child.Process.Kill(); _ = child.Wait() })
+	meta, err := m.loadMetadata(id)
+	require.NoError(t, err)
+	meta.HypervisorProcessIdentity.Set(child.Process.Pid)
+	meta.ForkPending = &ForkOwner{}
+	require.NoError(t, m.saveMetadata(meta))
+
+	require.True(t, NewLivenessChecker(m).IsInstanceRunning(t.Context(), id), "a missing socket is not proof the device is free")
+	m.RecoverInterruptedForks(t.Context())
+	require.False(t, ProcessExists(child.Process.Pid))
+	require.NoDirExists(t, meta.DataDir)
 }
 
 // Nobody was given an interrupted fork, and the API does not listen until

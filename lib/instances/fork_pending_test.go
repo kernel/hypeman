@@ -462,6 +462,69 @@ func TestRunningForkIsDeletedWhenItsSourceDoesNotComeBack(t *testing.T) {
 	require.NoError(t, err)
 }
 
+type forkRestoreAdmission struct {
+	recordingResourceValidator
+	reserve func(context.Context) error
+}
+
+func (v forkRestoreAdmission) ReserveAllocation(ctx context.Context, _ string, _ int, _, _, _, _, _ int64, _ bool) error {
+	return v.reserve(ctx)
+}
+
+func TestRunningForkRestoresSourceOnCancelOrCapacityFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		err          error
+		wantAttempts int
+	}{
+		{"caller disconnected", context.Canceled, 1},
+		{"only one guest fits", ErrInsufficientResources, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			now := time.Now().UTC()
+			m, source := newLifecycleNoopManagerWithInstance(t, StateStandby, now)
+			m.vmStarters = map[hypervisor.Type]hypervisor.VMStarter{lifecycleNoopHypervisorType: concurrentForkPrepareTestStarter{}}
+			meta, err := m.loadMetadata(source)
+			require.NoError(t, err)
+			meta.SkipGuestAgent = true
+			meta.ProgramStartedAt = &now
+			require.NoError(t, m.saveMetadata(meta))
+			m.imageManager = readyFixtureImageManager{name: meta.Image}
+			fork, _, err := m.forkInstanceFromStoppedOrStandby(t.Context(), source, ForkInstanceRequest{Name: "child"}, false)
+			require.NoError(t, err)
+			writeLifecycleNoopSocket(t, fork.SocketPath, hypervisor.StateRunning)
+			t.Cleanup(func() { lifecycleNoopHypervisorStates.Delete(fork.SocketPath) })
+
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			if tc.err == context.Canceled {
+				cancel()
+			}
+			attempts := 0
+			m.resourceValidator = &forkRestoreAdmission{reserve: func(restoreCtx context.Context) error {
+				attempts++
+				_, bounded := restoreCtx.Deadline()
+				require.True(t, bounded)
+				require.NoError(t, restoreCtx.Err())
+				if tc.err == ErrInsufficientResources {
+					if _, err := os.Stat(fork.SocketPath); err == nil {
+						return errors.New("memory occupied by child")
+					}
+				}
+				return nil
+			}}
+
+			err = m.restoreSourceAfterRunningFork(ctx, source, fork, nil)
+			require.ErrorIs(t, err, tc.err)
+			require.Equal(t, tc.wantAttempts, attempts)
+			require.NoDirExists(t, fork.DataDir)
+			got, err := m.currentInstanceWithoutHydration(t.Context(), source)
+			require.NoError(t, err)
+			require.Equal(t, StateRunning, got.State)
+		})
+	}
+}
+
 func TestForkOwnerIsGoneOnlyWhenItsProcessIs(t *testing.T) {
 	assert.False(t, currentForkOwner().gone(), "a running process")
 	assert.True(t, exitedProcessOwner(t).gone(), "an exited process")

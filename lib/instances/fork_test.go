@@ -315,7 +315,8 @@ func (concurrentForkPrepareTestStarter) RestoreVM(_ context.Context, _ *paths.Pa
 	if err := os.WriteFile(socketPath, []byte("socket"), 0644); err != nil {
 		return 0, nil, err
 	}
-	return 1, lifecycleNoopHypervisor{state: hypervisor.StateRunning}, nil
+	// This starter opens no process. Never hand a real host PID to teardown.
+	return 1 << 30, lifecycleNoopHypervisor{state: hypervisor.StateRunning}, nil
 }
 
 func (concurrentForkPrepareTestStarter) PrepareFork(context.Context, hypervisor.ForkPrepareRequest) (hypervisor.ForkPrepareResult, error) {

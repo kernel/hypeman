@@ -75,7 +75,9 @@ func (m *manager) forkInstance(ctx context.Context, id string, req ForkInstanceR
 		log.InfoContext(ctx, "fork from running requested; transitioning source to standby",
 			"source_instance_id", id, "hypervisor", source.HypervisorType)
 		if inst, err := m.standbyInstance(ctx, id, StandbyInstanceRequest{}, true); err != nil {
-			return nil, "", false, m.recoverSourceAfterFailedStandby(ctx, inst, fmt.Errorf("standby source instance: %w", err))
+			restoreCtx, cancel := forkSourceRestoreContext(ctx)
+			defer cancel()
+			return nil, "", false, m.recoverSourceAfterFailedStandby(restoreCtx, inst, fmt.Errorf("standby source instance: %w", err))
 		}
 
 		forked, _, forkErr := m.forkInstanceFromStoppedOrStandby(ctx, id, req, true)
@@ -119,18 +121,39 @@ func (m *manager) forkInstance(ctx context.Context, id string, req ForkInstanceR
 	}
 }
 
-// restoreSourceAfterRunningFork brings the source of a running fork back up.
-// If it does not come back the request fails, so the fork it made is deleted
-// instead of staying up under the requested name.
+// The source was running before this request. Give its restore and readiness
+// check their own deadline even if the caller has disconnected.
+func forkSourceRestoreContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), 5*time.Minute)
+}
+
 func (m *manager) restoreSourceAfterRunningFork(ctx context.Context, sourceID string, forked *Instance, forkErr error) error {
-	err := m.restoreRunningForkSource(ctx, sourceID)
-	if err == nil {
+	restoreCtx, cancel := forkSourceRestoreContext(ctx)
+	defer cancel()
+	restoreErr := m.restoreRunningForkSource(restoreCtx, sourceID)
+	if forkErr != nil {
+		if restoreErr != nil {
+			return fmt.Errorf("fork failed: %v; additionally failed to %w", forkErr, restoreErr)
+		}
 		return forkErr
 	}
-	if forkErr != nil {
-		return fmt.Errorf("fork failed: %v; additionally failed to %w", forkErr, err)
+	if restoreErr == nil {
+		if err := ctx.Err(); err != nil {
+			return m.discardFork(ctx, forked.Id, err)
+		}
+		return nil
 	}
-	return m.discardFork(ctx, forked.Id, err)
+	if err := m.cleanupForkInstanceOnError(ctx, forked.Id); err != nil {
+		return fmt.Errorf("%w; additionally failed to delete fork %s: %v", restoreErr, forked.Id, err)
+	}
+	if !errors.Is(restoreErr, ErrInsufficientResources) {
+		return restoreErr
+	}
+	// The child may have occupied the capacity the source just released.
+	if err := m.restoreRunningForkSource(restoreCtx, sourceID); err != nil {
+		return fmt.Errorf("%w; source restore after deleting fork: %v", restoreErr, err)
+	}
+	return fmt.Errorf("%w; source restored after deleting fork %s", restoreErr, forked.Id)
 }
 
 func (m *manager) restoreRunningForkSource(ctx context.Context, sourceID string) error {

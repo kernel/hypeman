@@ -356,25 +356,21 @@ func run() error {
 		logger.Warn("failed to setup HTB on bridge (network rate limiting disabled)", "error", err)
 	}
 
-	// Reconcile device state (clears orphaned attachments from crashed VMs)
-	// Set up liveness checker so device reconciliation can accurately detect orphaned attachments
-	logger.Info("Reconciling device state...")
-	livenessChecker := instances.NewLivenessChecker(app.InstanceManager)
-	if livenessChecker != nil {
-		app.DeviceManager.SetLivenessChecker(livenessChecker)
-	}
-	if err := app.DeviceManager.ReconcileDevices(app.Ctx); err != nil {
-		logger.Error("failed to reconcile device state", "error", err)
-		return fmt.Errorf("reconcile device state: %w", err)
-	}
-
-	// A fork that a crash cut short still holds its VMM, memory and vGPU.
-	// Delete those before the vGPU reconciler counts their claims.
+	// Stop interrupted forks before either reconciler touches their devices.
 	logger.Info("Recovering interrupted forks...")
 	if r, ok := app.InstanceManager.(interface{ RecoverInterruptedForks(context.Context) }); ok {
 		r.RecoverInterruptedForks(app.Ctx)
 	} else {
 		logger.Warn("instance manager does not implement RecoverInterruptedForks")
+	}
+
+	logger.Info("Reconciling device state...")
+	if checker := instances.NewLivenessChecker(app.InstanceManager); checker != nil {
+		app.DeviceManager.SetLivenessChecker(checker)
+	}
+	if err := app.DeviceManager.ReconcileDevices(app.Ctx); err != nil {
+		logger.Error("failed to reconcile device state", "error", err)
+		return fmt.Errorf("reconcile device state: %w", err)
 	}
 
 	logger.Info("Reconciling vGPU devices...")

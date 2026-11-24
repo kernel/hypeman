@@ -128,9 +128,9 @@ func (m *manager) deleteInstanceWithOptions(
 		}
 	}
 
-	// 5. If hypervisor might be running, force kill it
-	// Also attempt kill for StateUnknown since we can't be sure if hypervisor is running
-	if !gracefulShutdown && (inst.State.RequiresVMM() || inst.State == StateUnknown || releaseTAPByID) {
+	// A pending fork's VMM can exist before its control socket does, even if
+	// its derived state is Stopped or Standby and it has no network allocation.
+	if !gracefulShutdown && (inst.State.RequiresVMM() || inst.State == StateUnknown || stored.ForkPending != nil) {
 		log.DebugContext(ctx, "stopping hypervisor", "instance_id", id, "state", inst.State)
 		killCtx, killSpanEnd := m.startLifecycleStep(ctx, "force_kill_hypervisor",
 			attribute.String("instance_id", id),

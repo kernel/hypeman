@@ -105,6 +105,32 @@ func TestReconcileDevicesKeepsOwnerIfStillBound(t *testing.T) {
 	require.Equal(t, &owner, got.AttachedTo)
 }
 
+type readOnlyReconcileBinder struct{ deviceBinder }
+
+func (readOnlyReconcileBinder) IsDeviceBoundToVFIO(string) bool { return true }
+
+func TestReconcilePreservesDeviceWithLiveForkOrIncompleteInventory(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		refs map[string][]string
+	}{
+		{"live fork", map[string][]string{"source": {"dev-1"}, "fork": {"dev-1"}}},
+		{"incomplete inventory", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, p, _ := setupTestManager(t)
+			owner := "source"
+			createTestDevice(t, p, &Device{Id: "dev-1", PCIAddress: "test-device", AttachedTo: &owner})
+			m.vfioBinder = readOnlyReconcileBinder{} // no reset operations permitted
+			m.SetLivenessChecker(&mockLivenessChecker{runningInstances: map[string]bool{"fork": true}, instanceDevices: tc.refs})
+			require.NoError(t, m.ReconcileDevices(t.Context()))
+			got, err := m.loadDevice("dev-1")
+			require.NoError(t, err)
+			require.Equal(t, &owner, got.AttachedTo)
+		})
+	}
+}
+
 func TestReconcileDevices_NoDevices(t *testing.T) {
 	mgr, _, _ := setupTestManager(t)
 	ctx := context.Background()

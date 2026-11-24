@@ -2,6 +2,7 @@ package network
 
 import (
 	"context"
+	"encoding/json"
 	"net"
 	"os"
 	"testing"
@@ -97,6 +98,31 @@ func TestPendingAllocationVisibleToNameExistsAndGetAllocation(t *testing.T) {
 	require.NotNil(t, alloc)
 	assert.Equal(t, "10.100.0.42", alloc.IP)
 	assert.Equal(t, "pending", alloc.State)
+}
+
+func TestPartialForkCopyDoesNotReserveNetworkIdentity(t *testing.T) {
+	m := &manager{paths: paths.New(t.TempDir()), config: &config.Config{}}
+	const subnet = "10.10.10.0/30" // only .2 is available to guests
+	m.setDefaultNetwork(newDefaultNetwork("br-test", subnet, "10.10.10.1"))
+	meta := instanceMetadata{ID: "source", Name: "demo", NetworkEnabled: true, IP: "10.10.10.2", MAC: "02:00:00:00:00:01"}
+	data, err := json.Marshal(meta)
+	require.NoError(t, err)
+	for _, id := range []string{meta.ID, "partial-copy"} {
+		require.NoError(t, os.MkdirAll(m.paths.InstanceDir(id), 0755))
+		require.NoError(t, os.WriteFile(m.paths.InstanceMetadata(id), data, 0644))
+	}
+	allocs, err := m.ListAllocations(t.Context())
+	require.NoError(t, err)
+	require.Len(t, allocs, 1)
+	require.Equal(t, meta.ID, allocs[0].InstanceID)
+
+	require.NoError(t, os.RemoveAll(m.paths.InstanceDir(meta.ID)))
+	exists, err := m.NameExists(t.Context(), meta.Name, "")
+	require.NoError(t, err)
+	require.False(t, exists)
+	ip, err := m.allocateNextIP(t.Context(), subnet)
+	require.NoError(t, err)
+	require.Equal(t, meta.IP, ip)
 }
 
 func TestPendingAllocationLoadsPersistedClassID(t *testing.T) {

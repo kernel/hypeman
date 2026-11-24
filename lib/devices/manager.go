@@ -20,16 +20,14 @@ import (
 // InstanceLivenessChecker provides a way to check if an instance is running.
 // This interface allows devices to query instance state without a circular dependency.
 type InstanceLivenessChecker interface {
-	// IsInstanceRunning returns true if the instance exists and is in a running state
-	// (i.e., has an active VMM process). Returns false if the instance doesn't exist
-	// or is stopped/standby/unknown.
+	// IsInstanceRunning counts uncertain VMM liveness as running for device reconciliation.
 	IsInstanceRunning(ctx context.Context, instanceID string) bool
 
 	// GetInstanceDevices returns the list of device IDs attached to an instance.
 	// Returns nil if the instance doesn't exist.
 	GetInstanceDevices(ctx context.Context, instanceID string) []string
 
-	// ListAllInstanceDevices returns a map of instanceID -> []deviceIDs for all instances.
+	// ListAllInstanceDevices returns instance IDs and their device references, or nil if the inventory is incomplete.
 	ListAllInstanceDevices(ctx context.Context) map[string][]string
 
 	// DetectSuspiciousVMMProcesses finds cloud-hypervisor processes that don't match
@@ -523,6 +521,21 @@ func (m *manager) ReconcileDevices(ctx context.Context) error {
 	var instanceDevices map[string][]string
 	if m.livenessChecker != nil {
 		instanceDevices = m.livenessChecker.ListAllInstanceDevices(ctx)
+		if instanceDevices == nil {
+			log.WarnContext(ctx, "skipping PCI reconciliation: instance device inventory is incomplete")
+			return nil
+		}
+	}
+	// A fork can use a device whose AttachedTo still names its stopped source.
+	liveInstances := make(map[string]bool)
+	inUse := make(map[string]bool)
+	for id, refs := range instanceDevices {
+		if m.livenessChecker.IsInstanceRunning(ctx, id) {
+			liveInstances[id] = true
+			for _, ref := range refs {
+				inUse[ref] = true
+			}
+		}
 	}
 
 	// Track stats
@@ -530,7 +543,7 @@ func (m *manager) ReconcileDevices(ctx context.Context) error {
 
 	// Phase 1: Detect and handle orphaned device attachments
 	for _, device := range allDevices {
-		if device.AttachedTo == nil {
+		if device.AttachedTo == nil || inUse[device.Id] {
 			continue
 		}
 
@@ -583,16 +596,14 @@ func (m *manager) ReconcileDevices(ctx context.Context) error {
 				}
 
 				// Check VFIO binding state - if instance is running, device should be bound
-				if m.livenessChecker != nil && m.livenessChecker.IsInstanceRunning(ctx, instanceID) {
-					if !device.BoundToVFIO {
-						log.WarnContext(ctx, "running instance has device not bound to VFIO (mismatch)",
-							"instance_id", instanceID,
-							"device_id", deviceID,
-							"device_name", device.Name,
-							"pci_address", device.PCIAddress,
-						)
-						stats.mismatches++
-					}
+				if liveInstances[instanceID] && !device.BoundToVFIO {
+					log.WarnContext(ctx, "running instance has device not bound to VFIO (mismatch)",
+						"instance_id", instanceID,
+						"device_id", deviceID,
+						"device_name", device.Name,
+						"pci_address", device.PCIAddress,
+					)
+					stats.mismatches++
 				}
 			}
 		}
@@ -686,7 +697,6 @@ type reconcileStats struct {
 func (m *manager) isInstanceOrphaned(ctx context.Context, instanceID string) bool {
 	// If we have a liveness checker, use it for more accurate detection
 	if m.livenessChecker != nil {
-		// Instance is orphaned if it's not running (stopped, standby, unknown, or missing)
 		return !m.livenessChecker.IsInstanceRunning(ctx, instanceID)
 	}
 

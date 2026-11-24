@@ -16,6 +16,7 @@ import (
 // instanceMetadata is the minimal metadata we need to derive allocations
 // Field names match StoredMetadata in lib/instances/types.go
 type instanceMetadata struct {
+	ID             string `json:"Id"`
 	Name           string
 	NetworkEnabled bool
 	HypervisorType string
@@ -34,8 +35,8 @@ func (m *manager) deriveAllocation(ctx context.Context, instanceID string) (*All
 		return nil, err
 	}
 
-	// 2. If network not enabled, return nil
-	if !meta.NetworkEnabled {
+	// A partial fork copy can still contain its source's IP, MAC and name.
+	if meta.ID != instanceID || !meta.NetworkEnabled {
 		return nil, nil
 	}
 
