@@ -125,6 +125,23 @@ func normalizeIssuer(out IssuerSpec) (IssuerSpec, error) {
 	return out, nil
 }
 
+// AuthorizationServer describes an OAuth authorization server whose access
+// tokens a resource server verifies. It differs from an identity issuer in two
+// ways: its metadata is read from the RFC 8414 location, and its last key set
+// stays in use while a refresh fails, because every request to the resource
+// server depends on those keys.
+func AuthorizationServer(issuerURL string, keys KeySource) (IssuerSpec, error) {
+	spec, err := normalizeIssuer(IssuerSpec{Name: "authorization-server", IssuerURL: issuerURL, PresetType: "custom_oidc", JWKS: keys})
+	if err != nil {
+		return spec, err
+	}
+	if spec.JWKS.DiscoveryBaseURL != "" {
+		return spec, fmt.Errorf("%w: an authorization server publishes its own metadata", ErrInvalid)
+	}
+	spec.authorizationServer = true
+	return spec, nil
+}
+
 // entraTenant returns the tenant an Entra v1 or v2 issuer URL names.
 func entraTenant(issuerURL string) string {
 	groups := entraIssuer.FindStringSubmatch(issuerURL)

@@ -25,6 +25,15 @@ jwt_secret: ""
 # revoked_token_hashes:
 #   - 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
 
+# Optional - also accept access tokens issued by an OAuth authorization server.
+# The server only verifies them, with the authorization server's public keys.
+# See docs/oauth-access-tokens.md.
+# oauth:
+#   audiences:
+#     - https://hypeman.example.com
+#   authorization_servers:
+#     - issuer: https://auth.example.com
+
 # Data directory (default: /var/lib/hypeman)
 data_dir: /var/lib/hypeman
 

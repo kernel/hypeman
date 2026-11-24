@@ -56,6 +56,10 @@ type IssuerSpec struct {
 	PresetType      string          `koanf:"preset_type" json:"preset_type,omitempty"`
 	JWKS            KeySource       `koanf:"jwks" json:"jwks"`
 	TokenValidation TokenValidation `koanf:"token_validation" json:"token_validation"`
+
+	// authorizationServer marks an OAuth authorization server, as
+	// AuthorizationServer returns it.
+	authorizationServer bool
 }
 
 // Match contains conditions that must all hold on verified identity claims.

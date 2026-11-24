@@ -24,6 +24,7 @@ import (
 	"github.com/kernel/hypeman"
 	"github.com/kernel/hypeman/cmd/api/api"
 	"github.com/kernel/hypeman/cmd/api/config"
+	"github.com/kernel/hypeman/lib/accesstoken"
 	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/guest"
 	"github.com/kernel/hypeman/lib/hypervisor/qemu"
@@ -285,6 +286,14 @@ func run() error {
 	jwtVerifier, err := jwtauth.NewVerifier(app.Config.JwtSecret, app.Config.JwtVerificationSecrets, otelProvider.Meter)
 	if err != nil {
 		return fmt.Errorf("initialize JWT verifier: %w", err)
+	}
+	accessTokens, err := accesstoken.New(app.Config.OAuth, accesstoken.NewFileKeyStore(paths.New(app.Config.DataDir).OAuthKeysDir(), logger), logger)
+	if err != nil {
+		return fmt.Errorf("initialize OAuth access tokens: %w", err)
+	}
+	if accessTokens.Enabled() {
+		logger.Info("accepting access tokens from authorization servers", "authorization_servers", len(app.Config.OAuth.AuthorizationServers), "audiences", app.Config.OAuth.Audiences)
+		jwtVerifier = jwtVerifier.WithAccessTokens(accessTokens)
 	}
 	revokedTokens, err := tokenrevocation.New(app.Config.RevokedTokenHashes)
 	if err != nil {

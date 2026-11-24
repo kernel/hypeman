@@ -551,3 +551,9 @@ func (p *Paths) BuildSourceDir(id string) string {
 func (p *Paths) BuildConfig(id string) string {
 	return filepath.Join(p.BuildDir(id), "config.json")
 }
+
+// OAuthKeysDir returns the directory holding the last key set fetched from
+// each configured authorization server.
+func (p *Paths) OAuthKeysDir() string {
+	return filepath.Join(p.dataDir, "oauth", "keys")
+}
