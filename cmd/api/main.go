@@ -359,13 +359,7 @@ func run() error {
 		logger.Warn("instance manager does not implement RecoverInterruptedForks")
 	}
 
-	// Reconcile device state (clears orphaned attachments from crashed VMs)
-	// Set up liveness checker so device reconciliation can accurately detect orphaned attachments
 	logger.Info("Reconciling device state...")
-	livenessChecker := instances.NewLivenessChecker(app.InstanceManager)
-	if livenessChecker != nil {
-		app.DeviceManager.SetLivenessChecker(livenessChecker)
-	}
 	if err := app.DeviceManager.ReconcileDevices(app.Ctx); err != nil {
 		logger.Error("failed to reconcile device state", "error", err)
 		return fmt.Errorf("reconcile device state: %w", err)

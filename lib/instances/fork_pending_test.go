@@ -136,13 +136,9 @@ type detachGateDeviceManager struct {
 	release chan struct{}
 }
 
-func (m detachGateDeviceManager) MarkDetached(ctx context.Context, deviceID string) error {
+func (m detachGateDeviceManager) ReleaseInstanceDevice(ctx context.Context, deviceID, instanceID string) error {
 	m.arrived <- deviceID
 	<-m.release
-	return nil
-}
-
-func (m detachGateDeviceManager) UnbindFromVFIO(ctx context.Context, id string) error {
 	return nil
 }
 

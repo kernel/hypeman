@@ -3,9 +3,11 @@ package devices
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -19,16 +21,14 @@ import (
 // InstanceLivenessChecker provides a way to check if an instance is running.
 // This interface allows devices to query instance state without a circular dependency.
 type InstanceLivenessChecker interface {
-	// IsInstanceRunning returns true if the instance exists and is in a running state
-	// (i.e., has an active VMM process). Returns false if the instance doesn't exist
-	// or is stopped/standby/unknown.
+	// IsInstanceRunning counts uncertain VMM liveness as running for device reconciliation.
 	IsInstanceRunning(ctx context.Context, instanceID string) bool
 
 	// GetInstanceDevices returns the list of device IDs attached to an instance.
 	// Returns nil if the instance doesn't exist.
 	GetInstanceDevices(ctx context.Context, instanceID string) []string
 
-	// ListAllInstanceDevices returns a map of instanceID -> []deviceIDs for all instances.
+	// ListAllInstanceDevices returns instance IDs and their device references, or nil if the inventory is incomplete.
 	ListAllInstanceDevices(ctx context.Context) map[string][]string
 
 	// DetectSuspiciousVMMProcesses finds cloud-hypervisor processes that don't match
@@ -65,6 +65,12 @@ type Manager interface {
 	// MarkDetached marks a device as detached from an instance
 	MarkDetached(ctx context.Context, deviceID string) error
 
+	// ReleaseInstanceDevice detaches and unbinds a passthrough device only if this instance owns it.
+	ReleaseInstanceDevice(ctx context.Context, deviceID, instanceID string) error
+
+	// DetachInstanceDevice clears the attachment without unbinding, only if this instance owns it.
+	DetachInstanceDevice(ctx context.Context, deviceID, instanceID string) error
+
 	// ReconcileDevices cleans up stale device state on startup.
 	// It detects devices with AttachedTo referencing non-existent instances
 	// and clears the orphaned attachment state.
@@ -75,9 +81,21 @@ type Manager interface {
 	SetLivenessChecker(checker InstanceLivenessChecker)
 }
 
+type deviceBinder interface {
+	deviceBoundToVFIO(string) (bool, error)
+	IsDeviceBoundToVFIO(string) bool
+	BindToVFIO(string) error
+	UnbindFromVFIO(string) error
+	CheckIOMMUGroupSafe(string, []string) error
+	unbindFromDriver(string, string) error
+	setDriverOverride(string, string) error
+	triggerDriverProbe(string) error
+	startNvidiaPersistenced() error
+}
+
 type manager struct {
 	paths           *paths.Paths
-	vfioBinder      *VFIOBinder
+	vfioBinder      deviceBinder
 	livenessChecker InstanceLivenessChecker
 	mu              sync.RWMutex
 }
@@ -322,8 +340,6 @@ func (m *manager) BindToVFIO(ctx context.Context, id string) error {
 }
 
 func (m *manager) UnbindFromVFIO(ctx context.Context, id string) error {
-	log := logger.FromContext(ctx)
-
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -341,8 +357,8 @@ func (m *manager) UnbindFromVFIO(ctx context.Context, id string) error {
 		return ErrInUse
 	}
 
-	// Unbind from VFIO
-	if err := m.vfioBinder.UnbindFromVFIO(device.PCIAddress); err != nil {
+	log := logger.FromContext(ctx)
+	if err := m.unbindAndVerify(device.PCIAddress); err != nil {
 		return err
 	}
 
@@ -397,11 +413,87 @@ func (m *manager) MarkDetached(ctx context.Context, deviceID string) error {
 	return m.saveDevice(device)
 }
 
+// The driver probe can bind the device straight back to vfio-pci. Check
+// sysfs before recording the release or dropping the owner that can retry it.
+func (m *manager) unbindAndVerify(pciAddress string) error {
+	if err := m.vfioBinder.UnbindFromVFIO(pciAddress); err != nil {
+		return err
+	}
+	bound, err := m.vfioBinder.deviceBoundToVFIO(pciAddress)
+	if err != nil {
+		return fmt.Errorf("verify VFIO release of %s: %w", pciAddress, err)
+	}
+	if bound {
+		return fmt.Errorf("device %s is still bound to vfio-pci", pciAddress)
+	}
+	return nil
+}
+
+// releasableDevice returns nil for a non-owner. A recorded owner may be a
+// stopped source whose fork still has the device open. Caller holds m.mu.
+func (m *manager) releasableDevice(ctx context.Context, deviceID, instanceID string) (*Device, error) {
+	device, err := m.loadDevice(deviceID)
+	if err != nil {
+		return nil, err
+	}
+	if device.AttachedTo == nil || *device.AttachedTo != instanceID {
+		return nil, nil
+	}
+	var refs map[string][]string
+	if m.livenessChecker != nil {
+		refs = m.livenessChecker.ListAllInstanceDevices(ctx)
+	}
+	if refs == nil {
+		return nil, fmt.Errorf("%w: cannot verify PCI device references for %s", ErrInUse, deviceID)
+	}
+	for id, ids := range refs {
+		if id != instanceID && slices.Contains(ids, deviceID) && m.livenessChecker.IsInstanceRunning(ctx, id) {
+			return nil, fmt.Errorf("%w: instance %s still references PCI device %s", ErrInUse, id, deviceID)
+		}
+	}
+	return device, nil
+}
+
+// ReleaseInstanceDevice checks the recorded owner under the same lock as the unbind.
+// A fork's device list can name a passthrough device still owned by its source.
+func (m *manager) ReleaseInstanceDevice(ctx context.Context, deviceID, instanceID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	device, err := m.releasableDevice(ctx, deviceID, instanceID)
+	if err != nil || device == nil {
+		return err
+	}
+	// A retry after the unbind but before the save sees ErrNotBound.
+	if err := m.unbindAndVerify(device.PCIAddress); err != nil && !errors.Is(err, ErrNotBound) {
+		return err
+	}
+	device.AttachedTo = nil
+	device.BoundToVFIO = false
+	return m.saveDevice(device)
+}
+
+// DetachInstanceDevice frees a device whose owner is being deleted after its
+// release failed. Nothing retries a release once the owner is gone, and
+// nothing but a restart clears an attachment to a missing instance.
+func (m *manager) DetachInstanceDevice(ctx context.Context, deviceID, instanceID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	device, err := m.releasableDevice(ctx, deviceID, instanceID)
+	if err != nil || device == nil {
+		return err
+	}
+	device.AttachedTo = nil
+	// The failed release may or may not have unbound the device, and the next
+	// attach binds it only if this says it is unbound.
+	device.BoundToVFIO = m.vfioBinder.IsDeviceBoundToVFIO(device.PCIAddress)
+	return m.saveDevice(device)
+}
+
 // ReconcileDevices cleans up stale device state on startup.
 // It performs safe-by-default reconciliation:
 // 1. Detects orphaned device attachments (instance missing or not running)
-// 2. Clears orphaned AttachedTo metadata
-// 3. Runs GPU-reset-lite for orphaned devices (unbind VFIO, clear override, probe driver)
+// 2. Runs GPU-reset-lite for orphaned devices (unbind VFIO, clear override, probe driver)
+// 3. Clears the attachment once the device is no longer bound to VFIO
 // 4. Logs mismatches between instance→device and device→instance references
 // 5. Detects suspicious cloud-hypervisor processes
 func (m *manager) ReconcileDevices(ctx context.Context) error {
@@ -449,6 +541,21 @@ func (m *manager) ReconcileDevices(ctx context.Context) error {
 	var instanceDevices map[string][]string
 	if m.livenessChecker != nil {
 		instanceDevices = m.livenessChecker.ListAllInstanceDevices(ctx)
+		if instanceDevices == nil {
+			log.WarnContext(ctx, "skipping PCI reconciliation: instance device inventory is incomplete")
+			return nil
+		}
+	}
+	// A fork can use a device whose AttachedTo still names its stopped source.
+	liveInstances := make(map[string]bool)
+	inUse := make(map[string]bool)
+	for id, refs := range instanceDevices {
+		if m.livenessChecker.IsInstanceRunning(ctx, id) {
+			liveInstances[id] = true
+			for _, ref := range refs {
+				inUse[ref] = true
+			}
+		}
 	}
 
 	// Track stats
@@ -456,7 +563,7 @@ func (m *manager) ReconcileDevices(ctx context.Context) error {
 
 	// Phase 1: Detect and handle orphaned device attachments
 	for _, device := range allDevices {
-		if device.AttachedTo == nil {
+		if device.AttachedTo == nil || inUse[device.Id] {
 			continue
 		}
 
@@ -471,19 +578,6 @@ func (m *manager) ReconcileDevices(ctx context.Context) error {
 				"orphaned_instance_id", instanceID,
 			)
 
-			// Clear the orphaned attachment
-			device.AttachedTo = nil
-			if err := m.saveDevice(device); err != nil {
-				log.ErrorContext(ctx, "failed to save device after clearing attachment",
-					"device_id", device.Id,
-					"error", err,
-				)
-				stats.errors++
-				continue
-			}
-			stats.orphanedCleared++
-
-			// Run GPU-reset-lite for orphaned device
 			m.resetOrphanedDevice(ctx, device, &stats)
 		}
 	}
@@ -522,16 +616,14 @@ func (m *manager) ReconcileDevices(ctx context.Context) error {
 				}
 
 				// Check VFIO binding state - if instance is running, device should be bound
-				if m.livenessChecker != nil && m.livenessChecker.IsInstanceRunning(ctx, instanceID) {
-					if !device.BoundToVFIO {
-						log.WarnContext(ctx, "running instance has device not bound to VFIO (mismatch)",
-							"instance_id", instanceID,
-							"device_id", deviceID,
-							"device_name", device.Name,
-							"pci_address", device.PCIAddress,
-						)
-						stats.mismatches++
-					}
+				if liveInstances[instanceID] && !device.BoundToVFIO {
+					log.WarnContext(ctx, "running instance has device not bound to VFIO (mismatch)",
+						"instance_id", instanceID,
+						"device_id", deviceID,
+						"device_name", device.Name,
+						"pci_address", device.PCIAddress,
+					)
+					stats.mismatches++
 				}
 			}
 		}
@@ -625,7 +717,6 @@ type reconcileStats struct {
 func (m *manager) isInstanceOrphaned(ctx context.Context, instanceID string) bool {
 	// If we have a liveness checker, use it for more accurate detection
 	if m.livenessChecker != nil {
-		// Instance is orphaned if it's not running (stopped, standby, unknown, or missing)
 		return !m.livenessChecker.IsInstanceRunning(ctx, instanceID)
 	}
 
@@ -695,30 +786,22 @@ func (m *manager) resetOrphanedDevice(ctx context.Context, device *Device, stats
 	}
 
 	// Verify the device is now unbound from VFIO
-	stillBoundToVFIO := m.vfioBinder.IsDeviceBoundToVFIO(device.PCIAddress)
-	if stillBoundToVFIO {
-		log.WarnContext(ctx, "device still bound to VFIO after reset-lite",
-			"device_id", device.Id,
-			"pci_address", device.PCIAddress,
-		)
+	bound, err := m.vfioBinder.deviceBoundToVFIO(device.PCIAddress)
+	if err != nil || bound {
+		log.WarnContext(ctx, "cannot confirm device was unbound after reset-lite; keeping attachment",
+			"device_id", device.Id, "pci_address", device.PCIAddress, "bound_to_vfio", bound, "error", err)
 		stats.resetFailed++
-	} else {
-		log.InfoContext(ctx, "GPU-reset-lite completed for orphaned device",
-			"device_id", device.Id,
-			"device_name", device.Name,
-			"pci_address", device.PCIAddress,
-		)
-		stats.resetSucceeded++
+		return
 	}
-
-	// Update device metadata to reflect new VFIO state
-	device.BoundToVFIO = stillBoundToVFIO
+	stats.resetSucceeded++
+	device.AttachedTo = nil
+	device.BoundToVFIO = false
 	if err := m.saveDevice(device); err != nil {
-		log.WarnContext(ctx, "failed to save device after reset-lite",
-			"device_id", device.Id,
-			"error", err,
-		)
+		log.WarnContext(ctx, "failed to save device after reset-lite", "device_id", device.Id, "error", err)
+		stats.errors++
+		return
 	}
+	stats.orphanedCleared++
 }
 
 // Helper methods

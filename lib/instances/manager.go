@@ -166,6 +166,7 @@ type manager struct {
 	limits                    ResourceLimits
 	resourceValidator         ResourceValidator // Optional validator for aggregate resource limits
 	instanceLocks             sync.Map          // map[string]*sync.RWMutex - per-instance locks
+	pciDeviceLocks            sync.Map          // device ID -> *sync.Mutex, held across boot or release
 	forkMetadataMu            sync.Mutex
 	macOSBootMu               sync.Mutex // Serialize admission for preserved Mac identities.
 	macOSGuestSubnet          netip.Prefix
@@ -292,6 +293,9 @@ func NewManagerWithConfig(p *paths.Paths, imageManager images.Manager, systemMan
 		nativeCodecPaths:         make(map[string]string),
 		lifecycleEvents:          newLifecycleSubscribersWithBufferSize(managerConfig.LifecycleEventBufferSize),
 		guestAgentReadyProbe:     probeGuestAgentReady,
+	}
+	if deviceManager != nil {
+		deviceManager.SetLivenessChecker(&instanceLivenessAdapter{manager: m})
 	}
 	m.deleteSnapshotFn = m.deleteSnapshot
 
