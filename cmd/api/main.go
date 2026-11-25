@@ -169,11 +169,9 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	dataDir, err := lockDataDir(cfg.DataDir)
-	if err != nil {
+	if err := lockDataDir(cfg.DataDir); err != nil {
 		return fmt.Errorf("lock data directory %q: %w", cfg.DataDir, err)
 	}
-	defer dataDir.Close()
 
 	// Configure GPU profile cache TTL
 	devices.SetGPUProfileCacheTTL(cfg.GPU.ProfileCacheTTL)

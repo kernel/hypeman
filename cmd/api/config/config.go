@@ -586,7 +586,10 @@ func Load(configPath string) (*Config, error) {
 }
 
 func (c *Config) expandPathFields() {
-	c.DataDir = expandHomePath(c.DataDir)
+	if c.DataDir != "" {
+		// Match filepath.Join's handling of ".." before locking the directory itself.
+		c.DataDir = filepath.Clean(expandHomePath(c.DataDir))
+	}
 	c.Build.SecretsDir = expandHomePath(c.Build.SecretsDir)
 	c.Build.DockerSocket = expandHomePath(c.Build.DockerSocket)
 	c.Registry.CACertFile = expandHomePath(c.Registry.CACertFile)
