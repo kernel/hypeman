@@ -12,6 +12,7 @@ import (
 	"github.com/kernel/hypeman/lib/devices"
 	"github.com/kernel/hypeman/lib/hypervisor"
 	"github.com/kernel/hypeman/lib/logger"
+	"github.com/kernel/hypeman/lib/network"
 	snapshotstore "github.com/kernel/hypeman/lib/snapshot"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -304,4 +305,31 @@ func TestCompressionJobLeavesLockedInstanceMetadataAlone(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, stored.PendingStandbyCompression)
 	assert.True(t, stored.ForkPending)
+}
+
+type forkTAPRelease struct {
+	network.Manager
+	ids []string
+}
+
+func (r *forkTAPRelease) ReleaseByInstanceID(_ context.Context, id string) error {
+	r.ids = append(r.ids, id)
+	return nil
+}
+
+// A restore creates the fork's TAP before it saves the IP and MAC, so a fork
+// cut short there has a TAP that no allocation can be derived for.
+func TestRecoveryReleasesTAPOfForkWithoutSavedAllocation(t *testing.T) {
+	mgr, _ := setupTestManager(t)
+	const fork = "fork-no-allocation"
+	savePendingForkFixture(t, mgr, fork, true, func(stored *StoredMetadata) { stored.NetworkEnabled = true })
+	alloc, err := mgr.networkManager.GetAllocation(t.Context(), fork)
+	require.NoError(t, err)
+	require.Nil(t, alloc)
+	release := &forkTAPRelease{Manager: mgr.networkManager}
+	mgr.networkManager = release
+
+	mgr.RecoverInterruptedForks(t.Context())
+	require.Equal(t, []string{fork}, release.ids)
+	require.NoDirExists(t, mgr.paths.InstanceDir(fork))
 }

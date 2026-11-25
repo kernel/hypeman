@@ -171,7 +171,13 @@ func (m *manager) deleteInstanceWithOptions(
 			attribute.String("hypervisor", string(stored.HypervisorType)),
 			attribute.String("operation", "release_network"),
 		)
-		err := m.networkManager.ReleaseAllocation(releaseNetworkCtx, networkAlloc)
+		var err error
+		if networkAlloc == nil && stored.ForkPending {
+			// A fork restore creates its TAP before it saves the IP and MAC.
+			err = m.networkManager.ReleaseByInstanceID(releaseNetworkCtx, id)
+		} else {
+			err = m.networkManager.ReleaseAllocation(releaseNetworkCtx, networkAlloc)
+		}
 		releaseNetworkSpanEnd(err)
 		if err != nil {
 			// Log error but continue with cleanup
