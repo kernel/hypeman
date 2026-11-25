@@ -6,18 +6,29 @@ import (
 	"strings"
 )
 
-// vzShimPIDsFromPS returns the PIDs in `ps -o pid=,command=` output whose
-// vz-shim configuration names socketPath as its control socket.
+// Match the kernel's process name as well as the control socket in the
+// shim's -config argument. Other processes can mention that socket in argv.
 func vzShimPIDsFromPS(out []byte, socketPath string) []int {
-	quoted, _ := json.Marshal(socketPath) // a string always marshals
-	marker := `"control_socket":` + string(quoted)
 	var pids []int
 	for _, line := range strings.Split(string(out), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) < 2 || !strings.Contains(line, " -config ") || !strings.Contains(line, marker) {
+		command, arg, ok := strings.Cut(line, " -config ")
+		if !ok {
 			continue
 		}
-		if pid, err := strconv.Atoi(fields[0]); err == nil {
+		fields := strings.Fields(command)
+		if len(fields) < 3 {
+			continue
+		}
+		if name := fields[1]; name != "vz-shim" && !strings.HasPrefix(name, "vz-shim-") {
+			continue
+		}
+		var config struct {
+			ControlSocket string `json:"control_socket"`
+		}
+		if err := json.Unmarshal([]byte(arg), &config); err != nil || config.ControlSocket != socketPath {
+			continue
+		}
+		if pid, err := strconv.Atoi(fields[0]); err == nil && pid > 0 {
 			pids = append(pids, pid)
 		}
 	}
