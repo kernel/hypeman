@@ -81,6 +81,9 @@ func (m *manager) createSnapshot(ctx context.Context, id string, req CreateSnaps
 	if err != nil {
 		return nil, err
 	}
+	if err := refusePendingFork(&meta.StoredMetadata); err != nil {
+		return nil, err
+	}
 	if err := m.admitGuestOperation(&meta.StoredMetadata); err != nil {
 		return nil, err
 	}
@@ -285,6 +288,9 @@ func (m *manager) restoreSnapshot(ctx context.Context, id string, snapshotID str
 
 	sourceMeta, err := m.loadMetadata(id)
 	if err != nil {
+		return nil, err
+	}
+	if err := refusePendingFork(&sourceMeta.StoredMetadata); err != nil {
 		return nil, err
 	}
 	if err := validateMacOSSnapshotRestore(sourceMeta, rec); err != nil {
@@ -558,6 +564,7 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 		}
 	}
 
+	forkMeta.ForkPending = true
 	newMeta := &metadata{StoredMetadata: forkMeta}
 	if forkMeta.MacOS != nil {
 		if err := m.saveMacOSSnapshotFork(ctx, newMeta); err != nil {
@@ -570,10 +577,10 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 	cu.Release()
 	inst, err := m.applyForkTargetState(ctx, forkID, targetState)
 	if err != nil {
-		if cleanupErr := m.cleanupForkInstanceOnError(ctx, forkID); cleanupErr != nil {
-			return nil, fmt.Errorf("apply snapshot fork target state: %w; additionally failed to cleanup forked instance %s: %v", err, forkID, cleanupErr)
-		}
-		return nil, fmt.Errorf("apply snapshot fork target state: %w", err)
+		return nil, m.discardFork(ctx, forkID, fmt.Errorf("apply snapshot fork target state: %w", err))
+	}
+	if err := m.completeFork(inst); err != nil {
+		return nil, m.discardFork(ctx, forkID, err)
 	}
 	return inst, nil
 }

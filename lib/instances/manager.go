@@ -557,11 +557,11 @@ func (m *manager) ForkInstance(ctx context.Context, id string, req ForkInstanceR
 			inst, err = m.applyForkTargetState(ctx, forked.Id, targetState)
 		}
 		if err != nil {
-			if cleanupErr := m.cleanupForkInstanceOnError(ctx, forked.Id); cleanupErr != nil {
-				return nil, fmt.Errorf("apply fork target state: %w; additionally failed to cleanup forked instance %s: %v", err, forked.Id, cleanupErr)
-			}
-			return nil, fmt.Errorf("apply fork target state: %w", err)
+			return nil, m.discardFork(ctx, forked.Id, fmt.Errorf("apply fork target state: %w", err))
 		}
+	}
+	if err := m.completeFork(inst); err != nil {
+		return nil, m.discardFork(ctx, forked.Id, err)
 	}
 	m.notifyLifecycleEvent(ctx, LifecycleEventFork, inst)
 	return inst, nil
@@ -618,6 +618,9 @@ func (m *manager) RestoreInstance(ctx context.Context, id string) (*Instance, er
 	defer lock.Unlock()
 	current, err := m.currentInstanceWithoutHydration(ctx, id)
 	if err != nil {
+		return nil, err
+	}
+	if err := refusePendingFork(&current.StoredMetadata); err != nil {
 		return nil, err
 	}
 	if current.State == StateRunning || current.State == StateInitializing {
@@ -715,6 +718,9 @@ func (m *manager) StartInstance(ctx context.Context, id string, req StartInstanc
 	lock := m.getInstanceLock(id)
 	lock.Lock()
 	defer lock.Unlock()
+	if err := m.refusePendingForkByID(id); err != nil {
+		return nil, err
+	}
 	if err := m.clearRestartStatusLocked(ctx, id); err != nil {
 		return nil, err
 	}
