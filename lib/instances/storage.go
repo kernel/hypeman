@@ -63,6 +63,8 @@ func (m *manager) ensureDirectories(id string) error {
 	return nil
 }
 
+var errMetadataIDMismatch = errors.New("instance metadata ID mismatch")
+
 // loadMetadata loads instance metadata from disk
 func (m *manager) loadMetadata(id string) (*metadata, error) {
 	return m.loadMetadataTimed(id, nil)
@@ -97,6 +99,14 @@ func (m *manager) loadMetadataTimed(id string, timings *metadataScanTimings) (*m
 		return nil, fmt.Errorf("unmarshal metadata: %w", err)
 	}
 
+	// A parked fork source, the link left at its path, and a fork copy cut
+	// short by an older binary all hold another guest's metadata.
+	if meta.Id != id {
+		if err := paths.ValidatePathComponent(meta.Id); err != nil {
+			return nil, fmt.Errorf("invalid instance ID %q in %s: %w", meta.Id, metaPath, err)
+		}
+		return nil, fmt.Errorf("%w: directory %q contains metadata for %q", errMetadataIDMismatch, id, meta.Id)
+	}
 	return &meta, nil
 }
 

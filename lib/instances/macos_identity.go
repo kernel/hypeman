@@ -66,8 +66,8 @@ func prepareMacOSClone(clone *StoredMetadata) error {
 }
 
 // forEachOtherInstance calls fn with the metadata of every stored instance except
-// exclude, stopping at fn's first error. Directories without metadata are skipped;
-// any other load error is wrapped with loadErrorContext when it is set.
+// exclude, stopping at fn's first error. Directories without their own metadata
+// are skipped; unreadable records fail admission.
 func (m *manager) forEachOtherInstance(exclude, loadErrorContext string, fn func(*metadata) error) error {
 	entries, err := os.ReadDir(m.paths.GuestsDir())
 	if err != nil {
@@ -78,8 +78,8 @@ func (m *manager) forEachOtherInstance(exclude, loadErrorContext string, fn func
 			continue
 		}
 		meta, err := m.loadMetadata(entry.Name())
-		if errors.Is(err, ErrNotFound) {
-			// A create in progress or a leftover directory has no instance to admit against.
+		if errors.Is(err, ErrNotFound) || errors.Is(err, errMetadataIDMismatch) {
+			// An incomplete copy is not another instance claiming this identity.
 			continue
 		}
 		if err != nil {

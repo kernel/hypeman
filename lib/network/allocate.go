@@ -484,7 +484,7 @@ func (m *manager) allocateNextIP(ctx context.Context, subnet string) (string, er
 		attribute.String("operation", "list_allocations"),
 		attribute.String("caller", "allocate_ip"),
 	)
-	allocations, err := m.ListAllocations(listCtx)
+	allocations, err := m.listAllocations(listCtx, true)
 	listSpanEnd(err)
 	if err != nil {
 		chooseErr = err
@@ -599,7 +599,7 @@ func (m *manager) allocateUniqueMAC(ctx context.Context) (string, error) {
 		attribute.String("operation", "list_allocations"),
 		attribute.String("caller", "allocate_mac"),
 	)
-	allocations, err := m.ListAllocations(listCtx)
+	allocations, err := m.listAllocations(listCtx, true)
 	listSpanEnd(err)
 	if err != nil {
 		chooseErr = err
