@@ -28,6 +28,10 @@ func (v *VFIOBinder) IsDeviceBoundToVFIO(pciAddress string) bool {
 	return false
 }
 
+func (v *VFIOBinder) deviceBoundToVFIO(pciAddress string) (bool, error) {
+	return false, nil
+}
+
 // BindToVFIO returns an error on macOS as VFIO is not supported.
 func (v *VFIOBinder) BindToVFIO(pciAddress string) error {
 	return ErrVFIONotSupportedOnMacOS

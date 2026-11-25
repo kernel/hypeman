@@ -2,6 +2,7 @@ package devices
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -180,6 +181,99 @@ func TestDeviceLookupAndDeleteRejectPathTraversal(t *testing.T) {
 	require.ErrorIs(t, mgr.saveDevice(&Device{Id: ".."}), paths.ErrInvalidPathComponent)
 	require.ErrorIs(t, mgr.DeleteDevice(context.Background(), ".."), ErrNotFound)
 	require.FileExists(t, marker)
+}
+
+type releaseTestBinder struct {
+	*VFIOBinder
+	unbind     func(string) error
+	bound      bool
+	inspectErr error
+}
+
+func (b *releaseTestBinder) UnbindFromVFIO(addr string) error { return b.unbind(addr) }
+func (b *releaseTestBinder) deviceBoundToVFIO(string) (bool, error) {
+	return b.bound, b.inspectErr
+}
+
+func TestReleaseInstanceDeviceKeepsOwnerUntilUnbound(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		unbindErr   error
+		bound       bool
+		inspectErr  error
+		retryResult error
+	}{
+		{name: "unbind failed", unbindErr: errors.New("device busy")},
+		{name: "rebound after probe", bound: true},
+		{name: "binding unreadable", inspectErr: errors.New("sysfs unavailable"), retryResult: ErrNotBound},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, p, _ := setupTestManager(t)
+			m.SetLivenessChecker(newMockLivenessChecker())
+			owner := "fork"
+			device := &Device{Id: "dev-1", PCIAddress: "test-device", AttachedTo: &owner, BoundToVFIO: true}
+			createTestDevice(t, p, device)
+			result := tc.unbindErr
+			var calls int
+			binder := &releaseTestBinder{bound: tc.bound, inspectErr: tc.inspectErr, unbind: func(addr string) error {
+				calls++
+				require.Equal(t, device.PCIAddress, addr)
+				stored, err := m.loadDevice(device.Id)
+				require.NoError(t, err)
+				require.Equal(t, &owner, stored.AttachedTo)
+				return result
+			}}
+
+			m.vfioBinder = binder
+			require.Error(t, m.ReleaseInstanceDevice(t.Context(), device.Id, owner))
+			kept, err := m.loadDevice(device.Id)
+			require.NoError(t, err)
+			require.Equal(t, &owner, kept.AttachedTo)
+			require.True(t, kept.BoundToVFIO)
+
+			result, binder.bound, binder.inspectErr = tc.retryResult, false, nil
+			require.NoError(t, m.ReleaseInstanceDevice(t.Context(), device.Id, owner))
+			require.Equal(t, 2, calls)
+			got, err := m.loadDevice(device.Id)
+			require.NoError(t, err)
+			require.Nil(t, got.AttachedTo)
+			require.False(t, got.BoundToVFIO)
+		})
+	}
+}
+
+func TestDeviceReleaseRefusesIncompleteInventory(t *testing.T) {
+	m, p, _ := setupTestManager(t)
+	owner := "source"
+	device := &Device{Id: "dev-1", AttachedTo: &owner, BoundToVFIO: true}
+	createTestDevice(t, p, device)
+	m.vfioBinder = readOnlyReconcileBinder{} // Any unbind would panic.
+	m.SetLivenessChecker(&mockLivenessChecker{})
+	require.ErrorIs(t, m.ReleaseInstanceDevice(t.Context(), device.Id, owner), ErrInUse)
+	require.ErrorIs(t, m.DetachInstanceDevice(t.Context(), device.Id, owner), ErrInUse)
+	stored, err := m.loadDevice(device.Id)
+	require.NoError(t, err)
+	require.Equal(t, &owner, stored.AttachedTo)
+	require.True(t, stored.BoundToVFIO)
+}
+
+func TestDetachInstanceDeviceFreesOnlyItsOwnersDevice(t *testing.T) {
+	m, p, _ := setupTestManager(t)
+	m.SetLivenessChecker(newMockLivenessChecker())
+	owner := "deleted"
+	device := &Device{Id: "dev-1", PCIAddress: "test-device", AttachedTo: &owner, BoundToVFIO: true}
+	createTestDevice(t, p, device)
+
+	require.NoError(t, m.DetachInstanceDevice(t.Context(), device.Id, "fork"))
+	got, err := m.loadDevice(device.Id)
+	require.NoError(t, err)
+	require.Equal(t, &owner, got.AttachedTo)
+
+	require.NoError(t, m.DetachInstanceDevice(t.Context(), device.Id, owner))
+	got, err = m.loadDevice(device.Id)
+	require.NoError(t, err)
+	require.Nil(t, got.AttachedTo)
+	require.False(t, got.BoundToVFIO, "the device is not bound, so the next attach must bind it")
 }
 
 func TestSaveLoadDevice_MetadataRoundTrip(t *testing.T) {

@@ -34,8 +34,16 @@ func (v *VFIOBinder) IsVFIOAvailable() bool {
 
 // IsDeviceBoundToVFIO checks if a device is currently bound to vfio-pci
 func (v *VFIOBinder) IsDeviceBoundToVFIO(pciAddress string) bool {
-	driver := readCurrentDriver(pciAddress)
-	return driver != nil && *driver == "vfio-pci"
+	bound, _ := v.deviceBoundToVFIO(pciAddress)
+	return bound
+}
+
+func (v *VFIOBinder) deviceBoundToVFIO(pciAddress string) (bool, error) {
+	target, err := os.Readlink(filepath.Join(sysfsDevicesPath, pciAddress, "driver"))
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	return filepath.Base(target) == "vfio-pci", err
 }
 
 // BindToVFIO binds a PCI device to the vfio-pci driver
@@ -104,7 +112,11 @@ func (v *VFIOBinder) BindToVFIO(pciAddress string) error {
 
 // UnbindFromVFIO unbinds a device from vfio-pci and restores the original driver
 func (v *VFIOBinder) UnbindFromVFIO(pciAddress string) error {
-	if !v.IsDeviceBoundToVFIO(pciAddress) {
+	bound, err := v.deviceBoundToVFIO(pciAddress)
+	if err != nil {
+		return err
+	}
+	if !bound {
 		return ErrNotBound
 	}
 
@@ -117,7 +129,7 @@ func (v *VFIOBinder) UnbindFromVFIO(pciAddress string) error {
 
 	// Clear driver override first
 	if err := v.setDriverOverride(pciAddress, ""); err != nil {
-		// Non-fatal, continue with unbind
+		return fmt.Errorf("clear VFIO driver override: %w", err)
 	}
 
 	// Unbind from vfio-pci
