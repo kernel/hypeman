@@ -37,6 +37,7 @@ import (
 	"github.com/kernel/hypeman/lib/ocicachegc"
 	"github.com/kernel/hypeman/lib/otel"
 	"github.com/kernel/hypeman/lib/paths"
+	"github.com/kernel/hypeman/lib/providers"
 	"github.com/kernel/hypeman/lib/registry"
 	"github.com/kernel/hypeman/lib/scopes"
 	"github.com/kernel/hypeman/lib/tokenrevocation"
@@ -164,18 +165,15 @@ func run() error {
 	startupStarted := time.Now()
 	slog.Info("starting hypeman initialization")
 
-	// Load config early for OTel initialization
-	// Config path can be specified via CONFIG_PATH env var or defaults to platform-specific locations
-	configPath := os.Getenv("CONFIG_PATH")
-	cfg, err := config.Load(configPath)
+	cfg, err := providers.ServerConfig()
 	if err != nil {
-		return fmt.Errorf("failed to load config: %w", err)
+		return err
 	}
-
-	// Validate configuration before proceeding
-	if err := cfg.Validate(); err != nil {
-		return fmt.Errorf("invalid configuration: %w", err)
+	dataDir, err := lockDataDir(cfg.DataDir)
+	if err != nil {
+		return fmt.Errorf("lock data directory %q: %w", cfg.DataDir, err)
 	}
+	defer dataDir.Close()
 
 	// Configure GPU profile cache TTL
 	devices.SetGPUProfileCacheTTL(cfg.GPU.ProfileCacheTTL)
