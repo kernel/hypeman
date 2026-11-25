@@ -351,6 +351,14 @@ func run() error {
 		logger.Warn("failed to setup HTB on bridge (network rate limiting disabled)", "error", err)
 	}
 
+	// Delete interrupted forks before either reconciler touches their devices.
+	logger.Info("Recovering interrupted forks...")
+	if r, ok := app.InstanceManager.(interface{ RecoverInterruptedForks(context.Context) }); ok {
+		r.RecoverInterruptedForks(app.Ctx)
+	} else {
+		logger.Warn("instance manager does not implement RecoverInterruptedForks")
+	}
+
 	// Reconcile device state (clears orphaned attachments from crashed VMs)
 	// Set up liveness checker so device reconciliation can accurately detect orphaned attachments
 	logger.Info("Reconciling device state...")

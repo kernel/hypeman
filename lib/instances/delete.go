@@ -124,8 +124,10 @@ func (m *manager) deleteInstanceWithOptions(
 	}
 
 	// 5. If hypervisor might be running, force kill it
-	// Also attempt kill for StateUnknown since we can't be sure if hypervisor is running
-	if !gracefulShutdown && (inst.State.RequiresVMM() || inst.State == StateUnknown) {
+	// Also attempt kill for StateUnknown since we can't be sure if hypervisor is running.
+	// A pending fork's VMM can exist before its control socket does, while its
+	// derived state is still Stopped or Standby.
+	if !gracefulShutdown && (inst.State.RequiresVMM() || inst.State == StateUnknown || stored.ForkPending) {
 		log.DebugContext(ctx, "stopping hypervisor", "instance_id", id, "state", inst.State)
 		killCtx, killSpanEnd := m.startLifecycleStep(ctx, "force_kill_hypervisor",
 			attribute.String("instance_id", id),
@@ -169,7 +171,13 @@ func (m *manager) deleteInstanceWithOptions(
 			attribute.String("hypervisor", string(stored.HypervisorType)),
 			attribute.String("operation", "release_network"),
 		)
-		err := m.networkManager.ReleaseAllocation(releaseNetworkCtx, networkAlloc)
+		var err error
+		if networkAlloc == nil && stored.ForkPending {
+			// A fork restore creates its TAP before it saves the IP and MAC.
+			err = m.networkManager.ReleaseByInstanceID(releaseNetworkCtx, id)
+		} else {
+			err = m.networkManager.ReleaseAllocation(releaseNetworkCtx, networkAlloc)
+		}
 		releaseNetworkSpanEnd(err)
 		if err != nil {
 			// Log error but continue with cleanup

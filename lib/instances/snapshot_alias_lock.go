@@ -140,9 +140,12 @@ func (m *manager) cloneGuestDirectoryForFork(ctx context.Context, srcDir, dstDir
 		}
 	}
 
-	copyOptions := forkvm.CopyOptions{}
+	// The fork writes its own metadata after the copy. A copy cut short must
+	// not leave the source's metadata, and its control socket, in the fork's
+	// directory.
+	copyOptions := forkvm.CopyOptions{SkipRelativePaths: map[string]struct{}{"metadata.json": {}}}
 	if shareMemFile {
-		copyOptions.SkipRelativePaths = map[string]struct{}{firecrackerSnapshotMemoryRelPath: {}}
+		copyOptions.SkipRelativePaths[firecrackerSnapshotMemoryRelPath] = struct{}{}
 	}
 	if err := forkvm.CopyGuestDirectoryWithOptions(srcDir, dstDir, copyOptions); err != nil {
 		return err

@@ -127,6 +127,9 @@ func (m *manager) RestartInstance(ctx context.Context, id string) (*Instance, er
 	lock.Lock()
 	defer lock.Unlock()
 
+	if err := m.refusePendingForkByID(id); err != nil {
+		return nil, err
+	}
 	inst, err := m.startInstance(ctx, id, StartInstanceRequest{})
 	if err == nil {
 		m.notifyLifecycleEvent(ctx, LifecycleEventStart, inst)
@@ -143,7 +146,7 @@ func (m *manager) HandleHealthCheckUnhealthy(ctx context.Context, id string) err
 	if err != nil {
 		return err
 	}
-	if current.State != StateRunning {
+	if current.ForkPending || current.State != StateRunning {
 		return nil
 	}
 
@@ -266,7 +269,7 @@ func (m *manager) reconcileRestartPolicyInstanceID(ctx context.Context, id strin
 }
 
 func (m *manager) reconcileRestartPolicyInstance(ctx context.Context, inst *Instance, log *slog.Logger) error {
-	if inst == nil {
+	if inst == nil || inst.ForkPending {
 		return nil
 	}
 	policy, err := restartpolicy.NormalizePolicy(inst.RestartPolicy)
