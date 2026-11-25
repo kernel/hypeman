@@ -31,6 +31,24 @@ func (s *macOSBootAdmissionStarter) StartVM(_ context.Context, _ *paths.Paths, _
 	return os.Getpid(), lifecycleNoopHypervisor{state: hypervisor.StateRunning}, nil
 }
 
+func TestMacOSBootAdmissionSkipsOnlyForeignMetadata(t *testing.T) {
+	p := paths.New(t.TempDir())
+	m := &manager{paths: p}
+	guest := &StoredMetadata{Id: "guest", SocketPath: p.InstanceSocket("guest", "vz.sock"), MacOS: testMacImage().MacOS, NetworkEnabled: true}
+	require.NoError(t, m.ensureDirectories("partial-copy"))
+	path := p.InstanceMetadata("partial-copy")
+	require.NoError(t, os.WriteFile(path, []byte(`{"Id":"old-source","MAC":"02:00:00:00:00:01"}`), 0644))
+	require.NoError(t, m.checkMacOSBootAvailable(t.Context(), guest))
+	macs, err := m.storedMACs(guest.Id)
+	require.NoError(t, err)
+	require.Empty(t, macs)
+
+	for _, invalid := range []string{`{`, `{}`} {
+		require.NoError(t, os.WriteFile(path, []byte(invalid), 0644))
+		require.Error(t, m.checkMacOSBootAvailable(t.Context(), guest))
+	}
+}
+
 func TestMacOSConcurrentBootsRecheckMACUnderBootLock(t *testing.T) {
 	p := paths.New(t.TempDir())
 	m := &manager{paths: p}

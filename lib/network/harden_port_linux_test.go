@@ -373,7 +373,7 @@ func enterGuestNetns(t *testing.T) netlink.Link {
 
 func writeGuestMetadata(t *testing.T, m *manager, id string, ip net.IP, mac string) net.HardwareAddr {
 	t.Helper()
-	data, err := json.Marshal(instanceMetadata{Name: id, NetworkEnabled: true, IP: ip.String(), MAC: mac})
+	data, err := json.Marshal(instanceMetadata{ID: id, Name: id, NetworkEnabled: true, IP: ip.String(), MAC: mac})
 	require.NoError(t, err)
 	path := m.paths.InstanceMetadata(id)
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))

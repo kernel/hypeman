@@ -796,7 +796,10 @@ func (m *manager) listMetadataForReconcile() ([]StoredMetadata, error) {
 		id := filepath.Base(filepath.Dir(file))
 		meta, err := m.loadMetadata(id)
 		if err != nil {
-			if errors.Is(err, ErrNotFound) {
+			// A directory holding another guest's metadata is a partial fork
+			// copy or a parked source. Neither can have a VMM of its own, so
+			// it holds nothing a reconcile has to account for.
+			if errors.Is(err, ErrNotFound) || errors.Is(err, errMetadataIDMismatch) {
 				continue
 			}
 			return nil, fmt.Errorf("load metadata for instance %s: %w", id, err)
@@ -860,6 +863,11 @@ func (m *manager) getInstanceWithMinIDPrefix(ctx context.Context, idOrName strin
 	if err == nil {
 		m.finalizeResolvedInstance(ctx, inst)
 		return inst, nil
+	}
+
+	// A parked source or partial copy is not a name/prefix lookup.
+	if errors.Is(err, errMetadataIDMismatch) {
+		return nil, ErrNotFound
 	}
 
 	// 2. Resolve exact name or ID prefix from metadata only, then hydrate the
