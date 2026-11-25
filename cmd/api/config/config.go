@@ -587,7 +587,7 @@ func Load(configPath string) (*Config, error) {
 
 func (c *Config) expandPathFields() {
 	if c.DataDir != "" {
-		// Match filepath.Join's handling of ".." before locking the directory itself.
+		// Direct lookups of data_dir must agree with filepath.Join's handling of "..".
 		c.DataDir = filepath.Clean(expandHomePath(c.DataDir))
 	}
 	c.Build.SecretsDir = expandHomePath(c.Build.SecretsDir)

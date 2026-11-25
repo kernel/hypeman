@@ -26,6 +26,7 @@ jwt_secret: dev-secret-change-me
 #   - "<previous-or-next-secret>"
 
 # Data directory - use macOS conventions
+# Stop guests and the API before moving the directory or repointing a symlink in its path.
 # Note: ~ is NOT expanded; use full path or let the install script fill this in
 data_dir: ~/Library/Application Support/hypeman
 
