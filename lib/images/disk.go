@@ -2,6 +2,7 @@ package images
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -254,6 +255,13 @@ func convertToErofs(ctx context.Context, rootfsDir, diskPath string) (int64, err
 	cmd := exec.CommandContext(ctx, "mkfs.erofs", "-zlz4", diskPath, rootfsDir)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
+		if errors.Is(err, exec.ErrNotFound) {
+			return 0, fmt.Errorf(
+				"required tool mkfs.erofs not found in the API server's PATH; "+
+					"on Ubuntu/Debian, install it with: sudo apt-get install erofs-utils: %w",
+				err,
+			)
+		}
 		return 0, fmt.Errorf("mkfs.erofs failed: %w, output: %s", err, output)
 	}
 

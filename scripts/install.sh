@@ -146,6 +146,8 @@ else
         SUDO="sudo"
     fi
     command -v systemctl >/dev/null 2>&1 || error "systemctl is required but not installed (systemd not available?)"
+    command -v mkfs.erofs >/dev/null 2>&1 || error \
+        "mkfs.erofs is required to convert OCI images into VM disks. On Ubuntu/Debian, install it with: sudo apt-get install erofs-utils"
 fi
 
 # Common checks

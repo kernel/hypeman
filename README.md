@@ -33,7 +33,8 @@
 ## Requirements
 
 ### Linux
-**KVM** virtualization support required. Supports Cloud Hypervisor, Firecracker, and QEMU as hypervisors.
+- **KVM** virtualization support. Supported hypervisors: Cloud Hypervisor, Firecracker, and QEMU.
+- **erofs-utils** provides `mkfs.erofs` for converting OCI images into VM disks.
 
 ### macOS
 **macOS 11.0+** on Apple Silicon. Uses Apple's Virtualization.framework via the `vz` hypervisor.
