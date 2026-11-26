@@ -314,6 +314,30 @@ func TestDeleteVolume_RejectIfAttached(t *testing.T) {
 	assert.ErrorIs(t, err, ErrInUse)
 }
 
+func TestDeleteVolume_ReleasesStorage(t *testing.T) {
+	manager, _, cleanup := setupTestManager(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	vol, err := manager.CreateVolume(ctx, CreateVolumeRequest{
+		Name:   "test-vol",
+		SizeGb: 1,
+	})
+	require.NoError(t, err)
+
+	total, err := manager.TotalVolumeBytes(ctx)
+	require.NoError(t, err)
+	require.Equal(t, int64(1024*1024*1024), total)
+
+	require.NoError(t, manager.DeleteVolume(ctx, vol.Id))
+
+	// The running total feeds disk capacity tracking, so a deleted
+	// volume must stop counting against it.
+	total, err = manager.TotalVolumeBytes(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), total)
+}
+
 func TestMultiAttach_ConcurrentAttachments(t *testing.T) {
 	manager, _, cleanup := setupTestManager(t)
 	defer cleanup()
