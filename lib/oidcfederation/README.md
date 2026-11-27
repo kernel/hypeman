@@ -41,6 +41,7 @@ their JSON text; objects and arrays never match.
   next waits a minute; after a fetch that fails, the next attempt waits ten seconds. Keys
   published for another purpose, such as encryption, are ignored.
 - Only asymmetric signature algorithms are accepted, and only RS256 for GitHub, Google and Entra.
+  The key must be of the algorithm's kind, and an ECDSA key on the algorithm's curve.
 - An assertion needs `sub`, `iat`, `exp` and exactly one `aud` equal to the rule's
   `expected_audience`. Its lifetime must fit the issuer's `max_lifetime_seconds`.
 - A single-use issuer's assertion needs a token ID (`jti`, or `uti` for Entra). GitHub and AWS are
@@ -49,3 +50,19 @@ their JSON text; objects and arrays never match.
 
 The verifier reports only that an assertion is invalid or that keys are unavailable. A
 `KeyProblem` carries the reason an issuer's keys cannot be used, for the operator's logs.
+
+## Authorization servers
+
+`AuthorizationServer` describes an OAuth authorization server whose access tokens a resource
+server accepts, and `Verifier.VerifySignature` checks a token's signature, issuer and time claims
+against its keys, leaving the audience and other claims to the caller; `lib/accesstoken` applies
+the access token rules. Two things differ from an identity issuer:
+
+- Its metadata is read from the RFC 8414 location, `/.well-known/oauth-authorization-server`.
+- Its last key set stays in use while a refresh runs or fails, and is handed to a `KeyStore` with
+  the time it was fetched, so that a restarted server continues with the cache it had. A resource
+  server checks every request against those keys, so it must not stop when the authorization
+  server does. An identity issuer's keys are never kept past their five minutes.
+- A key set that is empty or holds only valid public keys for other purposes is its answer that every
+  key is withdrawn, and replaces the last key set. For an identity issuer it is a configuration
+  problem.

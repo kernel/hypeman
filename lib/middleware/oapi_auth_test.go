@@ -2,15 +2,22 @@ package middleware
 
 import (
 	"context"
+	"crypto/elliptic"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
+	"fmt"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/getkin/kin-openapi/openapi3filter"
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/kernel/hypeman/lib/accesstoken/accesstokentest"
 	"github.com/kernel/hypeman/lib/jwtauth"
 	"github.com/kernel/hypeman/lib/scopes"
 	"github.com/kernel/hypeman/lib/tokenrevocation"
@@ -617,4 +624,84 @@ func TestRevokedTokensAreRejected(t *testing.T) {
 		assert.Error(t, authFunc(context.Background(), newBearerAuthInput(t, revokedToken)))
 		assert.NoError(t, authFunc(context.Background(), newBearerAuthInput(t, activeToken)))
 	})
+}
+
+// An authorization server's access token authenticates like a token signed
+// with the server's secret: its scope is the permissions list, and its
+// subject is the user.
+func TestJwtAuth_AccessTokens(t *testing.T) {
+	server := accesstokentest.NewServer(t)
+	verifier := newTestVerifier(t, testJWTSecret).WithAccessTokens(server.Verifier(t))
+	nextHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-User-ID", GetUserIDFromContext(r.Context()))
+		w.Header().Set("X-Full-Access", fmt.Sprint(scopes.HasFullAccess(r.Context())))
+		w.Header().Set("X-Instance-Read", fmt.Sprint(scopes.HasScope(r.Context(), scopes.InstanceRead)))
+		w.Header().Set("X-Instance-Write", fmt.Sprint(scopes.HasScope(r.Context(), scopes.InstanceWrite)))
+		w.WriteHeader(http.StatusOK)
+	})
+	revoked := server.Token(t, accesstokentest.Claims("revoked", "*"), nil)
+	digest := sha256.Sum256([]byte(revoked))
+	revocations, err := tokenrevocation.New([]string{hex.EncodeToString(digest[:])})
+	require.NoError(t, err)
+	handler := JwtAuth(verifier, revocations)(nextHandler)
+	serve := func(path, token string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+		return rr
+	}
+
+	rr := serve("/instances", server.Token(t, accesstokentest.Claims("federation:ci", "instance:read"), nil))
+	require.Equal(t, http.StatusOK, rr.Code)
+	assert.Equal(t, "federation:ci", rr.Header().Get("X-User-ID"))
+	assert.Equal(t, "false", rr.Header().Get("X-Full-Access"))
+	assert.Equal(t, "true", rr.Header().Get("X-Instance-Read"))
+	assert.Equal(t, "false", rr.Header().Get("X-Instance-Write"))
+
+	// Full access is the wildcard scope, never the absence of a scope.
+	rr = serve("/instances", server.Token(t, accesstokentest.Claims("admin", "*"), nil))
+	require.Equal(t, http.StatusOK, rr.Code)
+	assert.Equal(t, "true", rr.Header().Get("X-Full-Access"))
+	unscoped := accesstokentest.Claims("user", "")
+	delete(unscoped, "scope")
+	rr = serve("/instances", server.Token(t, unscoped, nil))
+	require.Equal(t, http.StatusOK, rr.Code)
+	assert.Equal(t, "false", rr.Header().Get("X-Full-Access"))
+	assert.Equal(t, "false", rr.Header().Get("X-Instance-Read"))
+
+	// The registry accepts it as it accepts any API token.
+	rr = serve("/v2/test-image/manifests/latest", server.Token(t, accesstokentest.Claims("federation:ci", "image:read"), nil))
+	require.Equal(t, http.StatusOK, rr.Code)
+	assert.Equal(t, "federation:ci", rr.Header().Get("X-User-ID"))
+
+	// The other token with the same ECDSA signature is revoked with it.
+	separator := strings.LastIndexByte(revoked, '.')
+	signature, err := base64.RawURLEncoding.DecodeString(revoked[separator+1:])
+	require.NoError(t, err)
+	s := new(big.Int).SetBytes(signature[32:])
+	new(big.Int).Sub(elliptic.P256().Params().N, s).FillBytes(signature[32:])
+	revokedTwin := revoked[:separator+1] + base64.RawURLEncoding.EncodeToString(signature)
+	_, err = server.Verifier(t).Verify(context.Background(), revokedTwin)
+	require.NoError(t, err, "it must verify, otherwise the test proves nothing")
+
+	for name, token := range map[string]string{
+		"revoked":      revoked,
+		"revoked twin": revokedTwin,
+		"other audience": func() string {
+			claims := accesstokentest.Claims("user", "*")
+			claims["aud"] = "other"
+			return server.Token(t, claims, nil)
+		}(),
+		"builder subject": server.Token(t, accesstokentest.Claims("builder-abc", "*"), nil),
+		"signed with the secret": func() string {
+			token := jwt.NewWithClaims(jwt.SigningMethodHS256, accesstokentest.Claims("admin", "*"))
+			token.Header["typ"] = "at+jwt"
+			raw, err := token.SignedString([]byte(testJWTSecret))
+			require.NoError(t, err)
+			return raw
+		}(),
+	} {
+		assert.Equal(t, http.StatusUnauthorized, serve("/instances", token).Code, name)
+	}
 }

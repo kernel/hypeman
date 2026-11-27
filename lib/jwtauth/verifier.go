@@ -1,12 +1,16 @@
-// Package jwtauth verifies HMAC tokens during signing-key rotation.
+// Package jwtauth verifies API tokens: HMAC tokens signed with the server's
+// own secret, during signing-key rotation too, and access tokens issued by a
+// configured authorization server.
 package jwtauth
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/kernel/hypeman/lib/accesstoken"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 )
@@ -14,8 +18,17 @@ import (
 // Verifier accepts the signing key and additional verification-only keys.
 // It is immutable and safe for concurrent use.
 type Verifier struct {
-	keys        [][]byte
-	validations metric.Int64Counter
+	keys         [][]byte
+	validations  metric.Int64Counter
+	accessTokens *accesstoken.Verifier
+}
+
+// WithAccessTokens returns a Verifier that also accepts the access tokens
+// that verifier does.
+func (v *Verifier) WithAccessTokens(verifier *accesstoken.Verifier) *Verifier {
+	out := *v
+	out.accessTokens = verifier
+	return &out
 }
 
 func NewVerifier(signingSecret string, verificationSecrets []string, meter metric.Meter) (*Verifier, error) {
@@ -40,6 +53,12 @@ func NewVerifier(signingSecret string, verificationSecrets []string, meter metri
 // ParseWithClaims preserves JWT claim validation and only tries another key on
 // a signature mismatch. Callers still enforce revocation and authorization.
 func (v *Verifier) ParseWithClaims(ctx context.Context, tokenString string, claims jwt.Claims) (*jwt.Token, error) {
+	// A token that declares itself an access token is never checked against
+	// the HMAC keys, and no other token is checked against an authorization
+	// server's keys.
+	if v.accessTokens.Enabled() && accesstoken.Typed(tokenString) {
+		return v.parseAccessToken(ctx, tokenString, claims)
+	}
 	if len(v.keys) == 0 {
 		return nil, errors.New("JWT secret not configured")
 	}
@@ -65,4 +84,39 @@ func (v *Verifier) ParseWithClaims(ctx context.Context, tokenString string, clai
 		}
 	}
 	return nil, err
+}
+
+// parseAccessToken verifies an authorization server's access token and hands
+// its claims to the caller in the shape of an HMAC token's: the scope becomes
+// the permissions list. The list is always present, so such a token is never
+// read as a token without one, which has full access.
+func (v *Verifier) parseAccessToken(ctx context.Context, tokenString string, claims jwt.Claims) (*jwt.Token, error) {
+	verified, err := v.accessTokens.Verify(ctx, tokenString)
+	if err != nil {
+		return nil, err
+	}
+	fields := map[string]any{
+		"iss":         verified.Issuer,
+		"sub":         verified.Subject,
+		"aud":         verified.Audience,
+		"iat":         verified.IssuedAt.Unix(),
+		"exp":         verified.ExpiresAt.Unix(),
+		"jti":         verified.ID,
+		"permissions": verified.Permissions,
+	}
+	encoded, err := json.Marshal(fields)
+	if err != nil {
+		return nil, err
+	}
+	// MapClaims is passed by value; decoding through its address fills the caller's map.
+	if mapped, ok := claims.(jwt.MapClaims); ok {
+		err = json.Unmarshal(encoded, &mapped)
+	} else {
+		err = json.Unmarshal(encoded, claims)
+	}
+	if err != nil {
+		return nil, err
+	}
+	v.validations.Add(ctx, 1, metric.WithAttributes(attribute.String("key_role", "authorization_server")))
+	return &jwt.Token{Raw: tokenString, Claims: claims, Valid: true}, nil
 }

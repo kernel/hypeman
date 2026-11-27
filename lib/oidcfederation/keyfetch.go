@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -205,6 +206,23 @@ func fetchKeyDocument(ctx context.Context, client *http.Client, endpoint string)
 	return body, nil
 }
 
+// metadataURL is where an issuer publishes the document naming its key set.
+// OpenID Connect discovery appends a suffix to the issuer URL. RFC 8414 puts
+// an authorization server's suffix between the host and the path.
+func metadataURL(issuer IssuerSpec) string {
+	if issuer.authorizationServer {
+		if parsed, err := url.Parse(issuer.IssuerURL); err == nil {
+			parsed.Path = "/.well-known/oauth-authorization-server" + strings.TrimRight(parsed.Path, "/")
+			return parsed.String()
+		}
+	}
+	base := issuer.IssuerURL
+	if issuer.JWKS.DiscoveryBaseURL != "" {
+		base = issuer.JWKS.DiscoveryBaseURL
+	}
+	return strings.TrimRight(base, "/") + "/.well-known/openid-configuration"
+}
+
 func fetchIssuerKeys(ctx context.Context, issuer IssuerSpec) ([]byte, error) {
 	if issuer.JWKS.Type == "inline" {
 		return json.Marshal(map[string]any{"keys": issuer.JWKS.Keys})
@@ -216,11 +234,7 @@ func fetchIssuerKeys(ctx context.Context, issuer IssuerSpec) ([]byte, error) {
 	defer client.CloseIdleConnections()
 	endpoint := issuer.JWKS.URL
 	if issuer.JWKS.Type == "discovery" {
-		base := issuer.IssuerURL
-		if issuer.JWKS.DiscoveryBaseURL != "" {
-			base = issuer.JWKS.DiscoveryBaseURL
-		}
-		raw, err := fetchKeyDocument(ctx, client, strings.TrimRight(base, "/")+"/.well-known/openid-configuration")
+		raw, err := fetchKeyDocument(ctx, client, metadataURL(issuer))
 		if err != nil {
 			return nil, err
 		}

@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/c2h5oh/datasize"
+	"github.com/go-viper/mapstructure/v2"
+	"github.com/kernel/hypeman/lib/accesstoken"
 	"github.com/kernel/hypeman/lib/snapshot"
 	"github.com/knadh/koanf/parsers/yaml"
 	"github.com/knadh/koanf/providers/env"
@@ -297,6 +299,10 @@ type Config struct {
 	// even though they are signed with JwtSecret and not yet expired.
 	RevokedTokenHashes []string `koanf:"revoked_token_hashes"`
 
+	// OAuth names the authorization servers whose access tokens are accepted
+	// as API tokens, and the audiences those tokens must be issued for.
+	OAuth accesstoken.Config `koanf:"oauth"`
+
 	Network          NetworkConfig          `koanf:"network"`
 	Caddy            CaddyConfig            `koanf:"caddy"`
 	ACME             ACMEConfig             `koanf:"acme"`
@@ -580,6 +586,17 @@ func Load(configPath string) (*Config, error) {
 	if err := k.Unmarshal("", &cfg); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
 	}
+	// Decode the oauth block again, rejecting unknown keys: a misspelled key
+	// would otherwise be dropped and leave the block meaning something else.
+	cfg.OAuth = accesstoken.Config{}
+	if err := k.UnmarshalWithConf("oauth", &cfg.OAuth, koanf.UnmarshalConf{DecoderConfig: &mapstructure.DecoderConfig{
+		TagName:          "koanf",
+		WeaklyTypedInput: true,
+		ErrorUnused:      true,
+		Result:           &cfg.OAuth,
+	}}); err != nil {
+		return nil, fmt.Errorf("invalid oauth config: %w", err)
+	}
 	cfg.expandPathFields()
 
 	return &cfg, nil
@@ -614,6 +631,9 @@ func (c *Config) Validate() error {
 		if secret == "" {
 			return fmt.Errorf("jwt_verification_secrets entry %d must not be empty", i)
 		}
+	}
+	if _, err := accesstoken.New(c.OAuth, nil, nil); err != nil {
+		return err
 	}
 	if c.MacOSOnly && (runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" || c.Hypervisor.Default != "vz") {
 		return fmt.Errorf("macos_only requires vz on Apple silicon")

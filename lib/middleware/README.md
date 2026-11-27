@@ -6,6 +6,8 @@ HTTP middleware for the hypeman API.
 
 JWT bearer token validation for protected endpoints. Extracts user identity and adds it to the request context.
 
+A token is either signed with `jwt_secret` or, when `oauth.authorization_servers` is configured, an access token one of those servers issued; see [docs/oauth-access-tokens.md](../../docs/oauth-access-tokens.md). An access token's `scope` is read as the permissions list.
+
 Tokens whose SHA-256 appears in `revoked_token_hashes` are rejected even when they are correctly signed and unexpired, so a single leaked token can be revoked without rotating `jwt_secret`. Revoked tokens are logged at warn level with the request path and remote address.
 
 ## Resource Resolution
