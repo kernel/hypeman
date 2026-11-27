@@ -8,5 +8,6 @@ RUN CGO_ENABLED=0 go build -trimpath -o /hypeman-auth ./cmd/auth
 
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /hypeman-auth /hypeman-auth
+USER nonroot:nonroot
 EXPOSE 8080
 ENTRYPOINT ["/hypeman-auth"]

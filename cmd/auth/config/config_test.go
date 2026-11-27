@@ -82,7 +82,7 @@ func TestEnvironmentOverridesTheFile(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, "https://env.example.test", cfg.Issuer)
 		require.Equal(t, ":9000", cfg.ListenAddress)
-		require.Equal(t, "from the environment", cfg.SigningKey.PEM)
+		require.Equal(t, Key{PEM: "from the environment"}, cfg.SigningKey, "the file's key path is gone with it")
 		require.Equal(t, "postgres://env", cfg.ReplayStore.PostgresURL)
 		require.Equal(t, "https://env.example.test:4317", cfg.OtelEndpoint)
 		require.Equal(t, []Key{{PEM: "one"}, {File: "/keys/two.pem"}}, cfg.PublishedKeys)

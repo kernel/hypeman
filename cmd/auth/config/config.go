@@ -104,6 +104,11 @@ func Load(path string) (*Config, error) {
 			return nil, fmt.Errorf("%s: %w", path, err)
 		}
 	}
+	// A key from the environment replaces the file's key, not one half of it:
+	// the file may name a path where the environment gives the text.
+	if os.Getenv("SIGNING_KEY__PEM") != "" || os.Getenv("SIGNING_KEY__FILE") != "" {
+		k.Delete("signing_key")
+	}
 	for name, key := range environment {
 		if value := os.Getenv(name); value != "" {
 			if err := k.Set(key, value); err != nil {
