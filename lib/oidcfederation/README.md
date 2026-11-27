@@ -9,8 +9,8 @@ Trust is two kinds of object, both written by the operator in a `Config`:
   `explicit_url` or `inline`), the longest assertion lifetime accepted, and whether an assertion
   may be presented more than once.
 - A **federation rule** names which workload of one issuer is accepted and what it receives: the
-  audience the assertion must carry, the conditions its claims must meet, a `permissions` scope
-  list and a token lifetime.
+  audience the assertion must carry, the conditions its claims must meet, the audiences a token
+  may be issued for, a `permissions` scope list and a token lifetime.
 
 `Compile` validates a configuration and returns a `Registry` of rules. `Verifier.Verify` checks one
 assertion against a rule's issuer and audience, and `Match.Matches` evaluates the rule's conditions

@@ -17,7 +17,7 @@ func githubConfig() Config {
 			Issuer:           "github-actions",
 			ExpectedAudience: "https://auth.example.test",
 			Match:            Match{Type: "github_actions", RepositoryID: "12", RepositoryOwnerID: "34", Workflow: ".github/workflows/test.yml", Ref: "refs/heads/main"},
-			Authorization:    RuleAuthorization{Permissions: []string{"instance:write", "instance:read"}},
+			Authorization:    RuleAuthorization{Audiences: []string{"https://hypeman.example.test"}, Permissions: []string{"instance:write", "instance:read"}},
 		}},
 	}
 }
@@ -50,7 +50,7 @@ func ruleFor(issuer IssuerSpec, match Match) (Rule, error) {
 		Issuers: []IssuerSpec{issuer},
 		FederationRules: []RuleSpec{{
 			Name: "rule", Issuer: issuer.Name, ExpectedAudience: "https://auth.example.test", Match: match,
-			Authorization: RuleAuthorization{Permissions: []string{"instance:read"}},
+			Authorization: RuleAuthorization{Audiences: []string{"https://hypeman.example.test"}, Permissions: []string{"instance:read"}},
 		}},
 	})
 	if err != nil {
@@ -297,6 +297,12 @@ func TestCompileResolvesIssuersAndRejectsAmbiguity(t *testing.T) {
 		"duplicate issuer url": func(c *Config) { c.Issuers = append(c.Issuers, IssuerSpec{Name: "second", IssuerURL: GitHubIssuer}) },
 		"no audience":          func(c *Config) { c.FederationRules[0].ExpectedAudience = "" },
 		"bad rule name":        func(c *Config) { c.FederationRules[0].Name = "ci:main" },
+		"no token audience":    func(c *Config) { c.FederationRules[0].Authorization.Audiences = nil },
+		"empty token audience": func(c *Config) { c.FederationRules[0].Authorization.Audiences = []string{""} },
+		"repeated token audience": func(c *Config) {
+			c.FederationRules[0].Authorization.Audiences = []string{"prod", "prod"}
+		},
+		"subject claim not a pointer": func(c *Config) { c.FederationRules[0].Authorization.SubjectClaim = "email" },
 	} {
 		cfg := githubConfig()
 		alter(&cfg)
@@ -308,12 +314,16 @@ func TestCompileResolvesIssuersAndRejectsAmbiguity(t *testing.T) {
 func TestCompileDoesNotAliasItsInput(t *testing.T) {
 	cfg := githubConfig()
 	cfg.FederationRules[0].Match.Claims = map[string]string{"/actor": "octocat"}
+	cfg.FederationRules[0].Authorization.SubjectClaim = "/actor"
 	registry, err := Compile(cfg)
 	require.NoError(t, err)
 	cfg.FederationRules[0].Match.Claims["/actor"] = "other"
 	cfg.FederationRules[0].Authorization.Permissions[0] = "image:delete"
+	cfg.FederationRules[0].Authorization.Audiences[0] = "https://other.example.test"
 	rule, _ := registry.Rule("ci")
 	require.Equal(t, "octocat", rule.Match.Claims["/actor"])
+	require.Equal(t, []string{"https://hypeman.example.test"}, rule.Authorization.Audiences)
+	require.Equal(t, "/actor", rule.Authorization.SubjectClaim)
 	require.Equal(t, []string{"instance:read", "instance:write"}, rule.Authorization.Permissions)
 }
 
@@ -331,7 +341,7 @@ func TestCompileLeavesInlineKeysAsConfigured(t *testing.T) {
 		FederationRules: []RuleSpec{{
 			Name: "ci", Issuer: "idp", ExpectedAudience: "https://auth.example.test",
 			Match:         Match{Type: "custom_oidc", Subject: "build"},
-			Authorization: RuleAuthorization{Permissions: []string{"image:read"}},
+			Authorization: RuleAuthorization{Audiences: []string{"https://hypeman.example.test"}, Permissions: []string{"image:read"}},
 		}},
 	}
 	for range 2 {

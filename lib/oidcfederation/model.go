@@ -80,10 +80,17 @@ type Match struct {
 	ServiceAccount    string            `koanf:"service_account" json:"service_account,omitempty"`
 }
 
-// RuleAuthorization is what a matching workload receives: a scope list and a token lifetime.
+// RuleAuthorization is what a matching workload receives: the servers its
+// token may be for, a scope list and a token lifetime.
 type RuleAuthorization struct {
+	// Audiences are the audiences a token may be issued for. A token names one.
+	Audiences          []string `koanf:"audiences" json:"audiences"`
 	Permissions        []string `koanf:"permissions" json:"permissions"`
 	MaxTokenTTLSeconds *int     `koanf:"max_token_ttl_seconds" json:"max_token_ttl_seconds,omitempty"`
+	// SubjectClaim is an optional JSON Pointer to the identity token claim
+	// that names the caller, such as /email. Its value is added to the
+	// issued token's subject, which otherwise names only the rule.
+	SubjectClaim string `koanf:"subject_claim" json:"subject_claim,omitempty"`
 }
 
 // RuleSpec maps a matching external identity to a scoped Hypeman token.
