@@ -53,8 +53,10 @@ type Config struct {
 
 // Claims are the verified claims of an access token.
 type Claims struct {
-	Issuer    string
-	Subject   string
+	Issuer   string
+	Subject  string
+	ClientID string
+	// ID is the token's `jti`.
 	ID        string
 	Audience  []string
 	IssuedAt  time.Time
@@ -130,21 +132,20 @@ func (v *Verifier) Verify(ctx context.Context, raw string) (Claims, error) {
 	if err != nil {
 		return Claims{}, ErrToken
 	}
+	// RFC 9068 requires every claim read here except the scope.
 	claims := jwt.MapClaims(verified)
-	subject, subjectOK := claims["sub"].(string)
+	subject, _ := claims["sub"].(string)
+	client, _ := claims["client_id"].(string)
+	id, _ := claims["jti"].(string)
 	expires, expErr := claims.GetExpirationTime()
 	issued, iatErr := claims.GetIssuedAt()
 	audiences, audErr := claims.GetAudience()
-	if !subjectOK || subject == "" || len(subject) > 1024 || expErr != nil || iatErr != nil || audErr != nil || expires == nil || issued == nil ||
+	if subject == "" || len(subject) > 1024 || client == "" || len(client) > 1024 || id == "" || len(id) > 512 ||
+		expErr != nil || iatErr != nil || audErr != nil || expires == nil || issued == nil ||
 		!slices.ContainsFunc(audiences, func(audience string) bool { return slices.Contains(v.audiences, audience) }) {
 		return Claims{}, ErrToken
 	}
-	out := Claims{Issuer: server.IssuerURL, Subject: subject, Audience: audiences, IssuedAt: issued.Time, ExpiresAt: expires.Time, Permissions: []string{}}
-	if id, exists := claims["jti"]; exists {
-		if out.ID, _ = id.(string); out.ID == "" || len(out.ID) > 512 {
-			return Claims{}, ErrToken
-		}
-	}
+	out := Claims{Issuer: server.IssuerURL, Subject: subject, ClientID: client, ID: id, Audience: audiences, IssuedAt: issued.Time, ExpiresAt: expires.Time, Permissions: []string{}}
 	if scope, exists := claims["scope"]; exists {
 		text, ok := scope.(string)
 		if !ok {

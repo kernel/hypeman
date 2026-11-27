@@ -686,9 +686,13 @@ func TestJwtAuth_AccessTokens(t *testing.T) {
 	require.NoError(t, err, "it must verify, otherwise the test proves nothing")
 
 	for name, token := range map[string]string{
-		"revoked":         revoked,
-		"revoked twin":    revokedTwin,
-		"other audience":  server.Token(t, jwt.MapClaims{"iss": accesstokentest.Issuer, "sub": "user", "aud": "other", "iat": time.Now().Unix(), "exp": time.Now().Add(time.Hour).Unix()}, nil),
+		"revoked":      revoked,
+		"revoked twin": revokedTwin,
+		"other audience": func() string {
+			claims := accesstokentest.Claims("user", "*")
+			claims["aud"] = "other"
+			return server.Token(t, claims, nil)
+		}(),
 		"builder subject": server.Token(t, accesstokentest.Claims("builder-abc", "*"), nil),
 		"signed with the secret": func() string {
 			token := jwt.NewWithClaims(jwt.SigningMethodHS256, accesstokentest.Claims("admin", "*"))

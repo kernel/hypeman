@@ -6,6 +6,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"maps"
 	"testing"
@@ -56,10 +57,13 @@ func (s *Server) Verifier(t *testing.T) *accesstoken.Verifier {
 	return verifier
 }
 
-// Claims are those of a token for subject, valid for an hour around now.
+// Claims are those of a token for subject, valid for an hour around now, with
+// a token ID of its own.
 func Claims(subject, scope string) jwt.MapClaims {
 	now := time.Now()
-	return jwt.MapClaims{"iss": Issuer, "sub": subject, "aud": Audience, "iat": now.Add(-time.Minute).Unix(), "exp": now.Add(time.Hour).Unix(), "scope": scope}
+	var id [16]byte
+	_, _ = rand.Read(id[:])
+	return jwt.MapClaims{"iss": Issuer, "sub": subject, "client_id": "test-client", "aud": Audience, "iat": now.Add(-time.Minute).Unix(), "exp": now.Add(time.Hour).Unix(), "jti": hex.EncodeToString(id[:]), "scope": scope}
 }
 
 // Token signs claims as an access token. Entries of header replace the

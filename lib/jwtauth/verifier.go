@@ -101,10 +101,8 @@ func (v *Verifier) parseAccessToken(ctx context.Context, tokenString string, cla
 		"aud":         verified.Audience,
 		"iat":         verified.IssuedAt.Unix(),
 		"exp":         verified.ExpiresAt.Unix(),
+		"jti":         verified.ID,
 		"permissions": verified.Permissions,
-	}
-	if verified.ID != "" {
-		fields["jti"] = verified.ID
 	}
 	encoded, err := json.Marshal(fields)
 	if err != nil {

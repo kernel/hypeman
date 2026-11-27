@@ -6,8 +6,8 @@ of RFC 9068. Operator documentation is in
 
 `New` validates the `oauth` block of the server configuration. `Verifier.Verify` selects the
 authorization server a token names in `iss`, has `lib/oidcfederation` check the signature, type
-and time claims against that server's keys, and then requires a subject and one of this server's
-audiences. The token's `scope` becomes `Claims.Permissions`, which is never nil.
+and time claims against that server's keys, and then requires a subject, a client ID, a token ID
+and one of this server's audiences. The token's `scope` becomes `Claims.Permissions`, which is never nil.
 
 `lib/jwtauth` calls it for tokens whose `typ` header is `at+jwt` (`Typed`), and only for those.
 

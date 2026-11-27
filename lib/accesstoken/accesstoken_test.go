@@ -31,6 +31,7 @@ func TestVerifyAcceptsATokenIssuedForThisServer(t *testing.T) {
 	require.Equal(t, accesstokentest.Issuer, verified.Issuer)
 	require.Equal(t, "federation:ci", verified.Subject)
 	require.Equal(t, "token-1", verified.ID)
+	require.Equal(t, "test-client", verified.ClientID)
 	require.Equal(t, []string{"instance:read", "instance:write"}, verified.Permissions)
 	require.Equal(t, claims["exp"], verified.ExpiresAt.Unix())
 	require.Equal(t, claims["iat"], verified.IssuedAt.Unix())
@@ -68,6 +69,11 @@ func TestVerifyRejectsOtherTokens(t *testing.T) {
 		"no audience":       func(c jwt.MapClaims) { delete(c, "aud") },
 		"no subject":        func(c jwt.MapClaims) { delete(c, "sub") },
 		"empty subject":     func(c jwt.MapClaims) { c["sub"] = "" },
+		"no client":         func(c jwt.MapClaims) { delete(c, "client_id") },
+		"empty client":      func(c jwt.MapClaims) { c["client_id"] = "" },
+		"client not text":   func(c jwt.MapClaims) { c["client_id"] = 7 },
+		"no token ID":       func(c jwt.MapClaims) { delete(c, "jti") },
+		"empty token ID":    func(c jwt.MapClaims) { c["jti"] = "" },
 		"no issued-at":      func(c jwt.MapClaims) { delete(c, "iat") },
 		"no expiry":         func(c jwt.MapClaims) { delete(c, "exp") },
 		"expired":           func(c jwt.MapClaims) { c["exp"] = now.Add(-time.Minute).Unix() },

@@ -35,9 +35,10 @@ Access tokens follow the JWT format of [RFC 9068](https://www.rfc-editor.org/rfc
 | `iss` | A configured `issuer`. |
 | `aud` | A string or a list holding at least one configured audience. |
 | `sub` | Who the token is for. It is the user in logs. |
+| `client_id` | The client the token was issued to. Required. |
 | `iat`, `exp` | Required. `nbf` is honoured if present. Clocks may differ by 30 seconds. |
 | `scope` | Optional. Space-separated permissions such as `instance:read image:read`, or `*` for all of them. |
-| `jti` | Optional. |
+| `jti` | The token's ID. Required. |
 
 A token is at most 16 KB. Its lifetime is the authorization server's to choose.
 
@@ -72,6 +73,8 @@ Fetched keys are handled so that requests do not wait on the authorization serve
   than five minutes ago is used until those five minutes are over, and an older one is used while
   the key set is fetched again. Only a server with no saved copy, such as one that has just been
   configured, makes its first requests wait for a fetch.
+- If a fetched key set cannot be saved, the older copy is removed, so that a restart cannot bring
+  back keys the authorization server has withdrawn since. The restart then waits for a fetch.
 
 A key removed from the authorization server stops being trusted at the next successful fetch, at
 most five minutes later while the authorization server is reachable, whether or not the server
@@ -87,4 +90,5 @@ token is then accepted.
 
 A key fetch that fails is logged as a warning, with whether the last key set is still in use, at
 most every ten seconds for each authorization server. A copy that could not be saved is logged as a
-warning as well, and a start from the saved copy at info level, with the copy's fetch time.
+warning as well, or as an error if the older copy could not be removed either. A start from the
+saved copy is logged at info level, with the copy's fetch time.
