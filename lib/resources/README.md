@@ -72,9 +72,17 @@ Bidirectional rate limiting with separate download and upload controls:
 Per-VM disk I/O rate limiting with burst support:
 
 - **Cloud Hypervisor**: Uses native `RateLimiterConfig` with token bucket
-- **QEMU**: Uses drive `throttling.bps-total` options
+- **QEMU**: Uses drive `throttling.bps-total` options. For vGPU instances with a read-only first (root) disk and a configured burst rate above the sustained rate, that disk uses `bps-total-max-length=5`; other disks retain QEMU's default one-second bucket.
 - **Default**: Proportional to CPU: `(vcpus / cpu_capacity) * disk_io_capacity`
 - **Burst**: 4x sustained rate (allows fast cold starts)
+
+The QEMU vGPU root-disk setting enlarges the burst bucket, not the sustained
+reservation. At 62 MiB/s sustained and 248 MiB/s burst, its bucket holds
+1,240 MiB; sustained demand eventually returns to 62 MiB/s. This is not a
+five-second startup timer: the bucket drains at the sustained rate, allowing
+another burst after idle time. Concurrent vGPU starts can therefore contend
+for host I/O even though their admission reservations are unchanged. Validate
+startup concurrency and neighboring-guest latency before expanding a rollout.
 
 ## Example: Default Limits
 
