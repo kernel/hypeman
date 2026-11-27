@@ -2,7 +2,8 @@
 
 Hypeman can accept access tokens issued by an OAuth authorization server, beside the tokens signed
 with `jwt_secret`. For these tokens the server is a resource server: it holds the authorization
-server's public keys, so it can verify the tokens and cannot issue them.
+server's public keys, so it can verify the tokens and cannot issue them. `hypeman-auth` is such an
+authorization server; see [Authorization server](authorization-server.md).
 
 ## Configure
 

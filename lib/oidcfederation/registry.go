@@ -62,3 +62,17 @@ func (r *Registry) Rule(name string) (Rule, bool) {
 func (r *Registry) Enabled() bool {
 	return r != nil && len(r.rules) > 0
 }
+
+// SingleUse reports whether any rule's issuer lets an identity token be
+// exchanged only once, which takes a record of the spent ones.
+func (r *Registry) SingleUse() bool {
+	if r == nil {
+		return false
+	}
+	for _, rule := range r.rules {
+		if rule.IssuerSpec.TokenValidation.ReplayProtection == ReplaySingleUse {
+			return true
+		}
+	}
+	return false
+}

@@ -26,6 +26,20 @@ func normalizeRule(out RuleSpec, issuer IssuerSpec) (RuleSpec, error) {
 	if n := *out.Authorization.MaxTokenTTLSeconds; n < 1 || n > MaxTokenTTL {
 		return out, fmt.Errorf("%w: token lifetime must be between 1 and %d seconds", ErrInvalid, MaxTokenTTL)
 	}
+	if len(out.Authorization.Audiences) == 0 {
+		return out, fmt.Errorf("%w: authorization.audiences is required", ErrInvalid)
+	}
+	out.Authorization.Audiences = slices.Clone(out.Authorization.Audiences)
+	for i, audience := range out.Authorization.Audiences {
+		if audience == "" || len(audience) > 2048 || slices.Contains(out.Authorization.Audiences[:i], audience) {
+			return out, fmt.Errorf("%w: authorization.audiences[%d] is empty, too long or repeated", ErrInvalid, i)
+		}
+	}
+	if out.Authorization.SubjectClaim != "" {
+		if _, err := pointerParts(out.Authorization.SubjectClaim); err != nil {
+			return out, fmt.Errorf("%w: authorization.subject_claim must be a JSON Pointer", ErrInvalid)
+		}
+	}
 	// A federated token never falls back to the full access a token without a
 	// permissions claim has, so the list is explicit and has no wildcard.
 	if len(out.Authorization.Permissions) == 0 {
