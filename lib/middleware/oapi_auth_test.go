@@ -289,6 +289,43 @@ func TestJwtAuth_RegistryPathAcceptsUserTokens(t *testing.T) {
 	})
 }
 
+// The registry holds an access token to its permissions. A token signed with
+// the server's secret pushes and pulls whatever its permissions, as before.
+func TestJwtAuth_RegistryPermissions(t *testing.T) {
+	server := accesstokentest.NewServer(t)
+	verifier := newTestVerifier(t, testJWTSecret).WithAccessTokens(server.Verifier(t))
+	handler := JwtAuth(verifier, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	accessToken := func(scope string) string {
+		return server.Token(t, accesstokentest.Claims("federation:ci", scope), nil)
+	}
+	const ok, denied = http.StatusOK, http.StatusForbidden
+	for _, tt := range []struct {
+		name, token      string
+		pull, push, drop int
+	}{
+		{"secret token with full access", generateUserToken(t, "user"), ok, ok, ok},
+		{"secret token scoped to other resources", generateScopedToken(t, "user", []string{"instance:read"}), ok, ok, ok},
+		{"access token with image:read", accessToken("image:read"), ok, denied, denied},
+		{"access token with image:write", accessToken("image:write"), denied, ok, denied},
+		{"access token with image:delete", accessToken("image:delete"), denied, denied, ok},
+		{"access token with the wildcard", accessToken("*"), ok, ok, ok},
+		{"access token scoped to other resources", accessToken("instance:read"), denied, denied, denied},
+	} {
+		for method, want := range map[string]int{http.MethodGet: tt.pull, http.MethodPut: tt.push, http.MethodDelete: tt.drop} {
+			req := httptest.NewRequest(method, "/v2/test-image/manifests/latest", nil)
+			req.Header.Set("Authorization", "Bearer "+tt.token)
+			rr := httptest.NewRecorder()
+			handler.ServeHTTP(rr, req)
+			assert.Equal(t, want, rr.Code, "%s: %s", tt.name, method)
+			if want == denied {
+				assert.Contains(t, rr.Body.String(), `"code":"DENIED"`)
+			}
+		}
+	}
+}
+
 func TestJwtAuth_RegistryUnauthorizedResponse(t *testing.T) {
 	nextHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -670,7 +707,7 @@ func TestJwtAuth_AccessTokens(t *testing.T) {
 	assert.Equal(t, "false", rr.Header().Get("X-Full-Access"))
 	assert.Equal(t, "false", rr.Header().Get("X-Instance-Read"))
 
-	// The registry accepts it as it accepts any API token.
+	// The registry accepts it with the scope the request needs.
 	rr = serve("/v2/test-image/manifests/latest", server.Token(t, accesstokentest.Claims("federation:ci", "image:read"), nil))
 	require.Equal(t, http.StatusOK, rr.Code)
 	assert.Equal(t, "federation:ci", rr.Header().Get("X-User-ID"))
