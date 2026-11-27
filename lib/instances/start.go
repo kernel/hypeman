@@ -45,6 +45,9 @@ func (m *manager) startInstance(
 	if err := m.checkMacOSStart(stored, req); err != nil {
 		return nil, err
 	}
+	if err := m.refuseAbandonedFork(stored); err != nil {
+		return nil, err
+	}
 
 	// 2. Validate state (must be Stopped to start)
 	if inst.State != StateStopped {
@@ -215,6 +218,10 @@ func (m *manager) startInstance(
 		log.WarnContext(ctx, "failed to archive app log before start", "instance_id", id, "error", err)
 	}
 
+	if len(stored.Devices) > 0 {
+		defer m.lockPCIDevices(stored.Devices)()
+	}
+
 	// 6. Start hypervisor and boot VM (reuses logic from create)
 	bootStart := time.Now().UTC()
 	stored.StartedAt = &bootStart
@@ -253,7 +260,9 @@ func (m *manager) startInstance(
 	stored.Phases.Record(initialBootPhase(stored), time.Now().UTC())
 	meta = &metadata{StoredMetadata: *stored}
 	if err := m.saveMetadata(meta); err != nil {
-		// VM is running but metadata failed - log but don't fail
+		if meta.ForkPending != nil {
+			return nil, fmt.Errorf("save fork metadata after start: %w", err)
+		}
 		log.WarnContext(ctx, "failed to update metadata after VM start", "instance_id", id, "error", err)
 	}
 

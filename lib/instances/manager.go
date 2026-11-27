@@ -166,6 +166,7 @@ type manager struct {
 	limits                    ResourceLimits
 	resourceValidator         ResourceValidator // Optional validator for aggregate resource limits
 	instanceLocks             sync.Map          // map[string]*sync.RWMutex - per-instance locks
+	pciDeviceLocks            sync.Map          // device ID -> *sync.Mutex, held across boot or release
 	forkMetadataMu            sync.Mutex
 	macOSBootMu               sync.Mutex // Serialize admission for preserved Mac identities.
 	macOSGuestSubnet          netip.Prefix
@@ -181,6 +182,9 @@ type manager struct {
 	now                       func() time.Time
 	writeFile                 func(string, []byte, os.FileMode) error
 	deleteInstanceFn          func(context.Context, string) error
+	renameMetadataFn          func(string, string) error
+	syncDirFn                 func(*os.File) error
+	forkOwnerGoneFn           func(ForkOwner) bool
 	discoverVGPU              func() (devices.VGPUFramework, []devices.VirtualFunction, error)
 	createVGPU                func(context.Context, string, string) (*devices.VGPUDevice, error)
 	configureVGPU             func(context.Context, string, string) error
@@ -292,6 +296,9 @@ func NewManagerWithConfig(p *paths.Paths, imageManager images.Manager, systemMan
 		nativeCodecPaths:         make(map[string]string),
 		lifecycleEvents:          newLifecycleSubscribersWithBufferSize(managerConfig.LifecycleEventBufferSize),
 		guestAgentReadyProbe:     probeGuestAgentReady,
+	}
+	if deviceManager != nil {
+		deviceManager.SetLivenessChecker(&instanceLivenessAdapter{manager: m})
 	}
 	m.deleteSnapshotFn = m.deleteSnapshot
 
@@ -556,12 +563,12 @@ func (m *manager) ForkInstance(ctx context.Context, id string, req ForkInstanceR
 		} else {
 			inst, err = m.applyForkTargetState(ctx, forked.Id, targetState)
 		}
-		if err != nil {
-			if cleanupErr := m.cleanupForkInstanceOnError(ctx, forked.Id); cleanupErr != nil {
-				return nil, fmt.Errorf("apply fork target state: %w; additionally failed to cleanup forked instance %s: %v", err, forked.Id, cleanupErr)
-			}
-			return nil, fmt.Errorf("apply fork target state: %w", err)
-		}
+	}
+	if err != nil {
+		return nil, m.discardFork(ctx, forked.Id, fmt.Errorf("apply fork target state: %w", err))
+	}
+	if err := m.completeFork(ctx, inst); err != nil {
+		return nil, m.discardFork(ctx, forked.Id, err)
 	}
 	m.notifyLifecycleEvent(ctx, LifecycleEventFork, inst)
 	return inst, nil
@@ -616,17 +623,18 @@ func (m *manager) RestoreInstance(ctx context.Context, id string) (*Instance, er
 	lock := m.getInstanceLock(id)
 	lock.Lock()
 	defer lock.Unlock()
-	current, err := m.currentInstanceWithoutHydration(ctx, id)
+	meta, err := m.loadMetadataForBootRequest(id)
 	if err != nil {
 		return nil, err
 	}
+	current := m.toInstanceWithoutHydration(ctx, meta)
 	if current.State == StateRunning || current.State == StateInitializing {
 		// A running macOS guest has consumed its checkpoint. One still on disk means an
 		// earlier resume failed before removing it, so finish that resume now.
 		if current.MacOS != nil && current.HasSnapshot {
 			// Initializing without a control socket is a shim still loading the VM. It has
 			// not resumed, so the checkpoint it will consume must stay.
-			if current.State == StateInitializing && !m.macOSSocketAnswers(ctx, current) {
+			if current.State == StateInitializing && !m.macOSSocketAnswers(ctx, &current) {
 				return nil, fmt.Errorf("%w: macOS restore is still loading the VM; retry shortly", ErrInvalidState)
 			}
 			if err := m.finishMacOSResume(id); err != nil {
@@ -634,7 +642,7 @@ func (m *manager) RestoreInstance(ctx context.Context, id string) (*Instance, er
 			}
 			return m.currentInstanceWithoutHydration(ctx, id)
 		}
-		return current, nil
+		return &current, nil
 	}
 	if current.State == StatePaused {
 		hv, err := m.getHypervisor(current.SocketPath, current.HypervisorType)
@@ -656,12 +664,12 @@ func (m *manager) RestoreInstance(ctx context.Context, id string) (*Instance, er
 				return nil, fmt.Errorf("finish resumed restore: %w", err)
 			}
 		}
-		current, err = m.currentInstanceWithoutHydration(ctx, id)
+		resumed, err := m.currentInstanceWithoutHydration(ctx, id)
 		if err != nil {
 			return nil, err
 		}
-		m.notifyLifecycleEvent(ctx, LifecycleEventRestore, current)
-		return current, nil
+		m.notifyLifecycleEvent(ctx, LifecycleEventRestore, resumed)
+		return resumed, nil
 	}
 	inst, err := m.restoreInstance(ctx, id)
 	if err == nil {
@@ -715,14 +723,15 @@ func (m *manager) StartInstance(ctx context.Context, id string, req StartInstanc
 	lock := m.getInstanceLock(id)
 	lock.Lock()
 	defer lock.Unlock()
-	if err := m.clearRestartStatusLocked(ctx, id); err != nil {
+	meta, err := m.loadMetadataForBootRequest(id)
+	if err != nil {
+		return nil, err
+	}
+	if err := m.clearRestartStatusLocked(ctx, meta); err != nil {
 		return nil, err
 	}
 	if !startRequestHasOverrides(req) {
-		current, err := m.currentInstanceWithoutHydration(ctx, id)
-		if err != nil {
-			return nil, err
-		}
+		current := m.toInstanceWithoutHydration(ctx, meta)
 		if current.State == StateRunning || current.State == StateInitializing {
 			// The API can exit after a clone boots and before its rekey finishes. Finish it
 			// here, or the clone keeps its source's SSH host keys.
@@ -732,7 +741,7 @@ func (m *manager) StartInstance(ctx context.Context, id string, req StartInstanc
 				}
 				return m.currentInstanceWithoutHydration(ctx, id)
 			}
-			return current, nil
+			return &current, nil
 		}
 	}
 	inst, err := m.startInstance(ctx, id, req)
@@ -790,7 +799,10 @@ func (m *manager) listMetadataForReconcile() ([]StoredMetadata, error) {
 		id := filepath.Base(filepath.Dir(file))
 		meta, err := m.loadMetadata(id)
 		if err != nil {
-			if errors.Is(err, ErrNotFound) {
+			// A directory holding another guest's metadata is a partial fork
+			// copy or a parked source. Neither can have a VMM of its own, so
+			// it holds nothing a reconcile has to account for.
+			if errors.Is(err, ErrNotFound) || errors.Is(err, errMetadataIDMismatch) {
 				continue
 			}
 			return nil, fmt.Errorf("load metadata for instance %s: %w", id, err)
@@ -854,6 +866,11 @@ func (m *manager) getInstanceWithMinIDPrefix(ctx context.Context, idOrName strin
 	if err == nil {
 		m.finalizeResolvedInstance(ctx, inst)
 		return inst, nil
+	}
+
+	// An alias or partial copy is not a name/prefix lookup.
+	if errors.Is(err, errMetadataIDMismatch) {
+		return nil, ErrNotFound
 	}
 
 	// 2. Resolve exact name or ID prefix from metadata only, then hydrate the

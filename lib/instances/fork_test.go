@@ -315,7 +315,8 @@ func (concurrentForkPrepareTestStarter) RestoreVM(_ context.Context, _ *paths.Pa
 	if err := os.WriteFile(socketPath, []byte("socket"), 0644); err != nil {
 		return 0, nil, err
 	}
-	return 1, lifecycleNoopHypervisor{state: hypervisor.StateRunning}, nil
+	// This starter opens no process. Never hand a real host PID to teardown.
+	return 1 << 30, lifecycleNoopHypervisor{state: hypervisor.StateRunning}, nil
 }
 
 func (concurrentForkPrepareTestStarter) PrepareFork(context.Context, hypervisor.ForkPrepareRequest) (hypervisor.ForkPrepareResult, error) {
@@ -734,6 +735,7 @@ func TestCloneStoredMetadataForFork_DeepCopiesReferenceFields(t *testing.T) {
 		StoppedAt:                 &stoppedAt,
 		GPUClaimedAt:              &gpuClaimedAt,
 		HypervisorProcessIdentity: HypervisorProcessIdentity{HypervisorPID: &pid},
+		ForkPending:               &ForkOwner{PID: 77},
 		ExitCode:                  &exitCode,
 		AutoStandby: &autostandby.Policy{
 			Enabled:                true,
@@ -777,6 +779,7 @@ func TestCloneStoredMetadataForFork_DeepCopiesReferenceFields(t *testing.T) {
 	cloned.Entrypoint[0] = "/usr/bin/env"
 	cloned.Cmd[0] = "printf"
 	*cloned.HypervisorPID = 4321
+	cloned.ForkPending.PID = 78
 	*cloned.ExitCode = 42
 	cloned.AutoStandby.IgnoreSourceCIDRs[0] = "192.168.0.0/16"
 	cloned.AutoStandby.IgnoreDestinationPorts[0] = 443
@@ -797,6 +800,7 @@ func TestCloneStoredMetadataForFork_DeepCopiesReferenceFields(t *testing.T) {
 	require.Equal(t, "/bin/sh", src.Entrypoint[0])
 	require.Equal(t, "echo", src.Cmd[0])
 	require.Equal(t, 1234, *src.HypervisorPID)
+	require.Equal(t, 77, src.ForkPending.PID)
 	require.Equal(t, 17, *src.ExitCode)
 	require.Equal(t, "10.0.0.0/8", src.AutoStandby.IgnoreSourceCIDRs[0])
 	require.Equal(t, uint16(22), src.AutoStandby.IgnoreDestinationPorts[0])

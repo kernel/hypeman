@@ -86,6 +86,51 @@ func createTestInstanceDir(t *testing.T, p *paths.Paths, instanceID string) {
 	require.NoError(t, os.MkdirAll(instanceDir, 0755))
 }
 
+type boundAfterReset struct{ *VFIOBinder }
+
+func (boundAfterReset) deviceBoundToVFIO(string) (bool, error) { return true, nil }
+func (boundAfterReset) setDriverOverride(string, string) error { return nil }
+func (boundAfterReset) triggerDriverProbe(string) error        { return nil }
+
+func TestReconcileDevicesKeepsOwnerIfStillBound(t *testing.T) {
+	m, p, _ := setupTestManager(t)
+	owner := "missing"
+	device := &Device{Id: "dev-1", PCIAddress: "test-device", AttachedTo: &owner}
+	createTestDevice(t, p, device)
+	m.vfioBinder = boundAfterReset{NewVFIOBinder()}
+
+	require.NoError(t, m.ReconcileDevices(t.Context()))
+	got, err := m.loadDevice(device.Id)
+	require.NoError(t, err)
+	require.Equal(t, &owner, got.AttachedTo)
+}
+
+type readOnlyReconcileBinder struct{ deviceBinder }
+
+func (readOnlyReconcileBinder) IsDeviceBoundToVFIO(string) bool { return true }
+
+func TestReconcilePreservesDeviceWithLiveForkOrIncompleteInventory(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		refs map[string][]string
+	}{
+		{"live fork", map[string][]string{"source": {"dev-1"}, "fork": {"dev-1"}}},
+		{"incomplete inventory", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, p, _ := setupTestManager(t)
+			owner := "source"
+			createTestDevice(t, p, &Device{Id: "dev-1", PCIAddress: "test-device", AttachedTo: &owner})
+			m.vfioBinder = readOnlyReconcileBinder{} // no reset operations permitted
+			m.SetLivenessChecker(&mockLivenessChecker{runningInstances: map[string]bool{"fork": true}, instanceDevices: tc.refs})
+			require.NoError(t, m.ReconcileDevices(t.Context()))
+			got, err := m.loadDevice("dev-1")
+			require.NoError(t, err)
+			require.Equal(t, &owner, got.AttachedTo)
+		})
+	}
+}
+
 func TestReconcileDevices_NoDevices(t *testing.T) {
 	mgr, _, _ := setupTestManager(t)
 	ctx := context.Background()

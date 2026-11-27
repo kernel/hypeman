@@ -45,6 +45,9 @@ func (m *manager) restoreInstance(
 	if err := m.admitGuestOperation(&meta.StoredMetadata); err != nil {
 		return nil, err
 	}
+	if err := m.refuseAbandonedFork(&meta.StoredMetadata); err != nil {
+		return nil, err
+	}
 	release, err := m.admitMacOSBoot(ctx, &meta.StoredMetadata)
 	if err != nil {
 		return nil, err
@@ -297,6 +300,10 @@ func (m *manager) restoreInstance(
 	}
 	defer releaseRestoreSlotOnce()
 
+	if len(stored.Devices) > 0 {
+		defer m.lockPCIDevices(stored.Devices)()
+	}
+
 	// 5. Transition: Standby → Paused (start hypervisor + restore)
 	restoreCtx, restoreSpanEnd := m.startLifecycleStep(ctx, "restore_from_snapshot",
 		attribute.String("instance_id", id),
@@ -390,7 +397,9 @@ func (m *manager) restoreInstance(
 	stored.Phases.Record(resumePhase, time.Now().UTC())
 	meta = &metadata{StoredMetadata: *stored}
 	if err := m.saveMetadata(meta); err != nil {
-		// VM is running but metadata failed
+		if meta.ForkPending != nil {
+			return nil, fmt.Errorf("save fork metadata after restore: %w", err)
+		}
 		log.WarnContext(ctx, "failed to update metadata after restore", "instance_id", id, "error", err)
 	}
 

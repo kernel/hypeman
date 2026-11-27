@@ -63,18 +63,13 @@ func (m *manager) markRestartManualStopLocked(ctx context.Context, id string) er
 	return nil
 }
 
-func (m *manager) clearRestartStatusLocked(ctx context.Context, id string) error {
-	meta, err := m.loadMetadata(id)
-	if err != nil {
-		logger.FromContext(ctx).WarnContext(ctx, "failed to clear restart policy status", "instance_id", id, "error", err)
-		return err
-	}
+func (m *manager) clearRestartStatusLocked(ctx context.Context, meta *metadata) error {
 	if meta.RestartStatus.IsZero() {
 		return nil
 	}
 	meta.RestartStatus = restartpolicy.Status{}
 	if err := m.saveMetadata(meta); err != nil {
-		logger.FromContext(ctx).WarnContext(ctx, "failed to clear restart policy status", "instance_id", id, "error", err)
+		logger.FromContext(ctx).WarnContext(ctx, "failed to clear restart policy status", "instance_id", meta.Id, "error", err)
 		return err
 	}
 	return nil
@@ -127,6 +122,9 @@ func (m *manager) RestartInstance(ctx context.Context, id string) (*Instance, er
 	lock.Lock()
 	defer lock.Unlock()
 
+	if _, err := m.loadMetadataForBootRequest(id); err != nil {
+		return nil, err
+	}
 	inst, err := m.startInstance(ctx, id, StartInstanceRequest{})
 	if err == nil {
 		m.notifyLifecycleEvent(ctx, LifecycleEventStart, inst)
@@ -143,7 +141,7 @@ func (m *manager) HandleHealthCheckUnhealthy(ctx context.Context, id string) err
 	if err != nil {
 		return err
 	}
-	if current.State != StateRunning {
+	if current.ForkPending != nil || current.State != StateRunning {
 		return nil
 	}
 
@@ -266,7 +264,7 @@ func (m *manager) reconcileRestartPolicyInstanceID(ctx context.Context, id strin
 }
 
 func (m *manager) reconcileRestartPolicyInstance(ctx context.Context, inst *Instance, log *slog.Logger) error {
-	if inst == nil {
+	if inst == nil || inst.ForkPending != nil {
 		return nil
 	}
 	policy, err := restartpolicy.NormalizePolicy(inst.RestartPolicy)

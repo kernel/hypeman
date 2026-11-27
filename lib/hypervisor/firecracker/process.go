@@ -216,6 +216,15 @@ func cleanupFailedRestore(pid int, socketPath string) {
 	_ = os.Remove(socketPath)
 }
 
+// SnapshotSourceAlias returns the source path recorded for the fallback, if any.
+func SnapshotSourceAlias(instanceDir string) (string, error) {
+	meta, err := loadRestoreMetadata(instanceDir)
+	if err != nil {
+		return "", err
+	}
+	return meta.SnapshotSourceDataDir, nil
+}
+
 func withSnapshotSourceDirAlias(meta *restoreMetadata, targetDataDir string, run func() error) error {
 	if meta == nil || meta.SnapshotSourceDataDir == "" {
 		return run()
@@ -239,12 +248,19 @@ func withSnapshotSourceDirAlias(meta *restoreMetadata, targetDataDir string, run
 
 	backupDataDir := ""
 	if _, err := os.Stat(sourceDataDir); err == nil {
-		backupDataDir = fmt.Sprintf("%s.fork-bak.%d", sourceDataDir, time.Now().UnixNano())
+		backupDataDir = paths.ForkBackupPath(sourceDataDir, time.Now().UnixNano())
 		if err := os.Rename(sourceDataDir, backupDataDir); err != nil {
 			return fmt.Errorf("backup snapshot source data dir: %w", err)
 		}
 	} else if !os.IsNotExist(err) {
 		return fmt.Errorf("stat snapshot source data dir: %w", err)
+	} else {
+		// A restore killed while its source directory did not exist leaves its
+		// link here, and the link dangles once that fork is deleted. Stat
+		// follows links, so anything still at this path is such a link.
+		if err := os.Remove(sourceDataDir); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove dangling snapshot source alias: %w", err)
+		}
 	}
 
 	if err := os.Symlink(targetDataDir, sourceDataDir); err != nil {

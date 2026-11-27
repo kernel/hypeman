@@ -2,6 +2,7 @@ package instances
 
 import (
 	"context"
+	"errors"
 	"os/exec"
 	"strings"
 
@@ -28,26 +29,22 @@ func NewLivenessChecker(m Manager) devices.InstanceLivenessChecker {
 	return &instanceLivenessAdapter{manager: mgr}
 }
 
-// IsInstanceRunning returns true if the instance exists and is in a running state
-// (i.e., has an active VMM process). Returns false if the instance doesn't exist
-// or is stopped/standby/unknown.
+// IsInstanceRunning returns false only when the device reconciler can rule out a live VMM.
 func (a *instanceLivenessAdapter) IsInstanceRunning(ctx context.Context, instanceID string) bool {
 	if a.manager == nil {
-		return false
-	}
-	inst, err := a.manager.getInstance(ctx, instanceID)
-	if err != nil {
-		return false
-	}
-
-	// Consider instance "running" if the VMM is active (any of these states means VM is using the device)
-	switch inst.State {
-	case StateRunning, StateInitializing, StatePaused, StateCreated:
 		return true
-	default:
-		// StateStopped, StateStandby, StateShutdown, StateUnknown
-		return false
 	}
+	meta, err := a.manager.loadMetadata(instanceID)
+	if err != nil {
+		return !errors.Is(err, ErrNotFound)
+	}
+	state := a.manager.deriveStateWithoutHydration(ctx, &meta.StoredMetadata).State
+	if state.RequiresVMM() {
+		return true
+	}
+	// A stale control socket reads as Unknown even after its owner has exited.
+	pid, err := resolveLiveHypervisorPID(meta.HypervisorProcessIdentity, meta.SocketPath)
+	return err != nil || pid != 0
 }
 
 // GetInstanceDevices returns the list of device IDs attached to an instance.
@@ -68,8 +65,9 @@ func (a *instanceLivenessAdapter) ListAllInstanceDevices(ctx context.Context) ma
 	if a.manager == nil {
 		return nil
 	}
-	instances, err := a.manager.listInstances(ctx)
+	instances, err := a.manager.listMetadataForReconcile()
 	if err != nil {
+		logger.FromContext(ctx).WarnContext(ctx, "cannot list instance PCI device references", "error", err)
 		return nil
 	}
 

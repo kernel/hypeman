@@ -38,6 +38,7 @@ import (
 	"github.com/kernel/hypeman/lib/ocicachegc"
 	"github.com/kernel/hypeman/lib/otel"
 	"github.com/kernel/hypeman/lib/paths"
+	"github.com/kernel/hypeman/lib/providers"
 	"github.com/kernel/hypeman/lib/registry"
 	"github.com/kernel/hypeman/lib/scopes"
 	"github.com/kernel/hypeman/lib/tokenrevocation"
@@ -165,17 +166,19 @@ func run() error {
 	startupStarted := time.Now()
 	slog.Info("starting hypeman initialization")
 
-	// Load config early for OTel initialization
-	// Config path can be specified via CONFIG_PATH env var or defaults to platform-specific locations
-	configPath := os.Getenv("CONFIG_PATH")
-	cfg, err := config.Load(configPath)
+	cfg, err := providers.ServerConfig()
 	if err != nil {
-		return fmt.Errorf("failed to load config: %w", err)
+		return err
 	}
-
-	// Validate configuration before proceeding
-	if err := cfg.Validate(); err != nil {
-		return fmt.Errorf("invalid configuration: %w", err)
+	dataDir, err := lockDataDir(cfg.DataDir)
+	if err != nil {
+		return fmt.Errorf("lock data directory %q: %w", cfg.DataDir, err)
+	}
+	defer dataDir.Close()
+	// A source that cannot be put back is left as it is and never resolves
+	// to another guest, so the rest of the host starts without it.
+	if err := instances.RecoverParkedForkSources(paths.New(cfg.DataDir)); err != nil {
+		slog.Error("failed to recover parked fork sources; they are left as they are until repaired", "error", err)
 	}
 
 	// Configure GPU profile cache TTL
@@ -362,13 +365,15 @@ func run() error {
 		logger.Warn("failed to setup HTB on bridge (network rate limiting disabled)", "error", err)
 	}
 
-	// Reconcile device state (clears orphaned attachments from crashed VMs)
-	// Set up liveness checker so device reconciliation can accurately detect orphaned attachments
-	logger.Info("Reconciling device state...")
-	livenessChecker := instances.NewLivenessChecker(app.InstanceManager)
-	if livenessChecker != nil {
-		app.DeviceManager.SetLivenessChecker(livenessChecker)
+	// Stop interrupted forks before either reconciler touches their devices.
+	logger.Info("Recovering interrupted forks...")
+	if r, ok := app.InstanceManager.(interface{ RecoverInterruptedForks(context.Context) }); ok {
+		r.RecoverInterruptedForks(app.Ctx)
+	} else {
+		logger.Warn("instance manager does not implement RecoverInterruptedForks")
 	}
+
+	logger.Info("Reconciling device state...")
 	if err := app.DeviceManager.ReconcileDevices(app.Ctx); err != nil {
 		logger.Error("failed to reconcile device state", "error", err)
 		return fmt.Errorf("reconcile device state: %w", err)

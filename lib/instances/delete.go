@@ -84,6 +84,9 @@ func (m *manager) deleteInstanceWithOptions(
 		}
 	}
 
+	// A fork restore can create the TAP before it saves the IP and MAC.
+	releaseTAPByID := inst.usesLinuxNetwork() && stored.ForkPending != nil && networkAlloc == nil
+
 	// 3. Close exec gRPC connection before killing hypervisor to prevent panic
 	if dialer, err := hypervisor.NewVsockDialer(inst.HypervisorType, inst.VsockSocket, inst.VsockCID); err == nil {
 		guest.CloseConn(dialer.Key())
@@ -123,9 +126,9 @@ func (m *manager) deleteInstanceWithOptions(
 		}
 	}
 
-	// 5. If hypervisor might be running, force kill it
-	// Also attempt kill for StateUnknown since we can't be sure if hypervisor is running
-	if !gracefulShutdown && (inst.State.RequiresVMM() || inst.State == StateUnknown) {
+	// A pending fork's VMM can exist before its control socket does, even if
+	// its derived state is Stopped or Standby and it has no network allocation.
+	if !gracefulShutdown && (inst.State.RequiresVMM() || inst.State == StateUnknown || stored.ForkPending != nil) {
 		log.DebugContext(ctx, "stopping hypervisor", "instance_id", id, "state", inst.State)
 		killCtx, killSpanEnd := m.startLifecycleStep(ctx, "force_kill_hypervisor",
 			attribute.String("instance_id", id),
@@ -169,29 +172,21 @@ func (m *manager) deleteInstanceWithOptions(
 			attribute.String("hypervisor", string(stored.HypervisorType)),
 			attribute.String("operation", "release_network"),
 		)
-		err := m.networkManager.ReleaseAllocation(releaseNetworkCtx, networkAlloc)
+		if releaseTAPByID {
+			err = m.networkManager.ReleaseByInstanceID(releaseNetworkCtx, id)
+		} else {
+			err = m.networkManager.ReleaseAllocation(releaseNetworkCtx, networkAlloc)
+		}
 		releaseNetworkSpanEnd(err)
 		if err != nil {
-			// Log error but continue with cleanup
+			// The TAP reconciler deletes a TAP that no live instance claims.
 			log.WarnContext(ctx, "failed to release network, continuing with cleanup", "instance_id", id, "error", err)
 		}
 	}
 
 	// 7. Detach and auto-unbind devices from VFIO
-	if len(inst.Devices) > 0 && m.deviceManager != nil {
-		for _, deviceID := range inst.Devices {
-			log.DebugContext(ctx, "detaching device", "id", id, "device", deviceID)
-			// Mark device as detached
-			if err := m.deviceManager.MarkDetached(ctx, deviceID); err != nil {
-				log.WarnContext(ctx, "failed to mark device as detached", "id", id, "device", deviceID, "error", err)
-			}
-			// Auto-unbind from VFIO so native driver can reclaim it
-			log.InfoContext(ctx, "auto-unbinding device from VFIO", "id", id, "device", deviceID)
-			if err := m.deviceManager.UnbindFromVFIO(ctx, deviceID); err != nil {
-				// Log but continue - device might already be unbound or in use by another instance
-				log.WarnContext(ctx, "failed to unbind device from VFIO", "id", id, "device", deviceID, "error", err)
-			}
-		}
+	if err := m.releasePCIDevices(ctx, stored); err != nil {
+		return err
 	}
 
 	// 7b. Detach volumes

@@ -144,6 +144,39 @@ func TestLifecycleNoopTransitionsReturnCurrentInstanceWithoutEvent(t *testing.T)
 	}
 }
 
+func TestPublicBootRejectsPendingForkBeforeFastPaths(t *testing.T) {
+	for _, state := range []State{StatePaused, StateRunning, StateInitializing} {
+		for kind, owner := range map[string]*ForkOwner{"in-flight": currentForkOwner(), "abandoned": {}} {
+			t.Run(string(state)+"/"+kind, func(t *testing.T) {
+				m, id := newLifecycleNoopManagerWithInstance(t, state, time.Now().UTC())
+				meta, err := m.loadMetadata(id)
+				require.NoError(t, err)
+				meta.ForkPending = owner
+				meta.RestartStatus.BlockedReason = restartpolicy.BlockedReasonManualStop
+				require.NoError(t, m.saveMetadata(meta))
+				events, cancel := m.SubscribeLifecycleEvents(LifecycleEventConsumerWaitForState)
+				defer cancel()
+
+				_, err = m.RestoreInstance(t.Context(), id)
+				require.ErrorIs(t, err, ErrInvalidState)
+				_, err = m.RestartInstance(t.Context(), id)
+				require.ErrorIs(t, err, ErrInvalidState)
+				require.ErrorContains(t, err, "fork")
+				for _, req := range []StartInstanceRequest{{}, {Cmd: []string{"true"}}} {
+					_, err = m.StartInstance(t.Context(), id, req)
+					require.ErrorIs(t, err, ErrInvalidState)
+					require.ErrorContains(t, err, "fork")
+				}
+				got, err := m.getInstance(t.Context(), id)
+				require.NoError(t, err)
+				require.Equal(t, state, got.State)
+				require.Equal(t, meta.RestartStatus, got.RestartStatus)
+				assertNoLifecycleEvent(t, events)
+			})
+		}
+	}
+}
+
 func TestLifecycleNoopStartWithOverridesStillRejectsActiveInstance(t *testing.T) {
 	m, id := newLifecycleNoopManagerWithInstance(t, StateRunning, time.Now().UTC())
 	events, cancel := m.SubscribeLifecycleEvents(LifecycleEventConsumerWaitForState)
@@ -356,20 +389,14 @@ func TestStopStoppedInstanceLeavesVGPUForReconcile(t *testing.T) {
 type recordingDeviceManager struct {
 	devices.Manager
 	detached       []string
-	unbound        []string
 	onMarkDetached func()
 }
 
-func (m *recordingDeviceManager) MarkDetached(ctx context.Context, deviceID string) error {
+func (m *recordingDeviceManager) ReleaseInstanceDevice(ctx context.Context, deviceID, instanceID string) error {
 	m.detached = append(m.detached, deviceID)
 	if m.onMarkDetached != nil {
 		m.onMarkDetached()
 	}
-	return nil
-}
-
-func (m *recordingDeviceManager) UnbindFromVFIO(ctx context.Context, id string) error {
-	m.unbound = append(m.unbound, id)
 	return nil
 }
 
@@ -421,6 +448,8 @@ func newLifecycleNoopManagerWithInstance(t *testing.T, state State, now time.Tim
 		writeLifecycleNoopSocket(t, stored.SocketPath, hypervisor.StateRunning)
 	case StateInitializing:
 		writeLifecycleNoopSocket(t, stored.SocketPath, hypervisor.StateRunning)
+	case StatePaused:
+		writeLifecycleNoopSocket(t, stored.SocketPath, hypervisor.StatePaused)
 	case StateStandby:
 		writeLifecycleNoopSnapshot(t, p, id)
 	}

@@ -2,9 +2,11 @@ package instances
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/kernel/hypeman/lib/forkvm"
@@ -287,6 +289,9 @@ func (m *manager) restoreSnapshot(ctx context.Context, id string, snapshotID str
 	if err != nil {
 		return nil, err
 	}
+	if sourceMeta.ForkPending != nil {
+		return nil, fmt.Errorf("%w: cannot restore a snapshot onto a pending fork", ErrInvalidState)
+	}
 	if err := validateMacOSSnapshotRestore(sourceMeta, rec); err != nil {
 		return nil, err
 	}
@@ -558,6 +563,7 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 		}
 	}
 
+	forkMeta.ForkPending = currentForkOwner()
 	newMeta := &metadata{StoredMetadata: forkMeta}
 	if forkMeta.MacOS != nil {
 		if err := m.saveMacOSSnapshotFork(ctx, newMeta); err != nil {
@@ -570,16 +576,24 @@ func (m *manager) forkSnapshot(ctx context.Context, snapshotID string, req ForkS
 	cu.Release()
 	inst, err := m.applyForkTargetState(ctx, forkID, targetState)
 	if err != nil {
-		if cleanupErr := m.cleanupForkInstanceOnError(ctx, forkID); cleanupErr != nil {
-			return nil, fmt.Errorf("apply snapshot fork target state: %w; additionally failed to cleanup forked instance %s: %v", err, forkID, cleanupErr)
-		}
-		return nil, fmt.Errorf("apply snapshot fork target state: %w", err)
+		return nil, m.discardFork(ctx, forkID, fmt.Errorf("apply snapshot fork target state: %w", err))
+	}
+	if err := m.completeFork(ctx, inst); err != nil {
+		return nil, m.discardFork(ctx, forkID, err)
 	}
 	return inst, nil
 }
 
-func (m *manager) copySnapshotPayload(sourceInstanceID, snapshotGuestDir string) error {
-	err := copyGuestDirectoryWithAliasReadLock(m.paths.InstanceDir(sourceInstanceID), snapshotGuestDir)
+func (m *manager) copySnapshotPayload(sourceID, snapshotGuestDir string) error {
+	// Never put a pending mark in the payload, even partway through a copy.
+	name := filepath.Base(m.paths.InstanceMetadata(sourceID))
+	opts := forkvm.CopyOptions{SkipRelativePaths: map[string]struct{}{name: {}}}
+	err := withSnapshotSourceAliasReadLock(func() error {
+		if err := forkvm.CopyGuestDirectoryWithOptions(m.paths.InstanceDir(sourceID), snapshotGuestDir, opts); err != nil {
+			return err
+		}
+		return copySnapshotMetadata(m.paths.InstanceMetadata(sourceID), filepath.Join(snapshotGuestDir, name))
+	})
 	if err != nil {
 		if errors.Is(err, forkvm.ErrSparseCopyUnsupported) {
 			return fmt.Errorf("snapshot requires sparse-capable filesystem (SEEK_DATA/SEEK_HOLE unsupported): %w", err)
@@ -587,6 +601,25 @@ func (m *manager) copySnapshotPayload(sourceInstanceID, snapshotGuestDir string)
 		return fmt.Errorf("copy guest directory into snapshot: %w", err)
 	}
 	return nil
+}
+
+func copySnapshotMetadata(src, dst string) error {
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	if _, marked := fields["fork_pending"]; marked {
+		delete(fields, "fork_pending")
+		data, err = json.MarshalIndent(fields, "", "  ")
+		if err != nil {
+			return err
+		}
+	}
+	return os.WriteFile(dst, data, 0644)
 }
 
 func (m *manager) replaceInstanceWithSnapshotPayload(snapshotID, instanceID string) error {
