@@ -229,12 +229,18 @@ cp config.example.yaml ~/.config/hypeman/config.yaml
 
 ### Data directory
 
-Hypeman stores data in a configurable directory. Configure permissions for this directory.
+Only the daemon account and trusted administrators should be able to write to `data_dir`.
 
 ```bash
 sudo mkdir /var/lib/hypeman
 sudo chown $USER:$USER /var/lib/hypeman
 ```
+
+The API takes an exclusive lock on `<data_dir>/.hypeman.lock` before loading guest state.
+Leave this file in place across restarts; the OS releases the lock when the process exits.
+Stop the old API process before upgrading or downgrading, because older versions do not take this lock.
+
+Guest metadata and socket paths use the configured directory name. Stop the guests and the API before moving or remounting the directory or repointing a symlink in its path.
 
 ### Dockerhub login
 
@@ -271,7 +277,7 @@ The server will start on port 4973 (configurable via `port` in config.yaml).
 ### Shared-Machine Local Config
 
 When developing on a shared host, avoid global paths like `/etc/hypeman` and `/var/lib/hypeman`.
-Use a workspace-local config and data directory instead:
+Use a workspace-local config and [data directory](#data-directory) instead:
 
 ```bash
 mkdir -p .tmp/hypeman-data

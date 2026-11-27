@@ -35,6 +35,7 @@ jwt_secret: ""
 #     - issuer: https://auth.example.com
 
 # Data directory (default: /var/lib/hypeman)
+# Stop guests and the API before moving the directory or repointing a symlink in its path.
 data_dir: /var/lib/hypeman
 
 # Server configuration
