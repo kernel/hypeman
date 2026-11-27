@@ -2,10 +2,13 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -106,31 +109,25 @@ func runExecMode(log *Logger, cfg *vmconfig.Config) {
 		workdir = "/"
 	}
 
-	// Shell-quote the entrypoint and cmd arrays for safe execution
-	entrypoint := shellQuoteArgs(cfg.Entrypoint)
-	cmd := shellQuoteArgs(cfg.Cmd)
-
 	log.Info("hypeman-init:entrypoint", fmt.Sprintf("workdir=%s entrypoint=%v cmd=%v", workdir, cfg.Entrypoint, cfg.Cmd))
-
-	// Construct the shell command to run
-	shellCmd := fmt.Sprintf("cd %s && exec %s %s", shellQuote(workdir), entrypoint, cmd)
-
 	log.Info("hypeman-init:entrypoint", "launching entrypoint")
 
-	// Run the entrypoint without stdin (defaults to /dev/null).
-	// This matches the old shell script behavior where the app ran in background with &
-	// and couldn't read from stdin. Interactive shells like bash will see EOF and exit.
-	// Users interact with the VM via guest-agent exec, not the entrypoint's stdin.
-	appCmd := exec.Command("/bin/sh", "-c", shellCmd)
-	appCmd.Stdout = os.Stdout
-	appCmd.Stderr = os.Stderr
-
-	// Set up environment for the app
-	appCmd.Env = buildEnv(cfg.Env)
-
-	if err := appCmd.Start(); err != nil {
+	// Exec the entrypoint directly, like Docker's exec form, so images without
+	// /bin/sh (scratch, distroless) can run. Shell-form entrypoints are already
+	// stored in the image config as ["/bin/sh", "-c", ...].
+	// Stdin defaults to /dev/null; users interact with the VM via guest-agent exec.
+	env := buildEnv(cfg.Env)
+	argv := append(append([]string{}, cfg.Entrypoint...), cfg.Cmd...)
+	appCmd, err := entrypointCommand(argv, workdir, env)
+	if err == nil {
+		appCmd.Stdout = os.Stdout
+		appCmd.Stderr = os.Stderr
+		err = appCmd.Start()
+	}
+	if err != nil {
 		log.Error("hypeman-init:entrypoint", "failed to start entrypoint", err)
-		dropToShell()
+		exitApp(log, startFailureExitCode(err))
+		return
 	}
 
 	// Program-start sentinel used by host state derivation.
@@ -157,7 +154,7 @@ func runExecMode(log *Logger, cfg *vmconfig.Config) {
 	}()
 
 	// Wait for app to exit
-	err := appCmd.Wait()
+	err = appCmd.Wait()
 	knownChildren.remove(appCmd.Process.Pid)
 	signal.Stop(sigCh)
 
@@ -175,7 +172,11 @@ func runExecMode(log *Logger, cfg *vmconfig.Config) {
 		}
 	}
 
-	// Build human-readable exit description
+	exitApp(log, exitCode)
+}
+
+// exitApp reports the app's exit code to the host and powers off the VM.
+func exitApp(log *Logger, exitCode int) {
 	exitMsg := describeExitCode(exitCode)
 
 	// Log the exit with appropriate level
@@ -195,6 +196,15 @@ func runExecMode(log *Logger, cfg *vmconfig.Config) {
 	// and causes the hypervisor process to exit on the host.
 	syscall.Sync()
 	syscall.Reboot(syscall.LINUX_REBOOT_CMD_POWER_OFF)
+}
+
+// startFailureExitCode maps an entrypoint start error to the exit code a shell
+// would report: 127 when the program does not exist, 126 when it cannot run.
+func startFailureExitCode(err error) int {
+	if errors.Is(err, errEntrypointNotFound) || errors.Is(err, fs.ErrNotExist) {
+		return 127
+	}
+	return 126
 }
 
 // describeExitCode returns a human-readable description of an exit code.
@@ -334,20 +344,44 @@ func buildEnv(env map[string]string) []string {
 	return result
 }
 
-// shellQuote quotes a string for safe use in shell commands.
-func shellQuote(s string) string {
-	// Use single quotes and escape embedded single quotes
-	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
+var errEntrypointNotFound = errors.New("executable not found")
+
+// entrypointCommand builds the command for argv, resolving a bare program name
+// against the PATH in the app's environment rather than init's own.
+func entrypointCommand(argv []string, workdir string, env []string) (*exec.Cmd, error) {
+	if len(argv) == 0 {
+		return nil, fmt.Errorf("%w: image has no entrypoint or cmd", errEntrypointNotFound)
+	}
+	path, err := lookPath(argv[0], envValue(env, "PATH"))
+	if err != nil {
+		return nil, err
+	}
+	return &exec.Cmd{Path: path, Args: argv, Dir: workdir, Env: env}, nil
 }
 
-// shellQuoteArgs quotes each argument and joins them with spaces.
-func shellQuoteArgs(args []string) string {
-	if len(args) == 0 {
-		return ""
+// lookPath finds an executable named file in the directories of pathEnv.
+// Names containing a slash are used as-is.
+func lookPath(file, pathEnv string) (string, error) {
+	if strings.Contains(file, "/") {
+		return file, nil
 	}
-	quoted := make([]string, len(args))
-	for i, arg := range args {
-		quoted[i] = shellQuote(arg)
+	for _, dir := range filepath.SplitList(pathEnv) {
+		if dir == "" {
+			dir = "."
+		}
+		path := filepath.Join(dir, file)
+		if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() && info.Mode()&0o111 != 0 {
+			return path, nil
+		}
 	}
-	return strings.Join(quoted, " ")
+	return "", fmt.Errorf("%w: %q in PATH %q", errEntrypointNotFound, file, pathEnv)
+}
+
+func envValue(env []string, key string) string {
+	for _, kv := range env {
+		if k, v, ok := strings.Cut(kv, "="); ok && k == key {
+			return v
+		}
+	}
+	return ""
 }

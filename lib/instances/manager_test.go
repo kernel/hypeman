@@ -1067,6 +1067,64 @@ func TestAppExitPropagation(t *testing.T) {
 	t.Log("App exit propagation test complete!")
 }
 
+// TestShelllessImageEntrypoint verifies that images without /bin/sh, such as
+// scratch-based images, run their entrypoint and propagate its exit code.
+func TestShelllessImageEntrypoint(t *testing.T) {
+	t.Parallel()
+	if _, err := os.Stat("/dev/kvm"); os.IsNotExist(err) {
+		t.Skip("/dev/kvm not available, skipping on this platform")
+	}
+
+	manager, tmpDir := setupTestManager(t)
+	ctx := context.Background()
+	p := paths.New(tmpDir)
+
+	imageManager, err := images.NewManager(p, 1, nil)
+	require.NoError(t, err)
+
+	imageRef := integrationTestImageRef(t, "docker.io/library/hello-world:latest")
+	img, err := imageManager.CreateImage(ctx, images.CreateImageRequest{Name: imageRef})
+	require.NoError(t, err)
+	for i := 0; i < 60 && img.Status != images.StatusReady; i++ {
+		if img.Status == images.StatusFailed {
+			t.Fatalf("Image build failed: %s", *img.Error)
+		}
+		time.Sleep(1 * time.Second)
+		img, err = imageManager.GetImage(ctx, img.Name)
+		require.NoError(t, err)
+	}
+	require.Equal(t, images.StatusReady, img.Status)
+
+	require.NoError(t, system.NewManager(p).EnsureSystemFiles(ctx))
+
+	inst, err := manager.CreateInstance(ctx, CreateInstanceRequest{
+		Name:        "test-shellless-entrypoint",
+		Image:       imageRef,
+		Size:        512 * 1024 * 1024,
+		OverlaySize: 1024 * 1024 * 1024,
+		Vcpus:       1,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = manager.DeleteInstance(context.Background(), inst.Id) })
+
+	var finalInst *Instance
+	for i := 0; i < 60; i++ {
+		got, err := manager.GetInstance(ctx, inst.Id)
+		if err == nil && got.State == StateStopped {
+			finalInst = got
+			break
+		}
+		time.Sleep(1 * time.Second)
+	}
+	require.NotNil(t, finalInst, "Instance should reach Stopped state within 60 seconds")
+	require.NotNil(t, finalInst.ExitCode)
+	assert.Equal(t, 0, *finalInst.ExitCode)
+
+	appLog, err := os.ReadFile(p.InstanceAppLog(inst.Id))
+	require.NoError(t, err)
+	assert.Contains(t, string(appLog), "Hello from Docker!")
+}
+
 // TestOOMExitPropagation verifies that OOM kills are detected and reported.
 // Creates a VM with low memory and runs a command that allocates more than available,
 // triggering the OOM killer. Verifies exit code 137 and "OOM" in the exit message.

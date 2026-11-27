@@ -231,3 +231,37 @@ func TestWaitForGuestAgentReadyReadyWinsAfterExitSignal(t *testing.T) {
 	err = waitForGuestAgentReady(readyReader, time.Second, agentExited)
 	require.NoError(t, err)
 }
+
+func TestEntrypointCommand(t *testing.T) {
+	binDir := t.TempDir()
+	tool := binDir + "/tool"
+	require.NoError(t, os.WriteFile(tool, []byte("#!/x\n"), 0o755))
+	require.NoError(t, os.WriteFile(binDir+"/data", []byte("x"), 0o644))
+	env := []string{"HOME=/root", "PATH=/nonexistent:" + binDir}
+
+	cmd, err := entrypointCommand([]string{"tool", "--flag", "it's"}, "/srv", env)
+	require.NoError(t, err)
+	assert.Equal(t, tool, cmd.Path)
+	assert.Equal(t, []string{"tool", "--flag", "it's"}, cmd.Args)
+	assert.Equal(t, "/srv", cmd.Dir)
+	assert.Equal(t, env, cmd.Env)
+
+	cmd, err = entrypointCommand([]string{"/collector"}, "/", env)
+	require.NoError(t, err)
+	assert.Equal(t, "/collector", cmd.Path)
+
+	_, err = entrypointCommand([]string{"data"}, "/", env)
+	assert.ErrorIs(t, err, errEntrypointNotFound)
+	assert.Equal(t, 127, startFailureExitCode(err))
+
+	_, err = entrypointCommand(nil, "/", env)
+	assert.ErrorIs(t, err, errEntrypointNotFound)
+
+	cmd, err = entrypointCommand([]string{binDir + "/data"}, "/", env)
+	require.NoError(t, err)
+	assert.Equal(t, 126, startFailureExitCode(cmd.Start()))
+
+	cmd, err = entrypointCommand([]string{binDir + "/missing"}, "/", env)
+	require.NoError(t, err)
+	assert.Equal(t, 127, startFailureExitCode(cmd.Start()))
+}
