@@ -14,9 +14,10 @@ type CHVersion string
 const (
 	V49_0 CHVersion = "v49.0"
 	V51_1 CHVersion = "v51.1"
+	V51_2 CHVersion = "v51.2"
 )
 
-const DefaultVersion = V51_1
+const DefaultVersion = V51_2
 
 // SupportedVersions lists supported Cloud Hypervisor versions.
 // On macOS, Cloud Hypervisor is not supported (use vz instead).
