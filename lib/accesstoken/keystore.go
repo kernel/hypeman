@@ -1,6 +1,8 @@
 package accesstoken
 
 import (
+	"errors"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -15,15 +17,20 @@ const maxKeySetBytes = 256 << 10
 // restarts continues from that copy.
 //
 // The copy is a convenience, not a record: a write that fails is logged and
-// the fetched keys stay in memory.
+// the fetched keys stay in memory. The older copy is then removed, so that a
+// restart cannot bring back keys the server has withdrawn since.
 type FileKeyStore struct {
 	dir string
 	log *slog.Logger
+	// write replaces the file at a path. Tests make it fail.
+	write func(path string, keySet []byte) error
 }
 
 // NewFileKeyStore stores key sets under dir, which is created when first needed.
 func NewFileKeyStore(dir string, log *slog.Logger) *FileKeyStore {
-	return &FileKeyStore{dir: dir, log: log}
+	s := &FileKeyStore{dir: dir, log: log}
+	s.write = s.replace
+	return s
 }
 
 // path is the file of one key set. The id is the hex digest the verifier
@@ -41,12 +48,20 @@ func (s *FileKeyStore) Save(id, issuerURL string, keySet []byte) {
 	if !ok {
 		return
 	}
-	if err := s.write(path, keySet); err != nil {
-		s.log.Warn("authorization server keys were not saved for the next start", "issuer", issuerURL, "error", err)
+	err := s.write(path, keySet)
+	if err == nil {
+		return
 	}
+	// The copy that was not replaced may hold keys this fetch no longer
+	// lists. Without a copy, a restart waits for a fetch.
+	if removeErr := os.Remove(path); removeErr != nil && !errors.Is(removeErr, fs.ErrNotExist) {
+		s.log.Error("authorization server keys were not saved and the older copy could not be removed; a restart would start from the older keys", "issuer", issuerURL, "error", err, "remove_error", removeErr)
+		return
+	}
+	s.log.Warn("authorization server keys were not saved; a restart will fetch them", "issuer", issuerURL, "error", err)
 }
 
-func (s *FileKeyStore) write(path string, keySet []byte) error {
+func (s *FileKeyStore) replace(path string, keySet []byte) error {
 	if err := os.MkdirAll(s.dir, 0o700); err != nil {
 		return err
 	}
