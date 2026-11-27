@@ -121,6 +121,32 @@ func (s vendorVFIOSysfs) creatableProfiles(vfs []VirtualFunction) (map[string][]
 	if query == nil {
 		query = nvmlCreatableProfiles
 	}
+	gpus := parentGPUs(vfs)
+	byGPU, err := runBounded(func() (map[string][]creatableProfile, error) { return query(gpus) })
+	if err != nil {
+		return byGPU, fmt.Errorf("query creatable vGPU placements: %w", err)
+	}
+	return byGPU, nil
+}
+
+// supportedProfileNames asks the driver, through NVML, for the name of every
+// profile the GPU of each VF supports, whether or not one could be created
+// now.
+func (s vendorVFIOSysfs) supportedProfileNames(vfs []VirtualFunction) (map[string]struct{}, error) {
+	query := s.supportedFunc
+	if query == nil {
+		query = nvmlSupportedProfileNames
+	}
+	gpus := parentGPUs(vfs)
+	names, err := runBounded(func() (map[string]struct{}, error) { return query(gpus) })
+	if err != nil {
+		return nil, fmt.Errorf("query supported vGPU profiles: %w", err)
+	}
+	return names, nil
+}
+
+// parentGPUs returns the sorted, distinct parent GPU addresses of vfs.
+func parentGPUs(vfs []VirtualFunction) []string {
 	seen := make(map[string]struct{})
 	gpus := make([]string, 0)
 	for _, vf := range vfs {
@@ -130,11 +156,7 @@ func (s vendorVFIOSysfs) creatableProfiles(vfs []VirtualFunction) (map[string][]
 		}
 	}
 	sort.Strings(gpus)
-	byGPU, err := runBounded(func() (map[string][]creatableProfile, error) { return query(gpus) })
-	if err != nil {
-		return byGPU, fmt.Errorf("query creatable vGPU placements: %w", err)
-	}
-	return byGPU, nil
+	return gpus
 }
 
 // creatableOrSysfs returns the NVML creatable profiles by GPU and the VFs

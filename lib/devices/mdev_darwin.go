@@ -40,6 +40,11 @@ func ListVendorVFIOProfileTypes(vfs []VirtualFunction) (map[string][]VGPUProfile
 	return nil, ErrVGPUNotSupportedOnMacOS
 }
 
+// SupportedVGPUProfileNames returns an error on macOS as vGPU is not supported.
+func SupportedVGPUProfileNames(vfs []VirtualFunction) (map[string]struct{}, error) {
+	return nil, ErrVGPUNotSupportedOnMacOS
+}
+
 // RefreshVGPUCapacity does nothing on macOS.
 func RefreshVGPUCapacity() {}
 
