@@ -43,8 +43,10 @@ Access tokens follow the JWT format of [RFC 9068](https://www.rfc-editor.org/rfc
 A token is at most 16 KB. Its lifetime is the authorization server's to choose.
 
 A token without a `scope` has no permissions. This differs from a token signed with `jwt_secret`,
-where a missing `permissions` claim means full access. As for every API token, the registry under
-`/v2` does not check permissions.
+where a missing `permissions` claim means full access. The registry under `/v2` checks an access
+token's permissions too: `image:read` to pull, `image:read` and `image:write` to push, and
+`image:delete` for a DELETE request. A token signed with `jwt_secret` can do all of it whatever
+its permissions.
 
 `revoked_token_hashes` applies to access tokens as it does to the others. Revoking a token signed
 with ES256, ES384 or ES512 also revokes the second token string that carries the same signature.

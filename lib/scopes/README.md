@@ -24,9 +24,11 @@ Scopes follow the pattern `resource:action`. Each resource type supports `read`,
 
 | Scope | Grants access to |
 |---|---|
-| `image:read` | List images, get image details |
-| `image:write` | Pull/create images |
-| `image:delete` | Delete images |
+| `image:read` | List images, get image details; pull from the registry under `/v2` |
+| `image:write` | Pull/create images; push to the registry under `/v2`, which needs `image:read` too |
+| `image:delete` | Delete images; delete from the registry under `/v2` |
+
+The registry holds only [access tokens from an OAuth authorization server](../../docs/oauth-access-tokens.md) to these scopes. A token signed with `jwt_secret`, such as one `hypeman-token` mints, could always use the registry whatever its scopes, and keeps that access.
 
 ### Volumes
 

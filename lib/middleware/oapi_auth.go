@@ -439,6 +439,21 @@ func JwtAuth(verifier *jwtauth.Verifier, revoked *tokenrevocation.List) func(htt
 								"auth_type", authType,
 								"subject", userClaims["sub"])
 							ctx := contextWithUserClaims(r.Context(), userClaims)
+							// Tokens signed with the server's secret have always been able
+							// to push and pull whatever their permissions, and tokens in
+							// use rely on it, so only access tokens are held to theirs.
+							required := scopes.ImageRead
+							if r.Method == http.MethodDelete {
+								required = scopes.ImageDelete
+							} else if isWriteOperation(r.Method) {
+								required = scopes.ImageWrite
+							}
+							if verifier.IsAccessToken(token) && !scopes.HasScope(ctx, required) {
+								w.Header().Set("Content-Type", "application/json")
+								w.WriteHeader(http.StatusForbidden)
+								fmt.Fprintf(w, `{"errors":[{"code":"DENIED","message":"missing required scope: %s"}]}`, required)
+								return
+							}
 							next.ServeHTTP(w, requestWithoutAuthorization(r, ctx))
 							return
 						}

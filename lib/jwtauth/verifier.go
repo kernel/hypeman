@@ -56,7 +56,7 @@ func (v *Verifier) ParseWithClaims(ctx context.Context, tokenString string, clai
 	// A token that declares itself an access token is never checked against
 	// the HMAC keys, and no other token is checked against an authorization
 	// server's keys.
-	if v.accessTokens.Enabled() && accesstoken.Typed(tokenString) {
+	if v.IsAccessToken(tokenString) {
 		return v.parseAccessToken(ctx, tokenString, claims)
 	}
 	if len(v.keys) == 0 {
@@ -84,6 +84,12 @@ func (v *Verifier) ParseWithClaims(ctx context.Context, tokenString string, clai
 		}
 	}
 	return nil, err
+}
+
+// IsAccessToken reports whether ParseWithClaims checks tokenString against an
+// authorization server's keys rather than the HMAC keys.
+func (v *Verifier) IsAccessToken(tokenString string) bool {
+	return v.accessTokens.Enabled() && accesstoken.Typed(tokenString)
 }
 
 // parseAccessToken verifies an authorization server's access token and hands
