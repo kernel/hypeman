@@ -482,8 +482,7 @@ func sameMACAddress(a, b string) bool {
 	return bytes.Equal(x, y)
 }
 
-// vzShimOwner finds the vz-shim for socketPath when no live shim PID is recorded,
-// as after the API dies mid-boot or mid-restore. More than one is ambiguous.
+// vzShimOwner finds the unique vz-shim configured for socketPath, even before it listens.
 func vzShimOwner(socketPath string) (int, error) {
 	if socketPath == "" {
 		return 0, nil

@@ -145,10 +145,13 @@ func resolveLiveHypervisorPID(id HypervisorProcessIdentity, socketPath string) (
 		}
 	}
 	if runtime.GOOS != "linux" {
-		if stored == 0 {
-			return vzShimOwner(socketPath)
+		// Darwin has no recorded start time. Never signal a PID based only on
+		// its continued existence, even when the control socket is stale.
+		owner, err := vzShimOwner(socketPath)
+		if err == nil && owner == 0 && stored != 0 {
+			return 0, fmt.Errorf("cannot confirm stored shim PID %d for socket %q", stored, socketPath)
 		}
-		return stored, nil
+		return owner, err
 	}
 	bootID := hostBootID()
 	if stored != 0 && id.HypervisorBootID != "" && bootID != "" && id.HypervisorBootID != bootID {
