@@ -2,6 +2,7 @@ package instances
 
 import (
 	"context"
+	"slices"
 	"time"
 
 	"github.com/kernel/hypeman/lib/logger"
@@ -17,12 +18,11 @@ const (
 )
 
 // TAPPreserveIDs returns the instances whose TAPs must survive orphan cleanup.
-// Paused guests still own their TAPs; Unknown guests may still have a live VMM.
+// Paused, unknown and pending-stop guests may still own their TAPs.
 func TAPPreserveIDs(instances []Instance) []string {
 	ids := make([]string, 0, len(instances))
 	for _, inst := range instances {
-		switch inst.State {
-		case StateRunning, StateInitializing, StatePaused, StateUnknown:
+		if inst.stopCleanupPending || slices.Contains([]State{StateRunning, StateInitializing, StatePaused, StateUnknown}, inst.State) {
 			ids = append(ids, inst.Id)
 		}
 	}
@@ -31,7 +31,7 @@ func TAPPreserveIDs(instances []Instance) []string {
 
 // StartTAPGCReconciler starts a background goroutine that periodically deletes
 // orphaned TAP devices on the host. Orphaned means: a hype-prefixed netdev whose
-// instance ID does not correspond to any Running/Initializing/Paused/Unknown instance.
+// instance ID is not in TAPPreserveIDs.
 // To avoid racing against in-flight CreateAllocation calls whose metadata hasn't
 // been persisted yet, only TAPs older than tapGCMinAge are considered.
 // The goroutine stops when ctx is cancelled.

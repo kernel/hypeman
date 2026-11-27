@@ -93,6 +93,24 @@ func TestRestoreSnapshotDoesNotResurrectStaleVGPUAssignment(t *testing.T) {
 	assert.Empty(t, restored.GPUMdevUUID)
 }
 
+func TestRestoreSnapshotRejectsPendingStop(t *testing.T) {
+	m, _ := setupTestManager(t)
+	const id = "restore-while-stopping"
+	createStoppedSnapshotSourceFixture(t, m, id, id, m.defaultHypervisor)
+	snap, err := m.CreateSnapshot(t.Context(), id, CreateSnapshotRequest{Kind: SnapshotKindStopped, Name: "before-stop"})
+	require.NoError(t, err)
+	meta, err := m.loadMetadata(id)
+	require.NoError(t, err)
+	meta.StopCleanupPending = true
+	require.NoError(t, m.saveMetadata(meta))
+	afterSnapshot := filepath.Join(meta.DataDir, "after-snapshot")
+	require.NoError(t, os.WriteFile(afterSnapshot, nil, 0600))
+
+	_, err = m.RestoreSnapshot(t.Context(), id, snap.Id, RestoreSnapshotRequest{TargetState: StateStopped})
+	require.ErrorIs(t, err, ErrInvalidState)
+	require.FileExists(t, afterSnapshot)
+}
+
 func TestRestoreSnapshotKeepsCurrentVGPUAssignment(t *testing.T) {
 	mgr, _ := setupTestManager(t)
 	ctx := context.Background()

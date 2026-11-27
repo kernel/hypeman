@@ -120,6 +120,26 @@ func (m *manager) tryGracefulGuestShutdown(ctx context.Context, inst *Instance, 
 	return false
 }
 
+// beginVFIOStop saves the confirmed owner while its socket is still available.
+// A retry cannot recover a legacy PID from a listener already closed by SIGTERM.
+func (m *manager) beginVFIOStop(meta *metadata, inst *Instance) error {
+	if meta.StopCleanupPending || !hasVFIODevices(&meta.StoredMetadata) {
+		return nil
+	}
+	pid, err := resolveLiveHypervisorPID(meta.HypervisorProcessIdentity, meta.SocketPath)
+	if err != nil {
+		return err
+	}
+	if pid > 0 {
+		inst.HypervisorProcessIdentity.Set(pid)
+		meta.HypervisorProcessIdentity = inst.HypervisorProcessIdentity
+	} else if inst.State == StateStopped || inst.State == StateStandby {
+		return nil // deleting an already inactive guest needs no pending stop
+	}
+	meta.StopCleanupPending = true
+	return m.saveMetadata(meta)
+}
+
 // stopInstance stops an active instance.
 // Flow: send Shutdown RPC -> wait for VM to power off ->
 // fall back to hypervisor shutdown -> final SIGKILL if still alive.
@@ -153,10 +173,16 @@ func (m *manager) stopInstance(
 	ctx = enrichInstancesTrace(ctx, attribute.String("hypervisor", string(stored.HypervisorType)))
 	log.DebugContext(ctx, "loaded instance", "instance_id", id, "state", inst.State)
 
-	// 2. Validate state transition (must be active to stop)
-	if inst.State != StateRunning && inst.State != StateInitializing {
+	// A pending stop still has to confirm VMM exit and finish cleanup even
+	// when the missing control socket already makes the guest look stopped.
+	active := inst.State == StateRunning || inst.State == StateInitializing
+	if !active && !meta.StopCleanupPending {
 		log.ErrorContext(ctx, "invalid state for stop", "instance_id", id, "state", inst.State)
 		return nil, fmt.Errorf("%w: cannot stop from state %s, must be Running or Initializing", ErrInvalidState, inst.State)
+	}
+
+	if err := m.beginVFIOStop(meta, &inst); err != nil {
+		return nil, fmt.Errorf("record pending VFIO stop: %w", err)
 	}
 
 	// 3. Get network allocation BEFORE killing VMM (while we can still query it)
@@ -173,7 +199,7 @@ func (m *manager) stopInstance(
 	// 4. Graceful shutdown: send signal to guest init via Shutdown RPC,
 	// then wait for VM to power off cleanly. Fall back to hypervisor shutdown on timeout.
 	gracefulShutdown := false
-	if !req.Force {
+	if active && !req.Force {
 		stopTimeout := resolveStopTimeout(stored)
 		if inst.MacOS != nil {
 			// macOS power-off can outlast the ordinary short stop default.
@@ -224,7 +250,16 @@ func (m *manager) stopInstance(
 		}
 	}
 
-	// 6. Release network allocation (delete TAP device)
+	// 6. Release the vGPU first so a failed reset can be retried without
+	// repeating the network teardown. The on-disk stop is still pending.
+	if path := storedVGPUDevicePath(stored); path != "" {
+		log.InfoContext(ctx, "destroying vGPU on stop", "instance_id", id, "device_path", path)
+		if err := m.releaseStoredVGPU(ctx, stored); err != nil {
+			return nil, fmt.Errorf("release vGPU: %w", err)
+		}
+	}
+
+	// 7. Release network allocation (delete TAP device)
 	if inst.NetworkEnabled {
 		m.unregisterEgressProxyInstance(ctx, id)
 	}
@@ -256,14 +291,6 @@ func (m *manager) stopInstance(
 			log.WarnContext(ctx, "failed to release network by id, continuing", "instance_id", id, "error", err)
 		} else {
 			releaseNetworkSpanEnd(nil)
-		}
-	}
-
-	// 7. Release the vGPU assignment if present (frees the vGPU slot for other VMs).
-	if path := storedVGPUDevicePath(stored); path != "" {
-		log.InfoContext(ctx, "destroying vGPU on stop", "instance_id", id, "device_path", path)
-		if err := m.releaseStoredVGPU(ctx, stored); err != nil {
-			log.WarnContext(ctx, "failed to destroy vGPU on stop; retaining assignment metadata", "instance_id", id, "device_path", path, "error", err)
 		}
 	}
 
@@ -312,7 +339,11 @@ func (m *manager) stopInstance(
 	stored.GuestAgent = nil
 	stored.Phases.Record(phasetracking.PhaseStopped, now)
 
-	meta = &metadata{StoredMetadata: *stored}
+	meta = &metadata{
+		StoredMetadata: *stored,
+		HealthStartPending: pendingHealthCheckRestart(meta) &&
+			meta.RestartStatus.NextAttemptAt == nil && meta.RestartStatus.BlockedReason == "",
+	}
 	if err := m.saveMetadata(meta); err != nil {
 		log.ErrorContext(ctx, "failed to save metadata", "instance_id", id, "error", err)
 		return nil, fmt.Errorf("save metadata: %w", err)

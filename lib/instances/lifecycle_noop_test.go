@@ -331,6 +331,30 @@ func TestStopInstanceRetiresPooledGuestConnection(t *testing.T) {
 	}, time.Second, time.Millisecond, "stop must close the retired connection")
 }
 
+func TestStopRetriesFailedVGPURelease(t *testing.T) {
+	m, id := newLifecycleNoopManagerWithInstance(t, StateRunning, time.Now().UTC())
+	meta, err := m.loadMetadata(id)
+	require.NoError(t, err)
+	meta.GPUDevicePath = "/sys/bus/pci/devices/0000:82:00.4"
+	require.NoError(t, m.saveMetadata(meta))
+	releaseErr := errors.New("reset failed")
+	m.destroyVGPU = func(context.Context, devices.VGPUAssignment) error { return releaseErr }
+	_, err = m.StopInstance(t.Context(), id, StopInstanceRequest{Force: true})
+	require.ErrorIs(t, err, releaseErr)
+	retained, err := m.loadMetadata(id)
+	require.NoError(t, err)
+	require.True(t, retained.StopCleanupPending)
+	require.Nil(t, retained.StoppedAt)
+	require.Equal(t, meta.GPUDevicePath, retained.GPUDevicePath)
+
+	m.destroyVGPU = func(context.Context, devices.VGPUAssignment) error { return nil }
+	inst, err := m.StopInstance(t.Context(), id, StopInstanceRequest{})
+	require.NoError(t, err)
+	require.Equal(t, StateStopped, inst.State)
+	require.Empty(t, inst.GPUDevicePath)
+	require.NotNil(t, inst.StoppedAt)
+}
+
 func TestStopStoppedInstanceLeavesVGPUForReconcile(t *testing.T) {
 	m, id := newLifecycleNoopManagerWithInstance(t, StateStopped, time.Now().UTC())
 	meta, err := m.loadMetadata(id)

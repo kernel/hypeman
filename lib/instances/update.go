@@ -49,6 +49,9 @@ func (m *manager) updateInstance(ctx context.Context, id string, req UpdateInsta
 	}
 	req.HealthCheck = normalizedHealthCheck
 	if req.RestartPolicySet {
+		if pendingHealthCheckRestart(meta) {
+			return nil, fmt.Errorf("%w: cannot update restart policy during health-check restart recovery", ErrInvalidState)
+		}
 		normalizedRestartPolicy, err := normalizeRestartPolicy(req.RestartPolicy)
 		if err != nil {
 			return nil, err

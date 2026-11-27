@@ -27,6 +27,8 @@ const linuxBootIDPath = "/proc/sys/kernel/random/boot_id"
 // does not unstick it, so the wait is short to keep stop and delete fast.
 const hypervisorSIGKILLWaitTimeout = 2 * time.Second
 
+const vfioKillWait = 2 * hypervisorSIGKILLWaitTimeout
+
 func (m *manager) vfioTerminationGrace() time.Duration {
 	if m.vfioTermGrace > 0 {
 		return m.vfioTermGrace
@@ -37,8 +39,19 @@ func (m *manager) vfioTerminationGrace() time.Duration {
 // SIGKILL during guest driver init can wedge a VF until the parent GPU is reset.
 func (m *manager) terminateThenKill(ctx context.Context, inst *Instance, pid int) error {
 	if hasVFIODevices(&inst.StoredMetadata) {
-		if syscall.Kill(pid, syscall.SIGTERM) == nil && WaitForProcessExit(pid, m.vfioTerminationGrace()) {
-			return nil
+		grace := m.vfioTerminationGrace()
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		teardown := hypervisor.BeginVFIOTeardown()
+		defer teardown.Done()
+		if syscall.Kill(pid, syscall.SIGTERM) == nil {
+			exited, err := teardown.Wait(ctx, grace, vfioKillWait, func(d time.Duration) bool {
+				return WaitForProcessExit(pid, d)
+			})
+			if exited || err != nil {
+				return err
+			}
 		}
 		logger.FromContext(ctx).WarnContext(ctx, "hypervisor with VFIO devices did not exit on SIGTERM; hard-killing, device may wedge if the guest driver was initializing",
 			"instance_id", inst.Id, "device_path", inst.GPUDevicePath)

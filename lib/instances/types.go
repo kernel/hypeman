@@ -220,6 +220,7 @@ type Instance struct {
 	HasSnapshot         bool    // Derived from filesystem check
 	BootMarkersHydrated bool    // True when missing boot markers were hydrated from logs in this read
 	HealthCheckRuntime  *healthcheck.Runtime
+	stopCleanupPending  bool // stop/delete still owns the instance's host resources
 }
 
 // GetHypervisorType returns the hypervisor type as a string.

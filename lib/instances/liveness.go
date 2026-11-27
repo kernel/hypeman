@@ -28,9 +28,8 @@ func NewLivenessChecker(m Manager) devices.InstanceLivenessChecker {
 	return &instanceLivenessAdapter{manager: mgr}
 }
 
-// IsInstanceRunning returns true if the instance exists and is in a running state
-// (i.e., has an active VMM process). Returns false if the instance doesn't exist
-// or is stopped/standby/unknown.
+// IsInstanceRunning protects device attachments for active VMMs and for
+// pending stops whose VMM may have already closed its control socket.
 func (a *instanceLivenessAdapter) IsInstanceRunning(ctx context.Context, instanceID string) bool {
 	if a.manager == nil {
 		return false
@@ -40,13 +39,11 @@ func (a *instanceLivenessAdapter) IsInstanceRunning(ctx context.Context, instanc
 		return false
 	}
 
-	// Consider instance "running" if the VMM is active (any of these states means VM is using the device)
 	switch inst.State {
 	case StateRunning, StateInitializing, StatePaused, StateCreated:
 		return true
 	default:
-		// StateStopped, StateStandby, StateShutdown, StateUnknown
-		return false
+		return inst.stopCleanupPending
 	}
 }
 
